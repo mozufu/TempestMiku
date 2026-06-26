@@ -1,0 +1,15 @@
+[package]
+name = "tm-sandbox"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TempestMiku sandbox backends. M0 ships a stub; deno_core lands in M1."
+
+[dependencies]
+tm-core.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

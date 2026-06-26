@@ -1,0 +1,19 @@
+[package]
+name = "tm-llm"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TempestMiku LLM backend: a streaming-first OpenAI-compatible chat client."
+
+[dependencies]
+tm-core.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+async-stream.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

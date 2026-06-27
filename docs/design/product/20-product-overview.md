@@ -83,7 +83,7 @@ background workers** — not a rewrite of the loop.
 | [§25](25-coding-agent-sdk.md) | Coding-agent SDK (OMP translation) + artifacts |
 | [§26](26-self-evolution.md) | Self-evolution |
 | [§27](27-server-and-clients.md) | Server, scheduler & clients |
-| [§28](28-product-roadmap.md) | Product roadmap |
+| [§28](../../../ROADMAP.md#product-roadmap-28) | Product roadmap |
 | [§29](29-parity-baseline.md) | Parity baseline — the current deployment |
 
 ## Scope

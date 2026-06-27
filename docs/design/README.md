@@ -18,7 +18,7 @@ Design doc, split by section. Read in order or jump to a section:
 11. [OpenAI-compatible integration](core/11-openai-integration.md)
 12. [Observability & reproducibility](core/12-observability.md)
 13. [End-to-end example](core/13-end-to-end-example.md)
-14. [Roadmap](core/14-roadmap.md)
+14. [Roadmap](../../ROADMAP.md#core-runtime-milestones-14)
 15. [Open questions / risks](core/15-open-questions.md)
 16. [References](core/16-references.md)
 
@@ -36,5 +36,5 @@ Design doc, split by section. Read in order or jump to a section:
 25. [Coding-agent SDK & artifacts](product/25-coding-agent-sdk.md)
 26. [Self-evolution](product/26-self-evolution.md)
 27. [Server, scheduler & clients](product/27-server-and-clients.md)
-28. [Product roadmap](product/28-product-roadmap.md)
+28. [Product roadmap](../../ROADMAP.md#product-roadmap-28)
 29. [Parity baseline — the current deployment](product/29-parity-baseline.md)

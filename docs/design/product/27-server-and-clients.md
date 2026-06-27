@@ -126,7 +126,7 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 - `session` — session lifecycle; the SSE event stream; `Last-Event-ID` resume over the replay log (#6).
 - `api` — inbound HTTP: session create / send, mode lock, approval resolve, browser feeds; optional
   OpenAI-compatible endpoint (§27.5).
-- `schedule` — cron-style scheduler; job table; bounds (`max_turns`, `cron_mode`).
+- `schedule` — cron-style scheduler; job table; bounds (`max_turns`, `cron_mode`); registers the `cron://` handler (list jobs / a job's def + run history) into the §9.2 registry.
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).
 - `auth` — single-user token / pairing.
 - Clients live **outside** the Rust workspace: `web` (WebUI) + `android` (§28).

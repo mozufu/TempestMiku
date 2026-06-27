@@ -12,6 +12,8 @@ flowchart TD
     H --> SEC[Secret broker]
     S --> ART[Artifact store]
     O --> ART
+    S -->|read uri| RR[Resource resolver registry]
+    RR --> ART
     O --> TR[Transcript / tracing]
     H --> TR
 ```
@@ -24,5 +26,7 @@ Components:
 - **Sandbox / Session** — executes code cells in a persistent, isolated environment.
 - **Host capability registry** — the set of Rust-backed functions the SDK exposes to code.
 - **Artifact store** — content-addressed storage for large outputs; hands back `artifact://` refs.
+- **Resource resolver registry** — one scheme-dispatched `read(uri)` over registered handlers
+  (`artifact://` / `agent://` / `memory://` / `skill://` / `drive://` / `cron://`); §9.2.
 - **Secret broker** — resolves opaque secret handles to real values only at the host boundary.
 - **Transcript / tracing** — structured record of the whole session for audit and replay.

@@ -156,7 +156,7 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 - `mailbox` — async queue, addressing, delivery + receipts, broadcast, wait / inbox.
 - `orchestrate` — `agents.*` constructors (run / parallel / pipeline), DAG handles wired by reference.
 - `supervise` — supervision tree, restart strategies, budgets, depth cap, cost rollup.
-- `resources` — `agent://` + roster handler.
+- `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry; roster via `list()`.
 
 ## 23.9 Failure modes & degradation
 

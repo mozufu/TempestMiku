@@ -11,3 +11,7 @@
 - **Artifact token budgeting** — preview sizes and slice defaults need tuning against real usage.
 - **Multi-tenant isolation** — one isolate per run is fine single-user; shared deployment needs
   per-tenant capability + resource partitioning.
+- **External read-through resource schemes** — `issue://` / `pr://` (GitHub) and `mcp://` (MCP server
+  *resources*, §25.1) are **parked**. Unlike the internal schemes (§9.3) they are network-egress
+  proxies needing the allowlist (§08), a secret-broker credential (§08.3), and a disk cache; they
+  register into the same §9.2 resolver behind the same handler contract when enabled.

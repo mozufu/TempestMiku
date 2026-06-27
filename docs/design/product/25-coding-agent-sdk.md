@@ -95,7 +95,9 @@ flowchart TD
   copy)**; move renames the session + artifact dir together. Mirrors OMP `blob-artifact-architecture`.
 
 Implemented in `tm-artifacts` (§10.1), extended from the single-tier sketch in §09 to the two-tier
-model above. With §22 and §23, this is what keeps big data and fan-out **out of the window**.
+model above. This section owns the **storage tiers** only; the **read / routing** of `artifact://` /
+`agent://` (and every other scheme) is unified under the §9.2 resolver registry. With §22 and §23,
+this is what keeps big data and fan-out **out of the window**.
 
 ## 25.4 Crate layout
 
@@ -103,8 +105,8 @@ model above. With §22 and §23, this is what keeps big data and fan-out **out o
   edit / ast / lsp), `proc` (run: **allowlist + argv + linked-cwd + approval**); wired to the
   capability registry (§07) + `ApprovalPolicy` (§08).
 - `tm-artifacts` (§10.1) — `blob` (content-addressed store: sha256, dedup, MIME sidecar), `artifact`
-  (session-local ids + `OutputSink` spill), `agent` (named sub-agent outputs), `resolve`
-  (`artifact://` / `agent://` handlers + `blob:` rehydration at load).
+  (session-local ids + `OutputSink` spill), `agent` (named sub-agent outputs), `resolve` (registers the
+  `artifact://` / `agent://` handlers into the §9.2 registry; `blob:` rehydration at load).
 - `agents.*` / `memory.*` / `skills.*` live in their own crates (§23 / §22 / §07 + §26); §25 is the
   **engineer-facing SDK + the artifact spine**.
 

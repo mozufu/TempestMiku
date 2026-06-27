@@ -104,7 +104,7 @@ flowchart LR
 - `organize` — placement proposer + background re-filer (lease + heartbeat); tier-gated apply / propose.
 - `vdir` — virtual-directory query views; maps a path to a conjunctive attribute query.
 - `policy` — `FsPolicy` grants (mint / attenuate / revoke); link ⇒ memory-scope coupling (§22.6).
-- `resources` — `drive://<path>` read resource + drive browser feed (§27).
+- `resources` — registers the `drive://<path>` handler into the §9.2 resolver registry; drive browser feed (§27).
 
 ## 24.7 Failure modes & degradation
 

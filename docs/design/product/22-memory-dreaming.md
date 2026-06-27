@@ -165,8 +165,9 @@ The current knobs become our config (now we own every one — none is an externa
 | `memory.reflect()` | enqueue a dream (extract → reflect → summarize → skills) |
 | `memory.card()` | current profile snapshot (top facts) |
 
-`memory://` URLs (read tool): `memory://root` (injected summary), `…/MEMORY.md`, `…/skills/<name>/SKILL.md`,
-`…/user-model` (profile/facts), `…/episodic?q=…` (search), `…/projects/<name>/…`.
+`memory://` URLs (resolved via the §9.2 registry): `memory://root` (injected summary), `…/MEMORY.md`,
+`…/user-model` (profile/facts), `…/episodic?q=…` (search), `…/projects/<name>/…`. Skills are addressed
+first-class as `skill://<name>` (→ `SKILL.md`), promoted out of the `memory://…/skills/` path (§9.3).
 
 ## 22.10 Crate layout (`tm-memory`, §28)
 
@@ -177,7 +178,7 @@ The current knobs become our config (now we own every one — none is an externa
 - `dream` — embed, extract (facts + relations), importance, reflect, summarize, OMP consolidation, redaction; lease +
   heartbeat to avoid double-runs.
 - `embed` — embeddings role client + local fallback.
-- `resources` — `memory://` handler.
+- `resources` — registers the `memory://` + `skill://` handlers into the §9.2 resolver registry.
 
 Dreaming/extraction use cheaper model roles (§27.3).
 

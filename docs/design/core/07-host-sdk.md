@@ -8,6 +8,8 @@ What the code can reach (each function is capability-checked at the boundary):
 - `http.get/post(...)` — egress through the network allowlist, with byte/req caps.
 - `fs.read/write/ls(...)` — confined to a per-session workspace root (jail).
 - `artifacts.put/slice/get(...)` — large-data store; returns `artifact://` handles.
+- `resources.read(uri, sel?)` — uniform, scheme-dispatched read over the resolver registry (§9.2):
+  `artifact://` / `agent://` / `history://` / `memory://` / `skill://` / `drive://` / `cron://`.
 - `display(value, opts)` — declare an intended output (text/markdown/json/table/image).
 - `secrets.use(name)` — opaque handle; see §8.3.
 - `skills.save(name, src)` / `import` — persist & reuse model-authored modules across runs

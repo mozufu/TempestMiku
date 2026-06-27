@@ -8,7 +8,7 @@ tempest-miku/
 │   ├── tm-core/        # message types, the agent loop, result-shaping policy, config
 │   ├── tm-llm/         # OpenAI-compatible client (chat + streaming), LlmClient trait
 │   ├── tm-sandbox/     # Sandbox/Session traits + backends (deno, quickjs, py-subprocess)
-│   ├── tm-host/        # host capability registry, ops, capability policy, secret broker
+│   ├── tm-host/        # host capability registry, ops, capability policy, secret broker, resource resolver registry (§9.2)
 │   ├── tm-artifacts/   # content-addressed artifact store
 │   ├── tm-mcp/         # MCP client -> imports external tools into the catalog
 │   └── tm-trace/       # tracing, transcript record/replay
@@ -99,6 +99,26 @@ pub struct Capabilities {
     pub secrets: SecretScope,      // which named secrets are resolvable, and their egress scope
     pub limits: ResourceLimits,    // wall, heap, output, egress
     pub approvals: ApprovalPolicy, // which capabilities require human sign-off
+}
+
+// resource resolution (§9.2) — one registry, scheme-keyed handlers
+#[async_trait]
+pub trait ResourceHandler: Send + Sync {
+    fn scheme(&self) -> &str;                                       // the URI scheme it owns
+    async fn read(&self, uri: &str, sel: Option<Selector>, ctx: &InvocationCtx)
+        -> Result<ResourceRead>;                                    // paged like artifacts.slice (§9.1)
+    async fn list(&self, _uri: Option<&str>, _ctx: &InvocationCtx)  // optional enumeration
+        -> Result<Vec<ResourceEntry>> { Ok(vec![]) }
+}
+
+pub struct ResourceRead { pub mime: String, pub preview: String, pub body: Bytes, pub size: usize }
+
+// subsystems register handlers at startup (late-binding, principle #9); read() dispatches by scheme.
+pub struct ResourceRegistry { /* scheme -> Arc<dyn ResourceHandler> */ }
+impl ResourceRegistry {
+    pub fn register(&mut self, h: Arc<dyn ResourceHandler>) { /* keyed by h.scheme() */ }
+    async fn read(&self, uri: &str, sel: Option<Selector>, ctx: &InvocationCtx)  // capability-gated (§08)
+        -> Result<ResourceRead> { /* split scheme, dispatch, fail closed on unknown/denied */ }
 }
 ```
 

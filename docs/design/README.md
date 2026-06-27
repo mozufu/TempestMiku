@@ -13,7 +13,7 @@ Design doc, split by section. Read in order or jump to a section:
 6. [The REPL / sandbox](core/06-repl-sandbox.md)
 7. [The host SDK / standard library](core/07-host-sdk.md)
 8. [Security model](core/08-security-model.md)
-9. [Context & artifact management](core/09-context-artifacts.md)
+9. [Context, artifacts & resource resolution](core/09-context-artifacts.md)
 10. [Rust implementation](core/10-rust-implementation.md)
 11. [OpenAI-compatible integration](core/11-openai-integration.md)
 12. [Observability & reproducibility](core/12-observability.md)

@@ -56,11 +56,12 @@ the server **extends** it with product events the core trait doesn't carry:
 - **Wire format.** `text/event-stream`, UTF-8; one block per event (`event:` + `data:` JSON + `id:`
   seq), blank-line separated.
 - **Resumability.** Each frame's `id:` is a turn/event sequence. On reconnect the client sends
-  `Last-Event-ID`; the server resumes from the **replay log** (#6) — no lost tokens; if the turn
-  already finished it replays `final`; a completed stream closes (HTTP 204 stops reconnection).
+  `Last-Event-ID`; the server resumes from the **Postgres replay log** (#6) — no lost tokens; if the
+  turn already finished it replays `final`; a completed stream closes (HTTP 204 stops reconnection).
 - **Control plane (client→server).** Discrete POSTs, **not** the SSE channel (SSE is one-way): create
   session, send message, lock / override mode (§21), resolve an approval (§27.6), open a browser view.
-- **Single-user auth.** One owner (Brian); a token / local-pairing scheme. Multi-tenant parked (§15).
+- **Single-user auth.** One owner (Brian). Local dev may use token / no-auth; deployed mode supports
+  forwarded auth from a trusted reverse proxy. Multi-tenant parked (§15).
 
 ## 27.2 Scheduler & proactivity
 
@@ -94,21 +95,21 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 
 ## 27.4 Clients
 
-- **WebUI (first).** Full surface + dogfooding client (§28): chat stream + **mode badge** (§21),
+- **WebUI (first).** P0 ships a **chat-only** dogfooding client: message input, streamed token rendering,
+  final response, default mode badge, and reconnect/replay smoke. The fuller product surface lands later:
   memory browser (`memory://` §22), drive browser (`drive.*` / `drive://` §24), artifact viewer
   (`artifact://` / `agent://` §25), agent roster (`agent://` §23), self-evolution review (§26.4).
 - **Android (thin).** Same API; chat + badge + browsers. **No on-device sandbox** (decision A).
 - Both consume the same SSE stream + POST control plane; nothing client-specific lives in the core.
 
-## 27.5 API shape (open question, §28)
+## 27.5 API shape (resolved for P0)
 
 - **Outbound** (server→LLM): **settled** — OpenAI-compatible chat completions with `stream: true`
   (§11); SSE all the way from the model provider through the loop to the client.
-- **Inbound** (client→server): **default = a custom session API + SSE** (it carries the full product
-  event set above — `mode` / `approval` / `write_proposal` — which plain chat cannot). Optional
-  **addition**: also expose an **OpenAI-compatible** endpoint (§11) so third-party clients / SDKs work
-  drop-in — but that flattens the product events to plain chat, so it is a **secondary** surface, not
-  the primary one. Decided at the server phase (P0, §28); not a v1 blocker.
+- **Inbound** (client→server): **custom session API + SSE** is primary: `POST /sessions`,
+  `POST /sessions/:id/messages`, `GET /sessions/:id/events`, and `GET /health`. Optional addition:
+  also expose an **OpenAI-compatible** endpoint (§11) so third-party clients / SDKs work drop-in, but
+  that flattens product events to plain chat, so it is secondary and not a v1 blocker.
 
 ## 27.6 Approvals surface
 
@@ -123,13 +124,14 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 
 ## 27.7 Crate layout (`tm-server`, §28)
 
-- `session` — session lifecycle; the SSE event stream; `Last-Event-ID` resume over the replay log (#6).
+- `session` — session lifecycle; the SSE event stream; `Last-Event-ID` resume over the Postgres replay log (#6).
 - `api` — inbound HTTP: session create / send, mode lock, approval resolve, browser feeds; optional
   OpenAI-compatible endpoint (§27.5).
+- `event_log` — Postgres-backed append-only session events, monotonic sequence ids, replay from `Last-Event-ID`.
 - `schedule` — cron-style scheduler; job table; bounds (`max_turns`, `cron_mode`); registers the `cron://` handler (list jobs / a job's def + run history) into the §9.2 registry.
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).
-- `auth` — single-user token / pairing.
-- Clients live **outside** the Rust workspace: `web` (WebUI) + `android` (§28).
+- `auth` — local token / no-auth for dev plus trusted forwarded identity for reverse-proxy deployments.
+- Clients live **outside** the Rust workspace: `web` (Vite + React first) + `android` (§28).
 
 ## 27.8 Failure modes & degradation
 

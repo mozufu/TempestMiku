@@ -126,6 +126,20 @@ There is no external deriver/dreamer to depend on or fall behind: steps 2–6 *a
 - **Scope:** a `scope` column on every row — a **global** scope (Brian) always, plus a
   **per-linked-project** scope when a folder/repo is linked (§24), so repo lore stays isolated.
 
+### 22.6.1 P0 minimum schema
+
+P0 uses **Postgres directly** for the minimal character slice instead of SQLite or file replay logs.
+The schema is deliberately expandable toward the full §22 engine:
+
+- `sessions(id, created_at, updated_at, status, mode, persona_status)`
+- `session_events(session_id, seq, event_type, payload_json, created_at)` — SSE replay source (§27)
+- `messages(session_id, seq, role, content, created_at)`
+- `profile_facts(id, subject, predicate, object, confidence, provenance, valid_from, valid_to)`
+- `recall_chunks(id, scope, text, source, created_at, embedding?)`
+
+P0 recall is profile facts + recall chunks, enough to inject a small context block. Full dreaming,
+graph, RRF fusion, and skill generation remain later §22 work.
+
 ## 22.7 honcho.json behavior → `tm-memory` config
 
 The current knobs become our config (now we own every one — none is an external call):

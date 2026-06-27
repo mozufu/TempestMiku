@@ -83,9 +83,10 @@ flowchart LR
 
 - **Default = sandbox jail** (§07/§08): **no ambient real-FS authority**. The drive lives in the
   per-session sandbox workspace; nothing touches the real machine.
-- **Link = mint a capability.** `drive.link(host_path, ro | rw)` mints an **unforgeable `FsPolicy` grant**
-  (real path, mode, approval-gated §08). This **single act also opens the per-linked-project memory scope**
-  (§22.6) — **one link, two grants** (filesystem + memory), revoked together.
+- **Link = mint a capability.** P1 first pass links folders from config; later UI may expose
+  `drive.link(host_path, ro | rw)`. Either path mints an **unforgeable `FsPolicy` grant** (real path,
+  mode, approval-gated when interactive). This **single act also opens the per-linked-project memory
+  scope** (§22.6) — **one link, two grants** (filesystem + memory), revoked together.
 - **Attenuation & revocation.** `ro` vs `rw` is attenuation; a grant narrows or revokes, never escalates.
   This is the **only** path by which **Serious Engineer** (§21) and `fs.*` / `proc.*` (§25) reach real
   repos. No ambient access, no `sh -c` (principle #8).

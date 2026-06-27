@@ -56,12 +56,39 @@ honoring principle #8 (no generic shell / escape hatch):
   CWE-88) — and OWASP's **MCP05:2025** names exactly this risk: an agent translating input into
   system commands.
 - **Allowlisted** commands only (the project's `cargo` / `pnpm` / `pytest`, etc.), scoped to a
-  **linked** folder (restricted cwd, §24.4), **approval-gated** (§08 / §27.6, matching the current
-  `approvals: manual`), least-privilege.
+  **linked** folder (restricted cwd, §24.4), least-privilege. P1 defaults to Pi-style **yolo within
+  configured grants**: safe build/test/check commands and normal writes run without per-action approval
+  once config grants them; destructive, external, or out-of-grant actions still require approval or fail closed.
 - The in-sandbox package ecosystem stays the long-tail safety net; `proc.run` is the narrow, audited
   door to real-repo build / test.
 - **Behavioral parity is kept** (build / test still work); the escape hatch is not. One of the
   on-purpose changes vs. the current system (§29.4).
+
+### 25.2.1 P1 first pass: config-declared linked repos
+
+P1 reaches real repos through config, not an interactive folder picker:
+
+```toml
+[[linked_folders]]
+name = "tempestmiku"
+path = "/path/to/repo"
+mode = "rw"
+commands = ["cargo", "pnpm"]
+safe_args = [
+  ["cargo", "test"],
+  ["cargo", "fmt"],
+  ["cargo", "clippy"],
+  ["pnpm", "test"],
+  ["pnpm", "playwright", "test"],
+]
+```
+
+The exact config format may be TOML/YAML/JSON, but the semantics are fixed: linked root, project
+alias, `ro` / `rw` attenuation, command allowlist, and safe argv prefixes. `proc.run(cmd, args)`
+matches command + argv prefix structurally; it never parses a shell string.
+
+First `code.edit` is **patch edit only**. LSP (`code.lsp`) and AST (`code.ast`) stay in the SDK map
+but are later milestones, not part of the first serious-engineer cut.
 
 ## 25.3 Artifact handler — two tiers (adopt OMP model into §09)
 
@@ -101,9 +128,10 @@ this is what keeps big data and fan-out **out of the window**.
 
 ## 25.4 Crate layout
 
-- `tm-host` SDK namespaces — `fs` (read / write / ls / find; jail-or-linked §24.4), `code` (search /
-  edit / ast / lsp), `proc` (run: **allowlist + argv + linked-cwd + approval**); wired to the
-  capability registry (§07) + `ApprovalPolicy` (§08).
+- `tm-host` SDK namespaces — `fs` (read / write / ls / find; jail-or-linked §24.4), `code` (patch
+  `edit` first; `ast` / `lsp` later), `proc` (run: **allowlist + argv + linked-cwd + yolo within
+  configured grants, approval for destructive/external/out-of-grant actions**); wired to the capability
+  registry (§07) + `ApprovalPolicy` (§08).
 - `tm-artifacts` (§10.1) — `blob` (content-addressed store: sha256, dedup, MIME sidecar), `artifact`
   (session-local ids + `OutputSink` spill), `agent` (named sub-agent outputs), `resolve` (registers the
   `artifact://` / `agent://` handlers into the §9.2 registry; `blob:` rehydration at load).
@@ -113,7 +141,8 @@ this is what keeps big data and fan-out **out of the window**.
 ## 25.5 Failure modes & degradation
 
 - **Non-allowlisted command** — `proc.run` rejects it (fail-closed); **no linked folder** → no
-  real-FS reach (sandbox only); **approval timeout** → denied, build / test deferred (§27.6).
+  real-FS reach (sandbox only); **destructive/external/out-of-grant action** → approval or fail-closed;
+  **approval timeout** → denied, effect skipped (§27.6).
 - **Blob missing on rehydrate** — warn, keep the `blob:sha256:` ref in memory, load continues (OMP
   behavior); blob read ENOENT → returns null.
 - **Artifact dir missing** — empty list, allocation starts fresh; **artifact id not found** → error

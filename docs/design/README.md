@@ -38,3 +38,11 @@ Design doc, split by section. Read in order or jump to a section:
 27. [Server, scheduler & clients](product/27-server-and-clients.md)
 28. [Product roadmap](../../ROADMAP.md#product-roadmap-28)
 29. [Parity baseline — the current deployment](product/29-parity-baseline.md)
+
+## Experimental: the `tm` language
+
+> Status: **fun / experimental**, not a committed milestone. A design exploration of what an
+> agent-first language for `execute(code)` would look like — effectful, small, data-oriented.
+> Does not change §6.1 (TS on `deno_core` is the shipping sandbox language); `tm` would be a
+> third `Sandbox` backend that lifts capability gating, approval, and provenance into language
+> primitives. See [`tm/README.md`](tm/README.md).

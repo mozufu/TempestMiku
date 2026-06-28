@@ -6,7 +6,8 @@ on any conflict, SOUL.md wins.**
 
 ## 21.1 Three layers: identity constant, voice floats, modes profile capability
 
-The structure that yields "characterful but never a coding agent":
+The structure that lets the first dogfood slice be a serious coding agent without becoming a sterile
+coding product:
 
 - **Identity** (SOUL.md) — *who* she is. Always present, never overridden.
 - **Voice** (miku-voice) — *how* she talks. Intensity **floats by context**:
@@ -81,6 +82,7 @@ sequenceDiagram
 ## 21.5 Character: defined (was the top open question)
 
 **Resolved.** The character is **Tempest Miku** per `SOUL.md` + `miku-voice`. P0 (§28) ships the
-real persona, not a placeholder. Voice mechanics (喵 density, 主人 honorific, self-reference,
-catchphrases, example lines) live in `miku-voice` and load as a **voice overlay at
+real persona in Serious Engineer form first; the broader project-manager and personal-assistant
+surfaces follow without replacing the identity. Voice mechanics (喵 density, 主人 honorific,
+self-reference, catchphrases, example lines) live in `miku-voice` and load as a **voice overlay at
 context-appropriate intensity** — never baked into a mode addendum, so seriousness can dial it down.

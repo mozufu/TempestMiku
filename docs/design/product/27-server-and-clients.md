@@ -95,14 +95,14 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 
 ## 27.4 Clients
 
-- **WebUI (first).** P0 ships a **chat-only** dogfooding client: message input, streamed token rendering,
-  final response, default mode badge, and reconnect/replay smoke. The fuller product surface lands later:
-  memory browser (`memory://` §22), drive browser (`drive.*` / `drive://` §24), artifact viewer
-  (`artifact://` / `agent://` §25), agent roster (`agent://` §23), self-evolution review (§26.4).
+- **WebUI (first).** P1 ships a **project-manager dogfooding** client on top of the P0 coding loop:
+  message input, streamed token rendering, final response, default mode badge, approval prompts,
+  artifact links, and project/open-loop views. The fuller product surface lands later: memory browser
+  (`memory://` §22), drive browser (`drive.*` / `drive://` §24), agent roster (`agent://` §23), self-evolution review (§26.4).
 - **Android (thin).** Same API; chat + badge + browsers. **No on-device sandbox** (decision A).
 - Both consume the same SSE stream + POST control plane; nothing client-specific lives in the core.
 
-## 27.5 API shape (resolved for P0)
+## 27.5 API shape (resolved for P0/P1)
 
 - **Outbound** (server→LLM): **settled** — OpenAI-compatible chat completions with `stream: true`
   (§11); SSE all the way from the model provider through the loop to the client.

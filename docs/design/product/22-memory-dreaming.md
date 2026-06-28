@@ -128,17 +128,19 @@ There is no external deriver/dreamer to depend on or fall behind: steps 2–6 *a
 
 ### 22.6.1 P0 minimum schema
 
-P0 uses **Postgres directly** for the minimal character slice instead of SQLite or file replay logs.
-The schema is deliberately expandable toward the full §22 engine:
+P0 uses **Postgres directly** for the coding-agent dogfood slice instead of SQLite or file replay logs.
+The schema is deliberately expandable toward the full §22 engine while preserving project continuity:
 
 - `sessions(id, created_at, updated_at, status, mode, persona_status)`
 - `session_events(session_id, seq, event_type, payload_json, created_at)` — SSE replay source (§27)
 - `messages(session_id, seq, role, content, created_at)`
 - `profile_facts(id, subject, predicate, object, confidence, provenance, valid_from, valid_to)`
-- `recall_chunks(id, scope, text, source, created_at, embedding?)`
+- `recall_chunks(id, scope, text, source, created_at, embedding?)` — project summaries, decisions,
+  open loops, and profile/user recall
 
-P0 recall is profile facts + recall chunks, enough to inject a small context block. Full dreaming,
-graph, RRF fusion, and skill generation remain later §22 work.
+P0 recall is profile facts + scoped recall chunks, enough to remember what changed, why it changed,
+and what remains open between coding sessions. Full dreaming, graph, RRF fusion, and skill generation
+remain later §22 work.
 
 ## 22.7 honcho.json behavior → `tm-memory` config
 

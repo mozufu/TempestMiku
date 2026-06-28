@@ -50,6 +50,7 @@ Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
 
 ## 29.5 Parity gate
 
-P0–P3 (§28) are not "done" until they reproduce the current behavior for their slice: Miku replies
-in-voice (§21), the mode router fires (§21.2), memory recall + user profile work (§22), and
-approvals gate the same actions (§21.3). New capabilities layer on **after** parity, not before.
+P0–P4 (§28) are not "done" until they reproduce the current behavior for their slice: coding reach
+works through the single `execute` SDK (§25), project continuity survives across sessions (§22/§27),
+Miku replies in-voice (§21), the mode router fires (§21.2), memory recall + user profile work (§22),
+and approvals gate the same actions (§21.3). New capabilities layer on **after** parity, not before.

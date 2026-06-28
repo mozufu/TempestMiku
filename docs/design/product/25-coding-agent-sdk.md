@@ -56,17 +56,17 @@ honoring principle #8 (no generic shell / escape hatch):
   CWE-88) — and OWASP's **MCP05:2025** names exactly this risk: an agent translating input into
   system commands.
 - **Allowlisted** commands only (the project's `cargo` / `pnpm` / `pytest`, etc.), scoped to a
-  **linked** folder (restricted cwd, §24.4), least-privilege. P1 defaults to Pi-style **yolo within
-  configured grants**: safe build/test/check commands and normal writes run without per-action approval
-  once config grants them; destructive, external, or out-of-grant actions still require approval or fail closed.
+  **linked** folder (restricted cwd, §24.4), least-privilege. P0's coding-agent slice defaults to
+  Pi-style **yolo within configured grants**: safe build/test/check commands and normal writes run
+  without per-action approval once config grants them; destructive, external, or out-of-grant actions still require approval or fail closed.
 - The in-sandbox package ecosystem stays the long-tail safety net; `proc.run` is the narrow, audited
   door to real-repo build / test.
 - **Behavioral parity is kept** (build / test still work); the escape hatch is not. One of the
   on-purpose changes vs. the current system (§29.4).
 
-### 25.2.1 P1 first pass: config-declared linked repos
+### 25.2.1 P0 first pass: config-declared linked repos
 
-P1 reaches real repos through config, not an interactive folder picker:
+P0 reaches real repos through config, not an interactive folder picker:
 
 ```toml
 [[linked_folders]]

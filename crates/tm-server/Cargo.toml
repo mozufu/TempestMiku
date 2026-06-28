@@ -1,0 +1,28 @@
+[package]
+name = "tm-server"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TempestMiku server: session API, SSE stream, persona, and minimal memory substrate."
+
+[dependencies]
+tm-core.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+async-stream.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio-postgres.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tower.workspace = true

@@ -86,7 +86,7 @@ Use this plan as the active implementation brief. First read `AGENTS.md`, `ROADM
 
 ### Status
 
-- [ ] Pending after M1 + host foundation
+- [x] Done
 
 ### Outcome
 
@@ -185,12 +185,12 @@ Expandable toward §22, but P0 only needs:
 
 All must pass before marking P0 done:
 
-- [ ] `cargo test` passes.
-- [ ] Server tests prove session creation, message append, event append, and event replay by `Last-Event-ID`.
-- [ ] Server tests prove persona missing path boots degraded with warning/status.
-- [ ] Server tests prove minimal memory context injection from profile facts + recall chunks.
-- [ ] Server tests prove forwarded auth behavior or local dev token/no-auth behavior, depending on config.
-- [ ] Playwright smoke opens the chat page, sends a message, observes streaming token deltas, observes final text, reconnects, and observes replay/resume.
+- [x] `cargo test` passes.
+- [x] Server tests prove session creation, message append, event append, and event replay by `Last-Event-ID`.
+- [x] Server tests prove persona missing path boots degraded with warning/status.
+- [x] Server tests prove minimal memory context injection from profile facts + recall chunks.
+- [x] Server tests prove forwarded auth behavior or local dev token/no-auth behavior, depending on config.
+- [x] Playwright smoke opens the chat page, sends a message, observes streaming token deltas, observes final text, reconnects, and observes replay/resume.
 
 ### Fresh-session prompt
 

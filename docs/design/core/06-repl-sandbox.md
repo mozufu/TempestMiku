@@ -68,28 +68,74 @@ async fn op_tools_call(
 ```
 
 ```ts
-// injected prelude (illustrative)
+// injected prelude (illustrative; see §7 for the authoritative .d.ts)
+const print = (...items: unknown[]) => Deno.core.ops.op_print(items);
+const display = (value: unknown, opts?: DisplayOptions) =>
+  Deno.core.ops.op_display(value, opts); // synchronous: buffered until cell finish
+
 const tools = {
-  search: (q: string)            => Deno.core.ops.op_tools_search(q),
-  docs:   (name: string)         => Deno.core.ops.op_tools_docs(name),
-  call:   (name: string, a: any) => Deno.core.ops.op_tools_call(name, a),
+  search: (query: string, opts?: ToolSearchOptions) =>
+    Deno.core.ops.op_tools_search(query, opts),
+  docs: (name: string) => Deno.core.ops.op_tools_docs(name),
+  call: (name: string, args?: JsonValue) =>
+    Deno.core.ops.op_host_call(name, args),
 };
-const display = (v: unknown, o?: DisplayOpts) => Deno.core.ops.op_display(v, o);
-const http = {
-  get:  (url: string, init?: ReqInit) => Deno.core.ops.op_http(  "GET", url, init),
-  post: (url: string, body: unknown, init?: ReqInit) => Deno.core.ops.op_http("POST", url, init, body),
+
+const fs = {
+  read: (path: SdkPath, opts?: FsReadOptions) =>
+    tools.call("fs.read", { path, ...opts }),
+  write: (path: SdkPath, data: string | Uint8Array | ArrayBuffer, opts?: FsWriteOptions) =>
+    tools.call("fs.write", { path, data, ...opts }),
+  ls: (path?: SdkPath, opts?: FsListOptions) =>
+    tools.call("fs.ls", { path, ...opts }),
+  find: (patterns: string | string[], opts?: FsFindOptions) =>
+    tools.call("fs.find", { patterns, ...opts }),
 };
+
+const code = {
+  search: (query: CodeSearchQuery) => tools.call("code.search", query),
+  edit: (patch: PatchEdit, opts?: CodeEditOptions) =>
+    tools.call("code.edit", { patch, ...opts }),
+};
+
+const proc = {
+  run: (cmd: string, args: string[] = [], opts?: ProcRunOptions) =>
+    tools.call("proc.run", { cmd, args, ...opts }),
+};
+
+const resources = {
+  read: (uri: ResourceUri, selector?: ResourceSelector) =>
+    tools.call("resources.read", { uri, selector }),
+  preview: (uri: ResourceUri) => tools.call("resources.preview", { uri }),
+  list: (uri?: ResourceUri) => tools.call("resources.list", { uri }),
+};
+
 const artifacts = {
-  put:   (data: Uint8Array | string, o?: PutOpts) => Deno.core.ops.op_artifact_put(data, o),
-  slice: (id: string, s: number, e: number)       => Deno.core.ops.op_artifact_slice(id, s, e),
+  put: (data: ArtifactInput, opts?: ArtifactPutOptions) =>
+    tools.call("artifacts.put", { data, ...opts }),
+  get: (ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions) =>
+    tools.call("artifacts.get", { ref, ...opts }),
+  slice: (ref: ArtifactUri | ArtifactRef, selector: ResourceSelector) =>
+    tools.call("artifacts.slice", { ref, selector }),
+  list: () => tools.call("artifacts.list"),
 };
-const secrets = { use: (name: string) => Deno.core.ops.op_secret_handle(name) };
+
+// Reserved future namespaces are explicitly present but unavailable in the first pass.
+globalThis.http = undefined;
+globalThis.secrets = undefined;
+globalThis.memory = undefined;
+globalThis.skills = undefined;
+globalThis.agents = undefined;
 ```
 
-**Two tiers of ops.** A small fixed set of **core primitives** (`display`, `print`, `artifacts`)
-is bound directly; every other capability goes through one **dispatch bridge**
-(`op_host_call` → registry, surfaced as `tools.call`). New capabilities take the bridge — register
-a handler, emit a stub — so the op layer never grows and never needs a rebuild (§3 principle 9).
+**Two tiers of ops.** A small fixed set of **core primitives** (`print`, synchronous
+`display`, `artifacts`, `resources`) is bound directly; every other capability goes through one
+**dispatch bridge** (`op_host_call` → registry, surfaced as `tools.call`). New capabilities take the
+bridge — register a handler, emit a typed stub — so the op layer never grows and never needs a
+rebuild (§3 principle 9). The first real JS/TS pass exposes `fs.*`, `code.search`, JSON-hunk
+`code.edit`, and argv-vector `proc.run`; `http`, `secrets`, `memory`, `skills`, and `agents` are set
+to `undefined` until their backing crates and policies exist. If a future namespace exists but a
+method is not ready, it throws `NotImplementedError`.
 
 For an **out-of-process** backend (Python), the same SDK is implemented over **JSON-RPC** on a
 pipe/socket: the in-sandbox `host.*` makes a blocking RPC, the Rust host services it
@@ -102,9 +148,9 @@ lives host-side or behind an explicit `host.parallel([...])`.
 naturally:
 
 ```ts
-const pages = await Promise.all(urls.map(u => http.get(u)));   // fan-out, one execute() round-trip
-const hits  = pages.flatMap(p => p.json().items).filter(x => x.score > 0.8);
-display(hits.slice(0, 20));   // only the distilled 20 reach context
+const docs = await Promise.all(paths.map(p => fs.read(p))); // fan-out, one execute() round-trip
+const hits = docs.flatMap(d => d.content?.split("\n") ?? []).filter(line => line.includes("TODO"));
+display(hits.slice(0, 20), { kind: "json", title: "first TODO lines" });
 ```
 
 ### 6.6 Future backend: Python in isolation

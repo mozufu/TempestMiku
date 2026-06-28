@@ -1,8 +1,9 @@
 # 27. Server, scheduler & clients
 
-> A headless, single-user, self-hosted daemon; WebUI + Android are thin clients over one streaming
-> API. Grounded in two proven primitives: **Server-Sent Events** (the server pushes tokens / events
-> down one long-lived connection) and **cron** (the companion is proactive on a schedule).
+> A headless, single-user, self-hosted daemon; one Flutter client targets Web/PWA first and Android
+> later over the same streaming API. Grounded in two proven primitives: **Server-Sent Events** (the
+> server pushes tokens / events down one long-lived connection) and **cron** (the companion is proactive
+> on a schedule).
 
 The core declared UI / deployment out of scope (design README). This is the deliberate expansion
 (decision A): the Rust core runs as a long-lived service; clients are thin views over its event stream.
@@ -30,9 +31,9 @@ registry, and the product subsystems (mode router §21, memory §22, agents §23
 
 ```mermaid
 flowchart TD
-  WEB[WebUI first] -->|SSE stream| SRV[tm-server]
-  WEB -->|POST control| SRV
-  AND[Android thin] -->|SSE + POST| SRV
+  FLUTTER[Flutter client<br/>Web/PWA first, Android later] -->|SSE stream| SRV[tm-server]
+  FLUTTER -->|POST control| SRV
+  FLUTTER -->|resource resolve/list/preview| SRV
   SCHED[scheduler cron] -->|start session| SRV
   SRV --> CORE[agent loop + sandbox + registry]
   CORE --> SUBS[persona / memory / agents / drive]
@@ -60,6 +61,9 @@ the server **extends** it with product events the core trait doesn't carry:
   turn already finished it replays `final`; a completed stream closes (HTTP 204 stops reconnection).
 - **Control plane (client→server).** Discrete POSTs, **not** the SSE channel (SSE is one-way): create
   session, send message, lock / override mode (§21), resolve an approval (§27.6), open a browser view.
+  This control plane is mobile-ready in P1: a phone/browser can attach to the same server-side session,
+  send a task, resolve a gated local-file / `proc.run` action, disconnect, and resume from
+  `Last-Event-ID` without gaining any on-device execution authority.
 - **Single-user auth.** One owner (Brian). Local dev may use token / no-auth; deployed mode supports
   forwarded auth from a trusted reverse proxy. Multi-tenant parked (§15).
 
@@ -95,21 +99,39 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 
 ## 27.4 Clients
 
-- **WebUI (first).** P1 ships a **project-manager dogfooding** client on top of the P0 coding loop:
-  message input, streamed token rendering, final response, default mode badge, approval prompts,
-  artifact links, and project/open-loop views. The fuller product surface lands later: memory browser
-  (`memory://` §22), drive browser (`drive.*` / `drive://` §24), agent roster (`agent://` §23), self-evolution review (§26.4).
-- **Android (thin).** Same API; chat + badge + browsers. **No on-device sandbox** (decision A).
-- Both consume the same SSE stream + POST control plane; nothing client-specific lives in the core.
+- **Flutter client (single codebase).** P1 ships a **project-manager dogfooding** client on top of the
+  P0 coding loop, targeting Web/PWA first: message input, streamed token rendering, final response,
+  default mode badge, approval prompts, artifact/resource links, and project/open-loop views. The P1
+  web target must be usable from a phone-sized browser because remote control of the computer-hosted
+  agent is a first-class workflow.
+- **Mobile remote control (P1).** Phone/browser control uses the same server API as every client: SSE
+  for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
+  session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
+  `project://`, `memory://`, `drive://`, and `cron://` links. The phone is only a view and controller;
+  the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
+- **Android target (later).** The Android app is the same Flutter codebase packaged after the server API
+  and product surfaces stabilize. It adds OS integrations — secure pairing storage, push approval
+  notifications, app links, reconnect/resume polish — but **no on-device sandbox** and no second
+  execution path.
+- All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
+  client-specific lives in the core.
 
 ## 27.5 API shape (resolved for P0/P1)
 
 - **Outbound** (server→LLM): **settled** — OpenAI-compatible chat completions with `stream: true`
   (§11); SSE all the way from the model provider through the loop to the client.
-- **Inbound** (client→server): **custom session API + SSE** is primary: `POST /sessions`,
-  `POST /sessions/:id/messages`, `GET /sessions/:id/events`, and `GET /health`. Optional addition:
-  also expose an **OpenAI-compatible** endpoint (§11) so third-party clients / SDKs work drop-in, but
-  that flattens product events to plain chat, so it is secondary and not a v1 blocker.
+- **Inbound (client→server):** **custom session API + SSE** is primary: `POST /sessions`,
+  `POST /sessions/:id/messages`, `GET /sessions/:id/events`, `POST /sessions/:id/approvals/:approval_id`,
+  `POST /sessions/:id/promote`, mode lock / override endpoints, session-scoped resource endpoints (§09),
+  and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
+  clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
+  a v1 blocker.
+
+`POST /sessions/:id/promote` turns an ad-hoc session into a project or merges it into an existing one.
+The request selects which session summary, open loops, decisions, `workspace://session` files,
+`artifact://` outputs, and linked-folder references to keep. User-initiated promotion is the approval;
+Miku-initiated promotion emits a `write_proposal` and waits for approval. The response returns the
+created/updated `project://<id>` URI plus every promoted target and its source provenance.
 
 ## 27.6 Approvals surface
 
@@ -119,19 +141,20 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 - **Baseline (parity §29):** `approvals.mode: manual`, `approvals.timeout: 60`, `cron_mode: deny`,
   `mcp_reload_confirm: true`, `skills.write_approval: true`, `memory.write_approval: true`.
 - **Enforced as `ApprovalPolicy`** (§08) for: destructive / external / spend actions, **memory-write**
-  (§22 `memory.note`), **skill-write** (§26), **drive-link** + auto-file (§24), and **MCP reload**.
+  (§22 `memory.note`), **skill-write** (§26), **project promotion** when Miku proposes it, **drive-link**
+  + auto-file (§24), and **MCP reload**.
 - This is the single choke point behind every "propose, don't apply" path in the product (§22 / §24 / §26).
 
 ## 27.7 Crate layout (`tm-server`, §28)
 
-- `session` — session lifecycle; the SSE event stream; `Last-Event-ID` resume over the Postgres replay log (#6).
-- `api` — inbound HTTP: session create / send, mode lock, approval resolve, browser feeds; optional
-  OpenAI-compatible endpoint (§27.5).
+- `api` — inbound HTTP: session create / send, mode lock, approval resolve, session promote,
+  session-scoped resource resolve/list/preview gateway for `artifact://`, `workspace://`, `linked://`,
+  `project://`, and the other registered schemes (§09), browser feeds; optional OpenAI-compatible endpoint (§27.5).
 - `event_log` — Postgres-backed append-only session events, monotonic sequence ids, replay from `Last-Event-ID`.
 - `schedule` — cron-style scheduler; job table; bounds (`max_turns`, `cron_mode`); registers the `cron://` handler (list jobs / a job's def + run history) into the §9.2 registry.
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).
 - `auth` — local token / no-auth for dev plus trusted forwarded identity for reverse-proxy deployments.
-- Clients live **outside** the Rust workspace: `web` (Vite + React first) + `android` (§28).
+- Clients live **outside** the Rust workspace: `clients/miku_flutter` (single Flutter codebase targeting Web/PWA first and Android later, §28).
 
 ## 27.8 Failure modes & degradation
 
@@ -168,5 +191,5 @@ lineage: Ken Thompson late-1970s → SysV cron, Keith Williamson 1979). **OpenAI
 (streaming over SSE; §11) for the outbound model transport and the optional inbound compat surface.
 Deployment **`config.yaml`** (host `lumo`, `hermes-agent`) for the model-role aliases + fallback,
 `approvals` (manual / 60s / `cron_mode: deny` / `mcp_reload_confirm`), `goals.max_turns: 8`, and
-`cron` knobs — the parity baseline (§29). **Decision A holds: headless single-user daemon; thin
-WebUI + Android clients; streaming-first; no on-device sandbox.**
+`cron` knobs — the parity baseline (§29). **Decision A holds: headless single-user daemon; one Flutter
+client targeting Web/PWA first and Android later; streaming-first; no on-device sandbox.**

@@ -64,9 +64,13 @@ honoring principle #8 (no generic shell / escape hatch):
 - **Behavioral parity is kept** (build / test still work); the escape hatch is not. One of the
   on-purpose changes vs. the current system (§29.4).
 
-### 25.2.1 P0 first pass: config-declared linked repos
+### 25.2.1 P0 first pass: host adaptor + config-declared linked repos
 
-P0 reaches real repos through config, not an interactive folder picker:
+P0 reaches real repos through the server/host adaptor and config, not ambient filesystem access or an
+interactive folder picker. In the common local deployment the adaptor is in-process with `tm-server`;
+if the server later runs away from the development machine, the same adaptor contract can run as a
+local connector that owns the real filesystem and dials out. Either shape exposes only minted
+`FsPolicy` grants to the SDK.
 
 ```toml
 [[linked_folders]]
@@ -87,8 +91,36 @@ The exact config format may be TOML/YAML/JSON, but the semantics are fixed: link
 alias, `ro` / `rw` attenuation, command allowlist, and safe argv prefixes. `proc.run(cmd, args)`
 matches command + argv prefix structurally; it never parses a shell string.
 
+Model-visible paths should prefer linked-folder aliases (`tempestmiku:crates/...`) over raw host
+absolute paths. The adaptor resolves aliases, canonicalizes paths under the linked root, enforces
+`ro` / `rw` and command grants, emits audit events, and fails closed on traversal, missing grants, or
+unknown capabilities.
+
+Each linked folder also registers a `linked://<alias>/` resource root (§9.3). `linked://` is the
+read/list/preview route for UI and model inspection; writes and commands stay on the explicit SDK paths
+(`fs.write`, `code.edit`, `proc.run`). Local vs remote is hidden behind the grant's host connector, so a
+folder keeps the same URI if it moves from an in-process adaptor to a remote connector.
+
 First `code.edit` is **patch edit only**. LSP (`code.lsp`) and AST (`code.ast`) stay in the SDK map
 but are later milestones, not part of the first serious-engineer cut.
+
+### 25.2.2 First-pass JS/TS runtime contract
+
+The first serious-engineer runtime exposes the authoritative SDK surface in §7.1. Product-layer scope
+is intentionally narrower than the full translation map:
+
+- **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `code`, and
+  `proc`.
+- **Reserved but unavailable:** `http`, `secrets`, `memory`, `skills`, and `agents` are explicitly set
+  to `undefined` so optional chaining and feature checks do not throw `ReferenceError`.
+- **Deferred:** `code.ast` and `code.lsp` remain in the translation map but are not first-pass runtime
+  namespaces. A future namespace may exist while a method is incomplete; that method throws
+  `NotImplementedError`.
+- **Read shape:** `fs.read` and `resources.read` return the shared `ResourceContent` envelope, never a
+  naked string.
+- **Edit shape:** `code.edit` takes JSON hunks, not a string patch grammar.
+- **Process shape:** `proc.run(cmd, args, opts)` is argv-vector only. Shell strings, pipes, redirects,
+  and command concatenation are not accepted.
 
 ## 25.3 Artifact handler — two tiers (adopt OMP model into §09)
 
@@ -130,7 +162,8 @@ this is what keeps big data and fan-out **out of the window**.
 
 - `tm-host` SDK namespaces — `fs` (read / write / ls / find; jail-or-linked §24.4), `code` (patch
   `edit` first; `ast` / `lsp` later), `proc` (run: **allowlist + argv + linked-cwd + yolo within
-  configured grants, approval for destructive/external/out-of-grant actions**); wired to the capability
+  configured grants, approval for destructive/external/out-of-grant actions**), plus the `linked://`
+  resource handler for read/list/preview over granted local or remote folders; wired to the capability
   registry (§07) + `ApprovalPolicy` (§08).
 - `tm-artifacts` (§10.1) — `blob` (content-addressed store: sha256, dedup, MIME sidecar), `artifact`
   (session-local ids + `OutputSink` spill), `agent` (named sub-agent outputs), `resolve` (registers the

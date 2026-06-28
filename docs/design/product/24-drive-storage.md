@@ -89,14 +89,16 @@ flowchart LR
   scope** (§22.6) — **one link, two grants** (filesystem + memory), revoked together.
 - **Attenuation & revocation.** `ro` vs `rw` is attenuation; a grant narrows or revokes, never escalates.
   This is the **only** path by which **Serious Engineer** (§21) and `fs.*` / `proc.*` (§25) reach real
-  repos. No ambient access, no `sh -c` (principle #8).
+  repos. A linked folder is exposed for read/list/preview as `linked://<alias>/…` (§9.3), not as
+  `drive://`; writes and commands still go through the explicit SDK capabilities. No ambient access, no
+  `sh -c` (principle #8).
 
 ## 24.5 Sync — local-first (decision)
 
 - **Local-first default** (Kleppmann et al.): the local copy is primary, fully functional **offline**; **no
   cloud dependency in v1** (the user owns the data).
 - **Later (open question, §28):** an optional **secondary** replica with **CRDT-based** sync for multi-device
-  (WebUI + Android, §27) — ownership, privacy, and offline use preserved; merges are conflict-free.
+  (Flutter Web/PWA + Android, §27) — ownership, privacy, and offline use preserved; merges are conflict-free.
 
 ## 24.6 Crate layout (`tm-drive`, §28)
 

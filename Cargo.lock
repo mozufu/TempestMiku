@@ -2027,6 +2027,7 @@ name = "tm-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "parking_lot",
  "tm-core",
  "tm-llm",
  "tm-sandbox",

@@ -163,3 +163,20 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
   returned to the model, not host failures.
 - **Serialization:** `serde` everywhere; the op boundary is `serde_json::Value`.
 - **Config:** layered (defaults → file → env → flags); capabilities are config, not code.
+
+
+### 10.5 Current implementation boundary
+
+The M0 CLI path is intentionally conservative: `apps/tm-cli` wires the streaming `Agent` to
+`StubSandbox`, so live CLI runs validate protocol flow, token streaming, tool-call assembly,
+result shaping, and turn budgeting without executing untrusted code. The real `DenoSandbox`
+backend lives behind the same `Sandbox` / `Session` traits in `tm-sandbox` and is exercised by
+crate tests, but it is not the default CLI runtime until the M1 host/artifact approval spine is
+locked.
+
+That split is temporary and deliberate:
+
+- model-visible behavior still goes through one `execute(code)` tool;
+- the loop never depends on stub-specific behavior;
+- product features must target the trait boundary, not `StubSandbox`;
+- switching the CLI from stub to Deno is an M1 integration step, not a second loop.

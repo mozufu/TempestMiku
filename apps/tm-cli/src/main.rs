@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use parking_lot::Mutex;
 use tm_core::{Agent, AgentConfig, EventSink, Protocol};
 use tm_llm::OpenAiClient;
 use tm_sandbox::StubSandbox;
@@ -57,38 +58,83 @@ async fn main() -> Result<()> {
     };
 
     let agent = Agent::new(Arc::new(llm), Arc::new(StubSandbox), cfg);
-    let sink = StdoutSink;
+    let sink = StdoutSink::stdio();
 
     agent.run(prompt, &sink).await.context("agent run")?;
     Ok(())
 }
 
 /// Streams assistant tokens to stdout live; cell telemetry to stderr (dimmed).
-struct StdoutSink;
+type StdoutSink = StreamingSink<std::io::Stdout, std::io::Stderr>;
 
-impl EventSink for StdoutSink {
+struct StreamingSink<O, E> {
+    stdout: Mutex<O>,
+    stderr: Mutex<E>,
+    dim: bool,
+}
+
+impl StdoutSink {
+    fn stdio() -> Self {
+        StreamingSink::new(std::io::stdout(), std::io::stderr(), true)
+    }
+}
+
+impl<O, E> StreamingSink<O, E> {
+    fn new(stdout: O, stderr: E, dim: bool) -> Self {
+        Self {
+            stdout: Mutex::new(stdout),
+            stderr: Mutex::new(stderr),
+            dim,
+        }
+    }
+}
+
+impl<O, E> StreamingSink<O, E>
+where
+    O: Write + Send,
+    E: Write + Send,
+{
+    fn write_stderr_line(&self, line: impl AsRef<str>) {
+        let mut stderr = self.stderr.lock();
+        if self.dim {
+            let _ = writeln!(stderr, "\x1b[2m{}\x1b[0m", line.as_ref());
+        } else {
+            let _ = writeln!(stderr, "{}", line.as_ref());
+        }
+        let _ = stderr.flush();
+    }
+}
+
+impl<O, E> EventSink for StreamingSink<O, E>
+where
+    O: Write + Send,
+    E: Write + Send,
+{
     fn on_text(&self, delta: &str) {
-        print!("{delta}");
-        let _ = std::io::stdout().flush();
+        let mut stdout = self.stdout.lock();
+        let _ = write!(stdout, "{delta}");
+        let _ = stdout.flush();
     }
 
     fn on_tool_call(&self, name: &str) {
-        eprintln!("\x1b[2m· tool call: {name}\x1b[0m");
+        self.write_stderr_line(format!("· tool call: {name}"));
     }
 
     fn on_cell_start(&self, code: &str) {
-        eprintln!("\x1b[2m· executing cell ({} bytes)\x1b[0m", code.len());
+        self.write_stderr_line(format!("· executing cell ({} bytes)", code.len()));
     }
 
     fn on_cell_result(&self, shaped: &str) {
-        eprintln!("\x1b[2m· result → model:\x1b[0m");
+        self.write_stderr_line("· result → model:");
         for line in shaped.lines() {
-            eprintln!("\x1b[2m  {line}\x1b[0m");
+            self.write_stderr_line(format!("  {line}"));
         }
     }
 
     fn on_final(&self, _text: &str) {
-        println!(); // terminate the streamed answer line
+        let mut stdout = self.stdout.lock();
+        let _ = writeln!(stdout);
+        let _ = stdout.flush();
     }
 }
 
@@ -157,4 +203,46 @@ fn print_usage() {
          OPENAI_API_KEY     bearer token\n  \
          OPENAI_MODEL       model id\n"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streaming_sink_writes_token_deltas_before_final_newline() {
+        let sink = StreamingSink::new(Vec::new(), Vec::new(), false);
+
+        sink.on_text("The answer ");
+        sink.on_text("streams");
+        assert_eq!(
+            String::from_utf8(sink.stdout.lock().clone()).unwrap(),
+            "The answer streams"
+        );
+
+        sink.on_final("The answer streams");
+        assert_eq!(
+            String::from_utf8(sink.stdout.lock().clone()).unwrap(),
+            "The answer streams\n"
+        );
+    }
+
+    #[test]
+    fn streaming_sink_keeps_cell_telemetry_off_stdout() {
+        let sink = StreamingSink::new(Vec::new(), Vec::new(), false);
+
+        sink.on_text("visible");
+        sink.on_tool_call("execute");
+        sink.on_cell_start("display(1)");
+        sink.on_cell_result("stdout:\n1");
+
+        assert_eq!(
+            String::from_utf8(sink.stdout.lock().clone()).unwrap(),
+            "visible"
+        );
+        let stderr = String::from_utf8(sink.stderr.lock().clone()).unwrap();
+        assert!(stderr.contains("tool call: execute"));
+        assert!(stderr.contains("executing cell"));
+        assert!(stderr.contains("result"));
+    }
 }

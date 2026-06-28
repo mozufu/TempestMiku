@@ -155,11 +155,21 @@ never `Promise.all` plus manual abort wiring.
 
 ## 2.8 Discovering capabilities
 
-`tools.search` and `tools.docs` are effects too (they hit the registry), and they are the
-language's **introspection entry point** — the `tm` equivalent of reading its own SDK docs:
+`help`, `tools.search`, and `tools.docs` are effects too (they hit the registry), and they
+are the language's **introspection entry point** — the `tm` equivalent of reading its own SDK
+docs:
 
 ```
-let docs = tools.docs "fs.read"
+help fs.read
+help "table.aggregate"
+```
+
+`help name` is Python-shaped sugar for `tools.docs name |> display {kind: "help"}`. It
+returns the same documentation value if used in an expression, so the model can inspect the
+signature programmatically:
+
+```
+let docs = help "fs.read"
 docs.signature |> display {kind: "json"}
 ```
 

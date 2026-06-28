@@ -116,7 +116,7 @@ The approval boundary (AGENTS.md: "manual approvals" as a parity invariant) beco
 | §7 SDK namespace | `tm` effect | `!`? |
 |---|---|---|
 | `print`, `display` | core primitive (not an effect — pure output to sink) | no |
-| `tools.search/docs/call` | `Tools Search` / `Tools Docs` / `Tools Call` | no |
+| `help`, `tools.search/docs/call` | `Tools Docs` / `Tools Search` / `Tools Call` | no |
 | `fs.read/ls/find` | `FS Read` | no |
 | `fs.write` | `FS Write!` | **yes** |
 | `code.search` | `Code Search` | no |

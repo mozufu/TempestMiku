@@ -31,6 +31,8 @@ dotenvy = "0.15"
 sha2 = "0.10"
 hex = "0.4"
 url = "2"
+deno_ast = { version = "=0.53.2", features = ["transpiling"] }
+deno_error = "=0.7.1"
 
 # errors + tracing
 thiserror = "2"

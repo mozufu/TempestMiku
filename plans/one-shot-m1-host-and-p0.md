@@ -15,7 +15,7 @@ Created from the 2026-06-27 planning discussion. Use this as source material for
 
 ### Status
 
-- [x] Pending
+- [x] Done
 
 ### Outcome
 
@@ -61,20 +61,20 @@ Complete the M1 substrate plus host foundation without starting the full P0 prod
 
 All must pass before marking this milestone done:
 
-- [ ] `cargo test` passes without external services.
-- [ ] Tests prove TypeScript cell execution.
-- [ ] Tests prove persistent state across cells.
-- [ ] Tests prove reset clears state.
-- [ ] Tests prove timeout/cancel returns a structured error and does not kill the host.
-- [ ] Tests prove `display` / `print` capture reaches shaped output.
-- [ ] Tests prove large output spills to `artifact://` with bounded preview.
-- [ ] Tests prove `artifact://` resolves through the registry.
-- [ ] Tests prove unknown resource schemes fail closed.
-- [ ] Tests prove unknown capabilities fail closed.
-- [ ] Tests prove blocked network by default.
-- [ ] Tests prove allowlisted `http.get` works or is covered by a deterministic local/test handler.
-- [ ] Tests prove approval timeout/default-deny behavior.
-- [ ] If frontend/WebUI files are added, Playwright smoke passes.
+- [x] `cargo test` passes without external services.
+- [x] Tests prove TypeScript cell execution.
+- [x] Tests prove persistent state across cells.
+- [x] Tests prove reset clears state.
+- [x] Tests prove timeout/cancel returns a structured error and does not kill the host.
+- [x] Tests prove `display` / `print` capture reaches shaped output.
+- [x] Tests prove large output spills to `artifact://` with bounded preview.
+- [x] Tests prove `artifact://` resolves through the registry.
+- [x] Tests prove unknown resource schemes fail closed.
+- [x] Tests prove unknown capabilities fail closed.
+- [x] Tests prove blocked network by default.
+- [x] Tests prove allowlisted `http.get` works or is covered by a deterministic local/test handler.
+- [x] Tests prove approval timeout/default-deny behavior.
+- [x] No frontend/WebUI files were added, so Playwright smoke is not applicable.
 
 ### Fresh-session prompt
 

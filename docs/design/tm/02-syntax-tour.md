@@ -15,7 +15,12 @@ That's it. No `console.log`, no `Deno.core.ops.op_print`. `print` is a core prim
 ## 2.2 The shape of a cell
 
 A cell is a series of bindings and a final expression. The last expression is the result;
-`display` is the *intended* output (§5.4 result shaping).
+`display` is the *intended* output (§5.4 result shaping). `tm` is **expression-oriented**:
+there are no statements. `let x = e1; e2` is sugar for `let x = e1 in e2`, and a `do` block is
+a nested-`let` expression — sequential code is just expression nesting, not a second
+paradigm. Pipelines, `match`, `let`, `do`, and function bodies are all the same thing
+(expressions); the pipeline vs. sequence distinction is surface, not spine. This is the
+OCaml/Roc stance, and it is in the model's fluency basin.
 
 ```
 let paths = ["src/a.ts", "src/b.ts", "src/c.ts"]
@@ -74,31 +79,35 @@ pandas — just rows the host already knows how to render.
 ## 2.4 Functions and effect rows
 
 ```
-fun add(x, y) : Int := x + y
+fun add(x, y) : Int = x + y
 
-fun gather_todos(paths) : {FS Read} [String] :=
+fun gather_todos(paths) : <FS Read> List String =
   paths |> par map fs.read |> flatmap lines |> filter (includes "TODO")
-```
 
-The `: {FS Read} [String]` is the **effect row + return type**. `{FS Read}` means "this
-function performs the `FS Read` effect." Empty row (or omitted) means pure — memoizable,
-replayable for free (§3.6).
+-- [String] in a value is a JSON list literal; the *type* is `List String`.
+-- `<>` is the effect row (angle brackets are free — `tm` has no generics, §2.9).
+
+The `: <FS Read> List String` is the **effect row + return type**. `<FS Read>` means "this
+function performs the `FS Read` effect." Empty row (or omitted `<>` entirely) means pure —
+memoizable, replayable for free (§3.6).
 
 ```
-fun pure_sum(xs) : [Int] := xs |> fold 0 (+)
-```
+fun pure_sum(xs) : List Int = xs |> fold 0 (+)
 
 No effect row → the host may cache it; the transcript may skip re-running it on replay.
 
 ## 2.5 The `!` — approval in the type
 
 ```
-fun save(patch) : {Code Edit!} Unit := code.edit {patch}
+fun save(patch) : <Code Edit!> Unit = code.edit {patch}
 ```
 
-`Code Edit!` — the `!` marks an effect that **can suspend for human approval**. The host's
-approval policy decides whether it actually suspends (§3). The model does not write "if
-approved then… else…" — it writes the edit, and the language handles the wait.
+`Code Edit!` — the `!` marks an effect whose handler **is resumable**: it may suspend for
+human approval and resume with the answer. The host's approval policy decides whether it
+actually suspends (§3) — "may" is the policy's call; "is allowed to at all" is the type's
+call (a non-`!` effect's handler is statically forbidden from suspending, §1.3). The model
+does not write "if approved then… else…" — it writes the edit, and the language handles the
+wait.
 
 ```
 do
@@ -136,6 +145,13 @@ let [a, b, c] = par [ fs.read "a", http.get "b", tools.docs "fs.write" ]
 `par` evaluates a tuple of effectful expressions concurrently and waits for all. Backed by
 Tokio on the deno path, host-side fan-out on the CPython path (§6.6 `host.parallel`) — **same
 syntax, different executor.** `par map` is `par` over a list.
+`par` has the strict semantics of a structured-concurrency scope (the shape
+[`ki`](https://github.com/awkward-squad/ki) / [`atelier-core`](https://github.com/atelier-hub/tricorder/tree/b21172e/atelier-core)
+`Conc.scoped` + `awaitAll` already implements): all branches are bound to the `par` scope;
+the scope does not close until every branch has completed or been cancelled; if any branch
+errors, the scope cancels its siblings and the `par` resolves to that error — the
+first-failure semantics of `Conc.race`, generalized to N arms. The model writes `par`,
+never `Promise.all` plus manual abort wiring.
 
 ## 2.8 Discovering capabilities
 
@@ -156,6 +172,8 @@ types.
 
 No classes. No prototypes. No `this`. No macros. No `async`/`await` (effects subsume both).
 No exceptions (errors are values). No optional chaining operator (pattern match instead). No
-npm. No `Promise`. No generics syntax beyond effect rows. The language is meant to be small
+npm. No `Promise`. No parametric generics — `<>` is *only* the effect row, never `List<T>` or
+`Map<K,V>`; type parameters on a `type` declaration (§4 `type Result T E`) are sum-type
+fields, not generic-function syntax. The language is meant to be small
 enough that the *entire grammar fits in the system prompt's SDK section* if we want — and
 certainly small enough that `tools.docs` can teach it.

@@ -13,14 +13,14 @@ eff FS   Read   : (path: Path) -> String
 eff FS   Write! : (path: Path, data: Data) -> Unit
 eff HTTP Get    : (url: Url) -> Bytes
 eff Code Edit!  : (patch: Patch) -> Unit
-eff Proc Run!   : (cmd: String, args: [String]) -> ProcResult
+eff Proc Run!   : (cmd: String, args: List String) -> ProcResult
 ```
 
 A function's effect row is its **capability manifest**, computed by the type checker from the
 effects it performs:
 
 ```
-fun backup(src, dst) : {FS Read, FS Write!} Unit :=
+fun backup(src, dst) : <FS Read, FS Write!> Unit =
   let data = fs.read src
   fs.write dst data
 ```
@@ -31,7 +31,7 @@ runs*:
 ### Fail-closed becomes a type error
 
 ```
-fun oops(url) : Unit := http.get url   -- {HTTP Get} not granted this session
+fun oops(url) : Unit = http.get url   -- <HTTP Get> not granted this session
 ```
 
 If the session's granted effect row does not include `HTTP Get`, this is **rejected before
@@ -54,10 +54,22 @@ register handler + emit stub) is, in `tm`, adding an effect declaration + a hand
 The "one bridge, a runtime registry" principle is not violated — it is *realized* as the
 language's dispatch.
 
+This dispatch is not new — it is the shape of every algebraic-effect library. Haskell's
+[`effectful`](https://github.com/haskell-effectful/effectful) and
+[`atelier-core`](https://github.com/atelier-hub/tricorder/tree/b21172e/atelier-core) already
+model `Process`/`FileSystem`/`Cache`/`Conc` as effects dispatched by an interpreter, and
+`atelier-core`'s `Component` lifecycle (`setup → listeners → start`) is a credible template
+for how the `tm` host could register capability handlers. What `tm` imports from that
+ecosystem is the **dispatch shape**; what it cannot import is below.
+
 ## 3.2 Approval as a resumable effect
 
-This is the aha from §1.3. Effects marked `!` are **approval-bearing**: their handler may
-*suspend* execution, ask the host (which asks the user), and *resume* with the result.
+This is the aha from §1.3. Effects marked `!` are **approval-bearing**: their handler's
+interface *is* resumable — it may suspend execution, ask the host (which asks the user), and
+resume with the result. Effects without `!` have a synchronous-only handler interface and are
+statically forbidden from suspending. The `!` is therefore a type-level contract on the
+handler, not a call-site naming convention; whether a given `!` perform actually suspends is
+the approval policy's runtime choice (§3.3), but whether it *can* is the type's choice.
 
 ```
 do
@@ -142,3 +154,13 @@ A resumable effect needs the isolate to capture its continuation. Two implementa
 This is the real argument for `tm` having its own Rust backend rather than transpiling to TS:
 **resumable effects are awkward on V8 but natural in a tree-walking interpreter.** §5 picks
 this up.
+
+And it is the argument against reusing a mature effect runtime instead of building one.
+[`atelier-core`](https://github.com/atelier-hub/tricorder/tree/b21172e/atelier-core) on
+[`effectful`](https://github.com/haskell-effectful/effectful) is the closest existing thing
+to `tm`'s effect catalog — yet none of its interpreters *resumes*: every `perform` returns
+synchronously from a compile-time-linked `interpret`. Resumable effects are not a library
+feature; they are a property of the execution substrate. A tree-walking interpreter's frame
+stack *is* the continuation, so `suspend → ask → resume` is a Rust enum. That is why `tm`
+builds its own backend rather than hosting on Effectful or V8: the load-bearing pillar (§3.2)
+demands a substrate that libraries do not provide.

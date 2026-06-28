@@ -30,6 +30,18 @@ it needs approved.
 | **Approval-aware** | §7 approval policy, AGENTS.md approval boundary | Resumable effects (suspend → ask → resume) |
 | **Data-oriented, small** | §5.4 result shaping, §3.3 context-as-budget | Pipelines, tables, JSON, errors-as-values |
 
+Pillar 1 is prior art, not a discovery. The "algebraic effects + handler = host registry"
+shape is already validated in Haskell's effect-library ecosystem: [`effectful`](https://github.com/haskell-effectful/effectful)
+with [`ki`](https://github.com/awkward-squad/ki) structured concurrency, and
+[`atelier-core`](https://github.com/atelier-hub/tricorder/tree/b21172e/atelier-core) is a
+production catalog of exactly these effects (`Process`, `Conc`, `Cache`, `FileSystem`, …)
+with the same perform → interpreter dispatch `tm` adopts. `tm` does not claim "effects as
+capabilities" as novel. What it adds over a library: the effect **row** as a fail-closed
+eval-time boundary rather than a post-hoc `:>` constraint (§3.1); **resumable** approval
+effects the library layer cannot express (§3.2); and the row as a **replay provenance**
+marker (§3.1). The load-bearing novelty is pillars 2 and 3; pillar 1 lifts a validated
+shape into the language so they have a type system to sit in.
+
 ## 1.3 The aha
 
 The genuinely agent-first idea is not the syntax. It is:
@@ -44,10 +56,16 @@ intra-event-loop. You can fake it with a host op that blocks, but the *type* of 
 still lies — it says `Promise<void>`, identical to `fs.read`. In `tm`:
 
 ```
-fun ship(patch) : {Code Edit!} Unit := code.edit {patch}
+fun ship(patch) : <Code Edit!> Unit = code.edit {patch}
 ```
 
 The `!` is in the type. The model, the host, and the transcript all see it.
+The `!` is not a naming hint. It is a **handler-interface contract**: a `!` effect's handler
+*must* be resumable (it may suspend and resume); a non-`!` effect's handler *must* be
+synchronous (it may never suspend). "May suspend" at the call site is the policy's choice;
+"can suspend at all" is the type's choice. This is the same shape as Rust's `async` —
+`async` fn may or may not actually await, but a non-`async` fn is statically guaranteed not
+to.
 
 ## 1.4 What it is not
 

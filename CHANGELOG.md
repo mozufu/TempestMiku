@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- Added `tm-artifacts` and `tm-host` foundations plus a `deno_core` sandbox path for the M1 substrate.
 
 - Added a root `ROADMAP.md` as the canonical roadmap for core and product milestones.
 - Added this changelog.

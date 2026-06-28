@@ -58,7 +58,7 @@ impl Sandbox for EchoSandbox {
 
 struct EchoSession;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Session for EchoSession {
     async fn eval(&mut self, code: &str, _budget: CellBudget) -> Result<EvalOutput> {
         Ok(EvalOutput {

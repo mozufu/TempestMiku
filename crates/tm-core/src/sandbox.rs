@@ -47,8 +47,8 @@ pub trait Sandbox: Send + Sync {
 
 /// A persistent REPL session. State (variables, definitions) survives across `eval` calls;
 /// `reset` tears it down for a clean slate.
-#[async_trait]
-pub trait Session: Send {
+#[async_trait(?Send)]
+pub trait Session {
     async fn eval(&mut self, code: &str, budget: CellBudget) -> Result<EvalOutput>;
     async fn reset(&mut self) -> Result<()>;
 }

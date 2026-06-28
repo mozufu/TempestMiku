@@ -1,8 +1,9 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use tm_persona::PersonaConfig;
+
 use tm_server::{
-    AppState, AuthConfig, EchoChatRunner, InMemoryStore, PersonaConfig, PostgresStore,
-    StoreMemoryProvider, app,
+    AppState, AuthConfig, EchoChatRunner, InMemoryStore, PostgresStore, StoreMemoryProvider, app,
 };
 
 #[tokio::main]

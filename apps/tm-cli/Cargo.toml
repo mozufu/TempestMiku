@@ -14,8 +14,16 @@ path = "src/main.rs"
 tm-core.workspace = true
 tm-llm.workspace = true
 tm-sandbox.workspace = true
+tm-host.workspace = true
+tm-artifacts.workspace = true
+tm-persona.workspace = true
+async-trait.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 parking_lot.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3"

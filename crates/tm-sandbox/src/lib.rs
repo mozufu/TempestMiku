@@ -26,8 +26,9 @@ use serde_json::{Value, json};
 use tm_artifacts::{ArtifactRef, ArtifactStore, ResourceContent};
 use tm_core::{CellBudget, EvalOutput, Result, Sandbox, Session, SessionConfig};
 use tm_host::{
-    ArtifactResourceHandler, CapabilityGrants, HostError, HostFn, HostRegistry, InvocationCtx,
-    ResourceRegistry,
+    ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy,
+    HostError, HostFn, HostRegistry, InvocationCtx, LinkedFolders, ResourceEntry, ResourceRegistry,
+    ToolDocs, ToolSummary, register_p0_linked_folder_functions,
 };
 
 /// A sandbox that runs no code. Each `eval` echoes the submitted source as its result and notes
@@ -81,12 +82,38 @@ struct RuntimeHostState {
 #[derive(Debug, Clone)]
 struct HttpGetFn {
     responses: BTreeMap<String, String>,
+    docs: ToolDocs,
+}
+
+impl HttpGetFn {
+    fn new(responses: BTreeMap<String, String>) -> Self {
+        Self {
+            responses,
+            docs: ToolDocs {
+                name: "http.get".to_string(),
+                namespace: "http".to_string(),
+                summary: "Fetch an allowlisted HTTP response for sandbox regression tests"
+                    .to_string(),
+                description: None,
+                signature: "http.get({ url })".to_string(),
+                args_schema: json!({ "type": "object", "required": ["url"] }),
+                result_schema: None,
+                examples: Vec::new(),
+                errors: Vec::new(),
+                grants: Vec::new(),
+                sensitive: true,
+                approval: "none".to_string(),
+                since: "M1".to_string(),
+                stability: "test".to_string(),
+            },
+        }
+    }
 }
 
 #[async_trait]
 impl HostFn for HttpGetFn {
-    fn name(&self) -> &str {
-        "http.get"
+    fn docs(&self) -> &ToolDocs {
+        &self.docs
     }
 
     async fn call(
@@ -145,6 +172,75 @@ async fn op_tm_resource_read(
 
 #[op2]
 #[serde]
+async fn op_tm_resource_preview(
+    state: Rc<RefCell<OpState>>,
+    #[string] uri: String,
+) -> std::result::Result<ResourceContent, JsErrorBox> {
+    let host_state = {
+        let state = state.borrow();
+        state.borrow::<RuntimeHostState>().clone()
+    };
+    host_state
+        .resource_registry
+        .preview(&uri, &host_state.invocation_ctx)
+        .await
+        .map_err(js_host_error)
+}
+
+#[op2]
+#[serde]
+async fn op_tm_resource_list(
+    state: Rc<RefCell<OpState>>,
+    #[string] uri: String,
+) -> std::result::Result<Vec<ResourceEntry>, JsErrorBox> {
+    let host_state = {
+        let state = state.borrow();
+        state.borrow::<RuntimeHostState>().clone()
+    };
+    let uri = (!uri.is_empty()).then_some(uri);
+    host_state
+        .resource_registry
+        .list(uri.as_deref(), &host_state.invocation_ctx)
+        .await
+        .map_err(js_host_error)
+}
+
+#[op2]
+#[serde]
+fn op_tm_tools_search(
+    state: &mut OpState,
+    #[string] query: String,
+    #[serde] opts: serde_json::Value,
+) -> Vec<ToolSummary> {
+    let host_state = state.borrow::<RuntimeHostState>().clone();
+    let namespace = opts
+        .get("namespace")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let limit = opts.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+    host_state.host_registry.search(
+        &query,
+        namespace.as_deref(),
+        limit,
+        &host_state.invocation_ctx,
+    )
+}
+
+#[op2]
+#[serde]
+fn op_tm_tools_docs(
+    state: &mut OpState,
+    #[string] name: String,
+) -> std::result::Result<ToolDocs, JsErrorBox> {
+    let host_state = state.borrow::<RuntimeHostState>().clone();
+    host_state
+        .host_registry
+        .docs(&name, &host_state.invocation_ctx)
+        .map_err(js_host_error)
+}
+
+#[op2]
+#[serde]
 fn op_tm_artifact_put(
     state: &mut OpState,
     #[serde] data: serde_json::Value,
@@ -183,6 +279,7 @@ fn js_host_error(err: HostError) -> JsErrorBox {
         HostError::UnknownScheme { .. } => "CapabilityDeniedError",
         HostError::NotFound(_) => "NotFoundError",
         HostError::InvalidArgs(_) => "InvalidArgsError",
+        HostError::InvalidPath(_) => "InvalidPathError",
         HostError::HostCall(_) => "HostCallError",
     };
     JsErrorBox::generic(format!("{name}: {err}"))
@@ -197,8 +294,12 @@ extension!(
     ops = [
         op_tm_host_call,
         op_tm_resource_read,
+        op_tm_resource_preview,
+        op_tm_resource_list,
         op_tm_artifact_put,
-        op_tm_artifact_list
+        op_tm_artifact_list,
+        op_tm_tools_search,
+        op_tm_tools_docs
     ],
     options = {
         host_state: RuntimeHostState,
@@ -217,6 +318,9 @@ pub struct DenoSandboxOptions {
     pub host_registry: HostRegistry,
     pub resource_registry: ResourceRegistry,
     pub grants: CapabilityGrants,
+    pub linked_folders: Option<LinkedFolders>,
+    pub approval_policy: Arc<dyn ApprovalPolicy>,
+    pub approval_timeout: Duration,
 }
 
 impl Default for DenoSandboxOptions {
@@ -230,6 +334,9 @@ impl Default for DenoSandboxOptions {
             grants: CapabilityGrants::default()
                 .allow("http.get")
                 .allow("resources.read:artifact"),
+            linked_folders: None,
+            approval_policy: Arc::new(DefaultDenyApprovalPolicy),
+            approval_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -270,18 +377,39 @@ impl DenoSession {
         let artifact_store = ArtifactStore::open(&options.artifact_root, &options.session_id)
             .map_err(|err| tm_core::Error::Sandbox(err.to_string()))?;
         let mut host_registry = options.host_registry.clone();
-        host_registry.register(Arc::new(HttpGetFn {
-            responses: options.http_allowlist.clone(),
-        }));
+        host_registry.register(Arc::new(HttpGetFn::new(options.http_allowlist.clone())));
         let mut resource_registry = options.resource_registry.clone();
         resource_registry.register(Arc::new(ArtifactResourceHandler::new(
             artifact_store.clone(),
         )));
+        let mut grants = options.grants.clone();
+        if let Some(linked_folders) = options.linked_folders.clone() {
+            register_p0_linked_folder_functions(
+                &mut host_registry,
+                &mut resource_registry,
+                linked_folders,
+                artifact_store.clone(),
+            );
+            grants = grants.allow_many([
+                "fs.read",
+                "fs.write",
+                "fs.ls",
+                "fs.find",
+                "code.search",
+                "code.edit",
+                "proc.run",
+                "resources.read:linked",
+            ]);
+        }
         let host_state = RuntimeHostState {
             artifact_store: artifact_store.clone(),
             host_registry,
             resource_registry,
-            invocation_ctx: InvocationCtx::new(options.grants.clone()),
+            invocation_ctx: InvocationCtx::with_approvals(
+                grants,
+                options.approval_policy.clone(),
+                options.approval_timeout,
+            ),
         };
         let mut session = Self {
             runtime: Some(JsRuntime::new(RuntimeOptions {
@@ -348,13 +476,26 @@ globalThis.artifacts = {
 };
 globalThis.resources = {
   read: async (uri, selector = undefined) => __tm_sdk_shape(await __tm_ops.op_tm_resource_read(String(uri), __tm_arg_selector(selector))),
-  preview: async (uri) => resources.read(uri),
-  list: (_uri = undefined) => artifacts.list()
+  preview: async (uri) => __tm_sdk_shape(await __tm_ops.op_tm_resource_preview(String(uri))),
+  list: async (uri = undefined) => (await __tm_ops.op_tm_resource_list(uri == null ? "" : String(uri))).map(__tm_sdk_shape)
 };
 globalThis.tools = {
-  search: async () => [],
-  docs: async (name) => tools.call("tools.docs", { name: String(name) }),
+  search: async (query, opts = undefined) => __tm_ops.op_tm_tools_search(String(query), opts ?? null),
+  docs: async (name) => __tm_ops.op_tm_tools_docs(String(name)),
   call: async (name, args = {}) => __tm_ops.op_tm_host_call(String(name), args ?? null)
+};
+globalThis.fs = {
+  read: async (path, opts = undefined) => __tm_sdk_shape(await tools.call("fs.read", { path: String(path), ...(opts ?? {}) })),
+  write: async (path, data, opts = undefined) => __tm_sdk_shape(await tools.call("fs.write", { path: String(path), data, ...(opts ?? {}) })),
+  ls: async (path = undefined, opts = undefined) => await tools.call("fs.ls", { ...(path == null ? {} : { path: String(path) }), ...(opts ?? {}) }),
+  find: async (patterns, opts = undefined) => await tools.call("fs.find", { patterns, ...(opts ?? {}) })
+};
+globalThis.code = {
+  search: async (query) => await tools.call("code.search", query),
+  edit: async (patch, opts = undefined) => await tools.call("code.edit", { ...patch, ...(opts ?? {}) })
+};
+globalThis.proc = {
+  run: async (cmd, args = [], opts = undefined) => __tm_sdk_shape(await tools.call("proc.run", { cmd: String(cmd), args, ...(opts ?? {}) }))
 };
 globalThis.http = {
   get: async (url) => tools.call("http.get", { url: String(url) })
@@ -637,6 +778,26 @@ fn transpile_typescript(code: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
+
+    fn p0_sandbox(root: &std::path::Path, artifact_root: &std::path::Path) -> DenoSandbox {
+        DenoSandbox::new(DenoSandboxOptions {
+            artifact_root: artifact_root.to_path_buf(),
+            linked_folders: Some(
+                LinkedFolders::from_configs(vec![LinkedFolderConfig {
+                    name: "tempestmiku".to_string(),
+                    path: root.to_path_buf(),
+                    mode: FsMode::Rw,
+                    commands: vec!["cargo".to_string()],
+                    safe_args: vec![vec!["cargo".to_string(), "test".to_string()]],
+                }])
+                .unwrap(),
+            ),
+            ..DenoSandboxOptions::default()
+        })
+    }
 
     #[tokio::test]
     async fn stub_echoes_code_and_persists_cell_count() {
@@ -910,5 +1071,90 @@ mod tests {
             .await
             .unwrap();
         assert!(composed.stdout.contains("display: ok"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test(flavor = "current_thread")]
+    async fn deno_p0_sdk_exposes_linked_repo_functions() {
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(
+            root.path().join("src/lib.rs"),
+            "pub fn edit() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        let sandbox = p0_sandbox(root.path(), artifacts.path());
+        let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+        let out = session
+            .eval(
+                "const found = await tools.search('edit');\n\
+                 const docs = await tools.docs('code.edit');\n\
+                 const read = await fs.read('tempestmiku:src/lib.rs');\n\
+                 const listed = await fs.ls('tempestmiku:src');\n\
+                 const hits = await code.search({ pattern: 'edit', paths: ['tempestmiku:src/lib.rs'], regex: false });\n\
+                 const linked = await resources.read('linked://tempestmiku/src/lib.rs');\n\
+                 ({ found: found.length, docName: docs.name, readHasMore: read.hasMore, sizeBytes: listed[0].sizeBytes, hits: hits.length, linked: linked.content.includes('edit'), fsType: typeof fs, codeType: typeof code, procType: typeof proc, memoryType: typeof memory, skillsType: typeof skills, agentsType: typeof agents })",
+                CellBudget::default(),
+            )
+            .await
+            .unwrap();
+        let result = out.result.unwrap();
+        assert_eq!(result["docName"], Value::String("code.edit".into()));
+        assert_eq!(result["readHasMore"], Value::Bool(false));
+        assert!(result["sizeBytes"].as_u64().unwrap() > 0);
+        assert_eq!(result["hits"], Value::Number(1.into()));
+        assert_eq!(result["linked"], Value::Bool(true));
+        assert_eq!(result["fsType"], Value::String("object".into()));
+        assert_eq!(result["codeType"], Value::String("object".into()));
+        assert_eq!(result["procType"], Value::String("object".into()));
+        assert_eq!(result["memoryType"], Value::String("undefined".into()));
+        assert_eq!(result["skillsType"], Value::String("undefined".into()));
+        assert_eq!(result["agentsType"], Value::String("undefined".into()));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test(flavor = "current_thread")]
+    async fn deno_p0_linked_repo_patch_and_proc_run_through_sdk() {
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"p0-sdk-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("src/lib.rs"),
+            "pub fn answer() -> i32 { 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn answer_is_two() {\n        assert_eq!(super::answer(), 2);\n    }\n}\n",
+        )
+        .unwrap();
+        let sandbox = p0_sandbox(root.path(), artifacts.path());
+        let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+        let out = session
+            .eval(
+                "const hits = await code.search({ pattern: '1', paths: ['tempestmiku:src/lib.rs'], regex: false });\n\
+                 const tag = hits[0].tag;\n\
+                 await code.edit({ path: 'tempestmiku:src/lib.rs', tag, hunks: [{ op: 'replace', startLine: 1, endLine: 1, lines: ['pub fn answer() -> i32 { 2 }'] }] });\n\
+                 const invalid = await proc.run('cargo test', [], { cwd: 'tempestmiku:' }).catch(err => String(err));\n\
+                 const run = await proc.run('cargo', ['test'], { cwd: 'tempestmiku:' });\n\
+                 ({ exitCode: run.exitCode, invalid })",
+                CellBudget {
+                    wall_ms: 240_000,
+                    output_bytes: 50_000,
+                },
+            )
+            .await
+            .unwrap();
+        let result = out.result.unwrap();
+        assert_eq!(result["exitCode"], Value::Number(0.into()));
+        assert!(
+            result["invalid"]
+                .as_str()
+                .unwrap()
+                .contains("InvalidArgsError")
+        );
+        let changed = fs::read_to_string(root.path().join("src/lib.rs")).unwrap();
+        assert!(changed.contains("pub fn answer() -> i32 { 2 }"));
     }
 }

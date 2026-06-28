@@ -1,19 +1,31 @@
 //! TempestMiku CLI.
 //!
-//! Wires the streaming OpenAI client to the stub sandbox and runs the agent loop, rendering
-//! the model's tokens to stdout the instant they stream in. Cell telemetry goes to stderr so
-//! piping stdout yields just the answer.
+//! Wires the streaming OpenAI client to the P0 Serious Engineer sandbox and runs the agent loop,
+//! rendering model tokens to stdout as they stream. Cell telemetry goes to stderr so piping stdout
+//! yields just the answer.
 
-use std::io::{Read, Write};
-use std::sync::Arc;
+use std::{
+    fs::OpenOptions,
+    io::{BufRead, BufReader, Read, Write},
+    path::PathBuf,
+    sync::{Arc, mpsc},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
+use async_trait::async_trait;
 use parking_lot::Mutex;
-use tm_core::{Agent, AgentConfig, EventSink, Protocol};
+use tm_artifacts::default_root;
+use tm_core::{Agent, AgentConfig, CellBudget, EventSink, Protocol, Sandbox};
+use tm_host::{
+    ApprovalDecision, ApprovalPolicy, DefaultDenyApprovalPolicy, HostError, LinkedFolders,
+    P0HostConfig,
+};
 use tm_llm::OpenAiClient;
-use tm_sandbox::StubSandbox;
+use tm_persona::Mode;
+use tm_sandbox::{DenoSandbox, DenoSandboxOptions, StubSandbox};
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -26,8 +38,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let prompt = match args.prompt {
-        Some(p) => p,
+    let prompt = match args.prompt.as_ref() {
+        Some(p) => p.clone(),
         None => read_stdin().context("reading prompt from stdin")?,
     };
     let prompt = prompt.trim();
@@ -37,27 +49,17 @@ async fn main() -> Result<()> {
     }
 
     let llm = OpenAiClient::from_env().context("building OpenAI client")?;
-
-    let model = args
-        .model
-        .or_else(|| std::env::var("OPENAI_MODEL").ok())
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
-
     let protocol = if args.fenced || env_is_fenced() {
         Protocol::FencedBlock
     } else {
         Protocol::NativeTool
     };
+    let host_config = load_host_config(args.config.as_ref())?;
+    let linked_folders = host_config.linked_folders()?;
+    let cfg = build_agent_config(&args, protocol, &host_config, &linked_folders);
+    let sandbox = build_sandbox(&args, &host_config, linked_folders)?;
 
-    let cfg = AgentConfig {
-        model,
-        max_turns: args.max_turns.unwrap_or(12),
-        protocol,
-        ..AgentConfig::default()
-    };
-
-    let agent = Agent::new(Arc::new(llm), Arc::new(StubSandbox), cfg);
+    let agent = Agent::new(Arc::new(llm), sandbox, cfg);
     let sink = StdoutSink::stdio();
 
     agent.run(prompt, &sink).await.context("agent run")?;
@@ -143,6 +145,9 @@ struct Args {
     prompt: Option<String>,
     model: Option<String>,
     max_turns: Option<usize>,
+    config: Option<PathBuf>,
+    session_id: Option<String>,
+    stub_sandbox: bool,
     fenced: bool,
     help: bool,
 }
@@ -157,12 +162,19 @@ impl Args {
             match arg.as_str() {
                 "-h" | "--help" => out.help = true,
                 "--fenced" => out.fenced = true,
+                "--stub-sandbox" => out.stub_sandbox = true,
                 "--model" => {
                     out.model = Some(it.next().context("--model needs a value")?);
                 }
                 "--max-turns" => {
                     let v = it.next().context("--max-turns needs a value")?;
                     out.max_turns = Some(v.parse().context("--max-turns must be a number")?);
+                }
+                "--config" => {
+                    out.config = Some(PathBuf::from(it.next().context("--config needs a value")?));
+                }
+                "--session-id" => {
+                    out.session_id = Some(it.next().context("--session-id needs a value")?);
                 }
                 other => prompt_parts.push(other.to_string()),
             }
@@ -187,21 +199,170 @@ fn read_stdin() -> Result<String> {
     Ok(s)
 }
 
+fn load_host_config(path: Option<&PathBuf>) -> Result<P0HostConfig> {
+    let path = path
+        .cloned()
+        .or_else(|| std::env::var_os("TM_CONFIG").map(PathBuf::from))
+        .or_else(|| {
+            let default = PathBuf::from(".tempestmiku/config.json");
+            default.exists().then_some(default)
+        });
+    match path {
+        Some(path) => P0HostConfig::from_json_file(&path)
+            .with_context(|| format!("loading P0 host config from {}", path.display())),
+        None => Ok(P0HostConfig {
+            linked_folders: Vec::new(),
+            approvals: Default::default(),
+            artifact_root: None,
+        }),
+    }
+}
+
+fn build_agent_config(
+    args: &Args,
+    protocol: Protocol,
+    host_config: &P0HostConfig,
+    linked_folders: &LinkedFolders,
+) -> AgentConfig {
+    let model = args
+        .model
+        .clone()
+        .or_else(|| std::env::var("OPENAI_MODEL").ok())
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+    AgentConfig {
+        model,
+        max_turns: args.max_turns.unwrap_or(8),
+        protocol,
+        cell_budget: CellBudget {
+            wall_ms: 240_000,
+            output_bytes: 50_000,
+        },
+        system_prompt: serious_engineer_prompt(host_config, linked_folders),
+        ..AgentConfig::default()
+    }
+}
+
+fn serious_engineer_prompt(_host_config: &P0HostConfig, linked_folders: &LinkedFolders) -> String {
+    let mut prompt = tm_core::DEFAULT_SYSTEM_PROMPT.to_string();
+    prompt.push_str("\n\n");
+    prompt.push_str(Mode::SeriousEngineer.system_addendum());
+    prompt.push('\n');
+    if linked_folders.is_empty() {
+        prompt.push_str("No linked folders configured; fs.*, code.*, and proc.* will fail closed.");
+    } else {
+        for policy in linked_folders.policies() {
+            let mode = match policy.mode {
+                tm_host::FsMode::Ro => "ro",
+                tm_host::FsMode::Rw => "rw",
+            };
+            prompt.push_str(&format!(
+                "Linked folders: {} ({mode}) at linked://{}/\n",
+                policy.alias, policy.alias
+            ));
+        }
+    }
+    prompt
+}
+
+fn build_sandbox(
+    args: &Args,
+    host_config: &P0HostConfig,
+    linked_folders: LinkedFolders,
+) -> Result<Arc<dyn Sandbox>> {
+    if args.stub_sandbox {
+        return Ok(Arc::new(StubSandbox));
+    }
+    let linked_folders = (!linked_folders.is_empty()).then_some(linked_folders);
+    Ok(Arc::new(DenoSandbox::new(DenoSandboxOptions {
+        artifact_root: host_config
+            .artifact_root
+            .clone()
+            .unwrap_or_else(default_root),
+        session_id: args.session_id.clone().unwrap_or_else(|| "cli".to_string()),
+        linked_folders,
+        approval_policy: approval_policy(host_config)?,
+        approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
+        ..DenoSandboxOptions::default()
+    })))
+}
+
+fn approval_policy(config: &P0HostConfig) -> Result<Arc<dyn ApprovalPolicy>> {
+    match config.approvals.mode.as_str() {
+        "manual" => Ok(Arc::new(PromptApprovalPolicy)),
+        "deny" | "" => Ok(Arc::new(DefaultDenyApprovalPolicy)),
+        other => bail!("unsupported approval mode {other}"),
+    }
+}
+
+#[derive(Debug)]
+struct PromptApprovalPolicy;
+
+#[async_trait]
+impl ApprovalPolicy for PromptApprovalPolicy {
+    async fn request(&self, action: &str, timeout: Duration) -> tm_host::Result<ApprovalDecision> {
+        let action = action.to_string();
+        let thread_action = action.clone();
+        let (tx, rx) = mpsc::channel();
+        let timeout_ms = timeout.as_millis();
+        std::thread::spawn(move || {
+            let result = read_tty_approval(&thread_action, timeout_ms);
+            let _ = tx.send(result);
+        });
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => Err(HostError::ApprovalTimeout(action)),
+        }
+    }
+}
+
+fn read_tty_approval(action: &str, timeout_ms: u128) -> tm_host::Result<ApprovalDecision> {
+    let tty = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|_| HostError::ApprovalTimeout(action.to_string()))?;
+    let mut writer = tty
+        .try_clone()
+        .map_err(|_| HostError::ApprovalTimeout(action.to_string()))?;
+    write!(
+        writer,
+        "Approval required: {action}\nType approve within {timeout_ms}ms to continue: "
+    )
+    .map_err(|_| HostError::ApprovalTimeout(action.to_string()))?;
+    writer
+        .flush()
+        .map_err(|_| HostError::ApprovalTimeout(action.to_string()))?;
+    let mut line = String::new();
+    BufReader::new(tty)
+        .read_line(&mut line)
+        .map_err(|_| HostError::ApprovalTimeout(action.to_string()))?;
+    if line.trim() == "approve" {
+        Ok(ApprovalDecision::Approved)
+    } else {
+        Ok(ApprovalDecision::Denied)
+    }
+}
+
 fn print_usage() {
     eprintln!(
-        "tm — TempestMiku CLI (M0)\n\n\
+        "tm — TempestMiku CLI (P0 Serious Engineer)\n\n\
          USAGE:\n  \
          tm [OPTIONS] <prompt...>\n  \
          echo <prompt> | tm\n\n\
          OPTIONS:\n  \
          --model <name>     model id (or env OPENAI_MODEL)\n  \
-         --max-turns <n>    max agent turns (default 12)\n  \
+         --max-turns <n>    max agent turns (default 8)\n  \
+         --config <path>    JSON config path (or env TM_CONFIG, else .tempestmiku/config.json)\n  \
+         --session-id <id>  artifact session id (default cli)\n  \
+         --stub-sandbox     use the M0 stub sandbox for protocol debugging\n  \
          --fenced           use the fenced-block protocol (or env TM_PROTOCOL=fenced)\n  \
          -h, --help         show this help\n\n\
          ENV:\n  \
          OPENAI_BASE_URL    default https://api.openai.com/v1\n  \
          OPENAI_API_KEY     bearer token\n  \
-         OPENAI_MODEL       model id\n"
+         OPENAI_MODEL       model id\n  \
+         TM_CONFIG          P0 JSON config path\n"
     );
 }
 
@@ -244,5 +405,49 @@ mod tests {
         assert!(stderr.contains("tool call: execute"));
         assert!(stderr.contains("executing cell"));
         assert!(stderr.contains("result"));
+    }
+
+    #[test]
+    fn args_parse_p0_config_session_and_stub_flags() {
+        let args = Args::parse(
+            [
+                "--config",
+                ".tempestmiku/config.json",
+                "--session-id",
+                "smoke",
+                "--stub-sandbox",
+                "--max-turns",
+                "3",
+                "hello",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(args.config, Some(PathBuf::from(".tempestmiku/config.json")));
+        assert_eq!(args.session_id, Some("smoke".to_string()));
+        assert!(args.stub_sandbox);
+        assert_eq!(args.max_turns, Some(3));
+        assert_eq!(args.prompt, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn serious_engineer_config_sets_voice_cap_and_budget() {
+        let host_config = P0HostConfig {
+            linked_folders: Vec::new(),
+            approvals: Default::default(),
+            artifact_root: None,
+        };
+        let linked = host_config.linked_folders().unwrap();
+        let cfg = build_agent_config(
+            &Args::default(),
+            Protocol::NativeTool,
+            &host_config,
+            &linked,
+        );
+        assert_eq!(cfg.max_turns, 8);
+        assert_eq!(cfg.cell_budget.output_bytes, 50_000);
+        assert!(cfg.system_prompt.contains("Active mode: Serious Engineer"));
+        assert!(cfg.system_prompt.contains("Voice cap: 關"));
     }
 }

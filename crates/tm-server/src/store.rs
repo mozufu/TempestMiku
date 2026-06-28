@@ -8,7 +8,9 @@ use serde_json::Value;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
-use crate::{Mode, PersonaStatus, Result, ServerError};
+use tm_persona::{Mode, PersonaStatus};
+
+use crate::{Result, ServerError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -252,7 +254,25 @@ impl PostgresStore {
                 tracing::error!(%err, "postgres connection failed");
             }
         });
-        Ok(Self { client })
+        let store = Self { client };
+        store.ensure_schema().await?;
+        Ok(store)
+    }
+
+    async fn ensure_schema(&self) -> Result<()> {
+        self.client
+            .batch_execute(
+                "create table if not exists sessions(id uuid primary key, created_at timestamptz not null, updated_at timestamptz not null, status text not null, mode jsonb not null, persona_status jsonb not null);
+                 create table if not exists session_events(session_id uuid not null references sessions(id) on delete cascade, seq bigint not null, event_type text not null, payload_json jsonb not null, created_at timestamptz not null, primary key(session_id, seq));
+                 create table if not exists messages(session_id uuid not null references sessions(id) on delete cascade, seq bigint not null, role text not null, content text not null, created_at timestamptz not null, primary key(session_id, seq));
+                 create table if not exists profile_facts(id uuid primary key, subject text not null, predicate text not null, object text not null, confidence real not null, provenance text not null, valid_from timestamptz not null, valid_to timestamptz);
+                 create table if not exists recall_chunks(id uuid primary key, scope text not null, text text not null, source text not null, created_at timestamptz not null);
+                 create index if not exists profile_facts_subject_idx on profile_facts(subject);
+                 create index if not exists recall_chunks_scope_created_idx on recall_chunks(scope, created_at desc);",
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        Ok(())
     }
 
     pub fn client(&self) -> &tokio_postgres::Client {
@@ -453,6 +473,7 @@ pub enum StoreEvent {
     Mode {
         mode: Mode,
         label: String,
+        voice_cap: String,
         persona_status: PersonaStatus,
     },
     Final {

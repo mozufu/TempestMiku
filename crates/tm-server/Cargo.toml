@@ -8,6 +8,7 @@ description = "TempestMiku server: session API, SSE stream, persona, and minimal
 
 [dependencies]
 tm-core.workspace = true
+tm-persona.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true

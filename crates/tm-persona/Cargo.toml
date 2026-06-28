@@ -1,0 +1,10 @@
+[package]
+name = "tm-persona"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TempestMiku shared persona, mode, and voice-cap literals."
+
+[dependencies]
+serde.workspace = true

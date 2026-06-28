@@ -13,6 +13,13 @@ serde_json.workspace = true
 thiserror.workspace = true
 tm-artifacts.workspace = true
 url.workspace = true
+regex.workspace = true
+globset.workspace = true
+ignore.workspace = true
+sha2.workspace = true
+hex.workspace = true
+chrono.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

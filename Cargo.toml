@@ -15,10 +15,11 @@ tm-llm = { path = "crates/tm-llm" }
 tm-sandbox = { path = "crates/tm-sandbox" }
 tm-artifacts = { path = "crates/tm-artifacts" }
 tm-host = { path = "crates/tm-host" }
+tm-persona = { path = "crates/tm-persona" }
 tm-server = { path = "crates/tm-server" }
 
 # async + runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time", "process"] }
 futures = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
@@ -39,6 +40,9 @@ dotenvy = "0.15"
 sha2 = "0.10"
 hex = "0.4"
 url = "2"
+regex = "1"
+globset = "0.4"
+ignore = "0.4"
 deno_ast = { version = "=0.53.2", features = ["transpiling"] }
 deno_error = "=0.7.1"
 

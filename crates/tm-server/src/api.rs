@@ -1,5 +1,7 @@
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
+use chrono::Utc;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -16,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     AuthConfig, ChatRunner, MemoryProvider, Mode, NewSession, PersistingEventSink, PersonaConfig,
-    Result, SessionEvent, Store, StoreEvent, webui,
+    Result, SessionEvent, Store, StoreEvent, store::RecallChunkRecord, webui,
 };
 
 pub struct AppState<S, M, C> {
@@ -88,16 +90,26 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct CreateSessionRequest {
+    #[serde(default)]
+    pub mode: Mode,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateSessionResponse {
     pub id: Uuid,
     pub mode: Mode,
     pub persona_status: crate::PersonaStatus,
+    pub label: String,
+    pub voice_cap: String,
+    pub default_scope: String,
 }
 
 async fn create_session<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     headers: HeaderMap,
+    payload: Option<Json<CreateSessionRequest>>,
 ) -> Result<Json<CreateSessionResponse>>
 where
     S: Store,
@@ -105,11 +117,14 @@ where
     C: ChatRunner,
 {
     state.auth.authorize(&headers)?;
+    let mode = payload
+        .map(|Json(payload)| payload.mode)
+        .unwrap_or_default();
     let persona_status = state.persona.load_status();
     let session = state
         .store
         .create_session(NewSession {
-            mode: Mode::PersonalAssistant,
+            mode,
             persona_status: persona_status.clone(),
         })
         .await?;
@@ -120,7 +135,8 @@ where
             "mode",
             serde_json::to_value(StoreEvent::Mode {
                 mode: session.mode,
-                label: "Personal Assistant".to_string(),
+                label: session.mode.label().to_string(),
+                voice_cap: session.mode.voice_cap().to_string(),
                 persona_status: persona_status.clone(),
             })?,
         )
@@ -130,6 +146,9 @@ where
         id: session.id,
         mode: session.mode,
         persona_status,
+        label: session.mode.label().to_string(),
+        voice_cap: session.mode.voice_cap().to_string(),
+        default_scope: session.mode.default_scope().to_string(),
     }))
 }
 
@@ -138,16 +157,12 @@ pub struct PostMessageRequest {
     pub content: String,
     #[serde(default = "default_subject")]
     pub subject: String,
-    #[serde(default = "default_scope")]
-    pub scope: String,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 fn default_subject() -> String {
     "brian".to_string()
-}
-
-fn default_scope() -> String {
-    "global".to_string()
 }
 
 async fn post_message<S, M, C>(
@@ -162,13 +177,18 @@ where
     C: ChatRunner,
 {
     state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let scope = payload
+        .scope
+        .clone()
+        .unwrap_or_else(|| session.mode.default_scope().to_string());
     state
         .store
         .append_message(session_id, "user", &payload.content)
         .await?;
     let memory = state
         .memory
-        .context_for_turn(&payload.subject, &payload.scope, &payload.content)
+        .context_for_turn(&payload.subject, &scope, &payload.content)
         .await?;
     let user_prompt = if memory.is_empty() {
         payload.content.clone()
@@ -190,6 +210,21 @@ where
         .store
         .append_message(session_id, "assistant", &response)
         .await?;
+    if session.mode == Mode::SeriousEngineer && !response.trim().is_empty() {
+        state
+            .store
+            .add_recall_chunk(RecallChunkRecord {
+                id: Uuid::new_v4(),
+                scope: scope.clone(),
+                text: format!(
+                    "Project summary/open loop from session {session_id}: {}",
+                    response.trim()
+                ),
+                source: format!("session:{session_id}:assistant"),
+                created_at: Utc::now(),
+            })
+            .await?;
+    }
     Ok(Json(json!({ "status": "accepted" })))
 }
 
@@ -257,13 +292,18 @@ mod tests {
     }
 
     async fn create(app: &Router) -> CreateSessionResponse {
+        create_with_body(app, Body::empty()).await
+    }
+
+    async fn create_with_body(app: &Router, body: Body) -> CreateSessionResponse {
         let res = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
                     .uri("/sessions")
-                    .body(Body::empty())
+                    .header("content-type", "application/json")
+                    .body(body)
                     .unwrap(),
             )
             .await
@@ -299,6 +339,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["mode", "text", "final"]
         );
+        assert_eq!(all[0].payload_json["voice_cap"], serde_json::json!("中"));
         let replay = store.events_after(session.id, Some(1)).await.unwrap();
         assert_eq!(
             replay
@@ -373,6 +414,62 @@ mod tests {
                 .payload_json
                 .to_string()
                 .contains("hello project open loop")
+        );
+    }
+
+    #[tokio::test]
+    async fn serious_engineer_session_uses_project_scope_and_recalls_next_session() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+        assert_eq!(session_a.voice_cap, "關");
+        assert_eq!(session_a.default_scope, "project:tempestmiku");
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session_a.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"tempestmiku open loop"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let chunks = store
+            .recall_chunks("project:tempestmiku", "tempestmiku", 5)
+            .await
+            .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert!(
+            chunks[0]
+                .text
+                .contains("Project summary/open loop from session")
+        );
+        let session_b = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session_b.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"tempestmiku open loop"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let events = store.events_after(session_b.id, None).await.unwrap();
+        let final_event = events
+            .iter()
+            .find(|event| event.event_type == "final")
+            .unwrap();
+        assert!(
+            final_event
+                .payload_json
+                .to_string()
+                .contains("Project summary/open loop from session")
         );
     }
 

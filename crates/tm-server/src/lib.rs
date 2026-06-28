@@ -9,7 +9,6 @@ pub mod auth;
 pub mod chat;
 pub mod error;
 pub mod memory;
-pub mod persona;
 pub mod store;
 pub mod webui;
 
@@ -18,8 +17,8 @@ pub use auth::{AuthConfig, ForwardedAuthConfig};
 pub use chat::{AgentChatRunner, ChatRunner, EchoChatRunner, PersistingEventSink};
 pub use error::{Result, ServerError};
 pub use memory::{MemoryContext, MemoryProvider, StoreMemoryProvider};
-pub use persona::{Mode, PersonaConfig, PersonaStatus};
 pub use store::{
     InMemoryStore, MessageRecord, NewSession, PostgresStore, SessionEvent, SessionRecord, Store,
     StoreEvent,
 };
+pub use tm_persona::{Mode, PersonaConfig, PersonaStatus};

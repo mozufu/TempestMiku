@@ -127,6 +127,11 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
 
+P0a adds one backend implementation behind the same API: `tm-server` can dispatch Serious Engineer /
+Handoff turns to an OMP ACP bridge instead of the native agent loop while the native SDK is still being
+built. The client API does not change; ACP events are normalized into the same `session_events` and SSE
+event names.
+
 `POST /sessions/:id/promote` turns an ad-hoc session into a project or merges it into an existing one.
 The request selects which session summary, open loops, decisions, `workspace://session` files,
 `artifact://` outputs, and linked-folder references to keep. User-initiated promotion is the approval;
@@ -143,6 +148,9 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 - **Enforced as `ApprovalPolicy`** (§08) for: destructive / external / spend actions, **memory-write**
   (§22 `memory.note`), **skill-write** (§26), **project promotion** when Miku proposes it, **drive-link**
   + auto-file (§24), and **MCP reload**.
+- **OMP ACP bridge (P0a):** ACP `session/request_permission` and elicitation prompts are translated
+  into the same `approval` event + POST resolution path; unsupported or timed-out prompts deny by
+  default.
 - This is the single choke point behind every "propose, don't apply" path in the product (§22 / §24 / §26).
 
 ## 27.7 Crate layout (`tm-server`, §28)
@@ -154,6 +162,8 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 - `schedule` — cron-style scheduler; job table; bounds (`max_turns`, `cron_mode`); registers the `cron://` handler (list jobs / a job's def + run history) into the §9.2 registry.
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).
 - `auth` — local token / no-auth for dev plus trusted forwarded identity for reverse-proxy deployments.
+- `coding_backend` / `omp_acp` — P0a adapter that owns the `omp acp` subprocess, JSON-RPC framing,
+  event normalization, permission translation, and bridge health/version checks.
 - Clients live **outside** the Rust workspace: `clients/miku_flutter` (single Flutter codebase targeting Web/PWA first and Android later, §28).
 
 ## 27.8 Failure modes & degradation

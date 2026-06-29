@@ -27,6 +27,32 @@ Engaged by **Serious Engineer** and **Handoff** modes (§21). Reference: **Oh My
   disclosed** (`tools.search` / `docs`, §07) rather than all-loaded.
 - This is the core bet (§01) realized at the product layer; the engineer modes are its heaviest users.
 
+## 25.0.1 P0a transitional OMP ACP backend
+
+P0a may adopt Oh My Pi first as an external coding backend over Agent Client Protocol (ACP). This is a
+bridge, not a replacement for the single-`execute` bet: TempestMiku still owns persona, mode routing,
+session ids, SSE replay, approvals, memory, and artifact/resource presentation; OMP owns coding-agent
+execution behind the adapter.
+
+The bridge shape is deliberately small:
+
+- `tm-server` launches or connects to a pinned `omp acp` subprocess for a Serious Engineer / Handoff
+  session.
+- A `CodingBackend` adapter maps TempestMiku `POST /sessions/:id/messages` into ACP session messages
+  and maps ACP progress, diffs, tool events, and final output back into `session_events`.
+- ACP permission requests become TempestMiku `approval` events and resolve only through the normal
+  approval endpoint; generated OMP config may select yolo/prompt modes, but policy is explicit per
+  bridge process, never an ambient default.
+- OMP outputs are mirrored into TempestMiku artifacts or wrapped as resource refs so reconnect/replay
+  and project promotion keep provenance.
+- Miku owns the user-facing final answer and serious-mode voice cap; raw OMP transcript is evidence,
+  not the personality layer.
+
+P0a acceptance: a UI/API Serious Engineer session dispatches a real TempestMiku coding task through
+`omp acp`, applies a patch in a linked repo, runs a targeted test, streams progress through existing
+SSE, routes at least one permission path through TempestMiku approvals, and replays from
+`Last-Event-ID`. Native `fs.*` / `code.*` / `proc.*` remains P0 proper.
+
 ## 25.1 Translation map
 
 The SDK is the **only** capability surface — there are no chat-native tools; the model writes code,
@@ -172,6 +198,13 @@ this is what keeps big data and fan-out **out of the window**.
   **engineer-facing SDK + the artifact spine**.
 
 ## 25.5 Failure modes & degradation
+
+- **`omp acp` missing / unsupported / exits** — P0a bridge reports the backend unavailable and keeps
+  the TempestMiku session alive; no silent fallback to raw shell.
+- **ACP permission unsupported / rejected / timed out** — translate to denied approval and skip the
+  effect; never auto-allow because a client capability is missing.
+- **ACP output cannot be mirrored** — keep the bounded event-log summary, mark artifact persistence
+  degraded, and preserve the raw backend ref if one exists.
 
 - **Non-allowlisted command** — `proc.run` rejects it (fail-closed); **no linked folder** → no
   real-FS reach (sandbox only); **destructive/external/out-of-grant action** → approval or fail-closed;

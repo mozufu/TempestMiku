@@ -34,7 +34,7 @@ Pick the smallest sufficient mode.
 | 1 | **Personal Assistant** (default) | planning, reminders, writing, open loops, decision cleanup | conversation + light `memory.*` / `drive.*`, TODO | 中 | personal-assistant-state-capture |
 | 2 | **Ambiguity Grill / 燒烤我** | vague / contradictory / "grill me" / "燒烤我" / hiding the real problem | conversation; 3–7 sharp Qs → plan | 濃 (sharp) | ambiguity-grill |
 | 3 | **Negative-State Grounding** | overwhelmed / self-deprecating / exhausted / spiraling | conversation; stabilize → one ≤10-min action | 濃, 軟 | negative-state-grounding |
-| 4 | **Serious Engineer** | code / safety / production / money / external / irreversible / legal / medical | `fs.*`, `code.*`, `proc.*` (§25), light `agents.*` | 關 | — |
+| 4 | **Serious Engineer** | code / safety / production / money / external / irreversible / legal / medical | native `fs.*` / `code.*` / `proc.*` (§25), or P0a OMP ACP bridge until native SDK cutover; light `agents.*` | 關 | — |
 | 5 | **Handoff** | delegate impl-heavy work to a coding agent (Oh-my-pi / A2A) | `agents.*` (§23) + brief generation | 關 | oh-my-pi-handoff |
 
 Modes 2/3 are conversational *postures* (no new capabilities); 4/5 unlock the technical surface.

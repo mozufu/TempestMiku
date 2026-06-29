@@ -56,6 +56,8 @@ flowchart TD
     WEB[WebUI] --> SRV
     SCHED[scheduler / cron §27] --> SRV
     SRV[tm-server: session API + SSE] --> RT[Persona router §21]
+    SRV -.P0a coding backend.-> OACP[OMP ACP bridge §25]
+    OACP --> OMP[Oh My Pi coding agent]
     RT --> LOOP[Agent loop + execute §05]
     LOOP <--> LLM[LlmClient + model roles §27]
     LOOP --> SBX[Sandbox §06]
@@ -72,6 +74,10 @@ flowchart TD
 
 The bet survives because the product is **capabilities + a persona layer + a server/clients +
 background workers** — not a rewrite of the loop.
+
+P0a is the narrow exception: `tm-server` may delegate Serious Engineer execution to an external
+`omp acp` process while TempestMiku still owns persona, approvals, SSE replay, memory, and
+artifact/resource presentation. That bridge is a cutover aid, not the final capability architecture.
 
 ## The product-layer track
 

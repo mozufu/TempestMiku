@@ -8,6 +8,7 @@ pub enum Mode {
     #[default]
     PersonalAssistant,
     SeriousEngineer,
+    Handoff,
 }
 
 impl Mode {
@@ -15,20 +16,21 @@ impl Mode {
         match self {
             Self::PersonalAssistant => "Personal Assistant",
             Self::SeriousEngineer => "Serious Engineer",
+            Self::Handoff => "Handoff",
         }
     }
 
     pub fn voice_cap(self) -> &'static str {
         match self {
             Self::PersonalAssistant => "中",
-            Self::SeriousEngineer => "關",
+            Self::SeriousEngineer | Self::Handoff => "關",
         }
     }
 
     pub fn default_scope(self) -> &'static str {
         match self {
             Self::PersonalAssistant => "global",
-            Self::SeriousEngineer => "project:tempestmiku",
+            Self::SeriousEngineer | Self::Handoff => "project:tempestmiku",
         }
     }
 
@@ -39,6 +41,9 @@ impl Mode {
             }
             Self::SeriousEngineer => {
                 "Active mode: Serious Engineer (mode 4). Use fs.*, code.*, and proc.* through the SDK for linked-repo work. Voice cap: 關 — preserve Tempest Miku identity, but keep technical replies precise and avoid 喵 unless the context is explicitly light. Never use shell strings; use proc.run(cmd, args). Destructive, external, or out-of-grant actions require approval or fail closed."
+            }
+            Self::Handoff => {
+                "Active mode: Handoff (mode 5). Delegate implementation-heavy coding work through the configured coding backend. Voice cap: 關 — preserve Tempest Miku identity, but keep the handoff precise and evidence-first."
             }
         }
     }
@@ -73,5 +78,22 @@ impl PersonaConfig {
                 warning: "persona asset path not configured".to_string(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mode;
+
+    #[test]
+    fn handoff_label_is_handoff() {
+        assert_eq!(Mode::Handoff.label(), "Handoff");
+    }
+
+    #[test]
+    fn handoff_voice_cap_is_off() {
+        assert_eq!(Mode::Handoff.voice_cap(), "關");
+        assert_eq!(Mode::Handoff.default_scope(), "project:tempestmiku");
+        assert!(Mode::Handoff.system_addendum().contains("mode 5"));
     }
 }

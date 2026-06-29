@@ -1,10 +1,10 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{convert::Infallible, path::PathBuf, sync::Arc, time::Duration};
 
 use chrono::Utc;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::{IntoResponse, Sse, sse::Event},
     routing::{get, post},
@@ -17,8 +17,9 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::{
-    AuthConfig, ChatRunner, MemoryProvider, Mode, NewSession, PersistingEventSink, PersonaConfig,
-    Result, SessionEvent, Store, StoreEvent, store::RecallChunkRecord, webui,
+    ApprovalBroker, AuthConfig, ChatRunner, CodingBackend, CodingTurn, MemoryProvider, Mode,
+    NewSession, PersistingEventSink, PersonaConfig, ResolveApprovalRequest, Result, ServerError,
+    SessionEvent, Store, StoreCodingEventSink, StoreEvent, store::RecallChunkRecord, webui,
 };
 
 pub struct AppState<S, M, C> {
@@ -27,6 +28,9 @@ pub struct AppState<S, M, C> {
     pub chat: Arc<C>,
     pub persona: PersonaConfig,
     pub auth: AuthConfig,
+    pub coding_backend: Option<Arc<dyn CodingBackend>>,
+    pub approval_broker: Arc<ApprovalBroker>,
+    pub artifact_root: PathBuf,
     live_events:
         Arc<parking_lot::Mutex<std::collections::BTreeMap<Uuid, broadcast::Sender<SessionEvent>>>>,
 }
@@ -39,6 +43,9 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             chat: Arc::clone(&self.chat),
             persona: self.persona.clone(),
             auth: self.auth.clone(),
+            coding_backend: self.coding_backend.clone(),
+            approval_broker: Arc::clone(&self.approval_broker),
+            artifact_root: self.artifact_root.clone(),
             live_events: Arc::clone(&self.live_events),
         }
     }
@@ -58,8 +65,21 @@ impl<S, M, C> AppState<S, M, C> {
             chat,
             persona,
             auth,
+            coding_backend: None,
+            approval_broker: Arc::new(ApprovalBroker::default()),
+            artifact_root: tm_artifacts::default_root(),
             live_events: Arc::new(parking_lot::Mutex::new(std::collections::BTreeMap::new())),
         }
+    }
+
+    pub fn with_coding_backend(mut self, backend: Arc<dyn CodingBackend>) -> Self {
+        self.coding_backend = Some(backend);
+        self
+    }
+
+    pub fn with_artifact_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.artifact_root = root.into();
+        self
     }
 
     fn sender(&self, session_id: Uuid) -> broadcast::Sender<SessionEvent> {
@@ -82,6 +102,18 @@ where
         .route("/sessions", post(create_session::<S, M, C>))
         .route("/sessions/:id/events", get(session_events::<S, M, C>))
         .route("/sessions/:id/messages", post(post_message::<S, M, C>))
+        .route(
+            "/sessions/:id/approvals/:approval_id",
+            post(resolve_approval::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/resources/artifacts",
+            get(list_artifacts::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/resources/artifacts/:artifact_id",
+            get(read_artifact::<S, M, C>),
+        )
         .merge(webui::routes::<AppState<S, M, C>>())
         .with_state(state)
 }
@@ -199,18 +231,52 @@ where
             memory.render_prompt_block()
         )
     };
-    let sink = Arc::new(PersistingEventSink::new(
-        session_id,
-        Arc::clone(&state.store),
-        state.sender(session_id),
-    ));
-    let response = state.chat.run_turn(user_prompt, sink.clone()).await?;
-    sink.flush().await?;
+    let response = if matches!(session.mode, Mode::SeriousEngineer | Mode::Handoff) {
+        if let Some(backend) = &state.coding_backend {
+            let sink = Arc::new(StoreCodingEventSink::new(
+                session_id,
+                Arc::clone(&state.store),
+                state.sender(session_id),
+            ));
+            backend
+                .run_turn(
+                    CodingTurn {
+                        session_id,
+                        user_prompt,
+                        mode: session.mode,
+                        scope: scope.clone(),
+                    },
+                    sink,
+                )
+                .await?
+                .final_text
+        } else {
+            let sink = Arc::new(PersistingEventSink::new(
+                session_id,
+                Arc::clone(&state.store),
+                state.sender(session_id),
+            ));
+            let response = state.chat.run_turn(user_prompt, sink.clone()).await?;
+            sink.flush().await?;
+            response
+        }
+    } else {
+        let sink = Arc::new(PersistingEventSink::new(
+            session_id,
+            Arc::clone(&state.store),
+            state.sender(session_id),
+        ));
+        let response = state.chat.run_turn(user_prompt, sink.clone()).await?;
+        sink.flush().await?;
+        response
+    };
+
     state
         .store
         .append_message(session_id, "assistant", &response)
         .await?;
-    if session.mode == Mode::SeriousEngineer && !response.trim().is_empty() {
+    if matches!(session.mode, Mode::SeriousEngineer | Mode::Handoff) && !response.trim().is_empty()
+    {
         state
             .store
             .add_recall_chunk(RecallChunkRecord {
@@ -228,6 +294,79 @@ where
     Ok(Json(json!({ "status": "accepted" })))
 }
 
+async fn resolve_approval<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path((session_id, approval_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(payload): Json<ResolveApprovalRequest>,
+) -> Result<Json<Value>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    state.store.get_session(session_id).await?;
+    state
+        .approval_broker
+        .resolve(session_id, approval_id, payload)?;
+    Ok(Json(json!({ "status": "resolved" })))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ArtifactReadQuery {
+    selector: Option<String>,
+}
+
+async fn list_artifacts<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    state.store.get_session(session_id).await?;
+    let store = tm_artifacts::ArtifactStore::open(&state.artifact_root, session_id.to_string())
+        .map_err(|err| ServerError::Store(err.to_string()))?;
+    Ok(Json(serde_json::to_value(store.list())?))
+}
+
+async fn read_artifact<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path((session_id, artifact_id)): Path<(Uuid, String)>,
+    headers: HeaderMap,
+    Query(query): Query<ArtifactReadQuery>,
+) -> Result<Json<Value>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    state.store.get_session(session_id).await?;
+    let store = tm_artifacts::ArtifactStore::open(&state.artifact_root, session_id.to_string())
+        .map_err(|err| ServerError::Store(err.to_string()))?;
+    let uri = format!("artifact://{artifact_id}");
+    let content = store
+        .read(&uri, query.selector.as_deref())
+        .map_err(map_artifact_error)?;
+    Ok(Json(serde_json::to_value(content)?))
+}
+
+fn map_artifact_error(err: tm_artifacts::ArtifactError) -> ServerError {
+    match err {
+        tm_artifacts::ArtifactError::NotFound { uri, .. } => ServerError::NotFound(uri),
+        tm_artifacts::ArtifactError::InvalidUri(uri) => ServerError::InvalidRequest(uri),
+        tm_artifacts::ArtifactError::InvalidSelector(selector) => {
+            ServerError::InvalidRequest(selector)
+        }
+        tm_artifacts::ArtifactError::Io(err) => ServerError::Store(err.to_string()),
+    }
+}
 async fn session_events<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
@@ -275,9 +414,13 @@ mod tests {
         http::{Method, Request, StatusCode},
     };
     use chrono::Utc;
+    use std::path::PathBuf;
+
+    use async_trait::async_trait;
     use tower::ServiceExt;
 
     use crate::{
+        ApprovalOption, ApprovalPrompt, CodingEventSink, CodingTurn, CodingTurnResult,
         EchoChatRunner, InMemoryStore, StoreMemoryProvider,
         auth::ForwardedAuthConfig,
         store::{ProfileFactRecord, RecallChunkRecord},
@@ -289,6 +432,170 @@ mod tests {
         let chat = Arc::new(EchoChatRunner);
         let state = AppState::new(store.clone(), memory, chat, persona, auth);
         (app(state), store)
+    }
+
+    fn test_app_with_state(
+        state: AppState<InMemoryStore, StoreMemoryProvider<InMemoryStore>, EchoChatRunner>,
+    ) -> (Router, Arc<InMemoryStore>) {
+        let store = Arc::clone(&state.store);
+        (app(state), store)
+    }
+
+    struct ScriptedBackend {
+        kind: ScriptedBackendKind,
+    }
+
+    enum ScriptedBackendKind {
+        Events,
+        Approval { broker: Arc<ApprovalBroker> },
+        Artifact { root: PathBuf },
+    }
+
+    impl ScriptedBackend {
+        fn events() -> Self {
+            Self {
+                kind: ScriptedBackendKind::Events,
+            }
+        }
+
+        fn approval(broker: Arc<ApprovalBroker>) -> Self {
+            Self {
+                kind: ScriptedBackendKind::Approval { broker },
+            }
+        }
+
+        fn artifact(root: PathBuf) -> Self {
+            Self {
+                kind: ScriptedBackendKind::Artifact { root },
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CodingBackend for ScriptedBackend {
+        async fn run_turn(
+            &self,
+            turn: CodingTurn,
+            sink: Arc<dyn CodingEventSink>,
+        ) -> Result<CodingTurnResult> {
+            match &self.kind {
+                ScriptedBackendKind::Events => {
+                    assert_eq!(turn.mode, Mode::SeriousEngineer);
+                    assert_eq!(turn.scope, "project:tempestmiku");
+                    sink.emit("text", json!({ "event": "text", "delta": "working" }))
+                        .await?;
+                    sink.emit(
+                        "diff",
+                        json!({
+                            "backend": "test",
+                            "path": "crates/tm-persona/src/lib.rs",
+                            "oldText": null,
+                            "newText": "patched",
+                        }),
+                    )
+                    .await?;
+                    let artifact = tm_artifacts::ArtifactRef {
+                        uri: "artifact://0".to_string(),
+                        id: "0".to_string(),
+                        kind: "text".to_string(),
+                        mime: "application/jsonl".to_string(),
+                        title: Some("test transcript".to_string()),
+                        size_bytes: 2,
+                        preview: "{}".to_string(),
+                    };
+                    sink.emit(
+                        "artifact",
+                        json!({ "backend": "test", "artifact": artifact }),
+                    )
+                    .await?;
+                    let final_text = "Completed via scripted backend with artifact://0".to_string();
+                    sink.emit(
+                        "final",
+                        serde_json::to_value(StoreEvent::Final {
+                            text: final_text.clone(),
+                        })?,
+                    )
+                    .await?;
+                    Ok(CodingTurnResult {
+                        final_text,
+                        transcript_artifact: None,
+                    })
+                }
+                ScriptedBackendKind::Approval { broker } => {
+                    let outcome = broker
+                        .request_permission(
+                            turn.session_id,
+                            ApprovalPrompt {
+                                action: "write file".to_string(),
+                                scope: json!({ "path": "crates/tm-persona/src/lib.rs" }),
+                                options: vec![
+                                    ApprovalOption {
+                                        option_id: "allow".to_string(),
+                                        name: "Allow once".to_string(),
+                                        kind: "allow_once".to_string(),
+                                    },
+                                    ApprovalOption {
+                                        option_id: "reject".to_string(),
+                                        name: "Reject once".to_string(),
+                                        kind: "reject_once".to_string(),
+                                    },
+                                ],
+                            },
+                            Duration::from_secs(5),
+                            sink.clone(),
+                        )
+                        .await?;
+                    let final_text = format!("approval outcome: {outcome:?} artifact://approval");
+                    sink.emit(
+                        "final",
+                        serde_json::to_value(StoreEvent::Final {
+                            text: final_text.clone(),
+                        })?,
+                    )
+                    .await?;
+                    Ok(CodingTurnResult {
+                        final_text,
+                        transcript_artifact: None,
+                    })
+                }
+                ScriptedBackendKind::Artifact { root } => {
+                    let store =
+                        tm_artifacts::ArtifactStore::open(root, turn.session_id.to_string())
+                            .map_err(|err| ServerError::Store(err.to_string()))?;
+                    let artifact = store
+                        .put_text(
+                            "{\"line\":\"scripted transcript\"}\n",
+                            Some("scripted transcript".to_string()),
+                            "application/jsonl",
+                        )
+                        .map_err(|err| ServerError::Store(err.to_string()))?;
+                    sink.emit(
+                        "artifact",
+                        json!({ "backend": "test", "artifact": artifact }),
+                    )
+                    .await?;
+                    let final_text = "Completed via scripted backend with artifact://0".to_string();
+                    sink.emit(
+                        "final",
+                        serde_json::to_value(StoreEvent::Final {
+                            text: final_text.clone(),
+                        })?,
+                    )
+                    .await?;
+                    Ok(CodingTurnResult {
+                        final_text,
+                        transcript_artifact: None,
+                    })
+                }
+            }
+        }
+    }
+
+    async fn response_json(res: axum::response::Response) -> Value {
+        let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
     }
 
     async fn create(app: &Router) -> CreateSessionResponse {
@@ -471,6 +778,217 @@ mod tests {
                 .to_string()
                 .contains("Project summary/open loop from session")
         );
+    }
+
+    #[tokio::test]
+    async fn serious_engineer_uses_coding_backend_and_replays_events() {
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let state = AppState::new(
+            store.clone(),
+            memory,
+            chat,
+            PersonaConfig::default(),
+            AuthConfig::NoAuth,
+        )
+        .with_coding_backend(Arc::new(ScriptedBackend::events()));
+        let (app, store) = test_app_with_state(state);
+        let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"ship p0a"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["mode", "text", "diff", "artifact", "final"]
+        );
+        let replay = store.events_after(session.id, Some(1)).await.unwrap();
+        assert_eq!(
+            replay
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["text", "diff", "artifact", "final"]
+        );
+        let final_event = events
+            .iter()
+            .find(|event| event.event_type == "final")
+            .unwrap();
+        let final_text = final_event.payload_json.to_string();
+        assert!(final_text.contains("artifact://"));
+        assert!(!final_text.contains("喵"));
+    }
+
+    #[tokio::test]
+    async fn approval_route_resolves_pending_backend_permission() {
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let mut state = AppState::new(
+            store.clone(),
+            memory,
+            chat,
+            PersonaConfig::default(),
+            AuthConfig::NoAuth,
+        );
+        let broker = Arc::clone(&state.approval_broker);
+        state = state.with_coding_backend(Arc::new(ScriptedBackend::approval(Arc::clone(&broker))));
+        let (app, store) = test_app_with_state(state);
+        let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+
+        let post_app = app.clone();
+        let message = tokio::spawn(async move {
+            post_app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{}/messages", session.id))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"content":"needs approval"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+
+        let approval_id =
+            wait_for_event_payload(&store, session.id, "approval").await["approvalId"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap();
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/sessions/{}/approvals/{}",
+                        session.id, approval_id
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"decision":"approve"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(message.await.unwrap().status(), StatusCode::OK);
+
+        let resolved = store
+            .events_after(session.id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == "approval_resolved")
+            .unwrap();
+        assert_eq!(resolved.payload_json["outcome"], json!("selected"));
+        assert_eq!(resolved.payload_json["optionId"], json!("allow"));
+    }
+
+    #[tokio::test]
+    async fn artifact_resource_route_reads_session_artifact() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let state = AppState::new(
+            store,
+            memory,
+            chat,
+            PersonaConfig::default(),
+            AuthConfig::NoAuth,
+        )
+        .with_artifact_root(root.clone())
+        .with_coding_backend(Arc::new(ScriptedBackend::artifact(root)));
+        let (app, _) = test_app_with_state(state);
+        let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"write transcript"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let list = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}/resources/artifacts", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list.status(), StatusCode::OK);
+        let list_json = response_json(list).await;
+        assert_eq!(list_json[0]["uri"], json!("artifact://0"));
+
+        let read = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}/resources/artifacts/0", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        let read_json = response_json(read).await;
+        assert_eq!(read_json["uri"], json!("artifact://0"));
+        assert!(
+            read_json["content"]
+                .as_str()
+                .unwrap()
+                .contains("scripted transcript")
+        );
+    }
+
+    async fn wait_for_event_payload(
+        store: &InMemoryStore,
+        session_id: Uuid,
+        event_type: &str,
+    ) -> Value {
+        for _ in 0..100 {
+            if let Some(event) = store
+                .events_after(session_id, None)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|event| event.event_type == event_type)
+            {
+                return event.payload_json;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("event {event_type} was not persisted")
     }
 
     #[tokio::test]

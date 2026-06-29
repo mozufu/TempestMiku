@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- Added the P0 OMP ACP coding handoff path with approval/artifact routes, backend event normalization, WebUI approval controls, and live-smoke coverage.
 - Added the P0 Serious Engineer dogfood slice with linked-folder `fs.*`, `code.*`, and `proc.*` SDK access, shared persona modes, CLI Deno sandbox wiring, minimal project memory recall, approval-aware host policy, and live-smoke coverage.
 - Completed the M1 sandbox path with TypeScript transpilation, host-call ops, artifact/resource SDK bridging, default-deny `http.get`, output spill, reset, timeout, and security regression coverage.
 

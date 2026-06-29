@@ -31,10 +31,12 @@ const INDEX_HTML: &str = r#"<!doctype html>
     <button>Send</button>
   </form>
   <pre id="stream"></pre>
+  <section id="approvals"></section>
   <script>
     let sessionId = window.localStorage.getItem('tm-session-id');
     let events;
     const stream = document.getElementById('stream');
+    const approvals = document.getElementById('approvals');
     function openEvents(id) {
       if (events) return;
       events = new EventSource(`/sessions/${id}/events`);
@@ -44,6 +46,36 @@ const INDEX_HTML: &str = r#"<!doctype html>
         const payload = JSON.parse(ev.data);
         document.getElementById('badge').textContent = payload.label || 'Personal Assistant';
       });
+      events.addEventListener('approval', ev => { renderApproval(JSON.parse(ev.data)); });
+    }
+    function renderApproval(payload) {
+      const item = document.createElement('article');
+      const action = document.createElement('p');
+      action.textContent = payload.action || 'Approval requested';
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.textContent = 'Approve';
+      const deny = document.createElement('button');
+      deny.type = 'button';
+      deny.textContent = 'Deny';
+      async function resolve(decision) {
+        await fetch(`/sessions/${sessionId}/approvals/${payload.approvalId}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ decision })
+        });
+        approve.remove();
+        deny.remove();
+        const status = document.createElement('span');
+        status.textContent = 'resolved';
+        item.appendChild(status);
+      }
+      approve.addEventListener('click', () => resolve('approve'));
+      deny.addEventListener('click', () => resolve('deny'));
+      item.appendChild(action);
+      item.appendChild(approve);
+      item.appendChild(deny);
+      approvals.appendChild(item);
     }
     async function ensureSession() {
       if (sessionId) { openEvents(sessionId); return sessionId; }

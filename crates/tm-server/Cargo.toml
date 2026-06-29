@@ -9,6 +9,7 @@ description = "TempestMiku server: session API, SSE stream, persona, and minimal
 [dependencies]
 tm-core.workspace = true
 tm-persona.workspace = true
+tm-artifacts.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -24,6 +25,8 @@ chrono.workspace = true
 tokio-postgres.workspace = true
 bytes.workspace = true
 tracing.workspace = true
+agent-client-protocol.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
+tempfile = "3"

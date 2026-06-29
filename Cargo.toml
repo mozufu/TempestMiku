@@ -46,6 +46,8 @@ ignore = "0.4"
 deno_ast = { version = "=0.53.2", features = ["transpiling"] }
 deno_error = "=0.7.1"
 
+agent-client-protocol = "1.0.0"
+
 # errors + tracing
 thiserror = "2"
 anyhow = "1"

@@ -14,6 +14,8 @@ pub enum ServerError {
     InvalidRequest(String),
     #[error("store error: {0}")]
     Store(String),
+    #[error("backend error: {0}")]
+    Backend(String),
 }
 
 impl From<serde_json::Error> for ServerError {
@@ -32,6 +34,7 @@ impl IntoResponse for ServerError {
             ServerError::Forbidden => StatusCode::FORBIDDEN,
             ServerError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             ServerError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ServerError::Backend(_) => StatusCode::BAD_GATEWAY,
         };
         let body = Json(json!({ "error": self.to_string() }));
         (status, body).into_response()

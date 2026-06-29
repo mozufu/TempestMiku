@@ -46,20 +46,22 @@ shape into the language so they have a type system to sit in.
 
 The genuinely agent-first idea is not the syntax. It is:
 
-> **Approval is a resumable effect.** The model writes `code.edit {patch}` and the language
+> **Approval is a resumable effect.** The model writes `@code.edit! {patch}` and the language
 > *suspends the whole isolate*, the host asks the user, and execution *resumes* with the
 > answer — no callbacks, no try/catch, no polling. Approval policy is an effect-handler
 > implementation detail, not an API the model learns.
 
 TypeScript cannot express this. `await` is not suspension across an approval boundary; it is
-intra-event-loop. You can fake it with a host op that blocks, but the *type* of `code.edit`
-still lies — it says `Promise<void>`, identical to `fs.read`. In `tm`:
+intra-event-loop. You can fake it with a host op that blocks, but the TS type still lies — it
+says `Promise<void>`, identical to `fs.read`. In `tm`:
 
 ```
-fun ship(patch) : <Code Edit!> Unit = code.edit {patch}
+fun ship(patch) : <Code Edit!> Unit = @code.edit! {patch}
 ```
 
-The `!` is in the type. The model, the host, and the transcript all see it.
+The `!` is in the type and at the call site; the `@` shows the host boundary. The model, the
+host, and the transcript all see it.
+
 The `!` is not a naming hint. It is a **handler-interface contract**: a `!` effect's handler
 *must* be resumable (it may suspend and resume); a non-`!` effect's handler *must* be
 synchronous (it may never suspend). "May suspend" at the call site is the policy's choice;

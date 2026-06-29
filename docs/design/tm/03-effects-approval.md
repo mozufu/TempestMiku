@@ -5,8 +5,9 @@ bet.
 
 ## 3.1 Effects as the capability manifest
 
-Every external interaction is an **algebraic effect**. A capability declaration (which lives
-in the host registry, §3.9) is also a language-level effect declaration:
+Every external interaction is an **algebraic effect** and every effect perform is written with
+`@` at the call site. A capability declaration (which lives in the host registry, §3.9) is
+also a language-level effect declaration:
 
 ```
 eff FS   Read   : (path: Path) -> String
@@ -21,8 +22,8 @@ effects it performs:
 
 ```
 fun backup(src, dst) : <FS Read, FS Write!> Unit =
-  let data = fs.read src
-  fs.write dst data
+  let data = @fs.read src
+  @fs.write! dst data
 ```
 
 Three invariants from AGENTS.md / §3 fall out *for free, at type-check time, before any code
@@ -31,7 +32,7 @@ runs*:
 ### Fail-closed becomes a type error
 
 ```
-fun oops(url) : Unit = http.get url   -- <HTTP Get> not granted this session
+fun oops(url) : Unit = @http.get url   -- <HTTP Get> not granted this session
 ```
 
 If the session's granted effect row does not include `HTTP Get`, this is **rejected before
@@ -41,7 +42,7 @@ This is strictly stronger than the §7 `globalThis.http = undefined` approach.
 
 ### Provenance is the effect log
 
-Each `perform` of an effect is a transcript node (§3.6 replay, §12 observability). Pure
+Each `@` perform of an effect is a transcript node (§3.6 replay, §12 observability). Pure
 functions (empty effect row) are **trivially replayable / memoizable** — they cannot touch
 the host, so the host may skip them on replay and serve the cached value. The type tells the
 replay engine what is safe to skip; today it has to guess from op names.
@@ -53,6 +54,11 @@ replay engine what is safe to skip; today it has to guess from op names.
 register handler + emit stub) is, in `tm`, adding an effect declaration + a handler branch.
 The "one bridge, a runtime registry" principle is not violated — it is *realized* as the
 language's dispatch.
+
+The `@` marker is not part of the capability name. It is the syntax for crossing the sandbox
+boundary. `@mcp.github.create_issue` and `@fs.read` both dispatch through the same host
+registry; MCP tools are just dynamically imported capabilities whose canonical names keep the
+`mcp.<server_alias>.` prefix.
 
 This dispatch is not new — it is the shape of every algebraic-effect library. Haskell's
 [`effectful`](https://github.com/haskell-effectful/effectful) and
@@ -67,14 +73,16 @@ ecosystem is the **dispatch shape**; what it cannot import is below.
 This is the aha from §1.3. Effects marked `!` are **approval-bearing**: their handler's
 interface *is* resumable — it may suspend execution, ask the host (which asks the user), and
 resume with the result. Effects without `!` have a synchronous-only handler interface and are
-statically forbidden from suspending. The `!` is therefore a type-level contract on the
-handler, not a call-site naming convention; whether a given `!` perform actually suspends is
-the approval policy's runtime choice (§3.3), but whether it *can* is the type's choice.
+statically forbidden from suspending. The `!` is therefore both a type-level contract on the
+handler and a required call-site marker for reviewability: `@code.edit!` may suspend;
+`@fs.read` may not. Whether a given `!` perform actually suspends is the approval policy's
+runtime choice (§3.3), but whether it *can* is the type's choice. Missing or extra call-site
+`!` is a type error.
 
 ```
 do
-  let before = fs.read "config.json"
-  code.edit {patch: replace "v1" "v2"}
+  let before = @fs.read workspace:config.json
+  @code.edit! {patch: replace "v1" "v2"}
   display "patched"
 ```
 
@@ -86,7 +94,7 @@ sequenceDiagram
   participant I as tm isolate
   participant H as Host handler
   participant U as User
-  M->>I: perform Code Edit! {patch}
+  M->>I: @code.edit! {patch} performs Code Edit!
   I->>H: effect + continuation
   H->>U: approval prompt (patch diff)
   U-->>H: approve
@@ -117,24 +125,25 @@ The approval boundary (AGENTS.md: "manual approvals" as a parity invariant) beco
 |---|---|---|
 | `print`, `display` | core primitive (not an effect — pure output to sink) | no |
 | `help`, `tools.search/docs/call` | `Tools Docs` / `Tools Search` / `Tools Call` | no |
-| `fs.read/ls/find` | `FS Read` | no |
-| `fs.write` | `FS Write!` | **yes** |
-| `code.search` | `Code Search` | no |
-| `code.edit` | `Code Edit!` | **yes** |
-| `proc.run` | `Proc Run!` | **yes** (always, per §7) |
-| `resources.read/preview/list` | `Resources Read` etc. | no |
-| `artifacts.put/get/slice/list` | `Artifacts Put` etc. | no |
-| `http.*` (future) | `HTTP *` | policy-dependent |
-| `secrets.*` (future) | `Secrets Resolve` — returns a handle, never a value (§3.5) | yes |
-| `memory.*` / `skills.*` / `agents.*` (future) | their own effects | per-capability |
+| `@fs.read` / `@fs.ls` / `@fs.find` | `FS Read` | no |
+| `@fs.write!` | `FS Write!` | **yes** |
+| `@code.search` | `Code Search` | no |
+| `@code.edit!` | `Code Edit!` | **yes** |
+| `@proc.run!` | `Proc Run!` | **yes** (always, per §7) |
+| `@resources.read` / `@resources.preview` / `@resources.list` | `Resources Read` etc. | no |
+| `@artifacts.put` / `@artifacts.get` / `@artifacts.slice` / `@artifacts.list` | `Artifacts Put` etc. | no |
+| `@http.*` (future) | `HTTP *` | policy-dependent |
+| `@secrets.*!` (future) | `Secrets Resolve` — returns a handle, never a value (§3.5) | yes |
+| `@memory.*` / `@skills.*` / `@agents.*` / `@mcp.*` (future/imported) | their own effects | per-capability |
 
-The `!` is not arbitrary; it encodes §7's existing `approval` field (`none`/`on-write`/…).
-We are not inventing policy — we are giving the existing policy a place in the type.
+The `!` is not arbitrary; it encodes §7's existing `approval` field (`none`/`on-write`/…). We
+are not inventing policy — we are giving the existing policy a place in the type and a visible
+call-site marker.
 
 ## 3.4 Secrets stay by-reference (§3.5)
 
-`secrets.resolve "OPENAI_KEY"` returns an opaque `SecretHandle`, never the bytes. The handle
-is passed to `http` / `proc` calls; the host substitutes the real value at the boundary
+`@secrets.resolve! "OPENAI_KEY"` returns an opaque `SecretHandle`, never the bytes. The handle
+is passed to `@http` / `@proc` calls; the host substitutes the real value at the boundary
 (§3.5). In `tm` this is just an effect whose result type is `SecretHandle`, and there is
 *no language operation* that dereferences a handle — so the invariant is enforced by the type
 system, not by convention.

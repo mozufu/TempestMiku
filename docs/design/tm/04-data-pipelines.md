@@ -8,8 +8,8 @@ display, §5.4) is one pipeline; the 10% case (branching on structured results) 
 The pipeline operator `|>` is the default way to write `tm`. Left-to-right, data-first:
 
 ```
-"src/main.ts"
-  |> fs.read
+workspace:src/main.ts
+  |> @fs.read
   |> lines
   |> filter (includes "TODO")
   |> map (replace "TODO" "DONE")
@@ -17,15 +17,17 @@ The pipeline operator `|>` is the default way to write `tm`. Left-to-right, data
   |> display {kind: "text"}
 ```
 
-Every stage is either a function `(a -> b)` or a **pipe clause** (`where`, `select`, `sort
-by`, `take`, `drop`, `group by`, `aggregate`, `inner_join`, `left_join`) that desugars to a
-function. Pipe clauses only exist because they read better than nested calls; semantically
-they are `filter`/`map`/`sortBy`/etc.
+Every stage is either a function `(a -> b)`, a host capability perform (`@capability`), or a
+**pipe clause** (`where`, `select`, `sort by`, `take`, `drop`, `group by`, `aggregate`,
+`inner_join`, `left_join`) that desugars to a function. Pipe clauses only exist because they
+read better than nested calls; semantically they are `filter`/`map`/`sortBy`/etc. The `@`
+marker makes boundary-crossing stages visible inside the pipeline instead of hiding host
+authority behind ordinary function syntax.
 
 ### `par map` — concurrent fan-out, one word
 
 ```
-paths |> par map fs.read |> flatmap lines
+paths |> par map @fs.read |> flatmap lines
 ```
 
 Backed by Tokio on the Rust/deno path; by host-side `host.parallel` (§6.6) on the CPython
@@ -107,6 +109,22 @@ pattern/step caps to protect replay.
 | `sort` / `sort_by` | `List a -> List a` | `sort by field desc` is pipe syntax over `sort_by`. |
 | `range` | `Int -> Int -> List Int` | Half-open `[start, end)`. |
 
+### URI and path literals
+
+URI/path literals are data tokens, not strings, when they start with a known scheme shape:
+`scheme:path` or `scheme://...`. This keeps resource-bearing capability calls compact while
+still reserving ordinary strings for ordinary text.
+
+```
+@fs.read workspace:src/main.rs
+@resources.read artifact://cell/abc123
+@resources.read mcp://github/repos/owner/repo/issues/123
+```
+
+Colon remains the URI separator; `@` remains the host-boundary marker. Without `@`,
+`mcp://...` is only a URI value. With `@mcp.github.search_issues`, the code performs an MCP
+tool capability. Resource reads and tool calls stay visibly different.
+
 ### JSON
 
 `tm` accepts JSON literals directly, but file and resource boundaries still return bytes or
@@ -160,7 +178,7 @@ text, list, JSON, table summaries, and simple joins.
 Records are JSON objects. Decomposition is by pattern, not by `.` chaining + null checks:
 
 ```
-match fs.read path {
+match @fs.read path {
   Ok {content, mime: "text/plain"} -> content |> display
   Ok {artifact, ...}              -> display {kind: "text", text: "spilled: #artifact"}
   Err(NotFound {uri})             -> display {kind: "text", text: "missing: #uri"}
@@ -211,7 +229,7 @@ JSON has `null`; `tm` has `Option`:
 ```
 type Option T = Some T | None
 
-match fs.find "*.ts" {
+match @fs.find "*.ts" {
   Ok([])   -> display {kind: "text", text: "no files"}
   Ok(head :: rest) -> display {kind: "json", data: head}
   Err(e)   -> rethrow e

@@ -81,7 +81,7 @@ The smallest credible slice, if/when the gate is cleared:
   `HostRegistry` (no new registry).
 - `tools.docs` returning `tm` effect declarations instead of TS `.d.ts` when the session is a
   `tm` session.
-- One E2E test: an approval-gated `code.edit!` that suspends, gets approved, resumes, and the
+- One E2E test: an approval-gated `@code.edit!` that suspends, gets approved, resumes, and the
   transcript shows the effect node. **That test is the proof that the §3 bet landed.**
 
 ## 5.6 The fun

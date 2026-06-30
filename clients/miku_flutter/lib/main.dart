@@ -154,6 +154,55 @@ class _MikuHomePageState extends State<MikuHomePage> {
     });
   }
 
+  Future<void> _openResource(String uri) async {
+    await _ensureSession();
+    setState(() => _status = 'opening resource');
+    try {
+      final preview = await widget.client.previewResource(_sessionId!, uri);
+      if (!mounted) return;
+      setState(() => _status = 'connected');
+      await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (context) => _ResourcePreviewSheet(preview: preview),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _status = 'resource error');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open $uri: $error')),
+      );
+    }
+  }
+
+  Future<void> _promoteSession() async {
+    await _ensureSession();
+    final resources = _resourceUris('$_streamText\n$_finalText');
+    final summary =
+        (_finalText.trim().isNotEmpty ? _finalText : _streamText).trim();
+    setState(() => _status = 'promoting');
+    try {
+      final promotion = await widget.client.promoteSession(
+        _sessionId!,
+        summary: summary.isEmpty ? null : summary,
+        resources: resources,
+      );
+      if (!mounted) return;
+      setState(() {
+        _status = 'promoted';
+        _projectStatus =
+            '${promotion.projectUri} - ${promotion.promotedCount} promoted';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _status = 'promotion error');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not promote session: $error')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final resources = _resourceUris('$_streamText\n$_finalText');
@@ -217,6 +266,11 @@ class _MikuHomePageState extends State<MikuHomePage> {
                   onPressed: _loadProject,
                   icon: const Icon(Icons.refresh),
                 ),
+                IconButton(
+                  tooltip: 'Promote session',
+                  onPressed: _promoteSession,
+                  icon: const Icon(Icons.upload_file),
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -251,8 +305,9 @@ class _MikuHomePageState extends State<MikuHomePage> {
                 children: [
                   for (final uri in resources)
                     ActionChip(
+                      avatar: const Icon(Icons.link),
                       label: Text(uri),
-                      onPressed: () {},
+                      onPressed: () => _openResource(uri),
                     ),
                 ],
               ),
@@ -298,7 +353,8 @@ class _MikuHomePageState extends State<MikuHomePage> {
   }
 
   List<String> _resourceUris(String text) {
-    final pattern = RegExp(r'\b(?:artifact|workspace|linked|project)://[^\s),\]]+');
+    final pattern =
+        RegExp(r'\b(?:artifact|workspace|linked|project)://[^\s),\]]+');
     return pattern
         .allMatches(text)
         .map((match) => match.group(0)!.replaceAll(RegExp(r'[.。]+$'), ''))
@@ -351,6 +407,60 @@ class _Panel extends StatelessWidget {
           child: Text(text),
         ),
       ],
+    );
+  }
+}
+
+class _ResourcePreviewSheet extends StatelessWidget {
+  const _ResourcePreviewSheet({required this.preview});
+
+  final ResourcePreview preview;
+
+  @override
+  Widget build(BuildContext context) {
+    final title =
+        preview.title?.isNotEmpty == true ? preview.title! : preview.uri;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 6),
+              Text(
+                '${preview.kind} / ${preview.mime} / ${preview.sizeBytes} bytes',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              SelectableText(preview.uri),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SelectableText(
+                  preview.preview.isEmpty ? '(empty preview)' : preview.preview,
+                ),
+              ),
+              if (preview.hasMore) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Preview truncated',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

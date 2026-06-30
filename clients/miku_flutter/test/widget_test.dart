@@ -12,14 +12,36 @@ void main() {
     expect(find.text('TempestMiku'), findsWidgets);
     expect(find.text('Personal Assistant'), findsWidgets);
 
-    await tester.enterText(find.byType(EditableText), 'please fix code artifact://0');
+    await tester.enterText(
+        find.byType(EditableText), 'please fix code artifact://0');
     await tester.tap(find.text('Send'));
     await tester.pump();
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.text('Serious Engineer'), findsWidgets);
-    expect(find.textContaining('Miku heard: please fix code artifact://0'), findsWidgets);
+    expect(find.textContaining('Miku heard: please fix code artifact://0'),
+        findsWidgets);
     expect(find.text('artifact://0'), findsOneWidget);
+
+    await tester.tap(find.text('artifact://0'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scripted resource'), findsOneWidget);
+    expect(find.text('Preview for artifact://0'), findsOneWidget);
+
+    await tester.tap(find.byType(ModalBarrier).last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Promote session'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.text('project://tempestmiku - 2 promoted'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+
+    expect(find.text('project://tempestmiku - 2 promoted'), findsOneWidget);
     expect(find.text('Continue from latest session result'), findsOneWidget);
   });
 }

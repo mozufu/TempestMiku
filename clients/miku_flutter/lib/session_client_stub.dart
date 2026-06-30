@@ -88,6 +88,33 @@ class ScriptedMikuClient implements MikuSessionClient {
     );
   }
 
+  @override
+  Future<ResourcePreview> previewResource(String sessionId, String uri) async {
+    return ResourcePreview(
+      uri: uri,
+      kind: 'text',
+      mime: 'text/plain',
+      title: 'Scripted resource',
+      sizeBytes: 48,
+      preview: 'Preview for $uri',
+      hasMore: false,
+    );
+  }
+
+  @override
+  Future<ProjectPromotion> promoteSession(
+    String sessionId, {
+    String? summary,
+    List<String> openLoops = const [],
+    List<String> decisions = const [],
+    List<String> resources = const [],
+  }) async {
+    return ProjectPromotion(
+      projectUri: 'project://tempestmiku',
+      promotedCount: resources.length + (summary == null ? 0 : 1),
+    );
+  }
+
   String _label(String mode) {
     return switch (mode) {
       'serious_engineer' => 'Serious Engineer',

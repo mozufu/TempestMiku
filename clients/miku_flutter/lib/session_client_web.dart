@@ -15,7 +15,8 @@ class WebMikuSessionClient implements MikuSessionClient {
       id: json['id'] as String,
       mode: json['mode'] as String,
       label: json['label'] as String,
-      voiceCap: json['voice_cap'] as String? ?? json['voiceCap'] as String? ?? '',
+      voiceCap:
+          json['voice_cap'] as String? ?? json['voiceCap'] as String? ?? '',
     );
   }
 
@@ -106,6 +107,49 @@ class WebMikuSessionClient implements MikuSessionClient {
           .map((item) => item['text'] as String? ?? '')
           .where((text) => text.isNotEmpty)
           .toList(),
+    );
+  }
+
+  @override
+  Future<ResourcePreview> previewResource(String sessionId, String uri) async {
+    final query = Uri(queryParameters: {'uri': uri}).query;
+    final json = await _request(
+      'GET',
+      '/sessions/$sessionId/resources/preview?$query',
+    );
+    return ResourcePreview(
+      uri: json['uri'] as String? ?? uri,
+      kind: json['kind'] as String? ?? '',
+      mime: json['mime'] as String? ?? '',
+      title: json['title'] as String?,
+      sizeBytes: json['size_bytes'] as int? ?? json['sizeBytes'] as int? ?? 0,
+      preview: json['preview'] as String? ?? '',
+      hasMore: json['has_more'] as bool? ?? json['hasMore'] as bool? ?? false,
+    );
+  }
+
+  @override
+  Future<ProjectPromotion> promoteSession(
+    String sessionId, {
+    String? summary,
+    List<String> openLoops = const [],
+    List<String> decisions = const [],
+    List<String> resources = const [],
+  }) async {
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/promote',
+      body: {
+        if (summary != null && summary.trim().isNotEmpty)
+          'summary': summary.trim(),
+        'openLoops': openLoops,
+        'decisions': decisions,
+        'resources': resources,
+      },
+    );
+    return ProjectPromotion(
+      projectUri: json['projectUri'] as String? ?? '',
+      promotedCount: ((json['promoted'] as List?) ?? const []).length,
     );
   }
 

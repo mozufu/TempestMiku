@@ -1,11 +1,11 @@
 {
-    "name": "miku_flutter",
-    "short_name": "miku_flutter",
+    "name": "TempestMiku Remote",
+    "short_name": "TempestMiku",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F8FAFC",
+    "theme_color": "#2563EB",
+    "description": "Remote control for TempestMiku sessions, approvals, resources, and projects.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

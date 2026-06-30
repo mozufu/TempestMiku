@@ -48,6 +48,36 @@ class ProjectOverview {
   final List<String> nextActions;
 }
 
+class ResourcePreview {
+  const ResourcePreview({
+    required this.uri,
+    required this.kind,
+    required this.mime,
+    required this.sizeBytes,
+    required this.preview,
+    required this.hasMore,
+    this.title,
+  });
+
+  final String uri;
+  final String kind;
+  final String mime;
+  final String? title;
+  final int sizeBytes;
+  final String preview;
+  final bool hasMore;
+}
+
+class ProjectPromotion {
+  const ProjectPromotion({
+    required this.projectUri,
+    required this.promotedCount,
+  });
+
+  final String projectUri;
+  final int promotedCount;
+}
+
 abstract class MikuSessionClient {
   Future<MikuSession> createSession();
 
@@ -66,4 +96,14 @@ abstract class MikuSessionClient {
   Future<void> unlockMode(String sessionId);
 
   Future<ProjectOverview> projectOverview(String sessionId);
+
+  Future<ResourcePreview> previewResource(String sessionId, String uri);
+
+  Future<ProjectPromotion> promoteSession(
+    String sessionId, {
+    String? summary,
+    List<String> openLoops = const [],
+    List<String> decisions = const [],
+    List<String> resources = const [],
+  });
 }

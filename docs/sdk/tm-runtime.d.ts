@@ -1,52 +1,8 @@
-# 7. The host SDK / standard library
-
-The JS/TS runtime exposes one fixed prelude plus capability-gated host namespaces. The model still
-gets only one chat-native tool, `execute(code)` (§5.2); SDK growth happens inside the sandbox and
-through progressive disclosure, not by adding chat-native tools.
-
-First-pass globals:
-
-- `print(...items)` — append to capped stdout.
-- `display(value, opts?)` — **synchronous** intended output; buffered until cell finish and preferred
-  by result shaping (§5.4).
-- `tools.search(query)` / `tools.docs(name)` / `tools.call(name, args)` — progressive disclosure over
-  the host capability catalog. `tools.docs("fs.read")` is the model's SDK-definition lookup: it
-  returns signature, machine-readable schemas, examples, errors, grants, and approval policy for a
-  capability without adding another chat-native tool. New capabilities register behind `tools.call`;
-  the op layer stays small.
-- `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2).
-- `artifacts.put/get/slice/list(...)` — session artifact store; large outputs return `artifact://`
-  handles.
-- `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
-- `code.search/edit(...)` — regex search plus JSON-hunk surgical edits in the first pass.
-- `proc.run(cmd, args, opts?)` — allowlisted argv-vector process execution; never a shell string.
-- `http.get(url)` — current M1 deterministic allowlist helper; production network egress policy is
-  still deferred.
-
-Reserved first-pass globals:
-
-- `secrets`, `memory`, `skills`, and `agents` are explicitly set to `undefined`. This makes feature
-  checks safe while keeping secrets, memory, skills, and sub-agents closed until their backing crates
-  and policies exist. If a future namespace exists but a method is incomplete, that method throws
-  `NotImplementedError`.
-
-Never exposed:
-
-- raw `Deno.*`, raw `fetch`, raw host filesystem/process/network APIs, raw shell strings, environment
-  variables, npm/package installation, browser globals, or Node built-ins such as `node:fs` and
-  `node:child_process`.
-
-### 7.1 Authoritative TypeScript surface
-
-The checked-in SDK type artifact lives at `docs/sdk/tm-runtime.d.ts`. It is the source file clients
-and tests should reference; the excerpt below describes the same surface at design-doc level.
-
-```ts
 /**
  * TempestMiku JS/TS runtime prelude.
  *
- * No ambient filesystem, process, network, secret, shell, or host access.
- * Every external effect goes through capability-checked SDK namespaces.
+ * P0 surface: no ambient filesystem, process, network, secret, shell, or host
+ * access. Every external effect goes through capability-checked SDK namespaces.
  */
 
 export {};
@@ -91,7 +47,7 @@ type ResourceUri =
   | `project://${string}/${string}`;
 
 type SdkPath =
-  | `workspace:${string}`
+  | `${string}:`
   | `${string}:${string}`
   | `linked://${string}/${string}`;
 
@@ -113,8 +69,8 @@ interface HostError extends Error {
   capability?: string;
   path?: string;
   uri?: string;
-  retryable?: boolean;
-  details?: JsonValue;
+  retryable: boolean;
+  details: JsonValue;
 }
 
 type DisplayValue =
@@ -123,11 +79,8 @@ type DisplayValue =
   | boolean
   | null
   | JsonValue
-  | Uint8Array
-  | ArrayBuffer
   | DisplayMarkdown
   | DisplayTable
-  | DisplayImage
   | ArtifactRef
   | ResourceContent;
 
@@ -152,14 +105,6 @@ interface DisplayTable {
   title?: string;
 }
 
-interface DisplayImage {
-  kind: "image";
-  data: Uint8Array | ArrayBuffer | ArtifactUri;
-  mime: "image/png" | "image/jpeg" | "image/webp" | "image/gif" | string;
-  alt?: string;
-  title?: string;
-}
-
 interface ToolsNamespace {
   search(query: string, opts?: ToolSearchOptions): Promise<ToolSummary[]>;
   docs(name: CapabilityName): Promise<ToolDocs>;
@@ -175,7 +120,7 @@ interface ToolSummary {
   name: CapabilityName;
   namespace: string;
   summary: string;
-  sensitive?: boolean;
+  sensitive: boolean;
   granted: boolean;
 }
 
@@ -184,16 +129,16 @@ interface ToolDocs {
   namespace: string;
   summary: string;
   description?: string;
-  signature?: string;
+  signature: string;
   argsSchema: JsonObject;
   resultSchema?: JsonObject;
-  examples?: ToolExample[];
-  errors?: ToolErrorDoc[];
-  grants?: GrantDoc[];
-  sensitive?: boolean;
-  approval?: "none" | "on-write" | "on-external" | "always" | "policy";
-  since?: string;
-  stability?: "stable" | "experimental" | "reserved" | "deprecated";
+  examples: ToolExample[];
+  errors: ToolErrorDoc[];
+  grants: GrantDoc[];
+  sensitive: boolean;
+  approval: "none" | "on-write" | "on-external" | "always" | "policy";
+  since: string;
+  stability: "stable" | "experimental" | "reserved" | "deprecated";
 }
 
 interface ToolExample {
@@ -205,7 +150,7 @@ interface ToolExample {
 interface ToolErrorDoc {
   name: HostError["name"];
   when: string;
-  retryable?: boolean;
+  retryable: boolean;
 }
 
 interface GrantDoc {
@@ -215,7 +160,7 @@ interface GrantDoc {
 
 interface ResourcesNamespace {
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
-  preview(uri: ResourceUri): Promise<ResourcePreview>;
+  preview(uri: ResourceUri): Promise<ResourceContent>;
   list(uri?: ResourceUri): Promise<ResourceEntry[]>;
 }
 
@@ -224,33 +169,20 @@ interface ResourceContent {
   kind: ResourceKind;
   mime: MimeType;
   title?: string;
-  sizeBytes?: number;
+  sizeBytes: number;
   selector?: ResourceSelector;
-  hasMore?: boolean;
-  content?: string;
-  bytes?: Uint8Array;
-  preview?: string;
-  artifact?: ArtifactRef;
-}
-
-interface ResourcePreview {
-  uri: ResourceUri;
-  kind: ResourceKind;
-  mime: MimeType;
-  title?: string;
-  sizeBytes?: number;
-  preview?: string;
-  hasMore?: boolean;
+  hasMore: boolean;
+  content: string;
+  preview: string;
 }
 
 interface ResourceEntry {
   uri: ResourceUri;
   name: string;
-  kind: ResourceKind | "directory";
-  mime?: MimeType;
+  kind: ResourceKind | "directory" | "scheme";
+  title?: string;
   sizeBytes?: number;
   modifiedAt?: string;
-  preview?: string;
 }
 
 type ResourceKind =
@@ -267,10 +199,10 @@ interface ArtifactsNamespace {
   put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef;
   get(ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions): Promise<ResourceContent>;
   slice(ref: ArtifactUri | ArtifactRef, selector: ResourceSelector): Promise<ResourceContent>;
-  list(): ArtifactInfo[];
+  list(): ArtifactRef[];
 }
 
-type ArtifactInput = string | Uint8Array | ArrayBuffer | JsonValue;
+type ArtifactInput = string | JsonValue;
 
 interface ArtifactPutOptions {
   title?: string;
@@ -290,23 +222,12 @@ interface ArtifactRef {
   mime: MimeType;
   title?: string;
   sizeBytes: number;
-  preview?: string;
-}
-
-interface ArtifactInfo {
-  uri: ArtifactUri;
-  id: string;
-  kind: ResourceKind;
-  mime: MimeType;
-  title?: string;
-  sizeBytes: number;
-  createdAt: string;
-  preview?: string;
+  preview: string;
 }
 
 interface FsNamespace {
   read(path: SdkPath, opts?: FsReadOptions): Promise<ResourceContent>;
-  write(path: SdkPath, data: string | Uint8Array | ArrayBuffer, opts?: FsWriteOptions): Promise<FsWriteResult>;
+  write(path: SdkPath, data: string, opts?: FsWriteOptions): Promise<FsWriteResult>;
   ls(path?: SdkPath, opts?: FsListOptions): Promise<FsEntry[]>;
   find(patterns: string | string[], opts?: FsFindOptions): Promise<FsEntry[]>;
 }
@@ -324,7 +245,7 @@ interface FsWriteOptions {
 
 interface FsWriteResult {
   path: SdkPath;
-  uri?: ResourceUri;
+  uri: ResourceUri;
   bytesWritten: number;
   created: boolean;
   overwritten: boolean;
@@ -345,7 +266,7 @@ interface FsFindOptions {
 
 interface FsEntry {
   path: SdkPath;
-  uri?: ResourceUri;
+  uri: ResourceUri;
   name: string;
   kind: "file" | "directory" | "symlink" | "other";
   sizeBytes?: number;
@@ -368,13 +289,13 @@ interface CodeSearchQuery {
 
 interface CodeSearchResult {
   path: SdkPath;
-  uri?: ResourceUri;
+  uri: ResourceUri;
   line: number;
-  column?: number;
+  column: number;
   text: string;
-  before?: string[];
-  after?: string[];
-  tag?: string;
+  before: string[];
+  after: string[];
+  tag: string;
 }
 
 interface PatchEdit {
@@ -426,9 +347,9 @@ interface CodeEditOptions {
 interface CodeEditResult {
   path: SdkPath;
   changed: boolean;
-  diff?: string;
+  diff: string;
   newTag?: string;
-  diagnostics?: Diagnostic[];
+  diagnostics: Diagnostic[];
 }
 
 interface Diagnostic {
@@ -447,19 +368,16 @@ interface ProcNamespace {
 interface ProcRunOptions {
   cwd?: SdkPath;
   timeoutMs?: number;
-  /** Reserved in P0; non-empty overrides are rejected. */
   env?: Record<string, string>;
-  /** Reserved in P0; stdin is rejected. */
-  stdin?: string | Uint8Array;
+  stdin?: string;
   outputBytes?: number;
 }
 
 interface ProcOutput {
   cmd: string;
   args: string[];
-  cwd?: SdkPath;
+  cwd: SdkPath;
   exitCode: number;
-  signal?: string;
   stdout: string;
   stderr: string;
   timedOut: boolean;
@@ -469,38 +387,6 @@ interface ProcOutput {
 }
 
 interface HttpNamespace {
+  /** Experimental M1/P0 deterministic allowlist helper; not general network egress. */
   get(url: string): Promise<string>;
 }
-```
-
-### 7.2 Progressive disclosure flow
-
-```mermaid
-sequenceDiagram
-    participant M as Model
-    participant Cx as Code (sandbox)
-    participant H as Host registry
-    M->>Cx: execute(tools.search("edit rust file"))
-    Cx->>H: op_tools_search
-    H-->>Cx: [{name:"code.edit", summary:"JSON-hunk patch edit", granted:true}]
-    Cx-->>M: 1 match (summary only)
-    M->>Cx: execute(tools.docs("code.edit"))
-    Cx->>H: op_tools_docs
-    H-->>Cx: full signature + examples
-    Cx-->>M: docs loaded on demand
-    M->>Cx: execute(await code.edit({...}); display("patched"))
-```
-
-The catalog never sits in the system prompt; tokens are spent only on what the run actually touches.
-
-### 7.3 Semantics
-
-- `display(...)` is synchronous. It records an intended output item and returns immediately; the host
-  buffers display items and shapes/spills them after the cell completes.
-- `fs.read(...)` and `resources.read(...)` always return `ResourceContent`, never a naked string.
-- `code.edit(...)` accepts JSON hunks. Human-facing patch grammars may exist outside the runtime, but
-  the TS SDK does not require string patch construction.
-- `proc.run(...)` accepts `cmd` + `args` only. `proc.run("cargo test")` is invalid; use
-  `proc.run("cargo", ["test"], { cwd: "tempestmiku:" })`.
-- Missing grants fail closed with `CapabilityDeniedError`. Unknown capabilities fail closed through
-  `tools.call`. Future namespaces that exist but have incomplete methods throw `NotImplementedError`.

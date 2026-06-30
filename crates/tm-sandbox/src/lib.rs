@@ -22,13 +22,14 @@ use deno_core::{
     JsRuntime, OpState, PollEventLoopOptions, RuntimeOptions, extension, op2, serde_v8, v8,
 };
 use deno_error::JsErrorBox;
+use serde::Serialize;
 use serde_json::{Value, json};
-use tm_artifacts::{ArtifactRef, ArtifactStore, ResourceContent};
+use tm_artifacts::{ArtifactRef, ArtifactStore};
 use tm_core::{CellBudget, EvalOutput, Result, Sandbox, Session, SessionConfig};
 use tm_host::{
-    ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy,
-    HostError, HostFn, HostRegistry, InvocationCtx, LinkedFolders, ResourceEntry, ResourceRegistry,
-    ToolDocs, ToolSummary, register_p0_linked_folder_functions,
+    ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy, GrantDoc,
+    HostError, HostFn, HostRegistry, InvocationCtx, LinkedFolders, ResourceRegistry, ToolDocs,
+    ToolErrorDoc, ToolExample, ToolSummary, register_p0_linked_folder_functions,
 };
 
 /// A sandbox that runs no code. Each `eval` echoes the submitted source as its result and notes
@@ -92,19 +93,53 @@ impl HttpGetFn {
             docs: ToolDocs {
                 name: "http.get".to_string(),
                 namespace: "http".to_string(),
-                summary: "Fetch an allowlisted HTTP response for sandbox regression tests"
-                    .to_string(),
-                description: None,
-                signature: "http.get({ url })".to_string(),
-                args_schema: json!({ "type": "object", "required": ["url"] }),
-                result_schema: None,
-                examples: Vec::new(),
-                errors: Vec::new(),
-                grants: Vec::new(),
+                summary: "Fetch a deterministic allowlisted HTTP response".to_string(),
+                description: Some(
+                    "M1/P0 exposes http.get as a default-deny, deterministic allowlist helper. It is not ambient network egress; production egress policy remains deferred."
+                        .to_string(),
+                ),
+                signature: "http.get(url: string): Promise<string>".to_string(),
+                args_schema: json!({
+                    "type": "object",
+                    "required": ["url"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "format": "uri",
+                            "description": "URL must be present in the session's deterministic allowlist."
+                        }
+                    }
+                }),
+                result_schema: Some(json!({ "type": "string" })),
+                examples: vec![ToolExample {
+                    title: Some("Fetch allowlisted fixture".to_string()),
+                    code: "const body = await http.get('https://local.test/ok');\ndisplay(body);"
+                        .to_string(),
+                    notes: Some("Non-allowlisted URLs fail closed with CapabilityDeniedError.".to_string()),
+                }],
+                errors: vec![
+                    ToolErrorDoc {
+                        name: "CapabilityDeniedError".to_string(),
+                        when: "The URL is not in the session allowlist or http.get is not granted."
+                            .to_string(),
+                        retryable: false,
+                    },
+                    ToolErrorDoc {
+                        name: "InvalidArgsError".to_string(),
+                        when: "The url argument is missing or not a string.".to_string(),
+                        retryable: false,
+                    },
+                ],
+                grants: vec![GrantDoc {
+                    kind: "network".to_string(),
+                    description:
+                        "Deterministic allowlisted HTTP fixture access; no open egress.".to_string(),
+                }],
                 sensitive: true,
                 approval: "none".to_string(),
                 since: "M1".to_string(),
-                stability: "test".to_string(),
+                stability: "experimental".to_string(),
             },
         }
     }
@@ -139,16 +174,17 @@ async fn op_tm_host_call(
     state: Rc<RefCell<OpState>>,
     #[string] name: String,
     #[serde] args: serde_json::Value,
-) -> std::result::Result<serde_json::Value, JsErrorBox> {
+) -> serde_json::Value {
     let host_state = {
         let state = state.borrow();
         state.borrow::<RuntimeHostState>().clone()
     };
-    host_state
-        .host_registry
-        .invoke(&name, args, &host_state.invocation_ctx)
-        .await
-        .map_err(js_host_error)
+    sdk_result(
+        host_state
+            .host_registry
+            .invoke(&name, args, &host_state.invocation_ctx)
+            .await,
+    )
 }
 
 #[op2]
@@ -157,17 +193,18 @@ async fn op_tm_resource_read(
     state: Rc<RefCell<OpState>>,
     #[string] uri: String,
     #[string] selector: String,
-) -> std::result::Result<ResourceContent, JsErrorBox> {
+) -> serde_json::Value {
     let host_state = {
         let state = state.borrow();
         state.borrow::<RuntimeHostState>().clone()
     };
     let selector = (!selector.is_empty()).then_some(selector);
-    host_state
-        .resource_registry
-        .read(&uri, selector.as_deref(), &host_state.invocation_ctx)
-        .await
-        .map_err(js_host_error)
+    sdk_result(
+        host_state
+            .resource_registry
+            .read(&uri, selector.as_deref(), &host_state.invocation_ctx)
+            .await,
+    )
 }
 
 #[op2]
@@ -175,16 +212,17 @@ async fn op_tm_resource_read(
 async fn op_tm_resource_preview(
     state: Rc<RefCell<OpState>>,
     #[string] uri: String,
-) -> std::result::Result<ResourceContent, JsErrorBox> {
+) -> serde_json::Value {
     let host_state = {
         let state = state.borrow();
         state.borrow::<RuntimeHostState>().clone()
     };
-    host_state
-        .resource_registry
-        .preview(&uri, &host_state.invocation_ctx)
-        .await
-        .map_err(js_host_error)
+    sdk_result(
+        host_state
+            .resource_registry
+            .preview(&uri, &host_state.invocation_ctx)
+            .await,
+    )
 }
 
 #[op2]
@@ -192,17 +230,18 @@ async fn op_tm_resource_preview(
 async fn op_tm_resource_list(
     state: Rc<RefCell<OpState>>,
     #[string] uri: String,
-) -> std::result::Result<Vec<ResourceEntry>, JsErrorBox> {
+) -> serde_json::Value {
     let host_state = {
         let state = state.borrow();
         state.borrow::<RuntimeHostState>().clone()
     };
     let uri = (!uri.is_empty()).then_some(uri);
-    host_state
-        .resource_registry
-        .list(uri.as_deref(), &host_state.invocation_ctx)
-        .await
-        .map_err(js_host_error)
+    sdk_result(
+        host_state
+            .resource_registry
+            .list(uri.as_deref(), &host_state.invocation_ctx)
+            .await,
+    )
 }
 
 #[op2]
@@ -228,15 +267,13 @@ fn op_tm_tools_search(
 
 #[op2]
 #[serde]
-fn op_tm_tools_docs(
-    state: &mut OpState,
-    #[string] name: String,
-) -> std::result::Result<ToolDocs, JsErrorBox> {
+fn op_tm_tools_docs(state: &mut OpState, #[string] name: String) -> serde_json::Value {
     let host_state = state.borrow::<RuntimeHostState>().clone();
-    host_state
-        .host_registry
-        .docs(&name, &host_state.invocation_ctx)
-        .map_err(js_host_error)
+    sdk_result(
+        host_state
+            .host_registry
+            .docs(&name, &host_state.invocation_ctx),
+    )
 }
 
 #[op2]
@@ -271,18 +308,27 @@ fn op_tm_artifact_list(state: &mut OpState) -> Vec<ArtifactRef> {
     state.borrow::<RuntimeHostState>().artifact_store.list()
 }
 
-fn js_host_error(err: HostError) -> JsErrorBox {
-    let name = match &err {
-        HostError::CapabilityDenied(_) => "CapabilityDeniedError",
-        HostError::ApprovalDenied(_) => "ApprovalDeniedError",
-        HostError::ApprovalTimeout(_) => "ApprovalTimeoutError",
-        HostError::UnknownScheme { .. } => "CapabilityDeniedError",
-        HostError::NotFound(_) => "NotFoundError",
-        HostError::InvalidArgs(_) => "InvalidArgsError",
-        HostError::InvalidPath(_) => "InvalidPathError",
-        HostError::HostCall(_) => "HostCallError",
-    };
-    JsErrorBox::generic(format!("{name}: {err}"))
+fn sdk_result<T: Serialize>(result: std::result::Result<T, HostError>) -> Value {
+    match result {
+        Ok(value) => sdk_ok(value),
+        Err(err) => json!({
+            "ok": false,
+            "error": err.to_payload()
+        }),
+    }
+}
+
+fn sdk_ok<T: Serialize>(value: T) -> Value {
+    match serde_json::to_value(value) {
+        Ok(value) => json!({
+            "ok": true,
+            "value": value
+        }),
+        Err(err) => json!({
+            "ok": false,
+            "error": HostError::HostCall(err.to_string()).to_payload()
+        }),
+    }
 }
 
 fn js_error(err: impl ToString) -> JsErrorBox {
@@ -468,21 +514,45 @@ const __tm_sdk_shape = (value) => {
   }
   return shaped;
 };
+const __tm_sdk_error = (payload) => {
+  const info = payload && typeof payload === "object" ? payload : {};
+  const err = new Error(String(info.message ?? "host call failed"));
+  err.name = String(info.name ?? "HostCallError");
+  if (info.capability != null) err.capability = String(info.capability);
+  if (info.path != null) err.path = String(info.path);
+  if (info.uri != null) err.uri = String(info.uri);
+  err.retryable = Boolean(info.retryable);
+  err.details = info.details ?? null;
+  return err;
+};
+const __tm_unwrap = (result) => {
+  if (result && typeof result === "object" && result.ok === false) {
+    throw __tm_sdk_error(result.error);
+  }
+  if (result && typeof result === "object" && result.ok === true) {
+    return result.value;
+  }
+  return result;
+};
+const __tm_host_call = async (name, args) => __tm_unwrap(await __tm_ops.op_tm_host_call(name, args));
+const __tm_resource_read = async (uri, selector) => __tm_unwrap(await __tm_ops.op_tm_resource_read(uri, selector));
+const __tm_resource_preview = async (uri) => __tm_unwrap(await __tm_ops.op_tm_resource_preview(uri));
+const __tm_resource_list = async (uri) => __tm_unwrap(await __tm_ops.op_tm_resource_list(uri));
 globalThis.artifacts = {
   put: (data, opts = undefined) => __tm_sdk_shape(__tm_ops.op_tm_artifact_put(data, opts ?? null)),
-  get: async (ref, opts = undefined) => __tm_sdk_shape(await __tm_ops.op_tm_resource_read(__tm_uri(ref), __tm_selector(opts))),
+  get: async (ref, opts = undefined) => __tm_sdk_shape(await __tm_resource_read(__tm_uri(ref), __tm_selector(opts))),
   slice: async (ref, selector) => artifacts.get(ref, { selector }),
   list: () => __tm_ops.op_tm_artifact_list().map(__tm_sdk_shape)
 };
 globalThis.resources = {
-  read: async (uri, selector = undefined) => __tm_sdk_shape(await __tm_ops.op_tm_resource_read(String(uri), __tm_arg_selector(selector))),
-  preview: async (uri) => __tm_sdk_shape(await __tm_ops.op_tm_resource_preview(String(uri))),
-  list: async (uri = undefined) => (await __tm_ops.op_tm_resource_list(uri == null ? "" : String(uri))).map(__tm_sdk_shape)
+  read: async (uri, selector = undefined) => __tm_sdk_shape(await __tm_resource_read(String(uri), __tm_arg_selector(selector))),
+  preview: async (uri) => __tm_sdk_shape(await __tm_resource_preview(String(uri))),
+  list: async (uri = undefined) => (await __tm_resource_list(uri == null ? "" : String(uri))).map(__tm_sdk_shape)
 };
 globalThis.tools = {
   search: async (query, opts = undefined) => __tm_ops.op_tm_tools_search(String(query), opts ?? null),
-  docs: async (name) => __tm_ops.op_tm_tools_docs(String(name)),
-  call: async (name, args = {}) => __tm_ops.op_tm_host_call(String(name), args ?? null)
+  docs: async (name) => __tm_unwrap(__tm_ops.op_tm_tools_docs(String(name))),
+  call: async (name, args = {}) => __tm_host_call(String(name), args ?? null)
 };
 globalThis.fs = {
   read: async (path, opts = undefined) => __tm_sdk_shape(await tools.call("fs.read", { path: String(path), ...(opts ?? {}) })),
@@ -1039,6 +1109,41 @@ mod tests {
 
     #[serial_test::serial]
     #[tokio::test(flavor = "current_thread")]
+    async fn deno_host_errors_are_structured_js_errors() {
+        let sandbox = DenoSandbox::default();
+        let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+        let out = session
+            .eval(
+                "const err = await tools.call('missing.capability', {}).catch((err) => ({ name: err.name, message: err.message, capability: err.capability, retryable: err.retryable, details: err.details }));\n\
+                 err",
+                CellBudget::default(),
+            )
+            .await
+            .unwrap();
+        let result = out.result.unwrap();
+        assert_eq!(
+            result["name"],
+            Value::String("CapabilityDeniedError".into())
+        );
+        assert_eq!(
+            result["capability"],
+            Value::String("missing.capability".into())
+        );
+        assert_eq!(result["retryable"], Value::Bool(false));
+        assert_eq!(
+            result["details"]["capability"],
+            Value::String("missing.capability".into())
+        );
+        assert!(
+            result["message"]
+                .as_str()
+                .unwrap()
+                .contains("capability denied")
+        );
+    }
+
+    #[serial_test::serial]
+    #[tokio::test(flavor = "current_thread")]
     async fn deno_http_get_is_default_deny_and_allowlisted() {
         let mut http_allowlist = BTreeMap::new();
         http_allowlist.insert("https://local.test/ok".to_string(), "ok".to_string());
@@ -1090,17 +1195,28 @@ mod tests {
             .eval(
                 "const found = await tools.search('edit');\n\
                  const docs = await tools.docs('code.edit');\n\
+                 const fsDocs = await tools.docs('fs.read');\n\
                  const read = await fs.read('tempestmiku:src/lib.rs');\n\
                  const listed = await fs.ls('tempestmiku:src');\n\
                  const hits = await code.search({ pattern: 'edit', paths: ['tempestmiku:src/lib.rs'], regex: false });\n\
                  const linked = await resources.read('linked://tempestmiku/src/lib.rs');\n\
-                 ({ found: found.length, docName: docs.name, readHasMore: read.hasMore, sizeBytes: listed[0].sizeBytes, hits: hits.length, linked: linked.content.includes('edit'), fsType: typeof fs, codeType: typeof code, procType: typeof proc, memoryType: typeof memory, skillsType: typeof skills, agentsType: typeof agents })",
+                 ({ found: found.length, docName: docs.name, fsSignature: fsDocs.signature, fsRequired: fsDocs.argsSchema.required[0], fsResultContent: fsDocs.resultSchema.properties.content.type, fsExamples: fsDocs.examples.length, fsApproval: fsDocs.approval, readHasMore: read.hasMore, sizeBytes: listed[0].sizeBytes, hits: hits.length, linked: linked.content.includes('edit'), fsType: typeof fs, codeType: typeof code, procType: typeof proc, memoryType: typeof memory, skillsType: typeof skills, agentsType: typeof agents })",
                 CellBudget::default(),
             )
             .await
             .unwrap();
         let result = out.result.unwrap();
         assert_eq!(result["docName"], Value::String("code.edit".into()));
+        assert_eq!(
+            result["fsSignature"],
+            Value::String(
+                "fs.read(path: SdkPath, opts?: FsReadOptions): Promise<ResourceContent>".into()
+            )
+        );
+        assert_eq!(result["fsRequired"], Value::String("path".into()));
+        assert_eq!(result["fsResultContent"], Value::String("string".into()));
+        assert!(result["fsExamples"].as_u64().unwrap() > 0);
+        assert_eq!(result["fsApproval"], Value::String("none".into()));
         assert_eq!(result["readHasMore"], Value::Bool(false));
         assert!(result["sizeBytes"].as_u64().unwrap() > 0);
         assert_eq!(result["hits"], Value::Number(1.into()));

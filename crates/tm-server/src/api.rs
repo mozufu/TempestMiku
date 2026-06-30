@@ -122,6 +122,7 @@ where
     Router::<AppState<S, M, C>>::new()
         .route("/health", get(health))
         .route("/sessions", post(create_session::<S, M, C>))
+        .route("/sessions/:id", get(get_session::<S, M, C>))
         .route("/sessions/:id/events", get(session_events::<S, M, C>))
         .route("/sessions/:id/messages", post(post_message::<S, M, C>))
         .route("/sessions/:id/mode", get(get_mode::<S, M, C>))
@@ -175,6 +176,7 @@ where
             "/sessions/:id/resources/artifacts/:artifact_id",
             get(read_artifact::<S, M, C>),
         )
+        .fallback_service(crate::webui::service())
         .with_state(state)
 }
 
@@ -230,7 +232,30 @@ where
         )
         .await?;
     let _ = state.sender(session.id).send(mode_event);
-    Ok(Json(CreateSessionResponse {
+    Ok(Json(session_response(session, persona_status)))
+}
+
+async fn get_session<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<CreateSessionResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let persona_status = session.persona_status.clone();
+    Ok(Json(session_response(session, persona_status)))
+}
+
+fn session_response(
+    session: crate::SessionRecord,
+    persona_status: crate::PersonaStatus,
+) -> CreateSessionResponse {
+    CreateSessionResponse {
         id: session.id,
         mode: session.mode,
         mode_state: session.mode_state.clone(),
@@ -238,7 +263,7 @@ where
         label: session.mode.label().to_string(),
         voice_cap: session.mode.voice_cap().to_string(),
         default_scope: session.mode.default_scope().to_string(),
-    }))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2070,6 +2095,22 @@ mod tests {
     async fn session_creation_message_append_event_append_and_replay_work() {
         let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
         let session = create(&app).await;
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let reused = response_json(res).await;
+        assert_eq!(reused["id"], session.id.to_string());
+        assert_eq!(reused["mode"], json!("personal_assistant"));
+
         let res = app
             .clone()
             .oneshot(

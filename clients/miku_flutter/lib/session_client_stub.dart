@@ -9,6 +9,9 @@ class ScriptedMikuClient implements MikuSessionClient {
   int _nextId = 0;
 
   @override
+  Future<MikuSession> createOrReuseSession() => createSession();
+
+  @override
   Future<MikuSession> createSession() async {
     final id = 'scripted-${_nextId++}';
     _controllers[id] = StreamController<MikuEvent>.broadcast();
@@ -26,6 +29,9 @@ class ScriptedMikuClient implements MikuSessionClient {
         .putIfAbsent(sessionId, () => StreamController<MikuEvent>.broadcast())
         .stream;
   }
+
+  @override
+  void rememberLastEventId(String sessionId, String lastEventId) {}
 
   @override
   Future<void> sendMessage(String sessionId, String content) async {
@@ -53,8 +59,9 @@ class ScriptedMikuClient implements MikuSessionClient {
   Future<void> resolveApproval(
     String sessionId,
     String approvalId,
-    String decision,
-  ) async {}
+    String decision, {
+    String? optionId,
+  }) async {}
 
   @override
   Future<void> lockMode(String sessionId, String mode) async {

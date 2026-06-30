@@ -6,12 +6,18 @@ class MikuSession {
     required this.mode,
     required this.label,
     required this.voiceCap,
+    this.defaultScope = 'global',
+    this.lastEventId,
+    this.locked = false,
   });
 
   final String id;
   final String mode;
   final String label;
   final String voiceCap;
+  final String defaultScope;
+  final String? lastEventId;
+  final bool locked;
 }
 
 class MikuEvent {
@@ -31,11 +37,27 @@ class ApprovalPrompt {
     required this.approvalId,
     required this.action,
     required this.scope,
+    this.options = const [],
+    this.timeoutMs,
   });
 
   final String approvalId;
   final String action;
   final Map<String, Object?> scope;
+  final List<ApprovalOption> options;
+  final int? timeoutMs;
+}
+
+class ApprovalOption {
+  const ApprovalOption({
+    required this.optionId,
+    required this.name,
+    required this.kind,
+  });
+
+  final String optionId;
+  final String name;
+  final String kind;
 }
 
 class ProjectOverview {
@@ -79,17 +101,22 @@ class ProjectPromotion {
 }
 
 abstract class MikuSessionClient {
+  Future<MikuSession> createOrReuseSession();
+
   Future<MikuSession> createSession();
 
   Stream<MikuEvent> events(String sessionId, {String? lastEventId});
+
+  void rememberLastEventId(String sessionId, String lastEventId);
 
   Future<void> sendMessage(String sessionId, String content);
 
   Future<void> resolveApproval(
     String sessionId,
     String approvalId,
-    String decision,
-  );
+    String decision, {
+    String? optionId,
+  });
 
   Future<void> lockMode(String sessionId, String mode);
 

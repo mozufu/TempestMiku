@@ -62,7 +62,8 @@ class _Tok {
 Color _modeAccent(String temp, _Tok tok) {
   switch (temp) {
     case 'hot':
-      return const Color(0xFFB84A30); // oklch(58% 0.094 33) — saturated rust orange
+      return const Color(
+          0xFFB84A30); // oklch(58% 0.094 33) — saturated rust orange
     case 'soft':
       return const Color(0xFFAA7860); // oklch(64% 0.058 28) — warm terracotta
     case 'warm':
@@ -98,12 +99,12 @@ class _Mode {
   });
 
   String get tempLabel => switch (temp) {
-    'hot' => '尖銳 · 濃',
-    'soft' => '安撫 · 濃',
-    'warm' => '親切 · 中',
-    'cool' => '克制 · 關',
-    _ => '中',
-  };
+        'hot' => '尖銳 · 濃',
+        'soft' => '安撫 · 濃',
+        'warm' => '親切 · 中',
+        'cool' => '克制 · 關',
+        _ => '中',
+      };
 }
 
 const _kModes = <_Mode>[
@@ -211,6 +212,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   final List<String> _nextActions = [];
   final List<_Msg> _history = [];
 
+  Future<void>? _sessionFuture;
   StreamSubscription<MikuEvent>? _sub;
   String? _sessionId;
   String? _lastEventId;
@@ -230,6 +232,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
+    unawaited(_ensureSession());
   }
 
   @override
@@ -249,24 +252,53 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _ensureSession() async {
     if (_sessionId != null) return;
-    final s = await widget.client.createSession();
-    _sessionId = s.id;
-    _modeId = s.mode;
-    _status = 'connected';
-    _sub = widget.client
-        .events(s.id, lastEventId: _lastEventId)
-        .listen(_onEvent, onError: (_) {
-      if (mounted) setState(() => _status = 'reconnecting');
-    });
-    if (mounted) setState(() {});
+    return _sessionFuture ??= _connectSession();
+  }
+
+  Future<void> _connectSession() async {
+    if (mounted) setState(() => _status = 'connecting');
+    try {
+      final s = await widget.client.createOrReuseSession();
+      if (!mounted) return;
+      await _sub?.cancel();
+      _sessionId = s.id;
+      _lastEventId = s.lastEventId;
+      _modeId = s.mode;
+      _modeLocked = s.locked;
+      _status = 'connected';
+      _sub = widget.client
+          .events(s.id, lastEventId: _lastEventId)
+          .listen(_onEvent, onError: (_) {
+        if (mounted) setState(() => _status = 'reconnecting');
+      });
+      await _loadProject();
+      if (mounted) setState(() {});
+    } catch (err) {
+      _sessionFuture = null;
+      if (!mounted) return;
+      setState(() => _status = 'offline');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not connect to tm-server: $err')),
+      );
+    }
   }
 
   void _onEvent(MikuEvent e) {
-    if (e.id != null) _lastEventId = e.id;
+    final eventId = e.id;
+    if (eventId != null && eventId.isNotEmpty) {
+      _lastEventId = eventId;
+      final sessionId = _sessionId;
+      if (sessionId != null) {
+        widget.client.rememberLastEventId(sessionId, eventId);
+      }
+    }
     setState(() {
       switch (e.type) {
+        case 'connection':
+          _status = e.data['status'] as String? ?? _status;
         case 'text':
           _streamText += e.data['delta'] as String? ?? '';
+          if (_streamText.isNotEmpty) _status = 'streaming';
         case 'final':
           final text = e.data['text'] as String? ?? '';
           _history.add(_Msg(isUser: false, text: text, modeId: _modeId));
@@ -275,6 +307,8 @@ class _MikuHomePageState extends State<MikuHomePage>
           _loadProject();
         case 'mode':
           final newId = e.data['mode'] as String? ?? _modeId;
+          _modeLocked =
+              e.data['lockSource'] != null || e.data['lock_source'] != null;
           if (newId != _modeId) {
             _history.add(
                 _Msg(isUser: false, text: '\x00mode:$newId', modeId: newId));
@@ -284,12 +318,26 @@ class _MikuHomePageState extends State<MikuHomePage>
           _approvals.add(ApprovalPrompt(
             approvalId: e.data['approvalId'] as String? ?? '',
             action: e.data['action'] as String? ?? 'Approval requested',
-            scope: (e.data['scope'] as Map?)?.cast<String, Object?>() ??
-                const {},
+            scope:
+                (e.data['scope'] as Map?)?.cast<String, Object?>() ?? const {},
+            options: ((e.data['options'] as List?) ?? const [])
+                .whereType<Map>()
+                .map(
+                  (option) => ApprovalOption(
+                    optionId: (option['optionId'] as String?) ??
+                        (option['option_id'] as String?) ??
+                        '',
+                    name: (option['name'] as String?) ?? '',
+                    kind: (option['kind'] as String?) ?? '',
+                  ),
+                )
+                .where((option) => option.optionId.isNotEmpty)
+                .toList(),
+            timeoutMs: (e.data['timeoutMs'] as num?)?.toInt() ??
+                (e.data['timeout_ms'] as num?)?.toInt(),
           ));
         case 'approval_resolved':
-          _approvals.removeWhere(
-              (a) => a.approvalId == e.data['approvalId']);
+          _approvals.removeWhere((a) => a.approvalId == e.data['approvalId']);
       }
     });
     _scrollToBottom();
@@ -321,8 +369,17 @@ class _MikuHomePageState extends State<MikuHomePage>
     _scrollToBottom();
   }
 
-  Future<void> _resolve(ApprovalPrompt a, String decision) async {
-    await widget.client.resolveApproval(_sessionId!, a.approvalId, decision);
+  Future<void> _resolve(
+    ApprovalPrompt a,
+    String decision, {
+    String? optionId,
+  }) async {
+    await widget.client.resolveApproval(
+      _sessionId!,
+      a.approvalId,
+      decision,
+      optionId: optionId,
+    );
     setState(() => _approvals.remove(a));
   }
 
@@ -341,9 +398,7 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _promoteSession() async {
     await _ensureSession();
-    final last = _history
-        .where((m) => !m.isUser && !m.isModeChange)
-        .lastOrNull;
+    final last = _history.where((m) => !m.isUser && !m.isModeChange).lastOrNull;
     final resources = _extractResources(last?.text ?? '');
     try {
       final p = await widget.client.promoteSession(
@@ -352,8 +407,8 @@ class _MikuHomePageState extends State<MikuHomePage>
         resources: resources,
       );
       if (!mounted) return;
-      setState(
-          () => _projectStatus = '${p.projectUri} · ${p.promotedCount} promoted');
+      setState(() =>
+          _projectStatus = '${p.projectUri} · ${p.promotedCount} promoted');
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -439,6 +494,16 @@ class _MikuHomePageState extends State<MikuHomePage>
         approval: a,
         tok: _tok,
         accent: _accent,
+        onOption: (option) {
+          final isReject = option.kind.startsWith('reject') ||
+              option.kind.startsWith('deny');
+          _resolve(
+            a,
+            isReject ? 'deny' : 'approve',
+            optionId: option.optionId,
+          );
+          Navigator.pop(context);
+        },
         onApprove: () {
           _resolve(a, 'approve');
           Navigator.pop(context);
@@ -555,7 +620,7 @@ class _MikuHomePageState extends State<MikuHomePage>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Miku',
+                  'TempestMiku',
                   style: TextStyle(
                     color: tok.text,
                     fontSize: 15.5,
@@ -565,7 +630,7 @@ class _MikuHomePageState extends State<MikuHomePage>
                   ),
                 ),
                 Text(
-                  '遠端遙控 · lumo',
+                  'Miku · ${mode.zh} · voice ${mode.cap}',
                   style: TextStyle(
                     color: tok.muted,
                     fontSize: 11,
@@ -576,6 +641,23 @@ class _MikuHomePageState extends State<MikuHomePage>
               ],
             ),
           ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+            decoration: BoxDecoration(
+              color: accent.withOpacity(0.12),
+              border: Border.all(color: accent.withOpacity(0.45)),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              _modeLocked ? '${mode.short} · locked' : mode.short,
+              style: TextStyle(
+                color: accent,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
           _ConnectionBadge(status: _status, tok: tok),
           const SizedBox(width: 8),
           _TokIconBtn(
@@ -832,8 +914,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           isStreaming: true,
         ));
       } else {
-        items.add(
-            _TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
+        items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
       }
       items.add(const SizedBox(height: 14));
     }
@@ -887,8 +968,7 @@ class _MikuHomePageState extends State<MikuHomePage>
                   hintText: '傳訊息給 Miku…',
                   hintStyle: TextStyle(color: tok.muted, fontSize: 13.5),
                   border: InputBorder.none,
-                  contentPadding:
-                      const EdgeInsets.fromLTRB(14, 10, 8, 10),
+                  contentPadding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
                 ),
                 onSubmitted: (_) => _send(),
               ),
@@ -1024,13 +1104,15 @@ class _ConnectionBadgeState extends State<_ConnectionBadge>
   }
 
   static String _label(String s) => switch (s) {
-    'idle' => '未連線',
-    'connected' => '已連線',
-    'streaming' => '回應中',
-    'reconnecting' => '重連中',
-    'complete' => '已連線',
-    _ => s,
-  };
+        'idle' => '未連線',
+        'connecting' => '連線中',
+        'connected' => '已連線',
+        'streaming' => '回應中',
+        'reconnecting' => '重連中',
+        'offline' => '離線',
+        'complete' => '已連線',
+        _ => s,
+      };
 }
 
 class _SystemLine extends StatelessWidget {
@@ -1375,8 +1457,8 @@ class _TypingIndicator extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: List.generate(3, (i) {
                 final phase = (anim.value - i * 0.18) % 1.0;
-                final opacity =
-                    (math.sin(phase * math.pi * 2) * 0.4 + 0.6).clamp(0.25, 1.0);
+                final opacity = (math.sin(phase * math.pi * 2) * 0.4 + 0.6)
+                    .clamp(0.25, 1.0);
                 final dy =
                     (math.sin(phase * math.pi * 2) * -2.0).clamp(-2.0, 0.0);
                 return Padding(
@@ -1574,8 +1656,7 @@ class _ModeSheet extends StatelessWidget {
                           color: mAccent,
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(m.icon,
-                            color: _textOn(mAccent), size: 20),
+                        child: Icon(m.icon, color: _textOn(mAccent), size: 20),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -1594,8 +1675,8 @@ class _ModeSheet extends StatelessWidget {
                                 ),
                                 const SizedBox(width: 7),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6),
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 6),
                                   decoration: BoxDecoration(
                                     border: Border.all(color: tok.border),
                                     borderRadius: BorderRadius.circular(999),
@@ -1741,6 +1822,7 @@ class _ApprovalSheet extends StatefulWidget {
     required this.approval,
     required this.tok,
     required this.accent,
+    required this.onOption,
     required this.onApprove,
     required this.onDeny,
   });
@@ -1748,6 +1830,7 @@ class _ApprovalSheet extends StatefulWidget {
   final ApprovalPrompt approval;
   final _Tok tok;
   final Color accent;
+  final void Function(ApprovalOption option) onOption;
   final VoidCallback onApprove, onDeny;
 
   @override
@@ -1755,12 +1838,18 @@ class _ApprovalSheet extends StatefulWidget {
 }
 
 class _ApprovalSheetState extends State<_ApprovalSheet> {
-  int _secs = 60;
+  late final int _initialSecs;
+  late int _secs;
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
+    _initialSecs = math.max(
+      1,
+      ((widget.approval.timeoutMs ?? 60000) / 1000).ceil(),
+    );
+    _secs = _initialSecs;
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() => _secs--);
@@ -1837,8 +1926,7 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   border: Border.all(color: tok.border),
                   borderRadius: BorderRadius.circular(999),
@@ -1931,71 +2019,108 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
           ClipRRect(
             borderRadius: BorderRadius.circular(999),
             child: LinearProgressIndicator(
-              value: _secs / 60,
+              value: _secs / _initialSecs,
               backgroundColor: tok.border.withOpacity(0.6),
               valueColor: AlwaysStoppedAnimation<Color>(accent),
               minHeight: 5,
             ),
           ),
           const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: widget.onDeny,
-                  child: Container(
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: tok.bg,
-                      border: Border.all(color: tok.border),
-                      borderRadius: BorderRadius.circular(13),
-                    ),
-                    child: Center(
-                      child: Text(
-                        '拒絕',
-                        style: TextStyle(
-                          color: tok.text,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
+          if (widget.approval.options.isEmpty)
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: widget.onDeny,
+                    child: Container(
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: tok.bg,
+                        border: Border.all(color: tok.border),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '拒絕',
+                          style: TextStyle(
+                            color: tok.text,
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 3,
-                child: GestureDetector(
-                  onTap: widget.onApprove,
-                  child: Container(
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: accent,
-                      borderRadius: BorderRadius.circular(13),
-                    ),
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.check, color: _textOn(accent), size: 17),
-                          const SizedBox(width: 7),
-                          Text(
-                            '核可並執行',
-                            style: TextStyle(
-                              color: _textOn(accent),
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w800,
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 3,
+                  child: GestureDetector(
+                    onTap: widget.onApprove,
+                    child: Container(
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: accent,
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: Center(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.check, color: _textOn(accent), size: 17),
+                            const SizedBox(width: 7),
+                            Text(
+                              '核可並執行',
+                              style: TextStyle(
+                                color: _textOn(accent),
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            )
+          else
+            Column(
+              children: widget.approval.options.map((option) {
+                final isReject = option.kind.startsWith('reject') ||
+                    option.kind.startsWith('deny');
+                final buttonColor = isReject ? tok.bg : accent;
+                final textColor = isReject ? tok.text : _textOn(accent);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: GestureDetector(
+                    onTap: () => widget.onOption(option),
+                    child: Container(
+                      width: double.infinity,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: buttonColor,
+                        border: Border.all(
+                          color: isReject ? tok.border : accent,
+                        ),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: Center(
+                        child: Text(
+                          option.name.isEmpty ? option.optionId : option.name,
+                          style: TextStyle(
+                            color: textColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
         ],
       ),
     );
@@ -2055,8 +2180,8 @@ class _OverflowSheet extends StatelessWidget {
               ),
               child: Text(
                 projectStatus,
-                style:
-                    TextStyle(color: tok.text, fontSize: 12, fontWeight: FontWeight.w500),
+                style: TextStyle(
+                    color: tok.text, fontSize: 12, fontWeight: FontWeight.w500),
               ),
             ),
             if (nextActions.isNotEmpty) ...[
@@ -2197,9 +2322,7 @@ class _ResourceSheet extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: SelectableText(
-                  preview.preview.isEmpty
-                      ? '(empty preview)'
-                      : preview.preview,
+                  preview.preview.isEmpty ? '(empty preview)' : preview.preview,
                   style: TextStyle(
                     color: tok.text,
                     fontSize: 12,

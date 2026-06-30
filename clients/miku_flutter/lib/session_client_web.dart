@@ -8,24 +8,44 @@ import 'session_models.dart';
 MikuSessionClient createClient() => WebMikuSessionClient();
 
 class WebMikuSessionClient implements MikuSessionClient {
+  static const _sessionIdKey = 'tempestmiku.sessionId';
+  static const _lastEventIdKey = 'tempestmiku.lastEventId';
+
+  @override
+  Future<MikuSession> createOrReuseSession() async {
+    final storedId = window.localStorage[_sessionIdKey];
+    if (storedId != null && storedId.isNotEmpty) {
+      try {
+        final json = await _request('GET', '/sessions/$storedId');
+        final session = _sessionFromJson(
+          json,
+          lastEventId: window.localStorage[_lastEventIdKey],
+        );
+        _rememberSession(session);
+        return session;
+      } catch (_) {
+        window.localStorage.remove(_sessionIdKey);
+        window.localStorage.remove(_lastEventIdKey);
+      }
+    }
+    return createSession();
+  }
+
   @override
   Future<MikuSession> createSession() async {
     final json = await _request('POST', '/sessions');
-    return MikuSession(
-      id: json['id'] as String,
-      mode: json['mode'] as String,
-      label: json['label'] as String,
-      voiceCap:
-          json['voice_cap'] as String? ?? json['voiceCap'] as String? ?? '',
-    );
+    final session = _sessionFromJson(json);
+    _rememberSession(session);
+    return session;
   }
 
   @override
   Stream<MikuEvent> events(String sessionId, {String? lastEventId}) {
     final controller = StreamController<MikuEvent>();
-    final suffix = lastEventId == null || lastEventId.isEmpty
+    final resumeId = lastEventId ?? window.localStorage[_lastEventIdKey];
+    final suffix = resumeId == null || resumeId.isEmpty
         ? ''
-        : '?lastEventId=${Uri.encodeQueryComponent(lastEventId)}';
+        : '?lastEventId=${Uri.encodeQueryComponent(resumeId)}';
     final source = EventSource('/sessions/$sessionId/events$suffix');
     for (final type in [
       'text',
@@ -35,26 +55,58 @@ class WebMikuSessionClient implements MikuSessionClient {
       'approval_resolved',
       'diff',
       'artifact',
+      'tool_call',
+      'tool_call_update',
+      'cell_start',
+      'cell_result',
+      'write_proposal',
+      'error',
     ]) {
       source.addEventListener(type, (Event event) {
         final message = event as MessageEvent;
+        final eventId = message.lastEventId;
+        if (eventId.isNotEmpty) {
+          rememberLastEventId(sessionId, eventId);
+        }
         controller.add(
           MikuEvent(
             type: type,
-            id: message.lastEventId,
+            id: eventId,
             data: (jsonDecode(message.data as String) as Map)
                 .cast<String, Object?>(),
           ),
         );
       });
     }
+    source.onOpen.listen((_) {
+      if (!controller.isClosed) {
+        controller.add(
+          const MikuEvent(
+            type: 'connection',
+            data: {'status': 'connected'},
+          ),
+        );
+      }
+    });
     source.onError.listen((_) {
       if (!controller.isClosed) {
-        controller.addError(StateError('event stream disconnected'));
+        controller.add(
+          const MikuEvent(
+            type: 'connection',
+            data: {'status': 'reconnecting'},
+          ),
+        );
       }
     });
     controller.onCancel = source.close;
     return controller.stream;
+  }
+
+  @override
+  void rememberLastEventId(String sessionId, String lastEventId) {
+    if (window.localStorage[_sessionIdKey] == sessionId) {
+      window.localStorage[_lastEventIdKey] = lastEventId;
+    }
   }
 
   @override
@@ -70,12 +122,16 @@ class WebMikuSessionClient implements MikuSessionClient {
   Future<void> resolveApproval(
     String sessionId,
     String approvalId,
-    String decision,
-  ) async {
+    String decision, {
+    String? optionId,
+  }) async {
     await _request(
       'POST',
       '/sessions/$sessionId/approvals/$approvalId',
-      body: {'decision': decision},
+      body: {
+        'decision': decision,
+        if (optionId != null) 'optionId': optionId,
+      },
     );
   }
 
@@ -173,5 +229,34 @@ class WebMikuSessionClient implements MikuSessionClient {
     final text = response.responseText;
     if (text == null || text.isEmpty) return <String, Object?>{};
     return (jsonDecode(text) as Map).cast<String, Object?>();
+  }
+
+  MikuSession _sessionFromJson(
+    Map<String, Object?> json, {
+    String? lastEventId,
+  }) {
+    final modeState = (json['mode_state'] as Map?)?.cast<String, Object?>() ??
+        (json['modeState'] as Map?)?.cast<String, Object?>() ??
+        const <String, Object?>{};
+    return MikuSession(
+      id: json['id'] as String,
+      mode: (json['mode'] as String?) ?? (modeState['mode'] as String?) ?? '',
+      label: json['label'] as String? ?? '',
+      voiceCap:
+          (json['voice_cap'] as String?) ?? (json['voiceCap'] as String?) ?? '',
+      defaultScope: (json['default_scope'] as String?) ??
+          (json['defaultScope'] as String?) ??
+          'global',
+      locked:
+          modeState['lockSource'] != null || modeState['lock_source'] != null,
+      lastEventId: lastEventId,
+    );
+  }
+
+  void _rememberSession(MikuSession session) {
+    window.localStorage[_sessionIdKey] = session.id;
+    if (session.lastEventId != null && session.lastEventId!.isNotEmpty) {
+      window.localStorage[_lastEventIdKey] = session.lastEventId!;
+    }
   }
 }

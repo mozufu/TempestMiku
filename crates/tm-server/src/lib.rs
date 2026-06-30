@@ -12,6 +12,7 @@ pub mod error;
 pub mod memory;
 pub mod omp_acp;
 pub mod store;
+pub mod webui;
 
 pub use api::{AppState, app};
 pub use auth::{AuthConfig, ForwardedAuthConfig};

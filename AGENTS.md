@@ -12,9 +12,14 @@
 - Existing crates/apps:
   - `crates/tm-core`: message types, streaming agent loop, result shaping, `LlmClient`, `Sandbox`, `EventSink` traits.
   - `crates/tm-llm`: OpenAI-compatible streaming SSE client.
-  - `crates/tm-sandbox`: current M0 stub sandbox only; real `deno_core` backend is still future M1 work.
-  - `apps/tm-cli`: CLI wiring the LLM client, agent loop, and stub sandbox.
-- Planned but not yet materialized: `tm-host`, `tm-artifacts`, `tm-mcp`, `tm-trace`, `tm-server`, `tm-persona`, `tm-memory`, `tm-agents`, `tm-drive`, WebUI, Android.
+  - `crates/tm-sandbox`: M0 `StubSandbox` plus the M1 `deno_core` JS/TS backend with persistent cells, timeout/reset, output spill, resource reads, SDK prelude, and host-call bridge.
+  - `crates/tm-artifacts`: session artifacts and content-addressed blob storage.
+  - `crates/tm-host`: host registry, capability grants, approval policy, resource registry, linked folders, `fs.*`, `code.*`, and argv-vector `proc.run`.
+  - `crates/tm-persona`: mode labels, voice caps, and configurable persona asset status.
+  - `crates/tm-server`: axum session API, replayable SSE/event store, minimal memory provider, approvals, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
+  - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and Deno sandbox by default; `--stub-sandbox` remains for protocol tests.
+  - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.
+- Not production-complete or not yet split into dedicated crates: `tm-mcp`, `tm-trace`, full `tm-memory`, `tm-agents`, `tm-drive`, scheduler/dreaming, full mode router/project promotion, and Android OS packaging.
 
 ## Read before changing code
 
@@ -40,15 +45,15 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Close M0 with regression tests around streaming, tool-call assembly, stub eval, and CLI token streaming.
-2. Add `tm-artifacts` before broad SDK/agent/server work, because spill + `artifact://` are shared infrastructure.
-3. Add the real `deno_core` sandbox before product dogfooding; avoid a special chat-only P0 path.
-4. Add `tm-host` + `ApprovalPolicy` before linked-folder editing or `proc.run`.
-5. Ship P0 as a vertical slice: `tm-server` SSE + persona overlay + minimal memory recall/profile together.
+1. Sweep the runtime SDK contract: add or generate `tm-runtime.d.ts`, enrich `tools.docs`, and reconcile the current allowlisted `http.get` helper with the deferred production egress policy.
+2. Ship P1 project manager + remote control: mode router lock/override, project/open-loop/decision views, session-to-project promotion, fuller resource gateway, and Flutter Web/PWA approval/resource workflows.
+3. Harden server persistence boundaries with gated Postgres coverage while keeping normal `cargo test` external-service-free.
+4. Keep P0a OMP ACP replaceable and continue proving native `fs.*` / `code.*` / `proc.*` can handle the same dogfood edits without weakening approval/security.
+5. Only extract or add expansion crates (`tm-memory`, `tm-agents`, `tm-drive`, `tm-mcp`, scheduler/dreaming) after the P1 server/resource surface is settled.
 
 Do not start yet unless explicitly requested:
 
-- Android before P0/P1 server APIs stabilize.
+- Android OS packaging before P1 server APIs stabilize.
 - Drive auto-organizer before approval policy and memory scopes exist.
 - Self-evolution writes before audit/replay and tier gates exist.
 - Deep research/orchestration before `agents.*`, artifacts, memory scopes, and scheduler are real.

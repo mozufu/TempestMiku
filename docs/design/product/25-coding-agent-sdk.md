@@ -135,10 +135,10 @@ but are later milestones, not part of the first serious-engineer cut.
 The first serious-engineer runtime exposes the authoritative SDK surface in §7.1. Product-layer scope
 is intentionally narrower than the full translation map:
 
-- **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `code`, and
-  `proc`.
-- **Reserved but unavailable:** `http`, `secrets`, `memory`, `skills`, and `agents` are explicitly set
-  to `undefined` so optional chaining and feature checks do not throw `ReferenceError`.
+- **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `code`,
+  `proc`, and the current M1 default-deny/allowlisted `http.get` helper.
+- **Reserved but unavailable:** `secrets`, `memory`, `skills`, and `agents` are explicitly set to
+  `undefined` so optional chaining and feature checks do not throw `ReferenceError`.
 - **Deferred:** `code.ast` and `code.lsp` remain in the translation map but are not first-pass runtime
   namespaces. A future namespace may exist while a method is incomplete; that method throws
   `NotImplementedError`.

@@ -35,13 +35,18 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
 
-## Execution plan from current workspace (2026-06-27)
+## Execution plan from current workspace (2026-06-30)
 
-Current implementation is **core M0-shaped, not product-ready**: `tm-core`, `tm-llm`, `tm-sandbox`,
-and `tm-cli` exist; `tm-sandbox` is still the M0 stub; product crates (`tm-server`, `tm-persona`,
-`tm-memory`, `tm-agents`, `tm-drive`) and core support crates (`tm-host`, `tm-artifacts`, `tm-mcp`,
-`tm-trace`) are not yet materialized. Plan from the substrate up; do not start product polish before
-the real REPL and host/artifact spine exist.
+Current implementation has advanced past the original M0-only substrate. The workspace now includes
+`tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
+`tm-host`, `tm-persona`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The
+implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP bridging, and the
+native P0 Serious Engineer dogfood slice. Normal Rust tests pass when local loopback networking is
+available; managed sandboxes may need elevated permissions for tests that bind `127.0.0.1`.
+
+Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, `tm-agents`, and
+`tm-drive` crates; scheduler/dreaming; full mode router lock/override; project promotion and
+project/open-loop views; Android OS packaging; richer SDK documentation and type artifacts.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -49,11 +54,11 @@ each milestone is done only when its acceptance checks pass.
 | Order | Milestone | Estimate | Tasks | Acceptance |
 |---:|---|---:|---|---|
 | 0 | **DONE — M0 closeout: streaming skeleton locked** | 0.5–1d | Freeze stream event contract; keep OpenAI SSE adapter tests; keep CLI token streaming; document current stub-sandbox boundary. | `cargo test`; scripted stream test proves token deltas, tool-call assembly, stub eval, and final answer path. |
-| 1 | **M1 — real REPL + SDK spine** | 4–7d | Add `deno_core` backend behind `Sandbox`; implement persistent cells, cancel/reset, `display`, `http.get` allowlist, artifact writes; add `tm-artifacts` spill store; enforce `CellBudget` and output caps. | Rust tests cover persistent state, display/artifact capture, blocked network, timeout/cancel, shaped output truncation + artifact spill. |
-| 2 | **Host registry + approvals foundation** | 3–5d | Add `tm-host`; define `HostFn`, capability grants, `ResourceRegistry`, `ApprovalPolicy`; wire SDK dispatch from sandbox ops; fail closed on unknown schemes/capabilities. | Unit tests prove denied capability cannot execute, approval timeout denies by default, `artifact://` resolves through the registry. |
-| 2.5 | **P0a — OMP ACP bridge** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | A Serious Engineer UI/API session dispatches a real TempestMiku coding task through ACP, applies a patch, runs a targeted test, streams progress over existing SSE, routes a permission request through TempestMiku approval resolution, and replays the full task history from `Last-Event-ID`. |
-| 3 | **P0 — coding-agent dogfood** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement `fs.*`, search, patch-only `code.edit`, `proc.run(cmd,args)` allowlist, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Real TempestMiku patch edit+targeted `cargo test` succeeds through SDK; non-allowlisted commands fail closed; destructive/external/out-of-grant ops are approval-gated; output spills to `artifact://`; next session recalls the project summary/open loop. |
-| 4 | **P1 — project manager + remote control** | 4–7d | Add `tm-server` (`axum`) custom session API + SSE, Postgres-backed session events/messages/project notes, mode router lock/override, `ModeChanged` events, project/open-loop views, approval resolution endpoints, session-scoped resource gateway, session-to-project promotion, and a Flutter client targeting Web/PWA first for mobile-ready remote control. | Reconnect replays from Postgres event id; router fires; user can lock; project status and decisions survive across sessions; `POST /sessions/:id/promote` turns workspace files/artifacts/summary/open loops into `project://` resources with provenance; a phone/browser can send a task, watch streaming events, approve/deny a gated action, open `workspace://` / `artifact://` / `project://` links through the gateway, disconnect, and resume without losing state. |
+| 1 | **DONE — M1 real REPL + SDK spine** | 4–7d | Add `deno_core` backend behind `Sandbox`; implement persistent cells, cancel/reset, `display`, `http.get` allowlist, artifact writes; add `tm-artifacts` spill store; enforce `CellBudget` and output caps. | Rust tests cover TypeScript cells, persistent state, reset, display/print capture, blocked raw APIs/network, timeout/cancel, shaped output truncation, and artifact spill/readback. |
+| 2 | **DONE — host registry + approvals foundation** | 3–5d | Add `tm-host`; define `HostFn`, capability grants, `ResourceRegistry`, `ApprovalPolicy`; wire SDK dispatch from sandbox ops; fail closed on unknown schemes/capabilities. | Unit tests prove denied capability cannot execute, approval timeout denies by default, `artifact://` resolves through the registry, linked paths cannot escape roots, and unsafe operations gate or fail closed. |
+| 2.5 | **DONE — P0a OMP ACP bridge path** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | Tests cover ACP event normalization, diff/artifact events, generated approval mode, permission request round trips, approval route resolution, and replay from `Last-Event-ID`. Live `omp acp` dogfood remains backend-environment dependent. |
+| 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement `fs.*`, search, patch-only `code.edit`, `proc.run(cmd,args)` allowlist, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, patch edit and stale-tag rejection, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI Deno host ops, serious-mode voice cap, and project summary/open-loop recall. |
+| 4 | **NEXT — P1 project manager + remote control** | 4–7d | Add the missing project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Reconnect replays from event id; router fires; user can lock; project status and decisions survive across sessions; `POST /sessions/:id/promote` turns workspace files/artifacts/summary/open loops into `project://` resources with provenance; a phone/browser can send a task, watch streaming events, approve/deny a gated action, open resource links, disconnect, and resume without losing state. |
 | 5 | **P2 — personal assistant** | 5–8d | Add full persona overlay, configurable SOUL / skills asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminders. | Token-by-token Miku response over SSE; profile/recall context injected; voice is characterful outside serious mode; memory writes are approval-gated; health-over-productivity and proactivity bounds hold. |
 | 6 | **P3 — handoff + sub-agent actors** | 6–10d | Add `tm-agents` actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` resources, supervision defaults; implement Handoff brief template. | Fan-out N workers, only digest returns to parent context; siblings coordinate by messages; child crash isolated/restarted/degraded; handoff matches `oh-my-pi-handoff`. |
 | 7 | **P4 — dreaming + scheduler** | 6–10d | Expand `tm-memory` to Postgres/pgvector + FTS; async episodic writes; dream queue; extraction, reflection, summaries, skill proposal; add cron scheduler. | Session end enqueues dream; dream writes summary + at least one approval-gated skill proposal; weekly ship ledger runs under cron bounds. |
@@ -63,25 +68,25 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Close M0 with regression tests** — keep the current CLI + OpenAI-compatible stream skeleton stable
-   before adding runtime complexity.
-2. **Implement `tm-artifacts` before broad host SDK work** — output spill and `artifact://` are needed by
-   REPL, agents, memory, and server replay.
-3. **Implement real `deno_core` sandbox before P0 product work** — P0 dogfood should run on the same
-   execution substrate the product will keep, not a special chat-only path.
-4. **Implement `tm-host` + approvals before linked-folder engineering** — `proc.run` and file edits must
-   be capability-gated from the first real repo operation.
-5. **Ship P0a as an OMP ACP bridge** — use `omp acp` as the transitional coding backend behind
-   `tm-server`; stream ACP progress into SSE, route permissions through TempestMiku approvals, and
-   persist replay before investing in the native SDK cutover.
-6. **Ship native P0 as a coding-agent vertical slice** — linked TempestMiku repo, patch edit, targeted
-   test, artifact spill, minimal project memory, and serious-mode Miku voice together.
+1. **Sweep the runtime SDK contract** — add or generate `tm-runtime.d.ts`; enrich `tools.docs`
+   metadata with examples/result schemas/error docs; reconcile the current allowlisted `http.get`
+   helper with the deferred-network namespace story.
+2. **Ship P1 project-manager remote control** — router lock/override, project/open-loop/decision
+   views, session promotion, and mobile-sized Flutter Web/PWA approval/resource workflows over the
+   existing SSE + POST API.
+3. **Harden server persistence boundaries** — keep normal tests external-service-free, but add gated
+   Postgres coverage for event replay, memory rows, approvals, and artifact/resource references.
+4. **Prepare the native cutover story from P0a** — keep OMP ACP replaceable; prove native `fs.*` /
+   `code.*` / `proc.*` can handle the same dogfood edits without weakening approval/security.
+5. **Defer expansion crates until P1 stabilizes** — `tm-memory`, `tm-agents`, `tm-drive`, `tm-mcp`,
+   scheduler/dreaming, and Android OS packaging should build on the settled server/resource surface.
 
 ### Parallelization seams
 
-- After `tm-artifacts` interfaces are fixed, `tm-server` SSE work and `tm-persona` asset loading can run
-  in parallel with the `deno_core` backend.
-- After `tm-host` grants are fixed, `fs.*` / `code.*` / `proc.run` can split across independent workers.
+- SDK docs/type generation can proceed independently of P1 UI work, as long as it reads from the
+  existing host registry contract.
+- Project promotion and project/open-loop views can split after the `project://` resource shape is
+  fixed.
 - After actor mailbox semantics are fixed, supervision and `agent://` resource handling can split.
 
 ### Do-not-start-yet list
@@ -93,12 +98,15 @@ each milestone is done only when its acceptance checks pass.
 
 ## Crate plan
 
-Planned/current product crates: transitional `tm-omp-acp` (P0a bridge to `omp acp`), `tm-server`
-(+ scheduler), `tm-persona`, `tm-memory` (multi-mechanism recall + dreaming), `tm-agents`,
-`tm-drive` (+ `code.*` / `fs.*` / `proc.*` host fns in `tm-host`), and `clients/miku_flutter`
-(single Flutter codebase targeting Web/PWA first and Android later). Existing core crates (§10.1)
-keep their contracts; `tm-llm` gains model-role resolution (§27.3); `tm-artifacts` extends to the
-two-tier model (§25.3).
+Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-persona`,
+`tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The P0a bridge currently lives in
+`tm-server::omp_acp`; minimal memory lives in `tm-server::memory`; `fs.*` / `code.*` / `proc.*` live
+in `tm-host`.
+
+Planned product/support crates remain: `tm-memory` (multi-mechanism recall + dreaming),
+`tm-agents`, `tm-drive`, `tm-mcp`, and `tm-trace`. Existing core crates (§10.1) keep their
+contracts; future work should extract product storage/orchestration only when the second concrete
+user exists.
 
 ## Open questions (near-term resolved; deployment still open)
 

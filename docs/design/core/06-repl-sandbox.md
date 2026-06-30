@@ -120,8 +120,9 @@ const artifacts = {
   list: () => tools.call("artifacts.list"),
 };
 
+// M1 has a deterministic default-deny helper; broader network egress remains deferred.
+globalThis.http = { get: (url: string) => tools.call("http.get", { url }) };
 // Reserved future namespaces are explicitly present but unavailable in the first pass.
-globalThis.http = undefined;
 globalThis.secrets = undefined;
 globalThis.memory = undefined;
 globalThis.skills = undefined;
@@ -133,9 +134,9 @@ globalThis.agents = undefined;
 **dispatch bridge** (`op_host_call` → registry, surfaced as `tools.call`). New capabilities take the
 bridge — register a handler, emit a typed stub — so the op layer never grows and never needs a
 rebuild (§3 principle 9). The first real JS/TS pass exposes `fs.*`, `code.search`, JSON-hunk
-`code.edit`, and argv-vector `proc.run`; `http`, `secrets`, `memory`, `skills`, and `agents` are set
-to `undefined` until their backing crates and policies exist. If a future namespace exists but a
-method is not ready, it throws `NotImplementedError`.
+`code.edit`, argv-vector `proc.run`, and the default-deny/allowlisted `http.get` helper. `secrets`,
+`memory`, `skills`, and `agents` are set to `undefined` until their backing crates and policies
+exist. If a future namespace exists but a method is not ready, it throws `NotImplementedError`.
 
 For an **out-of-process** backend (Python), the same SDK is implemented over **JSON-RPC** on a
 pipe/socket: the in-sandbox `host.*` makes a blocking RPC, the Rust host services it

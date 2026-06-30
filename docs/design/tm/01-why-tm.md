@@ -3,15 +3,16 @@
 ## 1.1 The observation
 
 The §7 prelude is already a *castrated TypeScript*. No `Deno.*`, no `fetch`, no npm, no
-`node:*`, no `globalThis.process`. `http`/`secrets`/`memory`/`skills`/`agents` are literally
-`undefined`. The model uses maybe 30% of TS's surface; the other 70% is footguns and dead
-syntax that exists only because TS is a general-purpose language we happened to pick.
+`node:*`, no `globalThis.process`. `secrets`/`memory`/`skills`/`agents` are literally
+`undefined`, and `http.get` is a default-deny allowlisted helper rather than ambient network.
+The model uses maybe 30% of TS's surface; the other 70% is footguns and dead syntax that exists
+only because TS is a general-purpose language we happened to pick.
 
 Meanwhile, three things TempestMiku treats as **architectural invariants** (AGENTS.md) are
 currently implemented as *runtime policy layered on top of the language*:
 
-- **Capability gating / fail-closed** — `globalThis.http = undefined` and `op_host_call`
-  checking grants at runtime.
+- **Capability gating / fail-closed** — reserved namespaces are unavailable and `op_host_call`
+  checks grants at runtime.
 - **Approval** — `ApprovalPolicy` (`on-write`/`on-external`/`always`) living in the
   orchestrator + host registry, three layers away from the code the model writes.
 - **Provenance / replay** — §3 principle 6: "everything is replayable," recorded by the

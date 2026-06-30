@@ -20,13 +20,15 @@ First-pass globals:
 - `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
 - `code.search/edit(...)` — regex search plus JSON-hunk surgical edits in the first pass.
 - `proc.run(cmd, args, opts?)` — allowlisted argv-vector process execution; never a shell string.
+- `http.get(url)` — current M1 deterministic allowlist helper; production network egress policy is
+  still deferred.
 
 Reserved first-pass globals:
 
-- `http`, `secrets`, `memory`, `skills`, and `agents` are explicitly set to `undefined`. This makes
-  `http?.get(...)` safe while keeping network, secrets, memory, skills, and sub-agents closed until
-  their backing crates and policies exist. If a future namespace exists but a method is incomplete,
-  that method throws `NotImplementedError`.
+- `secrets`, `memory`, `skills`, and `agents` are explicitly set to `undefined`. This makes feature
+  checks safe while keeping secrets, memory, skills, and sub-agents closed until their backing crates
+  and policies exist. If a future namespace exists but a method is incomplete, that method throws
+  `NotImplementedError`.
 
 Never exposed:
 
@@ -56,8 +58,8 @@ declare global {
   const fs: FsNamespace;
   const code: CodeNamespace;
   const proc: ProcNamespace;
+  const http: HttpNamespace;
 
-  var http: undefined;
   var secrets: undefined;
   var memory: undefined;
   var skills: undefined;
@@ -259,10 +261,10 @@ type ResourceKind =
   | "log";
 
 interface ArtifactsNamespace {
-  put(data: ArtifactInput, opts?: ArtifactPutOptions): Promise<ArtifactRef>;
+  put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef;
   get(ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions): Promise<ResourceContent>;
   slice(ref: ArtifactUri | ArtifactRef, selector: ResourceSelector): Promise<ResourceContent>;
-  list(): Promise<ArtifactInfo[]>;
+  list(): ArtifactInfo[];
 }
 
 type ArtifactInput = string | Uint8Array | ArrayBuffer | JsonValue;
@@ -442,7 +444,9 @@ interface ProcNamespace {
 interface ProcRunOptions {
   cwd?: SdkPath;
   timeoutMs?: number;
+  /** Reserved in P0; non-empty overrides are rejected. */
   env?: Record<string, string>;
+  /** Reserved in P0; stdin is rejected. */
   stdin?: string | Uint8Array;
   outputBytes?: number;
 }
@@ -459,6 +463,10 @@ interface ProcOutput {
   durationMs: number;
   truncated: boolean;
   artifact?: ArtifactRef;
+}
+
+interface HttpNamespace {
+  get(url: string): Promise<string>;
 }
 ```
 

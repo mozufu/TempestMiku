@@ -157,8 +157,8 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
 
 ### 10.4 Conventions
 
-- **Async runtime:** Tokio. `deno_core` event loop driven on a dedicated thread per isolate;
-  `eval` is `async` and cancel-safe (drop ⇒ terminate isolate).
+- **Async runtime:** Tokio. `deno_core` sessions are single-thread-affine and evaluated on their
+  owning task/thread; a timeout helper terminates the V8 isolate on wall-clock budget expiry.
 - **Errors:** `thiserror` per crate, `anyhow` at the binary edge. Sandbox errors are *data*
   returned to the model, not host failures.
 - **Serialization:** `serde` everywhere; the op boundary is `serde_json::Value`.
@@ -167,16 +167,17 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
 
 ### 10.5 Current implementation boundary
 
-The M0 CLI path is intentionally conservative: `apps/tm-cli` wires the streaming `Agent` to
-`StubSandbox`, so live CLI runs validate protocol flow, token streaming, tool-call assembly,
-result shaping, and turn budgeting without executing untrusted code. The real `DenoSandbox`
-backend lives behind the same `Sandbox` / `Session` traits in `tm-sandbox` and is exercised by
-crate tests, but it is not the default CLI runtime until the M1 host/artifact approval spine is
-locked.
+The M0 stub path still exists, but only as a protocol-test and explicit `--stub-sandbox` fallback.
+The default CLI path now wires the streaming `Agent` to `DenoSandbox`, backed by the same
+`Sandbox` / `Session` traits. The runtime installs the first-pass JS/TS SDK prelude (`print`,
+`display`, `tools`, `resources`, `artifacts`, `fs`, `code`, `proc`, plus allowlisted `http.get`),
+uses `tm-artifacts` for spill/readback, and calls host capabilities through `tm-host` grants,
+resource handlers, and approval policy.
 
-That split is temporary and deliberate:
+That boundary remains deliberate:
 
 - model-visible behavior still goes through one `execute(code)` tool;
-- the loop never depends on stub-specific behavior;
-- product features must target the trait boundary, not `StubSandbox`;
-- switching the CLI from stub to Deno is an M1 integration step, not a second loop.
+- the loop never depends on stub- or Deno-specific behavior;
+- product features target the trait boundary and host registry, not ambient runtime APIs;
+- real-repo reach stays behind linked-folder grants, `code.edit`, and argv-vector `proc.run`;
+- the stub remains useful for deterministic loop tests without creating a second agent loop.

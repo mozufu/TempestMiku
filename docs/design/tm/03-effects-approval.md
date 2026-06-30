@@ -36,9 +36,9 @@ fun oops(url) : Unit = @http.get url   -- <HTTP Get> not granted this session
 ```
 
 If the session's granted effect row does not include `HTTP Get`, this is **rejected before
-eval** — not a runtime `undefined` (§7's current trick), not a `CapabilityDeniedError` thrown
-mid-cell. The offending capability never enters the transcript because the cell never runs.
-This is strictly stronger than the §7 `globalThis.http = undefined` approach.
+eval** — not a runtime missing namespace, not a `CapabilityDeniedError` thrown mid-cell. The
+offending capability never enters the transcript because the cell never runs. This is strictly
+stronger than §7's runtime-policy approach.
 
 ### Provenance is the effect log
 

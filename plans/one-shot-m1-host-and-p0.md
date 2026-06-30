@@ -2,12 +2,17 @@
 
 Created from the 2026-06-27 planning discussion. Use this as source material for `/next-milestone` or a fresh long-session prompt. `ROADMAP.md` remains canonical for milestone order.
 
+Status note, 2026-06-30: M1 + host foundation, the P0 character server slice, and the serious-engineer
+permissions first pass have been implemented. The canonical next product milestone is now P1 project
+manager + remote control in `ROADMAP.md`.
+
 ## Current decisions
 
 - Work in a separate worktree/branch for planning changes; do not mutate an active implementation worktree.
-- First implementation target: **M1 + host foundation**.
-- Next product target after that substrate: **P0 character server slice**.
-- Do not start P1/P2+ until M1+host and P0 acceptance checks pass.
+- M1 + host foundation: done.
+- P0 character server slice: done.
+- Serious-engineer permissions first pass: done, folded into the roadmap's native P0 coding-agent dogfood slice.
+- Next product target: **P1 project manager + remote control**.
 
 ---
 
@@ -198,11 +203,11 @@ Use this plan as the active implementation brief after M1 + host foundation is c
 
 ---
 
-## Milestone 3: P1 serious engineer permissions
+## Milestone 3: Serious engineer permissions first pass
 
 ### Status
 
-- [ ] Pending after P0 character server slice
+- [x] Done; folded into `ROADMAP.md` as the native P0 coding-agent dogfood first pass.
 
 ### Outcome
 
@@ -254,21 +259,23 @@ safe_args = [
 
 ### Acceptance checks
 
-All must pass before marking P1 serious engineer permissions done:
+All must pass before marking serious engineer permissions done:
 
-- [ ] `cargo test` passes.
-- [ ] Tests prove linked folders load from config.
-- [ ] Tests prove `fs.read` / `fs.write` cannot escape the linked root.
-- [ ] Tests prove a configured safe command runs without approval.
-- [ ] Tests prove a non-allowlisted command is rejected.
-- [ ] Tests prove command execution uses argv-vector semantics, not shell parsing.
-- [ ] Tests prove destructive/external/out-of-grant operations still require approval or fail closed.
-- [ ] Tests prove patch edit applies only inside a linked `rw` folder.
-- [ ] Tests prove patch edit rejects stale/invalid anchors or out-of-root paths.
+- [x] `cargo test` passes when local loopback networking is available.
+- [x] Tests prove linked folders load from config.
+- [x] Tests prove `fs.read` / `fs.write` cannot escape the linked root.
+- [x] Tests prove a configured safe command runs without approval.
+- [x] Tests prove a non-allowlisted command is rejected.
+- [x] Tests prove command execution uses argv-vector semantics, not shell parsing.
+- [x] Tests prove destructive/external/out-of-grant operations still require approval or fail closed.
+- [x] Tests prove patch edit applies only inside a linked `rw` folder.
+- [x] Tests prove patch edit rejects stale/invalid anchors or out-of-root paths.
 
-### Fresh-session prompt
+### Historical fresh-session prompt
 
-Use this plan as the active implementation brief after P0 is complete. First read `AGENTS.md`, `ROADMAP.md`, and design docs §08, §21, §24, and §25. Implement only **P1 serious engineer permissions first pass**: config-declared linked folders, `FsPolicy`, yolo-by-default safe `proc.run(cmd,args)` for configured project commands, linked-folder `fs.*`, and patch-only `code.edit`. Preserve no raw shell, argv-vector execution, linked-root confinement, fail-closed security, and one model-visible `execute(code)` architecture. Defer LSP and AST tooling to later milestones. Verify every acceptance check before marking this milestone done.
+Do not use this as the next active prompt anymore; the work is implemented. For a new session, use
+`ROADMAP.md` and start from **P1 project manager + remote control** unless the user explicitly asks
+to revisit serious-engineer permissions.
 
 ---
 

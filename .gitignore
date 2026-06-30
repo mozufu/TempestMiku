@@ -4,6 +4,7 @@
 *.pdb
 # Cargo.lock is intentionally committed (this workspace ships the `tm` binary).
 .tempestmiku/
+.codex/
 
 # Nix
 result

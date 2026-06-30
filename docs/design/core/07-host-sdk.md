@@ -504,3 +504,18 @@ The catalog never sits in the system prompt; tokens are spent only on what the r
   `proc.run("cargo", ["test"], { cwd: "tempestmiku:" })`.
 - Missing grants fail closed with `CapabilityDeniedError`. Unknown capabilities fail closed through
   `tools.call`. Future namespaces that exist but have incomplete methods throw `NotImplementedError`.
+
+### 7.4 Deferred namespace placement
+
+The runtime keeps future namespaces closed until their product milestone owns the storage, resource,
+approval, and audit boundaries. The root roadmap is canonical (§28), but the SDK placement is:
+
+| Namespace / surface | Target milestone | SDK rule |
+|---|---|---|
+| `memory.*` | P2/P4 split | P2 may expose the minimum profile/user recall and personal-assistant state-capture calls; P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
+| `agents.*` | P3 | Add only with `tm-agents`, actor lifecycle, mailbox/roster, supervision, and `agent://` resource handling. |
+| `skills.*` | P4/P7 split | P4 may create approval-gated skill proposals; P7 owns safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
+| `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, and drive organizer flows. |
+| `http.*` hardening | P5 or P7 | Keep current `http.get` as deterministic allowlisted helper; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |
+| `secrets.use` | P7 | Requires opaque egress-scoped handles from a secret broker; secret values must never materialize in JS heap, artifacts, or model context. |
+| `code.ast` / `code.lsp` | P1.5/P2 tech slice | Add after the P1 server/resource surface stabilizes; do not block project-manager remote control. |

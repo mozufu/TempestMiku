@@ -46,7 +46,8 @@ available; managed sandboxes may need elevated permissions for tests that bind `
 
 Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, `tm-agents`, and
 `tm-drive` crates; scheduler/dreaming; full mode router lock/override; project promotion and
-project/open-loop views; Android OS packaging; richer SDK documentation and type artifacts.
+project/open-loop views; Android OS packaging; generated SDK docs from the runtime registry; and
+production egress/secret hardening.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -68,22 +69,33 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Sweep the runtime SDK contract** — add or generate `tm-runtime.d.ts`; enrich `tools.docs`
-   metadata with examples/result schemas/error docs; reconcile the current allowlisted `http.get`
-   helper with the deferred-network namespace story.
-2. **Ship P1 project-manager remote control** — router lock/override, project/open-loop/decision
+1. **Ship P1 project-manager remote control** — router lock/override, project/open-loop/decision
    views, session promotion, and mobile-sized Flutter Web/PWA approval/resource workflows over the
    existing SSE + POST API.
-3. **Harden server persistence boundaries** — keep normal tests external-service-free, but add gated
+2. **Harden server persistence boundaries** — keep normal tests external-service-free, but add gated
    Postgres coverage for event replay, memory rows, approvals, and artifact/resource references.
-4. **Prepare the native cutover story from P0a** — keep OMP ACP replaceable; prove native `fs.*` /
+3. **Prepare the native cutover story from P0a** — keep OMP ACP replaceable; prove native `fs.*` /
    `code.*` / `proc.*` can handle the same dogfood edits without weakening approval/security.
-5. **Defer expansion crates until P1 stabilizes** — `tm-memory`, `tm-agents`, `tm-drive`, `tm-mcp`,
+4. **Defer expansion crates until P1 stabilizes** — `tm-memory`, `tm-agents`, `tm-drive`, `tm-mcp`,
    scheduler/dreaming, and Android OS packaging should build on the settled server/resource surface.
+
+### Deferred SDK namespace placement
+
+These are roadmap-owned deferred tasks, not loose TODOs:
+
+| Namespace / surface | Target milestone | Placement note |
+|---|---|---|
+| `memory.*` | **P2/P4 split** | P2 may expose the minimum profile/user recall and personal-assistant state-capture surface; P4 owns full `tm-memory`, pgvector/FTS, dream queue writes, and richer scoped memory APIs. |
+| `agents.*` | **P3** | Lands with `tm-agents`, actor lifecycle, mailbox/roster, supervision, `agent://` resources, and Handoff mode. |
+| `skills.*` | **P4/P7 split** | P4 can emit approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
+| `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
+| `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as the deterministic allowlist helper until P7 hardening. |
+| `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
+| `code.ast` / `code.lsp` | **P1.5/P2 tech slice** | Can land after the P1 server/resource surface is stable; keep it out of the critical P1 project-manager path. |
 
 ### Parallelization seams
 
-- SDK docs/type generation can proceed independently of P1 UI work, as long as it reads from the
+- Generated SDK docs/type maintenance can proceed independently of P1 UI work, as long as it reads from the
   existing host registry contract.
 - Project promotion and project/open-loop views can split after the `project://` resource shape is
   fixed.

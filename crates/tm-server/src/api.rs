@@ -1,4 +1,11 @@
-use std::{convert::Infallible, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    convert::Infallible,
+    fs,
+    path::{Component, Path as FsPath, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use chrono::Utc;
 
@@ -16,10 +23,17 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use tm_artifacts::{ResourceContent, preview};
+use tm_host::{
+    CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
+    ResourceRegistry,
+};
+
 use crate::{
     ApprovalBroker, AuthConfig, ChatRunner, CodingBackend, CodingTurn, MemoryProvider, Mode,
-    NewSession, PersistingEventSink, PersonaConfig, ResolveApprovalRequest, Result, ServerError,
-    SessionEvent, Store, StoreCodingEventSink, StoreEvent, store::RecallChunkRecord, webui,
+    NewProjectItem, NewSession, PersistingEventSink, PersonaConfig, ProjectItemKind,
+    ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent, Store,
+    StoreCodingEventSink, StoreEvent, store::ModeState, store::RecallChunkRecord,
 };
 
 pub struct AppState<S, M, C> {
@@ -31,6 +45,7 @@ pub struct AppState<S, M, C> {
     pub coding_backend: Option<Arc<dyn CodingBackend>>,
     pub approval_broker: Arc<ApprovalBroker>,
     pub artifact_root: PathBuf,
+    pub linked_folders: LinkedFolders,
     live_events:
         Arc<parking_lot::Mutex<std::collections::BTreeMap<Uuid, broadcast::Sender<SessionEvent>>>>,
 }
@@ -46,6 +61,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             coding_backend: self.coding_backend.clone(),
             approval_broker: Arc::clone(&self.approval_broker),
             artifact_root: self.artifact_root.clone(),
+            linked_folders: self.linked_folders.clone(),
             live_events: Arc::clone(&self.live_events),
         }
     }
@@ -68,6 +84,7 @@ impl<S, M, C> AppState<S, M, C> {
             coding_backend: None,
             approval_broker: Arc::new(ApprovalBroker::default()),
             artifact_root: tm_artifacts::default_root(),
+            linked_folders: LinkedFolders::default(),
             live_events: Arc::new(parking_lot::Mutex::new(std::collections::BTreeMap::new())),
         }
     }
@@ -79,6 +96,11 @@ impl<S, M, C> AppState<S, M, C> {
 
     pub fn with_artifact_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.artifact_root = root.into();
+        self
+    }
+
+    pub fn with_linked_folders(mut self, linked_folders: LinkedFolders) -> Self {
+        self.linked_folders = linked_folders;
         self
     }
 
@@ -102,9 +124,48 @@ where
         .route("/sessions", post(create_session::<S, M, C>))
         .route("/sessions/:id/events", get(session_events::<S, M, C>))
         .route("/sessions/:id/messages", post(post_message::<S, M, C>))
+        .route("/sessions/:id/mode", get(get_mode::<S, M, C>))
+        .route("/sessions/:id/mode/suggest", post(suggest_mode::<S, M, C>))
+        .route("/sessions/:id/mode/apply", post(apply_mode::<S, M, C>))
+        .route("/sessions/:id/mode/lock", post(lock_mode::<S, M, C>))
+        .route("/sessions/:id/mode/unlock", post(unlock_mode::<S, M, C>))
+        .route(
+            "/sessions/:id/mode/override",
+            post(override_mode::<S, M, C>),
+        )
         .route(
             "/sessions/:id/approvals/:approval_id",
             post(resolve_approval::<S, M, C>),
+        )
+        .route("/sessions/:id/project", get(project_overview::<S, M, C>))
+        .route(
+            "/sessions/:id/project/open-loops",
+            get(project_open_loops::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/project/decisions",
+            get(project_decisions::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/project/next-actions",
+            get(project_next_actions::<S, M, C>),
+        )
+        .route("/sessions/:id/promote", post(promote_session::<S, M, C>))
+        .route(
+            "/sessions/:id/resources/resolve",
+            get(resolve_resource::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/resources/read",
+            get(resolve_resource::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/resources/preview",
+            get(preview_resource::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/resources/list",
+            get(list_resources::<S, M, C>),
         )
         .route(
             "/sessions/:id/resources/artifacts",
@@ -114,7 +175,6 @@ where
             "/sessions/:id/resources/artifacts/:artifact_id",
             get(read_artifact::<S, M, C>),
         )
-        .merge(webui::routes::<AppState<S, M, C>>())
         .with_state(state)
 }
 
@@ -132,6 +192,7 @@ pub struct CreateSessionRequest {
 pub struct CreateSessionResponse {
     pub id: Uuid,
     pub mode: Mode,
+    pub mode_state: ModeState,
     pub persona_status: crate::PersonaStatus,
     pub label: String,
     pub voice_cap: String,
@@ -165,18 +226,14 @@ where
         .append_event(
             session.id,
             "mode",
-            serde_json::to_value(StoreEvent::Mode {
-                mode: session.mode,
-                label: session.mode.label().to_string(),
-                voice_cap: session.mode.voice_cap().to_string(),
-                persona_status: persona_status.clone(),
-            })?,
+            mode_changed_payload(None, &session.mode_state, persona_status.clone())?,
         )
         .await?;
     let _ = state.sender(session.id).send(mode_event);
     Ok(Json(CreateSessionResponse {
         id: session.id,
         mode: session.mode,
+        mode_state: session.mode_state.clone(),
         persona_status,
         label: session.mode.label().to_string(),
         voice_cap: session.mode.voice_cap().to_string(),
@@ -209,11 +266,23 @@ where
     C: ChatRunner,
 {
     state.auth.authorize(&headers)?;
-    let session = state.store.get_session(session_id).await?;
+    let mut session = state.store.get_session(session_id).await?;
+    if let Some((suggested, reason)) = route_mode_for_prompt(&payload.content)
+        && session.mode_state.lock_source.is_none()
+        && suggested != session.mode_state.mode
+    {
+        let mut next = session.mode_state.clone();
+        next.mode = suggested;
+        next.router_reason = Some(reason);
+        next.override_source = None;
+        next.updated_at = Utc::now();
+        let (updated, _) = commit_mode_state(&state, session.clone(), next).await?;
+        session = updated;
+    }
     let scope = payload
         .scope
         .clone()
-        .unwrap_or_else(|| session.mode.default_scope().to_string());
+        .unwrap_or_else(|| session.mode_state.mode.default_scope().to_string());
     state
         .store
         .append_message(session_id, "user", &payload.content)
@@ -231,7 +300,10 @@ where
             memory.render_prompt_block()
         )
     };
-    let response = if matches!(session.mode, Mode::SeriousEngineer | Mode::Handoff) {
+    let response = if matches!(
+        session.mode_state.mode,
+        Mode::SeriousEngineer | Mode::Handoff
+    ) {
         if let Some(backend) = &state.coding_backend {
             let sink = Arc::new(StoreCodingEventSink::new(
                 session_id,
@@ -243,7 +315,7 @@ where
                     CodingTurn {
                         session_id,
                         user_prompt,
-                        mode: session.mode,
+                        mode: session.mode_state.mode,
                         scope: scope.clone(),
                     },
                     sink,
@@ -275,7 +347,10 @@ where
         .store
         .append_message(session_id, "assistant", &response)
         .await?;
-    if matches!(session.mode, Mode::SeriousEngineer | Mode::Handoff) && !response.trim().is_empty()
+    if matches!(
+        session.mode_state.mode,
+        Mode::SeriousEngineer | Mode::Handoff
+    ) && !response.trim().is_empty()
     {
         state
             .store
@@ -290,8 +365,296 @@ where
                 created_at: Utc::now(),
             })
             .await?;
+        record_project_observations(
+            &state,
+            session_id,
+            project_id_from_scope(&scope),
+            &payload.content,
+            &response,
+        )
+        .await?;
     }
     Ok(Json(json!({ "status": "accepted" })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModeRequest {
+    #[serde(default)]
+    pub mode: Option<Mode>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeResponse {
+    pub mode_state: ModeState,
+    pub label: String,
+    pub voice_cap: String,
+    pub default_scope: String,
+    pub changed: bool,
+    pub ignored_reason: Option<String>,
+}
+
+async fn get_mode<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<ModeResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    Ok(Json(mode_response(session.mode_state, false, None)))
+}
+
+async fn suggest_mode<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<ModeRequest>,
+) -> Result<Json<ModeResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    if session.mode_state.lock_source.is_some() {
+        return Ok(Json(mode_response(
+            session.mode_state,
+            false,
+            Some("mode is locked by user".to_string()),
+        )));
+    }
+    let mode = payload.mode.unwrap_or(session.mode_state.mode);
+    let mut next = session.mode_state.clone();
+    next.mode = mode;
+    next.router_reason = payload.reason;
+    next.override_source = None;
+    next.updated_at = Utc::now();
+    let (session, changed) = commit_mode_state(&state, session, next).await?;
+    Ok(Json(mode_response(session.mode_state, changed, None)))
+}
+
+async fn apply_mode<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<ModeRequest>,
+) -> Result<Json<ModeResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    if session.mode_state.lock_source.is_some() {
+        return Ok(Json(mode_response(
+            session.mode_state,
+            false,
+            Some("mode is locked by user".to_string()),
+        )));
+    }
+    let mode = payload
+        .mode
+        .ok_or_else(|| ServerError::InvalidRequest("mode is required".to_string()))?;
+    let mut next = session.mode_state.clone();
+    next.mode = mode;
+    next.router_reason = payload.reason;
+    next.override_source = payload.source.or_else(|| Some("api".to_string()));
+    next.updated_at = Utc::now();
+    let (session, changed) = commit_mode_state(&state, session, next).await?;
+    Ok(Json(mode_response(session.mode_state, changed, None)))
+}
+
+async fn lock_mode<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<ModeRequest>,
+) -> Result<Json<ModeResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let mut next = session.mode_state.clone();
+    if let Some(mode) = payload.mode {
+        next.mode = mode;
+    }
+    next.router_reason = payload.reason;
+    next.lock_source = Some(payload.source.unwrap_or_else(|| "user".to_string()));
+    next.override_source = None;
+    next.updated_at = Utc::now();
+    let (session, changed) = commit_mode_state(&state, session, next).await?;
+    Ok(Json(mode_response(session.mode_state, changed, None)))
+}
+
+async fn unlock_mode<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<ModeRequest>,
+) -> Result<Json<ModeResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let mut next = session.mode_state.clone();
+    next.lock_source = None;
+    next.override_source = None;
+    next.router_reason = payload.reason;
+    next.updated_at = Utc::now();
+    let (session, changed) = commit_mode_state(&state, session, next).await?;
+    Ok(Json(mode_response(session.mode_state, changed, None)))
+}
+
+async fn override_mode<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<ModeRequest>,
+) -> Result<Json<ModeResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let mode = payload
+        .mode
+        .ok_or_else(|| ServerError::InvalidRequest("mode is required".to_string()))?;
+    let mut next = session.mode_state.clone();
+    next.mode = mode;
+    next.router_reason = payload.reason;
+    next.lock_source = None;
+    next.override_source = Some(payload.source.unwrap_or_else(|| "user".to_string()));
+    next.updated_at = Utc::now();
+    let (session, changed) = commit_mode_state(&state, session, next).await?;
+    Ok(Json(mode_response(session.mode_state, changed, None)))
+}
+
+fn mode_response(
+    mode_state: ModeState,
+    changed: bool,
+    ignored_reason: Option<String>,
+) -> ModeResponse {
+    ModeResponse {
+        label: mode_state.label().to_string(),
+        voice_cap: mode_state.voice_cap().to_string(),
+        default_scope: mode_state.mode.default_scope().to_string(),
+        mode_state,
+        changed,
+        ignored_reason,
+    }
+}
+
+async fn commit_mode_state<S, M, C>(
+    state: &AppState<S, M, C>,
+    session: crate::SessionRecord,
+    next: ModeState,
+) -> Result<(crate::SessionRecord, bool)>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let changed = session.mode_state != next;
+    if !changed {
+        return Ok((session, false));
+    }
+    let from = Some(session.mode_state.mode);
+    let updated = state.store.set_mode_state(session.id, next).await?;
+    let event = state
+        .store
+        .append_event(
+            session.id,
+            "mode",
+            mode_changed_payload(from, &updated.mode_state, updated.persona_status.clone())?,
+        )
+        .await?;
+    let _ = state.sender(session.id).send(event);
+    Ok((updated, true))
+}
+
+fn mode_changed_payload(
+    from: Option<Mode>,
+    mode_state: &ModeState,
+    persona_status: crate::PersonaStatus,
+) -> Result<Value> {
+    Ok(serde_json::to_value(StoreEvent::ModeChanged {
+        from,
+        mode: mode_state.mode,
+        label: mode_state.label().to_string(),
+        voice_cap: mode_state.voice_cap().to_string(),
+        router_reason: mode_state.router_reason.clone(),
+        lock_source: mode_state.lock_source.clone(),
+        override_source: mode_state.override_source.clone(),
+        updated_at: mode_state.updated_at,
+        persona_status,
+    })?)
+}
+
+fn route_mode_for_prompt(content: &str) -> Option<(Mode, String)> {
+    let lower = content.to_lowercase();
+    if lower.contains("handoff") || lower.contains("delegate") {
+        return Some((Mode::Handoff, "handoff/delegation prompt".to_string()));
+    }
+    if lower.contains("燒烤") || lower.contains("grill me") || lower.contains("ambiguous") {
+        return Some((Mode::AmbiguityGrill, "ambiguity-grill trigger".to_string()));
+    }
+    if lower.contains("overwhelmed")
+        || lower.contains("spiraling")
+        || lower.contains("exhausted")
+        || lower.contains("i can't")
+    {
+        return Some((
+            Mode::NegativeStateGrounding,
+            "negative-state grounding trigger".to_string(),
+        ));
+    }
+    let engineering_markers = [
+        "code",
+        "rust",
+        "cargo",
+        "compile",
+        "test",
+        "bug",
+        "fix",
+        "repo",
+        "patch",
+        "crates/",
+        "apps/",
+        "src/",
+        ".rs",
+        "implement",
+        "refactor",
+        "migration",
+        "production",
+    ];
+    engineering_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
+        .then(|| {
+            (
+                Mode::SeriousEngineer,
+                "coding/production prompt requires Serious Engineer".to_string(),
+            )
+        })
 }
 
 async fn resolve_approval<S, M, C>(
@@ -311,6 +674,611 @@ where
         .approval_broker
         .resolve(session_id, approval_id, payload)?;
     Ok(Json(json!({ "status": "resolved" })))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectQuery {
+    project_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectOverview {
+    project_id: String,
+    project_uri: String,
+    session_id: Uuid,
+    status: String,
+    open_loops: Vec<ProjectItemRecord>,
+    decisions: Vec<ProjectItemRecord>,
+    next_actions: Vec<ProjectItemRecord>,
+    resources: Vec<ProjectItemRecord>,
+    provenance: Value,
+}
+
+async fn project_overview<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<ProjectOverview>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let project_id = query
+        .project_id
+        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    Ok(Json(
+        build_project_overview(&state, session_id, project_id).await?,
+    ))
+}
+
+async fn project_open_loops<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<ProjectItemRecord>>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let project_id = query
+        .project_id
+        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    Ok(Json(
+        state
+            .store
+            .project_items(&project_id, Some(ProjectItemKind::OpenLoop))
+            .await?,
+    ))
+}
+
+async fn project_decisions<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<ProjectItemRecord>>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let project_id = query
+        .project_id
+        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    Ok(Json(
+        state
+            .store
+            .project_items(&project_id, Some(ProjectItemKind::Decision))
+            .await?,
+    ))
+}
+
+async fn project_next_actions<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<ProjectQuery>,
+) -> Result<Json<Vec<ProjectItemRecord>>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let project_id = query
+        .project_id
+        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    Ok(Json(
+        state
+            .store
+            .project_items(&project_id, Some(ProjectItemKind::NextAction))
+            .await?,
+    ))
+}
+
+async fn build_project_overview<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    project_id: String,
+) -> Result<ProjectOverview>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let items = state.store.project_items(&project_id, None).await?;
+    let mut by_kind: BTreeMap<ProjectItemKind, Vec<ProjectItemRecord>> = BTreeMap::new();
+    for item in items {
+        by_kind.entry(item.kind).or_default().push(item);
+    }
+    let summaries = by_kind
+        .get(&ProjectItemKind::Summary)
+        .cloned()
+        .unwrap_or_default();
+    let status = by_kind
+        .get(&ProjectItemKind::Status)
+        .and_then(|items| items.last())
+        .map(|item| item.text.clone())
+        .or_else(|| summaries.last().map(|item| item.text.clone()))
+        .unwrap_or_else(|| format!("Session {session_id} has no project summary yet."));
+    let mut resources = Vec::new();
+    for kind in [
+        ProjectItemKind::Resource,
+        ProjectItemKind::Artifact,
+        ProjectItemKind::Workspace,
+        ProjectItemKind::Linked,
+    ] {
+        resources.extend(by_kind.get(&kind).cloned().unwrap_or_default());
+    }
+    Ok(ProjectOverview {
+        project_uri: format!("project://{project_id}"),
+        project_id,
+        session_id,
+        status,
+        open_loops: by_kind
+            .remove(&ProjectItemKind::OpenLoop)
+            .unwrap_or_default(),
+        decisions: by_kind
+            .remove(&ProjectItemKind::Decision)
+            .unwrap_or_default(),
+        next_actions: by_kind
+            .remove(&ProjectItemKind::NextAction)
+            .unwrap_or_default(),
+        resources,
+        provenance: json!({
+            "builtFrom": ["session_events", "project_items"],
+            "sessionId": session_id,
+        }),
+    })
+}
+
+async fn record_project_observations<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    project_id: String,
+    user_content: &str,
+    response: &str,
+) -> Result<()>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let final_event_seq = latest_event_seq(state, session_id, "final").await?;
+    let selected_at = Utc::now();
+    let summary_text = response.trim().to_string();
+    let summary_key = format!("summary:{session_id}:{final_event_seq:?}");
+    let summary_uri = format!("project://{project_id}/summary/{session_id}");
+    state
+        .store
+        .upsert_project_item(NewProjectItem {
+            project_id: project_id.clone(),
+            kind: ProjectItemKind::Summary,
+            text: summary_text.clone(),
+            target_uri: summary_uri,
+            source_session_id: session_id,
+            source_event_seq: final_event_seq,
+            source_uri: None,
+            dedupe_key: summary_key,
+            provenance_json: json!({
+                "sourceSession": session_id,
+                "sourceEventId": final_event_seq,
+                "selectedAt": selected_at,
+                "actor": "router",
+            }),
+        })
+        .await?;
+    state
+        .store
+        .upsert_project_item(NewProjectItem {
+            project_id: project_id.clone(),
+            kind: ProjectItemKind::NextAction,
+            text: next_action_text(response),
+            target_uri: format!("project://{project_id}/next-actions/{session_id}"),
+            source_session_id: session_id,
+            source_event_seq: final_event_seq,
+            source_uri: None,
+            dedupe_key: format!("next-action:{session_id}:{final_event_seq:?}"),
+            provenance_json: json!({
+                "sourceSession": session_id,
+                "sourceEventId": final_event_seq,
+                "selectedAt": selected_at,
+                "actor": "router",
+            }),
+        })
+        .await?;
+    let combined = format!("{user_content}\n{response}").to_lowercase();
+    if combined.contains("open loop") || combined.contains("todo") || combined.contains("follow up")
+    {
+        state
+            .store
+            .upsert_project_item(NewProjectItem {
+                project_id: project_id.clone(),
+                kind: ProjectItemKind::OpenLoop,
+                text: extract_line_with_markers(response, &["open loop", "todo", "follow up"])
+                    .unwrap_or_else(|| summary_text.clone()),
+                target_uri: format!("project://{project_id}/open-loops/{session_id}"),
+                source_session_id: session_id,
+                source_event_seq: final_event_seq,
+                source_uri: None,
+                dedupe_key: format!("open-loop:{session_id}:{final_event_seq:?}"),
+                provenance_json: json!({
+                    "sourceSession": session_id,
+                    "sourceEventId": final_event_seq,
+                    "selectedAt": selected_at,
+                    "actor": "router",
+                }),
+            })
+            .await?;
+    }
+    if combined.contains("decision") || combined.contains("decided") {
+        state
+            .store
+            .upsert_project_item(NewProjectItem {
+                project_id: project_id.clone(),
+                kind: ProjectItemKind::Decision,
+                text: extract_line_with_markers(response, &["decision", "decided"])
+                    .unwrap_or(summary_text),
+                target_uri: format!("project://{project_id}/decisions/{session_id}"),
+                source_session_id: session_id,
+                source_event_seq: final_event_seq,
+                source_uri: None,
+                dedupe_key: format!("decision:{session_id}:{final_event_seq:?}"),
+                provenance_json: json!({
+                    "sourceSession": session_id,
+                    "sourceEventId": final_event_seq,
+                    "selectedAt": selected_at,
+                    "actor": "router",
+                }),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+async fn latest_event_seq<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    event_type: &str,
+) -> Result<Option<i64>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    Ok(state
+        .store
+        .events_after(session_id, None)
+        .await?
+        .into_iter()
+        .rev()
+        .find(|event| event.event_type == event_type)
+        .map(|event| event.seq))
+}
+
+fn next_action_text(response: &str) -> String {
+    let first = response
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(response)
+        .trim();
+    format!("Continue from latest session result: {first}")
+}
+
+fn extract_line_with_markers(text: &str, markers: &[&str]) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| {
+            let lower = line.to_lowercase();
+            markers.iter().any(|marker| lower.contains(marker))
+        })
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+fn project_id_from_scope(scope: &str) -> String {
+    scope
+        .strip_prefix("project:")
+        .filter(|id| !id.is_empty())
+        .unwrap_or("tempestmiku")
+        .to_string()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PromoteSessionRequest {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    open_loops: Vec<String>,
+    #[serde(default)]
+    decisions: Vec<String>,
+    #[serde(default)]
+    resources: Vec<String>,
+    #[serde(default = "default_user_initiator")]
+    initiated_by: String,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+fn default_user_initiator() -> String {
+    "user".to_string()
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PromoteSessionResponse {
+    project_uri: String,
+    project_id: String,
+    promoted: Vec<ProjectItemRecord>,
+}
+
+async fn promote_session<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<PromoteSessionRequest>,
+) -> Result<Json<PromoteSessionResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let project_id = payload
+        .project_id
+        .clone()
+        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    if payload.initiated_by == "miku" {
+        let timeout = Duration::from_millis(payload.timeout_ms.unwrap_or(60_000));
+        let sink = Arc::new(StoreCodingEventSink::new(
+            session_id,
+            Arc::clone(&state.store),
+            state.sender(session_id),
+        ));
+        let outcome = state
+            .approval_broker
+            .request_permission_for_backend(
+                session_id,
+                "project-promotion",
+                crate::ApprovalPrompt {
+                    action: format!("Promote session {session_id} into project://{project_id}"),
+                    scope: json!({
+                        "projectId": project_id,
+                        "sessionId": session_id,
+                    }),
+                    options: vec![
+                        crate::ApprovalOption {
+                            option_id: "allow".to_string(),
+                            name: "Promote".to_string(),
+                            kind: "allow_once".to_string(),
+                        },
+                        crate::ApprovalOption {
+                            option_id: "reject".to_string(),
+                            name: "Reject".to_string(),
+                            kind: "reject_once".to_string(),
+                        },
+                    ],
+                },
+                timeout,
+                sink,
+            )
+            .await?;
+        if !matches!(
+            outcome,
+            crate::ApprovalOutcome::Selected { ref option_id } if option_id == "allow"
+        ) {
+            return Err(ServerError::Policy(
+                "project promotion denied by approval policy".to_string(),
+            ));
+        }
+    }
+    let promoted = apply_promotion(&state, session_id, project_id.clone(), payload).await?;
+    Ok(Json(PromoteSessionResponse {
+        project_uri: format!("project://{project_id}"),
+        project_id,
+        promoted,
+    }))
+}
+
+async fn apply_promotion<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    project_id: String,
+    payload: PromoteSessionRequest,
+) -> Result<Vec<ProjectItemRecord>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let mut promoted = Vec::new();
+    let selected_at = Utc::now();
+    let latest_final = latest_event_payload(state, session_id, "final").await?;
+    let summary = payload.summary.or_else(|| {
+        latest_final
+            .as_ref()
+            .and_then(|event| event.payload_json.get("text"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    if let Some(summary) = summary.filter(|summary| !summary.trim().is_empty()) {
+        promoted.push(
+            state
+                .store
+                .upsert_project_item(NewProjectItem {
+                    project_id: project_id.clone(),
+                    kind: ProjectItemKind::Summary,
+                    text: summary.trim().to_string(),
+                    target_uri: format!("project://{project_id}/summary/{session_id}"),
+                    source_session_id: session_id,
+                    source_event_seq: latest_final.as_ref().map(|event| event.seq),
+                    source_uri: None,
+                    dedupe_key: format!("promote:summary:{session_id}"),
+                    provenance_json: promotion_provenance(
+                        session_id,
+                        latest_final.as_ref().map(|event| event.seq),
+                        None,
+                        &payload.initiated_by,
+                        selected_at,
+                    ),
+                })
+                .await?,
+        );
+    }
+    for (idx, text) in payload.open_loops.iter().enumerate() {
+        promoted.push(
+            state
+                .store
+                .upsert_project_item(NewProjectItem {
+                    project_id: project_id.clone(),
+                    kind: ProjectItemKind::OpenLoop,
+                    text: text.clone(),
+                    target_uri: format!("project://{project_id}/open-loops/{session_id}-{idx}"),
+                    source_session_id: session_id,
+                    source_event_seq: latest_final.as_ref().map(|event| event.seq),
+                    source_uri: None,
+                    dedupe_key: format!("promote:open-loop:{session_id}:{idx}:{text}"),
+                    provenance_json: promotion_provenance(
+                        session_id,
+                        latest_final.as_ref().map(|event| event.seq),
+                        None,
+                        &payload.initiated_by,
+                        selected_at,
+                    ),
+                })
+                .await?,
+        );
+    }
+    for (idx, text) in payload.decisions.iter().enumerate() {
+        promoted.push(
+            state
+                .store
+                .upsert_project_item(NewProjectItem {
+                    project_id: project_id.clone(),
+                    kind: ProjectItemKind::Decision,
+                    text: text.clone(),
+                    target_uri: format!("project://{project_id}/decisions/{session_id}-{idx}"),
+                    source_session_id: session_id,
+                    source_event_seq: latest_final.as_ref().map(|event| event.seq),
+                    source_uri: None,
+                    dedupe_key: format!("promote:decision:{session_id}:{idx}:{text}"),
+                    provenance_json: promotion_provenance(
+                        session_id,
+                        latest_final.as_ref().map(|event| event.seq),
+                        None,
+                        &payload.initiated_by,
+                        selected_at,
+                    ),
+                })
+                .await?,
+        );
+    }
+    for source_uri in payload.resources {
+        let (kind, target_uri) = promoted_resource_target(&project_id, &source_uri)?;
+        promoted.push(
+            state
+                .store
+                .upsert_project_item(NewProjectItem {
+                    project_id: project_id.clone(),
+                    kind,
+                    text: source_uri.clone(),
+                    target_uri,
+                    source_session_id: session_id,
+                    source_event_seq: latest_final.as_ref().map(|event| event.seq),
+                    source_uri: Some(source_uri.clone()),
+                    dedupe_key: format!("promote:resource:{session_id}:{source_uri}"),
+                    provenance_json: promotion_provenance(
+                        session_id,
+                        latest_final.as_ref().map(|event| event.seq),
+                        Some(&source_uri),
+                        &payload.initiated_by,
+                        selected_at,
+                    ),
+                })
+                .await?,
+        );
+    }
+    Ok(promoted)
+}
+
+async fn latest_event_payload<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    event_type: &str,
+) -> Result<Option<SessionEvent>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    Ok(state
+        .store
+        .events_after(session_id, None)
+        .await?
+        .into_iter()
+        .rev()
+        .find(|event| event.event_type == event_type))
+}
+
+fn promotion_provenance(
+    session_id: Uuid,
+    source_event_seq: Option<i64>,
+    source_uri: Option<&str>,
+    actor: &str,
+    selected_at: chrono::DateTime<Utc>,
+) -> Value {
+    json!({
+        "sourceSession": session_id,
+        "sourceEventId": source_event_seq,
+        "sourceUri": source_uri,
+        "selectedAt": selected_at,
+        "actor": actor,
+    })
+}
+
+fn promoted_resource_target(
+    project_id: &str,
+    source_uri: &str,
+) -> Result<(ProjectItemKind, String)> {
+    if let Some(id) = source_uri.strip_prefix("artifact://") {
+        return Ok((
+            ProjectItemKind::Artifact,
+            format!("project://{project_id}/artifacts/{id}"),
+        ));
+    }
+    if let Some(path) = source_uri.strip_prefix("workspace://session/") {
+        validate_relative_path(path)?;
+        return Ok((
+            ProjectItemKind::Workspace,
+            format!("project://{project_id}/workspace/{path}"),
+        ));
+    }
+    if let Some(path) = source_uri.strip_prefix("linked://") {
+        return Ok((
+            ProjectItemKind::Linked,
+            format!("project://{project_id}/linked-folders/{path}"),
+        ));
+    }
+    Err(ServerError::Policy(format!(
+        "unsupported promotion resource scheme for {source_uri}"
+    )))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -357,6 +1325,470 @@ where
     Ok(Json(serde_json::to_value(content)?))
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct ResourceQuery {
+    uri: Option<String>,
+    selector: Option<String>,
+}
+
+async fn resolve_resource<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<ResourceQuery>,
+) -> Result<Json<ResourceContent>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    state.store.get_session(session_id).await?;
+    let uri = query.uri.ok_or_else(|| {
+        ServerError::InvalidRequest("uri query parameter is required".to_string())
+    })?;
+    read_resource_content(&state, session_id, &uri, query.selector.as_deref())
+        .await
+        .map(Json)
+}
+
+async fn preview_resource<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<ResourceQuery>,
+) -> Result<Json<ResourceContent>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    state.store.get_session(session_id).await?;
+    let uri = query.uri.ok_or_else(|| {
+        ServerError::InvalidRequest("uri query parameter is required".to_string())
+    })?;
+    let mut content = read_resource_content(&state, session_id, &uri, None).await?;
+    content.content.clear();
+    Ok(Json(content))
+}
+
+async fn list_resources<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<ResourceQuery>,
+) -> Result<Json<Vec<ResourceEntry>>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    state.store.get_session(session_id).await?;
+    list_resource_entries(&state, session_id, query.uri.as_deref())
+        .await
+        .map(Json)
+}
+
+async fn read_resource_content<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    match resource_scheme(uri).as_deref() {
+        Some("artifact") => {
+            let store =
+                tm_artifacts::ArtifactStore::open(&state.artifact_root, session_id.to_string())
+                    .map_err(|err| ServerError::Store(err.to_string()))?;
+            store.read(uri, selector).map_err(map_artifact_error)
+        }
+        Some("workspace") => {
+            read_workspace_resource(&state.artifact_root, session_id, uri, selector)
+        }
+        Some("linked") => read_linked_resource(&state.linked_folders, uri, selector).await,
+        Some("project") => read_project_resource(state, session_id, uri).await,
+        Some(scheme) => Err(ServerError::Policy(format!(
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project"
+        ))),
+        None => Err(ServerError::InvalidRequest(format!(
+            "invalid resource uri {uri}"
+        ))),
+    }
+}
+
+async fn list_resource_entries<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: Option<&str>,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let Some(uri) = uri.filter(|uri| !uri.is_empty()) else {
+        return Ok(["artifact", "linked", "workspace", "project"]
+            .into_iter()
+            .map(|scheme| ResourceEntry {
+                uri: format!("{scheme}://"),
+                name: scheme.to_string(),
+                kind: "scheme".to_string(),
+                title: None,
+                size_bytes: None,
+                modified_at: None,
+            })
+            .collect());
+    };
+    match resource_scheme(uri).as_deref() {
+        Some("artifact") => {
+            let store =
+                tm_artifacts::ArtifactStore::open(&state.artifact_root, session_id.to_string())
+                    .map_err(|err| ServerError::Store(err.to_string()))?;
+            Ok(store
+                .list()
+                .into_iter()
+                .map(|artifact| ResourceEntry {
+                    uri: artifact.uri,
+                    name: artifact.id,
+                    kind: artifact.kind,
+                    title: artifact.title,
+                    size_bytes: Some(artifact.size_bytes),
+                    modified_at: None,
+                })
+                .collect())
+        }
+        Some("workspace") => list_workspace_resources(&state.artifact_root, session_id, uri),
+        Some("linked") => list_linked_resources(&state.linked_folders, Some(uri)).await,
+        Some("project") => list_project_resources(state, session_id, uri).await,
+        Some(scheme) => Err(ServerError::Policy(format!(
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project"
+        ))),
+        None => Err(ServerError::InvalidRequest(format!(
+            "invalid resource uri {uri}"
+        ))),
+    }
+}
+
+fn resource_scheme(uri: &str) -> Option<String> {
+    uri.split_once("://").map(|(scheme, _)| scheme.to_string())
+}
+
+async fn read_linked_resource(
+    linked_folders: &LinkedFolders,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent> {
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"));
+    registry
+        .read(uri, selector, &ctx)
+        .await
+        .map_err(map_host_error)
+}
+
+async fn list_linked_resources(
+    linked_folders: &LinkedFolders,
+    uri: Option<&str>,
+) -> Result<Vec<ResourceEntry>> {
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"));
+    registry.list(uri, &ctx).await.map_err(map_host_error)
+}
+
+fn read_workspace_resource(
+    artifact_root: &FsPath,
+    session_id: Uuid,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent> {
+    let relative = workspace_relative(uri)?;
+    let root = workspace_root(artifact_root, session_id);
+    let path = root.join(&relative);
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| ServerError::NotFound(format!("workspace://session/")))?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|_| ServerError::NotFound(uri.to_string()))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(ServerError::Policy(format!(
+            "workspace path escapes session root: {uri}"
+        )));
+    }
+    let content =
+        fs::read_to_string(&canonical_path).map_err(|err| ServerError::Store(err.to_string()))?;
+    let (selected, has_more) = select_text(&content, selector)?;
+    Ok(ResourceContent {
+        uri: workspace_uri(&relative),
+        kind: "text".to_string(),
+        mime: "text/plain".to_string(),
+        title: canonical_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string),
+        size_bytes: content.len(),
+        selector: selector.map(str::to_string),
+        has_more,
+        preview: preview(&selected, 1024),
+        content: selected,
+    })
+}
+
+fn list_workspace_resources(
+    artifact_root: &FsPath,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>> {
+    let relative = workspace_relative(uri)?;
+    let root = workspace_root(artifact_root, session_id);
+    let dir = root.join(&relative);
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| ServerError::NotFound(format!("workspace://session/")))?;
+    let canonical_dir = dir
+        .canonicalize()
+        .map_err(|_| ServerError::NotFound(uri.to_string()))?;
+    if !canonical_dir.starts_with(&canonical_root) {
+        return Err(ServerError::Policy(format!(
+            "workspace path escapes session root: {uri}"
+        )));
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&canonical_dir).map_err(|err| ServerError::Store(err.to_string()))? {
+        let entry = entry.map_err(|err| ServerError::Store(err.to_string()))?;
+        let path = entry.path();
+        let metadata = entry
+            .metadata()
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        let rel = path.strip_prefix(&canonical_root).unwrap_or(path.as_path());
+        entries.push(ResourceEntry {
+            uri: workspace_uri(rel),
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("workspace")
+                .to_string(),
+            kind: if metadata.is_dir() { "dir" } else { "file" }.to_string(),
+            title: None,
+            size_bytes: metadata.is_file().then_some(metadata.len() as usize),
+            modified_at: metadata
+                .modified()
+                .ok()
+                .map(|time| chrono::DateTime::<Utc>::from(time).to_rfc3339()),
+        });
+    }
+    entries.sort_by(|a, b| a.uri.cmp(&b.uri));
+    Ok(entries)
+}
+
+fn workspace_root(artifact_root: &FsPath, session_id: Uuid) -> PathBuf {
+    artifact_root
+        .join("sessions")
+        .join(session_id.to_string())
+        .join("workspace")
+}
+
+fn workspace_relative(uri: &str) -> Result<PathBuf> {
+    let path = uri
+        .strip_prefix("workspace://session/")
+        .ok_or_else(|| ServerError::Policy(format!("unsupported workspace uri {uri}")))?;
+    validate_relative_path(path)
+}
+
+fn validate_relative_path(path: &str) -> Result<PathBuf> {
+    if path.contains('\0') {
+        return Err(ServerError::Policy("path contains NUL byte".to_string()));
+    }
+    let relative = FsPath::new(path);
+    if relative.is_absolute() {
+        return Err(ServerError::Policy(format!(
+            "absolute paths are not allowed: {path}"
+        )));
+    }
+    let mut out = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(ServerError::Policy(format!(
+                    "path traversal is not allowed: {path}"
+                )));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn workspace_uri(relative: &FsPath) -> String {
+    let rel = relative
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("workspace://session/{rel}")
+}
+
+async fn read_project_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let (project_id, view) = parse_project_uri(uri)?;
+    let payload = match view.as_deref() {
+        None | Some("") => serde_json::to_value(
+            build_project_overview(state, session_id, project_id.clone()).await?,
+        )?,
+        Some("open-loops") => serde_json::to_value(
+            state
+                .store
+                .project_items(&project_id, Some(ProjectItemKind::OpenLoop))
+                .await?,
+        )?,
+        Some("decisions") => serde_json::to_value(
+            state
+                .store
+                .project_items(&project_id, Some(ProjectItemKind::Decision))
+                .await?,
+        )?,
+        Some("next-actions") => serde_json::to_value(
+            state
+                .store
+                .project_items(&project_id, Some(ProjectItemKind::NextAction))
+                .await?,
+        )?,
+        Some("resources") => {
+            let overview = build_project_overview(state, session_id, project_id.clone()).await?;
+            serde_json::to_value(overview.resources)?
+        }
+        Some(other) => {
+            return Err(ServerError::NotFound(format!(
+                "project view project://{project_id}/{other}"
+            )));
+        }
+    };
+    let content = serde_json::to_string_pretty(&payload)?;
+    Ok(ResourceContent {
+        uri: uri.to_string(),
+        kind: "project_view".to_string(),
+        mime: "application/json".to_string(),
+        title: Some(format!("project://{project_id}")),
+        size_bytes: content.len(),
+        selector: None,
+        has_more: false,
+        preview: preview(&content, 1024),
+        content,
+    })
+}
+
+async fn list_project_resources<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let (project_id, view) = parse_project_uri(uri)?;
+    if view.is_some() {
+        let overview = build_project_overview(state, session_id, project_id).await?;
+        return Ok(overview
+            .resources
+            .into_iter()
+            .map(|item| ResourceEntry {
+                uri: item.target_uri,
+                name: item.kind.as_str().to_string(),
+                kind: item.kind.as_str().to_string(),
+                title: Some(item.text),
+                size_bytes: None,
+                modified_at: Some(item.created_at.to_rfc3339()),
+            })
+            .collect());
+    }
+    Ok(["open-loops", "decisions", "next-actions", "resources"]
+        .into_iter()
+        .map(|view| ResourceEntry {
+            uri: format!("project://{project_id}/{view}"),
+            name: view.to_string(),
+            kind: "project_view".to_string(),
+            title: None,
+            size_bytes: None,
+            modified_at: None,
+        })
+        .collect())
+}
+
+fn parse_project_uri(uri: &str) -> Result<(String, Option<String>)> {
+    let rest = uri
+        .strip_prefix("project://")
+        .ok_or_else(|| ServerError::Policy(format!("unsupported project uri {uri}")))?;
+    let (project_id, view) = rest.split_once('/').map_or((rest, None), |(id, view)| {
+        (id, (!view.is_empty()).then(|| view.to_string()))
+    });
+    if project_id.is_empty() {
+        return Err(ServerError::Policy("missing project id".to_string()));
+    }
+    Ok((project_id.to_string(), view))
+}
+
+fn select_text(content: &str, selector: Option<&str>) -> Result<(String, bool)> {
+    let Some(selector) = selector else {
+        return Ok((content.to_string(), false));
+    };
+    let (start, end) = selector
+        .split_once('-')
+        .ok_or_else(|| ServerError::InvalidRequest(format!("invalid selector {selector}")))?;
+    let start: usize = start
+        .parse()
+        .map_err(|_| ServerError::InvalidRequest(format!("invalid selector {selector}")))?;
+    let end: usize = end
+        .parse()
+        .map_err(|_| ServerError::InvalidRequest(format!("invalid selector {selector}")))?;
+    if start == 0 || end < start {
+        return Err(ServerError::InvalidRequest(format!(
+            "invalid selector {selector}"
+        )));
+    }
+    let lines = content.lines().collect::<Vec<_>>();
+    let selected = lines
+        .iter()
+        .skip(start - 1)
+        .take(end - start + 1)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok((selected, end < lines.len()))
+}
+
+fn map_host_error(err: tm_host::HostError) -> ServerError {
+    match err {
+        tm_host::HostError::UnknownScheme { .. }
+        | tm_host::HostError::CapabilityDenied(_)
+        | tm_host::HostError::InvalidPath(_) => ServerError::Policy(err.to_string()),
+        tm_host::HostError::NotFound(target) => ServerError::NotFound(target),
+        other => ServerError::InvalidRequest(other.to_string()),
+    }
+}
+
 fn map_artifact_error(err: tm_artifacts::ArtifactError) -> ServerError {
     match err {
         tm_artifacts::ArtifactError::NotFound { uri, .. } => ServerError::NotFound(uri),
@@ -367,10 +1799,18 @@ fn map_artifact_error(err: tm_artifacts::ArtifactError) -> ServerError {
         tm_artifacts::ArtifactError::Io(err) => ServerError::Store(err.to_string()),
     }
 }
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventsQuery {
+    last_event_id: Option<i64>,
+    last_event_id_legacy: Option<i64>,
+}
+
 async fn session_events<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
     headers: HeaderMap,
+    Query(query): Query<EventsQuery>,
 ) -> Result<impl IntoResponse>
 where
     S: Store,
@@ -382,6 +1822,9 @@ where
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<i64>().ok());
+    let last_event_id = last_event_id
+        .or(query.last_event_id)
+        .or(query.last_event_id_legacy);
     let receiver = state.sender(session_id).subscribe();
     let replay = state.store.events_after(session_id, last_event_id).await?;
     let replay_finished = replay.iter().any(|event| event.event_type == "final");
@@ -417,6 +1860,7 @@ mod tests {
     use std::path::PathBuf;
 
     use async_trait::async_trait;
+    use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
     use tower::ServiceExt;
 
     use crate::{
@@ -969,6 +2413,345 @@ mod tests {
                 .unwrap()
                 .contains("scripted transcript")
         );
+    }
+
+    #[tokio::test]
+    async fn router_lock_unlock_and_replay_mode_events() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"please fix this Rust code bug"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let events = store.events_after(session.id, None).await.unwrap();
+        let mode_events = events
+            .iter()
+            .filter(|event| event.event_type == "mode")
+            .collect::<Vec<_>>();
+        assert_eq!(mode_events.len(), 2);
+        assert_eq!(mode_events[1].payload_json["event"], json!("mode_changed"));
+        assert_eq!(
+            mode_events[1].payload_json["mode"],
+            json!("serious_engineer")
+        );
+        assert_eq!(mode_events[1].payload_json["voice_cap"], json!("關"));
+        assert!(
+            mode_events[1].payload_json["router_reason"]
+                .as_str()
+                .unwrap()
+                .contains("coding")
+        );
+
+        let replay = store.events_after(session.id, Some(1)).await.unwrap();
+        assert_eq!(replay[0].event_type, "mode");
+        assert_eq!(replay[0].payload_json["mode"], json!("serious_engineer"));
+
+        let lock = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/mode/lock", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"mode":"personal_assistant","reason":"stay light"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lock.status(), StatusCode::OK);
+        let lock_json = response_json(lock).await;
+        assert_eq!(lock_json["modeState"]["lockSource"], json!("user"));
+        assert_eq!(lock_json["voiceCap"], json!("中"));
+
+        let locked_message = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"fix another code bug"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(locked_message.status(), StatusCode::OK);
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::PersonalAssistant);
+
+        let unlock = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/mode/unlock", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reason":"router may resume"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unlock.status(), StatusCode::OK);
+
+        let reroute = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"fix the Rust code now"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reroute.status(), StatusCode::OK);
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+        assert_eq!(latest.mode_state.mode.voice_cap(), "關");
+    }
+
+    #[tokio::test]
+    async fn project_views_and_promotion_are_idempotent() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"content":"capture an open loop and decision for the code TODO"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let overview = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}/project", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(overview.status(), StatusCode::OK);
+        let overview_json = response_json(overview).await;
+        assert_eq!(overview_json["projectUri"], json!("project://tempestmiku"));
+        assert!(!overview_json["nextActions"].as_array().unwrap().is_empty());
+        assert!(!overview_json["openLoops"].as_array().unwrap().is_empty());
+        assert!(!overview_json["decisions"].as_array().unwrap().is_empty());
+
+        let body = Body::from(
+            r#"{"summary":"ship P1 slice","openLoops":["wire mobile resume"],"decisions":["keep SSE"],"resources":["artifact://0","workspace://session/notes.md"]}"#,
+        );
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/promote", session.id))
+                    .header("content-type", "application/json")
+                    .body(body)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first_json = response_json(first).await;
+        assert_eq!(first_json["projectUri"], json!("project://tempestmiku"));
+        let first_promoted = first_json["promoted"].as_array().unwrap().clone();
+        assert_eq!(first_promoted.len(), 5);
+        assert_eq!(first_promoted[0]["provenanceJson"]["actor"], json!("user"));
+
+        let second = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/promote", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"summary":"ship P1 slice","openLoops":["wire mobile resume"],"decisions":["keep SSE"],"resources":["artifact://0","workspace://session/notes.md"]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let second_json = response_json(second).await;
+        assert_eq!(
+            first_promoted[0]["id"],
+            second_json["promoted"].as_array().unwrap()[0]["id"]
+        );
+        let project_resources = store
+            .project_items("tempestmiku", Some(ProjectItemKind::Artifact))
+            .await
+            .unwrap();
+        assert_eq!(project_resources.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let linked_root = temp.path().join("linked");
+        std::fs::create_dir_all(&linked_root).unwrap();
+        std::fs::write(linked_root.join("README.md"), "linked readme").unwrap();
+        let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+            name: "tempestmiku".to_string(),
+            path: linked_root,
+            mode: FsMode::Ro,
+            commands: Vec::new(),
+            safe_args: Vec::new(),
+        }])
+        .unwrap();
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let state = AppState::new(
+            store,
+            memory,
+            chat,
+            PersonaConfig::default(),
+            AuthConfig::NoAuth,
+        )
+        .with_artifact_root(artifact_root.clone())
+        .with_linked_folders(linked);
+        let (app, store) = test_app_with_state(state);
+        let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+        let artifact_store =
+            tm_artifacts::ArtifactStore::open(&artifact_root, session.id.to_string()).unwrap();
+        artifact_store
+            .put_text("artifact line", Some("artifact".to_string()), "text/plain")
+            .unwrap();
+        let workspace = artifact_root
+            .join("sessions")
+            .join(session.id.to_string())
+            .join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("notes.md"), "one\ntwo").unwrap();
+        store
+            .upsert_project_item(NewProjectItem {
+                project_id: "tempestmiku".to_string(),
+                kind: ProjectItemKind::Artifact,
+                text: "artifact://0".to_string(),
+                target_uri: "project://tempestmiku/artifacts/0".to_string(),
+                source_session_id: session.id,
+                source_event_seq: None,
+                source_uri: Some("artifact://0".to_string()),
+                dedupe_key: "test-artifact".to_string(),
+                provenance_json: json!({"sourceSession": session.id}),
+            })
+            .await
+            .unwrap();
+
+        for (uri, expected) in [
+            ("artifact://0", "artifact line"),
+            ("workspace://session/notes.md", "two"),
+            ("linked://tempestmiku/README.md", "linked readme"),
+            ("project://tempestmiku/resources", "artifact://0"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri(format!(
+                            "/sessions/{}/resources/resolve?uri={}",
+                            session.id, uri
+                        ))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let json = response_json(response).await;
+            assert!(
+                json["content"].as_str().unwrap().contains(expected),
+                "content for {uri}: {json}"
+            );
+        }
+
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{}/resources/resolve?uri=workspace://session/../secret",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let unknown = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{}/resources/resolve?uri=drive://later",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn miku_initiated_promotion_denies_by_default_on_timeout() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/promote", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"summary":"proposed write","initiatedBy":"miku","timeoutMs":1}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert!(events.iter().any(|event| event.event_type == "approval"));
+        let resolved = events
+            .iter()
+            .find(|event| event.event_type == "approval_resolved")
+            .unwrap();
+        assert_eq!(resolved.payload_json["backend"], json!("project-promotion"));
+        assert_eq!(resolved.payload_json["optionId"], json!("reject"));
     }
 
     async fn wait_for_event_payload(

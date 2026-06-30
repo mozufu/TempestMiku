@@ -123,6 +123,18 @@ impl ApprovalBroker {
         timeout: Duration,
         sink: Arc<dyn CodingEventSink>,
     ) -> Result<ApprovalOutcome> {
+        self.request_permission_for_backend(session_id, "omp-acp", prompt, timeout, sink)
+            .await
+    }
+
+    pub async fn request_permission_for_backend(
+        &self,
+        session_id: Uuid,
+        backend: &str,
+        prompt: ApprovalPrompt,
+        timeout: Duration,
+        sink: Arc<dyn CodingEventSink>,
+    ) -> Result<ApprovalOutcome> {
         let approval_id = Uuid::new_v4();
         let (sender, receiver) = oneshot::channel();
         self.pending
@@ -131,7 +143,7 @@ impl ApprovalBroker {
 
         let approval_payload = json!({
             "approvalId": approval_id,
-            "backend": "omp-acp",
+            "backend": backend,
             "action": prompt.action,
             "scope": prompt.scope,
             "options": prompt.options,
@@ -155,7 +167,8 @@ impl ApprovalBroker {
             Some(request) => self.resolve_outcome(&prompt, request),
             None => self.reject_outcome(&prompt),
         };
-        self.emit_resolution(approval_id, &outcome, sink).await?;
+        self.emit_resolution(approval_id, backend, &outcome, sink)
+            .await?;
         Ok(outcome)
     }
 
@@ -226,19 +239,20 @@ impl ApprovalBroker {
     async fn emit_resolution(
         &self,
         approval_id: Uuid,
+        backend: &str,
         outcome: &ApprovalOutcome,
         sink: Arc<dyn CodingEventSink>,
     ) -> Result<SessionEvent> {
         let payload = match outcome {
             ApprovalOutcome::Selected { option_id } => json!({
                 "approvalId": approval_id,
-                "backend": "omp-acp",
+                "backend": backend,
                 "outcome": "selected",
                 "optionId": option_id,
             }),
             ApprovalOutcome::Cancelled => json!({
                 "approvalId": approval_id,
-                "backend": "omp-acp",
+                "backend": backend,
                 "outcome": "cancelled",
             }),
         };

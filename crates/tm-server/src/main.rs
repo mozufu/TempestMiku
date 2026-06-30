@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use tm_core::{Agent, AgentConfig, DEFAULT_SYSTEM_PROMPT};
+use tm_host::P0HostConfig;
 use tm_llm::OpenAiClient;
 use tm_persona::{Mode, PersonaConfig};
 use tm_sandbox::StubSandbox;
@@ -26,7 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_default();
     let chat = build_chat()?;
 
-    if let Ok(dsn) = std::env::var("TM_DATABASE_URL") {
+    if let Ok(dsn) = std::env::var("TM_DATABASE_URL")
+        && !dsn.trim().is_empty()
+    {
         let store = Arc::new(PostgresStore::connect(&dsn).await?);
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(AppState::new(
@@ -83,7 +86,9 @@ fn build_chat() -> Result<Arc<ServerChatRunner>, Box<dyn std::error::Error>> {
     };
     let agent = Agent::new(llm, sandbox, cfg);
     tracing::info!(model, "real LLM agent runner configured");
-    Ok(Arc::new(ServerChatRunner::Agent(AgentChatRunner::new(agent))))
+    Ok(Arc::new(ServerChatRunner::Agent(AgentChatRunner::new(
+        agent,
+    ))))
 }
 
 fn configure_coding_backend<S, M, C>(
@@ -91,6 +96,10 @@ fn configure_coding_backend<S, M, C>(
 ) -> Result<AppState<S, M, C>, Box<dyn std::error::Error>> {
     if let Some(root) = std::env::var_os("TM_OMP_ACP_ARTIFACT_ROOT") {
         state = state.with_artifact_root(root);
+    }
+    if let Some(path) = std::env::var_os("TM_HOST_CONFIG") {
+        let config = P0HostConfig::from_json_file(path)?;
+        state = state.with_linked_folders(config.linked_folders()?);
     }
     if std::env::var("TM_OMP_ACP_ENABLED").ok().as_deref() == Some("1") {
         let backend: Arc<dyn CodingBackend> = Arc::new(OmpAcpBackend::new(

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum Mode {
     #[default]
     PersonalAssistant,
+    AmbiguityGrill,
+    NegativeStateGrounding,
     SeriousEngineer,
     Handoff,
 }
@@ -15,6 +17,8 @@ impl Mode {
     pub fn label(self) -> &'static str {
         match self {
             Self::PersonalAssistant => "Personal Assistant",
+            Self::AmbiguityGrill => "Ambiguity Grill",
+            Self::NegativeStateGrounding => "Negative-State Grounding",
             Self::SeriousEngineer => "Serious Engineer",
             Self::Handoff => "Handoff",
         }
@@ -23,13 +27,16 @@ impl Mode {
     pub fn voice_cap(self) -> &'static str {
         match self {
             Self::PersonalAssistant => "中",
+            Self::AmbiguityGrill | Self::NegativeStateGrounding => "濃",
             Self::SeriousEngineer | Self::Handoff => "關",
         }
     }
 
     pub fn default_scope(self) -> &'static str {
         match self {
-            Self::PersonalAssistant => "global",
+            Self::PersonalAssistant | Self::AmbiguityGrill | Self::NegativeStateGrounding => {
+                "global"
+            }
             Self::SeriousEngineer | Self::Handoff => "project:tempestmiku",
         }
     }
@@ -38,6 +45,12 @@ impl Mode {
         match self {
             Self::PersonalAssistant => {
                 "Active mode: Personal Assistant. Use conversational planning and light memory; do not unlock engineering host capabilities."
+            }
+            Self::AmbiguityGrill => {
+                "Active mode: Ambiguity Grill (mode 2). Ask 3-7 sharp clarifying questions before planning; keep capability scope conversational."
+            }
+            Self::NegativeStateGrounding => {
+                "Active mode: Negative-State Grounding (mode 3). Stabilize first, keep the next action under ten minutes, and preserve the health-over-productivity rule."
             }
             Self::SeriousEngineer => {
                 "Active mode: Serious Engineer (mode 4). Use fs.*, code.*, and proc.* through the SDK for linked-repo work. Voice cap: 關 — preserve Tempest Miku identity, but keep technical replies precise and avoid 喵 unless the context is explicitly light. Never use shell strings; use proc.run(cmd, args). Destructive, external, or out-of-grant actions require approval or fail closed."
@@ -88,6 +101,13 @@ mod tests {
     #[test]
     fn handoff_label_is_handoff() {
         assert_eq!(Mode::Handoff.label(), "Handoff");
+    }
+
+    #[test]
+    fn router_modes_have_labels_and_scopes() {
+        assert_eq!(Mode::AmbiguityGrill.label(), "Ambiguity Grill");
+        assert_eq!(Mode::NegativeStateGrounding.default_scope(), "global");
+        assert!(Mode::AmbiguityGrill.system_addendum().contains("mode 2"));
     }
 
     #[test]

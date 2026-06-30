@@ -1,23 +1,35 @@
 import { expect, test } from '@playwright/test';
 
-test('chat streams text, finalizes, and replay resumes by Last-Event-ID', async ({ page, request }) => {
-  await page.goto('/');
-  await page.getByPlaceholder('Message Miku').fill('hello');
-  await page.getByRole('button', { name: 'Send' }).click();
+test('session API streams text, finalizes, and replay resumes by Last-Event-ID', async ({ request }) => {
+  const root = await request.get('/');
+  expect(root.status()).toBe(404);
 
-  await expect(page.locator('#stream')).toContainText('Miku heard: hello');
-  await expect(page.locator('#stream')).toHaveAttribute('data-final', 'Miku heard: hello');
+  const created = await request.post('/sessions');
+  expect(created.ok()).toBeTruthy();
+  const session = await created.json();
+  expect(session.label).toBe('Personal Assistant');
 
-  const sessionId = await page.evaluate(() => window.localStorage.getItem('tm-session-id'));
-  expect(sessionId).toBeTruthy();
+  const message = await request.post(`/sessions/${session.id}/messages`, {
+    data: { content: 'please fix code hello artifact://0' },
+  });
+  expect(message.ok()).toBeTruthy();
 
-  const replay = await request.get(`/sessions/${sessionId}/events`, {
+  const replay = await request.get(`/sessions/${session.id}/events`, {
     headers: { 'Last-Event-ID': '1' },
     timeout: 5_000,
   });
   expect(replay.ok()).toBeTruthy();
   const body = await replay.text();
   expect(body).toContain('id: 2');
+  expect(body).toContain('event: mode');
+  expect(body).toContain('serious_engineer');
   expect(body).toContain('event: text');
+  expect(body).toContain('Miku heard: please fix code hello artifact://0');
   expect(body).toContain('event: final');
+
+  const replayByQuery = await request.get(`/sessions/${session.id}/events?lastEventId=1`, {
+    timeout: 5_000,
+  });
+  expect(replayByQuery.ok()).toBeTruthy();
+  expect(await replayByQuery.text()).toContain('event: mode');
 });

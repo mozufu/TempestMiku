@@ -3937,6 +3937,7 @@ dependencies = [
  "thiserror",
  "tm-artifacts",
  "tm-core",
+ "tm-host",
  "tm-llm",
  "tm-persona",
  "tm-sandbox",

@@ -67,6 +67,20 @@ the server **extends** it with product events the core trait doesn't carry:
 - **Single-user auth.** One owner (Brian). Local dev may use token / no-auth; deployed mode supports
   forwarded auth from a trusted reverse proxy. Multi-tenant parked (§15).
 
+### 27.1.1 Postgres test gate
+
+Normal `cargo test` stays external-service-free: server persistence tests use the in-memory store unless
+Postgres coverage is explicitly enabled. To run the gated persistence checks for event replay, memory
+rows, approval events, and promoted artifact/resource references, set:
+
+```sh
+TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server
+```
+
+`TM_TEST_DATABASE_URL` is preferred for tests; if it is absent, the tests fall back to
+`TM_DATABASE_URL`. Without `TM_POSTGRES_TESTS=1`, the Postgres test returns early and does not open a
+network or local database connection.
+
 ## 27.2 Scheduler & proactivity
 
 A **scheduler** (cron lineage) starts sessions on a schedule: the **weekly ship ledger**

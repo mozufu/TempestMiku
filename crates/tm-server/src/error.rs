@@ -10,6 +10,8 @@ pub enum ServerError {
     Unauthorized,
     #[error("forbidden")]
     Forbidden,
+    #[error("policy error: {0}")]
+    Policy(String),
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("store error: {0}")]
@@ -31,7 +33,7 @@ impl IntoResponse for ServerError {
         let status = match self {
             ServerError::NotFound(_) => StatusCode::NOT_FOUND,
             ServerError::Unauthorized => StatusCode::UNAUTHORIZED,
-            ServerError::Forbidden => StatusCode::FORBIDDEN,
+            ServerError::Forbidden | ServerError::Policy(_) => StatusCode::FORBIDDEN,
             ServerError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             ServerError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ServerError::Backend(_) => StatusCode::BAD_GATEWAY,

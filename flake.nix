@@ -1,5 +1,5 @@
 {
-  description = "TempestMiku — code-execution agent runtime (Rust)";
+  description = "TempestMiku — code-execution agent runtime and Flutter client";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
@@ -40,6 +40,8 @@
             [
               rustToolchain
               pkgs.pkg-config
+              pkgs.flutter
+              pkgs.jdk17
             ]
             # reqwest uses rustls (no OpenSSL); darwin still wants libiconv and these
             # frameworks for linking network-touching crates.
@@ -50,6 +52,7 @@
             ];
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+          JAVA_HOME = "${pkgs.jdk17.home}";
 
           shellHook = ''
             echo "TempestMiku dev shell · $(rustc --version)"

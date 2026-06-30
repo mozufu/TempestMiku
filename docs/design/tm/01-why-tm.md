@@ -29,7 +29,7 @@ it needs approved.
 |---|---|---|
 | **Effectful** | §3.4 least-privilege, §3.9 one bridge | Algebraic effects + effect rows; host = handler |
 | **Approval-aware** | §7 approval policy, AGENTS.md approval boundary | Resumable effects (suspend → ask → resume) |
-| **Data-oriented, small** | §5.4 result shaping, §3.3 context-as-budget | Pipelines, tables, JSON, errors-as-values |
+| **Data-oriented, small** | §5.4 result shaping, §3.3 context-as-budget | Pipelines, tables, JSON, error effects |
 
 Pillar 1 is prior art, not a discovery. The "algebraic effects + handler = host registry"
 shape is already validated in Haskell's effect-library ecosystem: [`effectful`](https://github.com/haskell-effectful/effectful)
@@ -57,11 +57,12 @@ intra-event-loop. You can fake it with a host op that blocks, but the TS type st
 says `Promise<void>`, identical to `fs.read`. In `tm`:
 
 ```
-fun ship(patch) : <Code Edit!> Unit = @code.edit! {patch}
+fun ship(patch) : <_> Unit = @code.edit! {patch}
 ```
 
-The `!` is in the type and at the call site; the `@` shows the host boundary. The model, the
-host, and the transcript all see it.
+`<_>` asks the checker to infer the concrete capability row (`<code.edit!>` here, plus the
+possible error set). The `!` is in the inferred type and at the call site; the `@` shows the
+host boundary. The model, the host, and the transcript all see it.
 
 The `!` is not a naming hint. It is a **handler-interface contract**: a `!` effect's handler
 *must* be resumable (it may suspend and resume); a non-`!` effect's handler *must* be

@@ -10,21 +10,39 @@ Every external interaction is an **algebraic effect** and every effect perform i
 also a language-level effect declaration:
 
 ```
-eff FS   Read   : (path: Path) -> String
-eff FS   Write! : (path: Path, data: Data) -> Unit
-eff HTTP Get    : (url: Url) -> Bytes
-eff Code Edit!  : (patch: Patch) -> Unit
-eff Proc Run!   : (cmd: String, args: List String) -> ProcResult
+eff fs.read    : (path: Path) -> ResourceContent
+eff fs.write!  : (path: Path, data: Data) -> Unit
+eff http.get   : (url: Url) -> Bytes
+eff code.edit! : (patch: Patch) -> Unit
+eff proc.run!  : (cmd: String, args: List String) -> ProcResult
 ```
 
-A function's effect row is its **capability manifest**, computed by the type checker from the
-effects it performs:
+`error` is also an effect, but it is a core control effect rather than a grant-bearing host
+capability:
 
 ```
-fun backup(src, dst) : <FS Read, FS Write!> Unit =
+eff error : HostError -> Never
+```
+
+Host capability docs declare which `HostError` payloads they may perform, and fallible pure
+prelude functions do the same (for example `json.parse` performs `error ParseError`). For
+audit, the transcript shows the grant-bearing capability row separately from the possible
+error set: capabilities answer "what authority did this code touch?", while errors answer
+"how could this cell abort or be handled?" In source, `<_>` asks the checker to infer both.
+
+A function's grant-bearing effect row is its **capability manifest**, computed by the type
+checker from the host capability effects it performs:
+
+```
+fun backup(src, dst) : <_> Unit =
   let data = @fs.read src
   @fs.write! dst data
 ```
+
+Here `<_>` means "infer the effect row"; the checker records the concrete capability row
+`<fs.read, fs.write!>` plus the possible error set in the typed cell and transcript. The
+grant-bearing effect names are exactly the host registry's canonical capability names,
+including `!` for approval-bearing effects.
 
 Three invariants from AGENTS.md / §3 fall out *for free, at type-check time, before any code
 runs*:
@@ -32,10 +50,10 @@ runs*:
 ### Fail-closed becomes a type error
 
 ```
-fun oops(url) : Unit = @http.get url   -- <HTTP Get> not granted this session
+fun oops(url) : <_> Bytes = @http.get url   -- inferred <http.get>, not granted
 ```
 
-If the session's granted effect row does not include `HTTP Get`, this is **rejected before
+If the session's granted effect row does not include `http.get`, this is **rejected before
 eval** — not a runtime missing namespace, not a `CapabilityDeniedError` thrown mid-cell. The
 offending capability never enters the transcript because the cell never runs. This is strictly
 stronger than §7's runtime-policy approach.
@@ -86,7 +104,7 @@ do
   display "patched"
 ```
 
-Control flow under approval policy `always` for `Code Edit!`:
+Control flow under approval policy `always` for `code.edit!`:
 
 ```mermaid
 sequenceDiagram
@@ -94,7 +112,7 @@ sequenceDiagram
   participant I as tm isolate
   participant H as Host handler
   participant U as User
-  M->>I: @code.edit! {patch} performs Code Edit!
+  M->>I: @code.edit! {patch} performs code.edit!
   I->>H: effect + continuation
   H->>U: approval prompt (patch diff)
   U-->>H: approve
@@ -112,8 +130,10 @@ Today (§7 + ApprovalPolicy) the model has to know: which calls might block, whi
 denied, how to handle denial, whether to retry. That knowledge is scattered across the system
 prompt, the SDK `.d.ts`, and the orchestrator. In `tm`:
 
-- `!` in the type = "this can wait for a human." The model sees it at authoring time.
-- Denial = the effect resumes with an `ApprovalDenied` value = a normal `match` arm (§4.5).
+- `!` in the inferred/concrete row = "this can wait for a human." The model sees it at
+  authoring time.
+- Denial = the approval handler performs `error ApprovalDenied`; the model can catch it with
+  an error handler (§4.5), or let it bubble to the cell result.
 - Retry = the model's choice, explicit, not a hidden runtime retry loop.
 
 The approval boundary (AGENTS.md: "manual approvals" as a parity invariant) becomes a
@@ -124,16 +144,16 @@ The approval boundary (AGENTS.md: "manual approvals" as a parity invariant) beco
 | §7 SDK namespace | `tm` effect | `!`? |
 |---|---|---|
 | `print`, `display` | core primitive (not an effect — pure output to sink) | no |
-| `help`, `tools.search/docs/call` | `Tools Docs` / `Tools Search` / `Tools Call` | no |
-| `@fs.read` / `@fs.ls` / `@fs.find` | `FS Read` | no |
-| `@fs.write!` | `FS Write!` | **yes** |
-| `@code.search` | `Code Search` | no |
-| `@code.edit!` | `Code Edit!` | **yes** |
-| `@proc.run!` | `Proc Run!` | **yes** (always, per §7) |
-| `@resources.read` / `@resources.preview` / `@resources.list` | `Resources Read` etc. | no |
-| `@artifacts.put` / `@artifacts.get` / `@artifacts.slice` / `@artifacts.list` | `Artifacts Put` etc. | no |
-| `@http.*` (future) | `HTTP *` | policy-dependent |
-| `@secrets.*!` (future) | `Secrets Resolve` — returns a handle, never a value (§3.5) | yes |
+| `help`, `tools.search/docs/call` | `tools.docs` / `tools.search` / `tools.call` | no |
+| `@fs.read` / `@fs.ls` / `@fs.find` | `fs.read` / `fs.ls` / `fs.find` | no |
+| `@fs.write!` | `fs.write!` | **yes** |
+| `@code.search` | `code.search` | no |
+| `@code.edit!` | `code.edit!` | **yes** |
+| `@proc.run!` | `proc.run!` | **yes** (always, per §7) |
+| `@resources.read` / `@resources.preview` / `@resources.list` | `resources.read` / `resources.preview` / `resources.list` | no |
+| `@artifacts.put` / `@artifacts.get` / `@artifacts.slice` / `@artifacts.list` | `artifacts.put` / `artifacts.get` / `artifacts.slice` / `artifacts.list` | no |
+| `@http.*` (future) | `http.*` | policy-dependent |
+| `@secrets.*!` (future) | `secrets.resolve!` etc. — returns a handle, never a value (§3.5) | yes |
 | `@memory.*` / `@skills.*` / `@agents.*` / `@mcp.*` (future/imported) | their own effects | per-capability |
 
 The `!` is not arbitrary; it encodes §7's existing `approval` field (`none`/`on-write`/…). We

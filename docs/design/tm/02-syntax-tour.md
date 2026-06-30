@@ -82,16 +82,20 @@ pandas — just rows the host already knows how to render.
 ```
 fun add(x, y) : Int = x + y
 
-fun gather_todos(paths) : <FS Read> List String =
+fun gather_todos(paths) : <_> List String =
   paths |> par map @fs.read |> flatmap lines |> filter (includes "TODO")
 ```
 
 -- [String] in a value is a JSON list literal; the *type* is `List String`.
 -- `<>` is the effect row (angle brackets are free — `tm` has no generics, §2.9).
 
-The `: <FS Read> List String` is the **effect row + return type**. `<FS Read>` means "this
-function performs the `FS Read` effect." Empty row (or omitted `<>` entirely) means pure —
-memoizable, replayable for free (§3.6).
+The `: <_> List String` is the **effect row + return type** with an inferred row. `tm`
+uses the host registry's canonical capability names as grant-bearing effect names, so the
+checker infers the capability row `<fs.read>` for `gather_todos` and a separate possible-error
+set from the capability docs (§3.1). Empty row (or omitted `<>` entirely) means pure —
+memoizable, replayable for free (§3.6). A concrete row such as `<fs.read, code.edit!>` is
+still valid for library-like examples, but ordinary model-authored code should prefer `<_>`
+and let the checker print the inferred row into the transcript.
 ```
 fun pure_sum(xs) : List Int = xs |> fold 0 (+)
 ```
@@ -108,7 +112,7 @@ row before eval, and emits a provenance node in the transcript (§3.1).
 ```
 lines text                  -- pure prelude
 display rows                -- runtime output primitive
-@fs.read workspace:src/a.ts -- host capability: FS Read
+@fs.read workspace:src/a.ts -- host capability: fs.read
 @mcp.github.search_issues {repo: "owner/repo", query: "is:open"}
 ```
 
@@ -131,18 +135,19 @@ If the same text is meant as ordinary data, quote it as a string.
 ## 2.6 The `!` — approval at the call site and in the type
 
 ```
-fun save(patch) : <Code Edit!> Unit = @code.edit! {patch}
+fun save(patch) : <_> Unit = @code.edit! {patch}
 ```
 
-`Code Edit!` — the `!` marks an effect whose handler **is resumable**: it may suspend for
-human approval and resume with the answer. The same `!` is required at the call site for
-approval-bearing capabilities, so review can see both boundaries locally: `@` means host
-capability, `!` means that capability may suspend. The host's approval policy decides whether
-it actually suspends (§3) — "may" is the policy's call; "is allowed to at all" is the type's
-call (a non-`!` effect's handler is statically forbidden from suspending, §1.3). The model
-does not write "if approved then… else…" — it writes the edit, and the language handles the
-wait. Missing or extra call-site `!` is a type error: `@code.edit {patch}` is missing the
-approval marker, while `@fs.read! path` claims suspension for a non-approval effect.
+The checker infers `<code.edit!>` plus the possible error set. The `!` marks an effect whose
+handler **is resumable**: it may suspend for human approval and resume with the answer. The
+same `!` is required at the call site for approval-bearing capabilities, so review can see
+both boundaries locally: `@` means host capability, `!` means that capability may suspend.
+The host's approval policy decides whether it actually suspends (§3) — "may" is the policy's
+call; "is allowed to at all" is the type's call (a non-`!` effect's handler is statically
+forbidden from suspending, §1.3). The model does not write "if approved then… else…" — it
+writes the edit, and the language handles the wait. Missing or extra call-site `!` is a type
+error: `@code.edit {patch}` is missing the approval marker, while `@fs.read! path` claims
+suspension for a non-approval effect.
 
 ```
 do
@@ -151,25 +156,30 @@ do
 ```
 
 If the policy is `always`, execution suspends at `@code.edit!`, the host prompts the user, and
-`display "done"` runs only on approval. On denial, the effect resumes with an
-`ApprovalDenied` value and normal error handling takes over (§4). **No callback was written.**
+`display "done"` runs only on approval. On denial, the handler performs an `error
+ApprovalDenied` effect and normal error-effect handling takes over (§4). **No callback was
+written.**
 
-## 2.7 Pattern matching, errors as values
+## 2.7 Pattern matching and error effects
 
-There are no exceptions. Errors are values, matched:
+There are no exceptions and host capabilities do not wrap success values in `Result`. A
+successful `@fs.read` returns its success type; a failed one performs an `error` effect. If no
+handler catches it, the error bubbles to the cell result and the host shapes it as a
+structured error. When the model wants to recover, it handles the effect:
 
 ```
-match @fs.read path {
-  Ok(content)  -> content |> display
-  Err(NotFound {uri}) -> display {kind: "text", text: "missing: #uri"}
-  Err(e) -> rethrow e
+handle
+  path |> @fs.read |> display
+with error {
+  NotFound {uri} -> display {kind: "text", text: "missing: #uri"}
+  e              -> rethrow e
 }
 ```
 
 `#uri` is interpolation in a string. `rethrow` re-performs the error effect so the cell's
 shaped result includes it (§5.4 error policy). This maps 1:1 to §6.3's "a killed cell returns
-a structured error the model can react to" — but the reaction is a `match`, not a `try/catch`
-that might silently swallow.
+a structured error the model can react to" — but the reaction is an explicit effect handler,
+not a `try/catch` that might silently swallow.
 
 ## 2.8 `par` — concurrency is a word
 
@@ -184,7 +194,7 @@ syntax, different executor.** `par map` is `par` over a list.
 [`ki`](https://github.com/awkward-squad/ki) / [`atelier-core`](https://github.com/atelier-hub/tricorder/tree/b21172e/atelier-core)
 `Conc.scoped` + `awaitAll` already implements): all branches are bound to the `par` scope;
 the scope does not close until every branch has completed or been cancelled; if any branch
-errors, the scope cancels its siblings and the `par` resolves to that error — the
+performs an error, the scope cancels its siblings and re-performs that error — the
 first-failure semantics of `Conc.race`, generalized to N arms. The model writes `par`,
 never `Promise.all` plus manual abort wiring.
 
@@ -216,9 +226,9 @@ types.
 ## 2.10 What's deliberately not here
 
 No classes. No prototypes. No `this`. No macros. No `async`/`await` (effects subsume both).
-No exceptions (errors are values). No optional chaining operator (pattern match instead). No
-npm. No `Promise`. No parametric generics — `<>` is *only* the effect row, never `List<T>` or
-`Map<K,V>`; type parameters on a `type` declaration (§4 `type Result T E`) are sum-type
-fields, not generic-function syntax. The language is meant to be small
+No exceptions (`error` is an effect). No optional chaining operator (pattern match instead).
+No npm. No `Promise`. No parametric generics — `<>` is *only* the effect row, never `List<T>`
+or `Map<K,V>`; type parameters on a `type` declaration are sum-type fields, not
+generic-function syntax. The language is meant to be small
 enough that the *entire grammar fits in the system prompt's SDK section* if we want — and
 certainly small enough that `tools.docs` can teach it.

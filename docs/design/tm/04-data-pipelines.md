@@ -24,6 +24,11 @@ read better than nested calls; semantically they are `filter`/`map`/`sortBy`/etc
 marker makes boundary-crossing stages visible inside the pipeline instead of hiding host
 authority behind ordinary function syntax.
 
+`fs.read` still returns the SDK's `ResourceContent` shape (§7), not a magic naked string.
+Prelude text helpers accept `TextLike` (`String` or text-like `ResourceContent`), so the
+common read → lines pipeline stays short while the underlying capability result remains
+auditable.
+
 ### `par map` — concurrent fan-out, one word
 
 ```
@@ -70,16 +75,16 @@ in-memory, and has obvious list/string/table semantics.
 
 | Function | Type sketch | Notes |
 |---|---|---|
-| `lines` | `String -> List String` | Sugar for `split "\n"` with trailing newline handling. |
-| `words` | `String -> List String` | Split on Unicode whitespace. |
-| `split` | `String -> String -> List String` | `text |> split ","`; delimiter is literal text, not regex. |
+| `lines` | `TextLike -> List String` | Sugar for `split "\n"` with trailing newline handling. |
+| `words` | `TextLike -> List String` | Split on Unicode whitespace. |
+| `split` | `String -> TextLike -> List String` | `text |> split ","`; delimiter is literal text, not regex. |
 | `join` | `String -> List String -> String` | `parts |> join ", "`; inverse of `split` for simple cases. |
-| `trim`, `trim_start`, `trim_end` | `String -> String` | Unicode whitespace. |
-| `includes` / `contains` | `String -> String -> Bool` | `contains` is the canonical name; `includes` is accepted for JS fluency. |
-| `starts_with`, `ends_with` | `String -> String -> Bool` | Prefix/suffix tests. |
-| `replace` | `String -> String -> String -> String` | Literal replace; regex replacement is a separate helper. |
-| `slice` | `Int -> Int -> String -> String` | Half-open `[start, end)` by scalar value, not bytes. |
-| `lowercase`, `uppercase` | `String -> String` | Locale-insensitive Unicode case folding. |
+| `trim`, `trim_start`, `trim_end` | `TextLike -> String` | Unicode whitespace. |
+| `includes` / `contains` | `String -> TextLike -> Bool` | `contains` is the canonical name; `includes` is accepted for JS fluency. |
+| `starts_with`, `ends_with` | `String -> TextLike -> Bool` | Prefix/suffix tests. |
+| `replace` | `String -> String -> TextLike -> String` | Literal replace; regex replacement is a separate helper. |
+| `slice` | `Int -> Int -> TextLike -> String` | Half-open `[start, end)` by scalar value, not bytes. |
+| `lowercase`, `uppercase` | `TextLike -> String` | Locale-insensitive Unicode case folding. |
 
 ### Regex
 
@@ -132,7 +137,7 @@ strings. JSON conversion is therefore prelude, not a host capability:
 
 | Function | Type sketch | Notes |
 |---|---|---|
-| `json.parse` | `String -> Result Json HostError` | Parses into records/lists/strings/numbers/bools/`Option`. |
+| `json.parse` | `String -> Json` | Parses into records/lists/strings/numbers/bools/`Option`; performs `error ParseError` on invalid JSON. |
 | `json.stringify` | `Json -> String` | Stable key order for replay-friendly output. |
 | `json.pretty` | `Json -> String` | Human-readable stable formatting. |
 
@@ -166,8 +171,8 @@ window functions, pivot/unpivot, streaming execution, or query planning is a hos
 ### Runtime shape helpers
 
 `type_of value` returns a small descriptive tag (`"string"`, `"number"`, `"list"`, `"record"`,
-`"table"`, `"option"`, `"result"`, ...). It is for debugging and `help` examples, not for
-normal control flow; production branching should use `match`.
+`"table"`, `"option"`, ...). It is for debugging and `help` examples, not for normal control
+flow; production branching should use `match`.
 
 Date/time parsing, locale-aware formatting, full CSV dialects, statistical functions, and
 large-data execution stay behind future host capabilities. The language prelude stays small:
@@ -178,27 +183,29 @@ text, list, JSON, table summaries, and simple joins.
 Records are JSON objects. Decomposition is by pattern, not by `.` chaining + null checks:
 
 ```
-match @fs.read path {
-  Ok {content, mime: "text/plain"} -> content |> display
-  Ok {artifact, ...}              -> display {kind: "text", text: "spilled: #artifact"}
-  Err(NotFound {uri})             -> display {kind: "text", text: "missing: #uri"}
-  Err(e)                          -> rethrow e
+let resource = @fs.read path
+
+match resource {
+  {content, mime: "text/plain"} -> content |> display
+  {artifact, ...}               -> display {kind: "text", text: "spilled: #{artifact.uri}"}
+  {preview, ...}                -> preview |> display
 }
 ```
 
 `{content, mime: "text/plain"}` matches a record with those fields and binds `content`. `...`
 ignores the rest. This replaces the TS `d.content?.split("\n") ?? []` maze from §6.5 —
-instead of optional-chaining through a union, you `match` the union.
+instead of optional-chaining through a union, you `match` the successful value's shape. If
+`@fs.read` fails, it performs an `error` effect and bypasses this `match`; §4.5 shows how to
+catch that separately.
 
-## 4.5 Errors are values, not exceptions
+## 4.5 Error is an effect, not `Result`
 
-There is no `throw` / `try` / `catch`. Errors are variants of `Result`, and the host's
-structured errors (§7 `HostError` — `CapabilityDeniedError`, `ApprovalDeniedError`,
-`TimeoutError`, `OutputTruncatedError`, …) are constructors of an `Err` type:
+There is no `throw` / `try` / `catch`, and host capabilities do not return `Result` wrappers.
+`error` is an abortive effect: a failing capability performs `error HostError`, which either
+lands in the nearest `handle ... with error` block or bubbles to the cell result for host
+shaping (§5.4).
 
 ```
-type Result T E = Ok T | Err E
-
 type HostError =
   | CapabilityDenied {capability: String}
   | ApprovalDenied {capability: String}
@@ -210,17 +217,28 @@ type HostError =
   | HostCall {detail: Json}
 ```
 
-This is a 1:1 lift of §7's `HostError` interface into a sum type. The model `match`es on it;
-the host emits it as JSON across the bridge. **No exception ever crosses the isolate
-boundary** — which matches §6.3's "a killed cell returns a structured error the model can
-react to," but makes the reaction a type-level `match` instead of a runtime catch that might
-swallow.
+This is a 1:1 lift of §7's `HostError` interface into an error-effect payload. The host emits
+the same JSON shape across the bridge, but the language-level control flow is an effect
+handler:
+
+```
+handle
+  workspace:missing.rs |> @fs.read |> display
+with error {
+  NotFound {uri} -> display {kind: "text", text: "missing: #uri"}
+  e              -> rethrow e
+}
+```
+
+**No exception ever crosses the isolate boundary** — which matches §6.3's "a killed cell
+returns a structured error the model can react to," but makes the reaction an explicit effect
+handler instead of a runtime catch that might swallow.
 
 ### `rethrow`
 
-`rethrow e` re-performs the error's effect so the cell result includes it (§5.4 error
-shaping). It is the "I don't handle this" arm — the equivalent of `throw` in TS, but it is
-just another effect perform, not a control-flow bazooka.
+`rethrow e` re-performs the error effect so the cell result includes it (§5.4 error shaping).
+It is the "I don't handle this" arm — the equivalent of `throw` in TS, but it is just another
+effect perform, not a control-flow bazooka.
 
 ## 4.6 No `null` in the language
 
@@ -230,15 +248,16 @@ JSON has `null`; `tm` has `Option`:
 type Option T = Some T | None
 
 match @fs.find "*.ts" {
-  Ok([])   -> display {kind: "text", text: "no files"}
-  Ok(head :: rest) -> display {kind: "json", data: head}
-  Err(e)   -> rethrow e
+  []           -> display {kind: "text", text: "no files"}
+  head :: rest -> display {kind: "json", data: head}
 }
 ```
 
 Host capabilities that can return "absent" return `Option`. The JSON `null` the model writes
-in a literal is accepted (for fluency) but typed as `Option` at the boundary. The model never
-has to write `?? null` chains because the type system says "this is `Option`, match it."
+in a literal is accepted (for fluency) but typed as `Option` at the boundary. Capability
+failure is separate: it performs `error` and either bubbles or is caught by an error handler.
+The model never has to write `?? null` chains because the type system says "this is `Option`,
+match it."
 
 ## 4.7 Interpolation
 
@@ -255,7 +274,8 @@ JSON delimiter the model already has to escape.
 ## 4.8 Why this is "data-oriented"
 
 - **One data literal** (JSON) + one extension (`table`).
-- **One control flow** for structured results (`match`).
+- **One control flow** for structured success values (`match`) and one explicit handler for
+  failures (`handle ... with error`).
 - **One composition** form (`|>`).
 - **One small data prelude** — text/list/JSON/table summaries plus simple joins; heavy
   analytics stays behind host capabilities.

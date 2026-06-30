@@ -9,6 +9,7 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
 - **[Design docs](design/README.md)** — the full specification, split by section.
 - **[Roadmap](../ROADMAP.md)** — canonical milestones and execution order.
 - **[Changelog](../CHANGELOG.md)** — notable project changes.
+- **[Commit message spec](commit-messages.md)** — repository Conventional Commit dialect.
 
 ## Design layers
 

@@ -71,6 +71,12 @@ Do not start yet unless explicitly requested:
 - For approval/security work, test the denial path, timeout/default-deny behavior, and fail-closed unknown capability/resource behavior.
 - For sandbox work, test persistence across cells, reset, timeout/cancel, output caps, display/artifact capture, and blocked network/filesystem access.
 
+## Commit messages
+
+- Use the repository Conventional Commit dialect in `docs/commit-messages.md`: `<type>(<machine>/<scope>): <subject>`.
+- Prefer stable machine/scope pairs from the spec, for example `core/agent-loop`, `sandbox/deno`, `host/approval`, `server/sse`, `web/approvals`, `docs/roadmap`, or `repo/workspace`.
+- Split unrelated intents into separate commits; keep tests, callsite migrations, and required docs with the behavior they prove or describe.
+
 ## Documentation rules
 
 - Keep design docs and implementation aligned. If behavior changes milestone scope, update the relevant `docs/design/**` section in the same PR/change.

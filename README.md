@@ -7,3 +7,4 @@ Yet just anither personal assistant.
 - [Design docs](docs/README.md)
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
+- [Commit message spec](docs/commit-messages.md)

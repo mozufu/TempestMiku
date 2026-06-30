@@ -3928,6 +3928,7 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "dotenvy",
  "futures",
  "parking_lot",
  "serde",
@@ -3936,12 +3937,15 @@ dependencies = [
  "thiserror",
  "tm-artifacts",
  "tm-core",
+ "tm-llm",
  "tm-persona",
+ "tm-sandbox",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
  "tower",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

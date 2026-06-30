@@ -25,6 +25,10 @@ chrono.workspace = true
 tokio-postgres.workspace = true
 bytes.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
+dotenvy.workspace = true
+tm-llm.workspace = true
+tm-sandbox.workspace = true
 agent-client-protocol.workspace = true
 
 [dev-dependencies]

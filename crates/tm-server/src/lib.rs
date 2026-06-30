@@ -16,7 +16,7 @@ pub mod webui;
 
 pub use api::{AppState, app};
 pub use auth::{AuthConfig, ForwardedAuthConfig};
-pub use chat::{AgentChatRunner, ChatRunner, EchoChatRunner, PersistingEventSink};
+pub use chat::{AgentChatRunner, ChatRunner, EchoChatRunner, PersistingEventSink, ServerChatRunner};
 pub use coding_backend::{
     ApprovalBroker, ApprovalOption, ApprovalOutcome, ApprovalPrompt, ApprovalResolveDecision,
     CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult, ResolveApprovalRequest,

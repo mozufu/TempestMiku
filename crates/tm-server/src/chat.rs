@@ -19,6 +19,17 @@ pub trait ChatRunner: Send + Sync + 'static {
     ) -> Result<String>;
 }
 
+#[async_trait]
+impl<T: ChatRunner + ?Sized> ChatRunner for Arc<T> {
+    async fn run_turn(
+        &self,
+        user: String,
+        sink: Arc<dyn EventSink + Send + Sync>,
+    ) -> Result<String> {
+        (**self).run_turn(user, sink).await
+    }
+}
+
 struct AgentRequest {
     user: String,
     sink: Arc<dyn EventSink + Send + Sync>,
@@ -87,6 +98,27 @@ impl ChatRunner for EchoChatRunner {
         sink.on_text(&text);
         sink.on_final(&text);
         Ok(text)
+    }
+}
+
+/// Concrete dispatch enum so `main.rs` can pick a runner at startup without making
+/// `AppState` generic over a trait object (which loses `Sized`).
+pub enum ServerChatRunner {
+    Echo(EchoChatRunner),
+    Agent(AgentChatRunner),
+}
+
+#[async_trait]
+impl ChatRunner for ServerChatRunner {
+    async fn run_turn(
+        &self,
+        user: String,
+        sink: Arc<dyn EventSink + Send + Sync>,
+    ) -> Result<String> {
+        match self {
+            Self::Echo(r) => r.run_turn(user, sink).await,
+            Self::Agent(r) => r.run_turn(user, sink).await,
+        }
     }
 }
 

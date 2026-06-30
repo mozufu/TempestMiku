@@ -1,21 +1,30 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use tm_persona::PersonaConfig;
+use tm_core::{Agent, AgentConfig, DEFAULT_SYSTEM_PROMPT};
+use tm_llm::OpenAiClient;
+use tm_persona::{Mode, PersonaConfig};
+use tm_sandbox::StubSandbox;
 
 use tm_server::{
-    AppState, AuthConfig, CodingBackend, EchoChatRunner, InMemoryStore, OmpAcpBackend,
-    OmpAcpConfig, PostgresStore, StoreMemoryProvider, app,
+    AgentChatRunner, AppState, AuthConfig, CodingBackend, EchoChatRunner, InMemoryStore,
+    OmpAcpBackend, OmpAcpConfig, PostgresStore, ServerChatRunner, StoreMemoryProvider, app,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let addr: SocketAddr = std::env::var("TM_SERVER_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8787".to_string())
         .parse()?;
     let persona = std::env::var_os("TM_PERSONA_PATH")
         .map(PersonaConfig::from_path)
         .unwrap_or_default();
-    let chat = Arc::new(EchoChatRunner);
+    let chat = build_chat()?;
 
     if let Ok(dsn) = std::env::var("TM_DATABASE_URL") {
         let store = Arc::new(PostgresStore::connect(&dsn).await?);
@@ -47,6 +56,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn build_chat() -> Result<Arc<ServerChatRunner>, Box<dyn std::error::Error>> {
+    let api_key_set = std::env::var("OPENAI_API_KEY")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    let base_url_set = std::env::var("OPENAI_BASE_URL")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+
+    if !api_key_set && !base_url_set {
+        tracing::warn!("OPENAI_API_KEY / OPENAI_BASE_URL not set — falling back to EchoChatRunner");
+        return Ok(Arc::new(ServerChatRunner::Echo(EchoChatRunner)));
+    }
+
+    let llm = Arc::new(OpenAiClient::from_env()?);
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let sandbox = Arc::new(StubSandbox);
+    let system_prompt = format!(
+        "{DEFAULT_SYSTEM_PROMPT}\n\n{}",
+        Mode::PersonalAssistant.system_addendum()
+    );
+    let cfg = AgentConfig {
+        model: model.clone(),
+        system_prompt,
+        ..AgentConfig::default()
+    };
+    let agent = Agent::new(llm, sandbox, cfg);
+    tracing::info!(model, "real LLM agent runner configured");
+    Ok(Arc::new(ServerChatRunner::Agent(AgentChatRunner::new(agent))))
+}
+
 fn configure_coding_backend<S, M, C>(
     mut state: AppState<S, M, C>,
 ) -> Result<AppState<S, M, C>, Box<dyn std::error::Error>> {
@@ -72,6 +111,7 @@ where
     M: tm_server::MemoryProvider,
     C: tm_server::ChatRunner,
 {
+    tracing::info!(%addr, "tm-server listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app(state)).await?;
     Ok(())

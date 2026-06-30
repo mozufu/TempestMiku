@@ -168,6 +168,329 @@ impl HostFn for HttpGetFn {
     }
 }
 
+fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
+    [
+        core_doc(
+            "resources.read",
+            "resources",
+            "Read a registered resource URI",
+            "resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>",
+            "Read an artifact, linked file, or future resource URI through the scheme-dispatched resource registry. Scheme-specific grants still apply.",
+            json!({
+                "type": "object",
+                "required": ["uri"],
+                "additionalProperties": false,
+                "properties": {
+                    "uri": { "type": "string" },
+                    "selector": { "type": "string", "description": "Optional resource selector such as a 1-based line range." }
+                }
+            }),
+            Some(resource_content_schema()),
+            vec![ToolExample {
+                title: Some("Read artifact lines".to_string()),
+                code: "const ref = artifacts.put('one\\ntwo');\nconst content = await resources.read(ref.uri, '2-2');\ndisplay(content.content);".to_string(),
+                notes: Some("Unknown schemes and missing scheme grants fail closed with CapabilityDeniedError.".to_string()),
+            }],
+            resource_errors("resources.read"),
+            vec![GrantDoc {
+                kind: "workspace".to_string(),
+                description: "Scheme-specific grants such as resources.read:artifact or resources.read:linked.".to_string(),
+            }],
+        ),
+        core_doc(
+            "resources.preview",
+            "resources",
+            "Preview a registered resource URI",
+            "resources.preview(uri: ResourceUri): Promise<ResourceContent>",
+            "Return a ResourceContent envelope with preview metadata for a registered resource URI.",
+            json!({
+                "type": "object",
+                "required": ["uri"],
+                "additionalProperties": false,
+                "properties": {
+                    "uri": { "type": "string" }
+                }
+            }),
+            Some(resource_content_schema()),
+            vec![ToolExample {
+                title: Some("Preview an artifact".to_string()),
+                code: "const ref = artifacts.put('long text');\nconst preview = await resources.preview(ref.uri);".to_string(),
+                notes: None,
+            }],
+            resource_errors("resources.preview"),
+            vec![GrantDoc {
+                kind: "workspace".to_string(),
+                description: "Scheme-specific grants such as resources.read:artifact or resources.read:linked.".to_string(),
+            }],
+        ),
+        core_doc(
+            "resources.list",
+            "resources",
+            "List registered resource schemes or entries",
+            "resources.list(uri?: ResourceUri): Promise<ResourceEntry[]>",
+            "List registered resource schemes, or entries beneath a URI when that scheme supports listing.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "uri": { "type": "string", "description": "Omit to list registered schemes." }
+                }
+            }),
+            Some(json!({ "type": "array", "items": resource_entry_schema() })),
+            vec![ToolExample {
+                title: Some("List schemes".to_string()),
+                code: "const schemes = await resources.list();\ndisplay(schemes, { kind: 'json' });".to_string(),
+                notes: None,
+            }],
+            resource_errors("resources.list"),
+            vec![GrantDoc {
+                kind: "workspace".to_string(),
+                description: "Listing a specific URI uses that scheme's resource grant.".to_string(),
+            }],
+        ),
+        core_doc(
+            "artifacts.put",
+            "artifacts",
+            "Store session-local text or JSON",
+            "artifacts.put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef",
+            "Store a session-local text or JSON artifact and return an artifact:// handle. P0 artifacts are text-backed.",
+            json!({
+                "type": "object",
+                "required": ["data"],
+                "additionalProperties": false,
+                "properties": {
+                    "data": {},
+                    "title": { "type": "string" },
+                    "mime": { "type": "string", "default": "text/plain" },
+                    "kind": { "type": "string", "description": "Reserved metadata hint in P0." },
+                    "filename": { "type": "string", "description": "Reserved metadata hint in P0." }
+                }
+            }),
+            Some(artifact_ref_schema()),
+            vec![ToolExample {
+                title: Some("Create an artifact".to_string()),
+                code: "const ref = artifacts.put('notes\\n', { title: 'notes' });\ndisplay(ref.uri);".to_string(),
+                notes: None,
+            }],
+            vec![tool_error("HostCallError", "The artifact store cannot write the artifact.", false)],
+            vec![GrantDoc {
+                kind: "artifact".to_string(),
+                description: "Session-local artifact writes are always available inside the sandbox.".to_string(),
+            }],
+        ),
+        core_doc(
+            "artifacts.get",
+            "artifacts",
+            "Read a session artifact",
+            "artifacts.get(ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions): Promise<ResourceContent>",
+            "Read a session artifact by artifact:// URI or ArtifactRef and return a ResourceContent envelope.",
+            json!({
+                "type": "object",
+                "required": ["ref"],
+                "additionalProperties": false,
+                "properties": {
+                    "ref": {},
+                    "selector": { "type": "string", "description": "Optional 1-based inclusive line range." }
+                }
+            }),
+            Some(resource_content_schema()),
+            vec![ToolExample {
+                title: Some("Read an artifact".to_string()),
+                code: "const ref = artifacts.put('one\\ntwo');\nconst content = await artifacts.get(ref, { selector: '1-1' });".to_string(),
+                notes: None,
+            }],
+            resource_errors("artifacts.get"),
+            vec![GrantDoc {
+                kind: "artifact".to_string(),
+                description: "Reads use the resources.read:artifact grant.".to_string(),
+            }],
+        ),
+        core_doc(
+            "artifacts.slice",
+            "artifacts",
+            "Read a selected artifact slice",
+            "artifacts.slice(ref: ArtifactUri | ArtifactRef, selector: ResourceSelector): Promise<ResourceContent>",
+            "Read a selected range from a session artifact.",
+            json!({
+                "type": "object",
+                "required": ["ref", "selector"],
+                "additionalProperties": false,
+                "properties": {
+                    "ref": {},
+                    "selector": { "type": "string" }
+                }
+            }),
+            Some(resource_content_schema()),
+            vec![ToolExample {
+                title: Some("Slice an artifact".to_string()),
+                code: "const ref = artifacts.put('one\\ntwo');\nconst line = await artifacts.slice(ref, '2-2');".to_string(),
+                notes: None,
+            }],
+            resource_errors("artifacts.slice"),
+            vec![GrantDoc {
+                kind: "artifact".to_string(),
+                description: "Reads use the resources.read:artifact grant.".to_string(),
+            }],
+        ),
+        core_doc(
+            "artifacts.list",
+            "artifacts",
+            "List session artifacts",
+            "artifacts.list(): ArtifactRef[]",
+            "List artifact handles created in the current session.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            }),
+            Some(json!({ "type": "array", "items": artifact_ref_schema() })),
+            vec![ToolExample {
+                title: Some("List artifacts".to_string()),
+                code: "const refs = artifacts.list();\ndisplay(refs, { kind: 'json' });".to_string(),
+                notes: None,
+            }],
+            vec![tool_error("HostCallError", "The artifact store cannot list artifacts.", false)],
+            vec![GrantDoc {
+                kind: "artifact".to_string(),
+                description: "Session-local artifact listing is always available inside the sandbox.".to_string(),
+            }],
+        ),
+    ]
+    .into_iter()
+    .map(|docs| (docs.name.clone(), docs))
+    .collect()
+}
+
+fn core_doc(
+    name: &str,
+    namespace: &str,
+    summary: &str,
+    signature: &str,
+    description: &str,
+    args_schema: Value,
+    result_schema: Option<Value>,
+    examples: Vec<ToolExample>,
+    errors: Vec<ToolErrorDoc>,
+    grants: Vec<GrantDoc>,
+) -> ToolDocs {
+    ToolDocs {
+        name: name.to_string(),
+        namespace: namespace.to_string(),
+        summary: summary.to_string(),
+        description: Some(description.to_string()),
+        signature: signature.to_string(),
+        args_schema,
+        result_schema,
+        examples,
+        errors,
+        grants,
+        sensitive: false,
+        approval: "none".to_string(),
+        since: "M1".to_string(),
+        stability: "experimental".to_string(),
+    }
+}
+
+fn resource_errors(capability: &str) -> Vec<ToolErrorDoc> {
+    vec![
+        tool_error(
+            "CapabilityDeniedError",
+            &format!("{capability} is not granted for the requested resource scheme."),
+            false,
+        ),
+        tool_error(
+            "NotFoundError",
+            "The resource or artifact does not exist.",
+            false,
+        ),
+        tool_error(
+            "InvalidArgsError",
+            "The URI, selector, or arguments are malformed.",
+            false,
+        ),
+    ]
+}
+
+fn tool_error(name: &str, when: &str, retryable: bool) -> ToolErrorDoc {
+    ToolErrorDoc {
+        name: name.to_string(),
+        when: when.to_string(),
+        retryable,
+    }
+}
+
+fn resource_content_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["uri", "kind", "mime", "sizeBytes", "hasMore", "content", "preview"],
+        "properties": {
+            "uri": { "type": "string" },
+            "kind": { "type": "string" },
+            "mime": { "type": "string" },
+            "title": { "type": ["string", "null"] },
+            "sizeBytes": { "type": "integer" },
+            "selector": { "type": ["string", "null"] },
+            "hasMore": { "type": "boolean" },
+            "content": { "type": "string" },
+            "preview": { "type": "string" }
+        }
+    })
+}
+
+fn resource_entry_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["uri", "name", "kind"],
+        "properties": {
+            "uri": { "type": "string" },
+            "name": { "type": "string" },
+            "kind": { "type": "string" },
+            "title": { "type": ["string", "null"] },
+            "sizeBytes": { "type": ["integer", "null"] },
+            "modifiedAt": { "type": ["string", "null"] }
+        }
+    })
+}
+
+fn artifact_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["uri", "id", "kind", "mime", "sizeBytes", "preview"],
+        "properties": {
+            "uri": { "type": "string" },
+            "id": { "type": "string" },
+            "kind": { "type": "string" },
+            "mime": { "type": "string" },
+            "title": { "type": ["string", "null"] },
+            "sizeBytes": { "type": "integer" },
+            "preview": { "type": "string" }
+        }
+    })
+}
+
+fn core_doc_granted(name: &str, ctx: &InvocationCtx) -> bool {
+    match name {
+        "artifacts.put" | "artifacts.list" | "resources.list" => true,
+        "artifacts.get" | "artifacts.slice" => ctx.grants.permits("resources.read:artifact"),
+        "resources.read" | "resources.preview" => ctx
+            .grants
+            .names()
+            .any(|grant| grant.starts_with("resources.read:")),
+        _ => ctx.grants.permits(name),
+    }
+}
+
+fn core_doc_matches(docs: &ToolDocs, query: &str, namespace: Option<&str>) -> bool {
+    if let Some(namespace) = namespace
+        && docs.namespace != namespace
+    {
+        return false;
+    }
+    let needle = query.to_lowercase();
+    let haystack = format!("{} {} {}", docs.name, docs.namespace, docs.summary).to_lowercase();
+    needle.is_empty() || haystack.contains(&needle)
+}
+
 #[op2]
 #[serde]
 async fn op_tm_host_call(
@@ -256,24 +579,48 @@ fn op_tm_tools_search(
         .get("namespace")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let limit = opts.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
-    host_state.host_registry.search(
+    let limit = (opts.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize).max(1);
+    let mut summaries = host_state.host_registry.search(
         &query,
         namespace.as_deref(),
         limit,
         &host_state.invocation_ctx,
-    )
+    );
+    let core_docs = core_tool_docs();
+    for docs in core_docs.values() {
+        if summaries.len() >= limit {
+            break;
+        }
+        if summaries.iter().any(|summary| summary.name == docs.name) {
+            continue;
+        }
+        if !core_doc_matches(docs, &query, namespace.as_deref()) {
+            continue;
+        }
+        summaries.push(ToolSummary {
+            name: docs.name.clone(),
+            namespace: docs.namespace.clone(),
+            summary: docs.summary.clone(),
+            sensitive: docs.sensitive,
+            granted: core_doc_granted(&docs.name, &host_state.invocation_ctx),
+        });
+    }
+    summaries
 }
 
 #[op2]
 #[serde]
 fn op_tm_tools_docs(state: &mut OpState, #[string] name: String) -> serde_json::Value {
     let host_state = state.borrow::<RuntimeHostState>().clone();
-    sdk_result(
-        host_state
-            .host_registry
-            .docs(&name, &host_state.invocation_ctx),
-    )
+    let mut core_docs = core_tool_docs();
+    let docs = host_state
+        .host_registry
+        .docs(&name, &host_state.invocation_ctx)
+        .or_else(|err| match core_docs.remove(&name) {
+            Some(docs) => Ok(docs),
+            None => Err(err),
+        });
+    sdk_result(docs)
 }
 
 #[op2]
@@ -1062,6 +1409,7 @@ mod tests {
     #[serial_test::serial]
     #[tokio::test(flavor = "current_thread")]
     async fn deno_artifacts_resolve_through_resource_registry() {
+        let sdk_types = include_str!("../../../docs/sdk/tm-runtime.d.ts");
         let dir = tempfile::tempdir().unwrap();
         let sandbox = DenoSandbox::new(DenoSandboxOptions {
             artifact_root: dir.path().to_path_buf(),
@@ -1088,6 +1436,55 @@ mod tests {
         let error = denied.error.unwrap();
         assert!(error.contains("CapabilityDeniedError"));
         assert!(error.contains("unknown resource scheme"));
+
+        let docs = session
+            .eval(
+                "const artifactDocs = await tools.docs('artifacts.put');\n\
+                 const resourceDocs = await tools.docs('resources.read');\n\
+                 const found = await tools.search('artifact', { namespace: 'artifacts', limit: 10 });\n\
+                 ({ artifactSignature: artifactDocs.signature, resourceSignature: resourceDocs.signature, artifactResultRequired: artifactDocs.resultSchema.required[0], resourceContentType: resourceDocs.resultSchema.properties.content.type, foundNames: found.map(item => item.name), putGranted: found.find(item => item.name === 'artifacts.put').granted })",
+                CellBudget::default(),
+            )
+            .await
+            .unwrap();
+        let result = docs.result.unwrap();
+        assert_eq!(
+            result["artifactSignature"],
+            Value::String(
+                "artifacts.put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef".into()
+            )
+        );
+        assert_eq!(
+            result["resourceSignature"],
+            Value::String(
+                "resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>"
+                    .into()
+            )
+        );
+        assert!(
+            sdk_types.contains(result["artifactSignature"].as_str().unwrap()),
+            "docs/sdk/tm-runtime.d.ts is missing the artifacts.put signature"
+        );
+        assert!(
+            sdk_types.contains(result["resourceSignature"].as_str().unwrap()),
+            "docs/sdk/tm-runtime.d.ts is missing the resources.read signature"
+        );
+        assert_eq!(
+            result["artifactResultRequired"],
+            Value::String("uri".into())
+        );
+        assert_eq!(
+            result["resourceContentType"],
+            Value::String("string".into())
+        );
+        assert_eq!(result["putGranted"], Value::Bool(true));
+        assert!(
+            result["foundNames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name.as_str() == Some("artifacts.get"))
+        );
     }
 
     #[serial_test::serial]
@@ -1145,6 +1542,7 @@ mod tests {
     #[serial_test::serial]
     #[tokio::test(flavor = "current_thread")]
     async fn deno_http_get_is_default_deny_and_allowlisted() {
+        let sdk_types = include_str!("../../../docs/sdk/tm-runtime.d.ts");
         let mut http_allowlist = BTreeMap::new();
         http_allowlist.insert("https://local.test/ok".to_string(), "ok".to_string());
         let sandbox = DenoSandbox::new(DenoSandboxOptions {
@@ -1176,6 +1574,45 @@ mod tests {
             .await
             .unwrap();
         assert!(composed.stdout.contains("display: ok"));
+
+        let docs = session
+            .eval(
+                "const found = await tools.search('http', { namespace: 'http' });\n\
+                 const docs = await tools.docs('http.get');\n\
+                 const unknown = await tools.call('http.post', {}).catch(err => ({ name: err.name, capability: err.capability, retryable: err.retryable }));\n\
+                 ({ found: found.map(item => ({ name: item.name, granted: item.granted, sensitive: item.sensitive })), signature: docs.signature, description: docs.description, grantKind: docs.grants[0].kind, deniedName: unknown.name, deniedCapability: unknown.capability, deniedRetryable: unknown.retryable })",
+                CellBudget::default(),
+            )
+            .await
+            .unwrap();
+        let result = docs.result.unwrap();
+        assert_eq!(result["found"][0]["name"], Value::String("http.get".into()));
+        assert_eq!(result["found"][0]["granted"], Value::Bool(true));
+        assert_eq!(result["found"][0]["sensitive"], Value::Bool(true));
+        assert_eq!(
+            result["signature"],
+            Value::String("http.get(url: string): Promise<string>".into())
+        );
+        assert!(
+            sdk_types.contains(result["signature"].as_str().unwrap()),
+            "docs/sdk/tm-runtime.d.ts is missing the http.get signature"
+        );
+        assert!(
+            result["description"]
+                .as_str()
+                .unwrap()
+                .contains("production egress policy remains deferred")
+        );
+        assert_eq!(result["grantKind"], Value::String("network".into()));
+        assert_eq!(
+            result["deniedName"],
+            Value::String("CapabilityDeniedError".into())
+        );
+        assert_eq!(
+            result["deniedCapability"],
+            Value::String("http.post".into())
+        );
+        assert_eq!(result["deniedRetryable"], Value::Bool(false));
     }
 
     #[serial_test::serial]

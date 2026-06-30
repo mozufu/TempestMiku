@@ -159,8 +159,11 @@ interface GrantDoc {
 }
 
 interface ResourcesNamespace {
+  /** resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent> */
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
+  /** resources.preview(uri: ResourceUri): Promise<ResourceContent> */
   preview(uri: ResourceUri): Promise<ResourceContent>;
+  /** resources.list(uri?: ResourceUri): Promise<ResourceEntry[]> */
   list(uri?: ResourceUri): Promise<ResourceEntry[]>;
 }
 
@@ -196,9 +199,13 @@ type ResourceKind =
   | "log";
 
 interface ArtifactsNamespace {
+  /** artifacts.put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef */
   put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef;
+  /** artifacts.get(ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions): Promise<ResourceContent> */
   get(ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions): Promise<ResourceContent>;
+  /** artifacts.slice(ref: ArtifactUri | ArtifactRef, selector: ResourceSelector): Promise<ResourceContent> */
   slice(ref: ArtifactUri | ArtifactRef, selector: ResourceSelector): Promise<ResourceContent>;
+  /** artifacts.list(): ArtifactRef[] */
   list(): ArtifactRef[];
 }
 
@@ -226,9 +233,13 @@ interface ArtifactRef {
 }
 
 interface FsNamespace {
+  /** fs.read(path: SdkPath, opts?: FsReadOptions): Promise<ResourceContent> */
   read(path: SdkPath, opts?: FsReadOptions): Promise<ResourceContent>;
+  /** fs.write(path: SdkPath, data: string, opts?: FsWriteOptions): Promise<FsWriteResult> */
   write(path: SdkPath, data: string, opts?: FsWriteOptions): Promise<FsWriteResult>;
+  /** fs.ls(path?: SdkPath, opts?: FsListOptions): Promise<FsEntry[]> */
   ls(path?: SdkPath, opts?: FsListOptions): Promise<FsEntry[]>;
+  /** fs.find(patterns: string | string[], opts?: FsFindOptions): Promise<FsEntry[]> */
   find(patterns: string | string[], opts?: FsFindOptions): Promise<FsEntry[]>;
 }
 
@@ -274,7 +285,9 @@ interface FsEntry {
 }
 
 interface CodeNamespace {
+  /** code.search(query: CodeSearchQuery): Promise<CodeSearchResult[]> */
   search(query: CodeSearchQuery): Promise<CodeSearchResult[]>;
+  /** code.edit(patch: PatchEdit, opts?: CodeEditOptions): Promise<CodeEditResult> */
   edit(patch: PatchEdit, opts?: CodeEditOptions): Promise<CodeEditResult>;
 }
 
@@ -362,13 +375,16 @@ interface Diagnostic {
 }
 
 interface ProcNamespace {
+  /** proc.run(cmd: string, args?: string[], opts?: ProcRunOptions): Promise<ProcOutput> */
   run(cmd: string, args?: string[], opts?: ProcRunOptions): Promise<ProcOutput>;
 }
 
 interface ProcRunOptions {
   cwd?: SdkPath;
   timeoutMs?: number;
+  /** Reserved in P0; non-empty env overrides are rejected. */
   env?: Record<string, string>;
+  /** Reserved in P0; non-empty stdin is rejected. */
   stdin?: string;
   outputBytes?: number;
 }
@@ -387,6 +403,11 @@ interface ProcOutput {
 }
 
 interface HttpNamespace {
-  /** Experimental M1/P0 deterministic allowlist helper; not general network egress. */
+  /**
+   * http.get(url: string): Promise<string>
+   *
+   * Experimental M1/P0 deterministic allowlist helper; not general network
+   * egress. Non-allowlisted URLs fail closed with CapabilityDeniedError.
+   */
   get(url: string): Promise<string>;
 }

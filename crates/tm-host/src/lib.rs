@@ -2641,6 +2641,7 @@ mod tests {
 
     #[tokio::test]
     async fn p0_tool_docs_include_sdk_contract_metadata() {
+        let sdk_types = include_str!("../../../docs/sdk/tm-runtime.d.ts");
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("lib.rs"), "pub fn x() {}\n").unwrap();
         let artifact_dir = tempfile::tempdir().unwrap();
@@ -2655,6 +2656,11 @@ mod tests {
         );
 
         let docs = host_registry.docs("fs.read", &ctx()).unwrap();
+        assert!(
+            sdk_types.contains(&docs.signature),
+            "docs/sdk/tm-runtime.d.ts is missing {}",
+            docs.signature
+        );
         assert_eq!(
             docs.signature,
             "fs.read(path: SdkPath, opts?: FsReadOptions): Promise<ResourceContent>"
@@ -2677,6 +2683,30 @@ mod tests {
         );
         assert_eq!(docs.approval, "none");
         assert_eq!(docs.stability, "experimental");
+
+        for name in [
+            "fs.write",
+            "fs.ls",
+            "fs.find",
+            "code.search",
+            "code.edit",
+            "proc.run",
+        ] {
+            let docs = host_registry.docs(name, &ctx()).unwrap();
+            assert!(
+                sdk_types.contains(&docs.signature),
+                "docs/sdk/tm-runtime.d.ts is missing {}",
+                docs.signature
+            );
+            assert!(
+                docs.args_schema.is_object(),
+                "{name} docs should expose an args schema"
+            );
+            assert!(
+                !docs.errors.is_empty(),
+                "{name} docs should document fail-closed errors"
+            );
+        }
     }
 
     #[tokio::test]

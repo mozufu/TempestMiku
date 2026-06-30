@@ -492,6 +492,9 @@ sequenceDiagram
 ```
 
 The catalog never sits in the system prompt; tokens are spent only on what the run actually touches.
+It includes host-dispatched capabilities plus docs-only entries for core `resources.*` and
+`artifacts.*` primitives; those core entries document the direct namespace methods and do not imply
+`tools.call(...)` routing.
 
 ### 7.3 Semantics
 

@@ -12,11 +12,38 @@ pub const KNOWN_SKILLS: &[&str] = &[
     "weekly-ship-ledger",
 ];
 
-const FALLBACK_SOUL_PROMPT: &str = "\
-Persona assets are degraded, so the full SOUL.md is unavailable. Preserve the Tempest Miku \
-identity from the built-in contract: one constant Miku identity, serious-mode precision when the \
-work is technical/safety-critical, and bounded proactivity with explicit approval for destructive \
-or external actions.";
+const BUNDLED_PERSONA_SOURCE: &str = "bundled:tm-persona/default-persona";
+const BUNDLED_SOUL: &str = include_str!("../assets/SOUL.md");
+const BUNDLED_SKILLS: &[(&str, &str)] = &[
+    (
+        "miku-voice",
+        include_str!("../assets/skills/miku-voice/SKILL.md"),
+    ),
+    (
+        "ambiguity-grill",
+        include_str!("../assets/skills/ambiguity-grill/SKILL.md"),
+    ),
+    (
+        "negative-state-grounding",
+        include_str!("../assets/skills/negative-state-grounding/SKILL.md"),
+    ),
+    (
+        "oh-my-pi-handoff",
+        include_str!("../assets/skills/oh-my-pi-handoff/SKILL.md"),
+    ),
+    (
+        "personal-assistant-state-capture",
+        include_str!("../assets/skills/personal-assistant-state-capture/SKILL.md"),
+    ),
+    (
+        "scope-guard",
+        include_str!("../assets/skills/scope-guard/SKILL.md"),
+    ),
+    (
+        "weekly-ship-ledger",
+        include_str!("../assets/skills/weekly-ship-ledger/SKILL.md"),
+    ),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,9 +69,25 @@ impl Mode {
 
     pub fn voice_cap(self) -> &'static str {
         match self {
-            Self::PersonalAssistant => "中",
-            Self::AmbiguityGrill | Self::NegativeStateGrounding => "濃",
-            Self::SeriousEngineer | Self::Handoff => "關",
+            Self::PersonalAssistant => "medium",
+            Self::AmbiguityGrill | Self::NegativeStateGrounding => "high",
+            Self::SeriousEngineer | Self::Handoff => "off",
+        }
+    }
+
+    pub fn voice_cap_guidance(self) -> &'static str {
+        match self {
+            Self::PersonalAssistant => {
+                "medium: keep Miku warm and present, with only occasional voice flourishes."
+            }
+            Self::AmbiguityGrill => "high: teasing and sharp is allowed; roast the fog, not Brian.",
+            Self::NegativeStateGrounding => {
+                "high: warmer and softer is allowed; grounding beats productivity."
+            }
+            Self::SeriousEngineer => {
+                "off: keep identity but remove cute flourishes; precision, tests, approvals, and rollback matter most."
+            }
+            Self::Handoff => "off: keep the brief precise, self-contained, and evidence-first.",
         }
     }
 
@@ -69,10 +112,10 @@ impl Mode {
                 "Active mode: Negative-State Grounding (mode 3). Stabilize first, keep the next action under ten minutes, and preserve the health-over-productivity rule."
             }
             Self::SeriousEngineer => {
-                "Active mode: Serious Engineer (mode 4). Use fs.*, code.*, and proc.* through the SDK for linked-repo work. Voice cap: 關 — preserve Tempest Miku identity, but keep technical replies precise and avoid 喵 unless the context is explicitly light. Never use shell strings; use proc.run(cmd, args). Destructive, external, or out-of-grant actions require approval or fail closed."
+                "Active mode: Serious Engineer (mode 4). Use fs.*, code.*, and proc.* through the SDK for linked-repo work. Voice cap: off — preserve Tempest Miku identity, but keep technical replies precise and avoid voice flourishes unless the context is explicitly light. Never use shell strings; use proc.run(cmd, args). Destructive, external, or out-of-grant actions require approval or fail closed."
             }
             Self::Handoff => {
-                "Active mode: Handoff (mode 5). Delegate implementation-heavy coding work through the configured coding backend. Voice cap: 關 — preserve Tempest Miku identity, but keep the handoff precise and evidence-first."
+                "Active mode: Handoff (mode 5). Delegate implementation-heavy coding work through the configured coding backend. Voice cap: off — preserve Tempest Miku identity, but keep the handoff precise and evidence-first."
             }
         }
     }
@@ -167,25 +210,20 @@ impl PersonaConfig {
 
     pub fn load_assets(&self) -> PersonaAssets {
         let Some(root) = &self.asset_path else {
-            let warning = "persona asset path not configured".to_string();
-            return PersonaAssets {
-                status: PersonaStatus::Degraded {
-                    warning: warning.clone(),
-                },
-                soul: None,
-                skills: BTreeMap::new(),
-                warnings: vec![warning],
-            };
+            return bundled_assets();
         };
 
         if !root.exists() {
-            let warning = format!("persona assets missing at {}", root.display());
+            let warning = format!(
+                "persona assets missing at {}; using bundled defaults",
+                root.display()
+            );
             return PersonaAssets {
                 status: PersonaStatus::Degraded {
                     warning: warning.clone(),
                 },
-                soul: None,
-                skills: BTreeMap::new(),
+                soul: Some(BUNDLED_SOUL.to_string()),
+                skills: bundled_skill_map(),
                 warnings: vec![warning],
             };
         }
@@ -195,19 +233,23 @@ impl PersonaConfig {
         let soul = match fs::read_to_string(&soul_path) {
             Ok(contents) => Some(contents),
             Err(err) => {
-                warnings.push(format!("missing or unreadable SOUL.md: {err}"));
-                None
+                warnings.push(format!(
+                    "missing or unreadable SOUL.md: {err}; using bundled default"
+                ));
+                Some(BUNDLED_SOUL.to_string())
             }
         };
 
-        let mut skills = BTreeMap::new();
+        let mut skills = bundled_skill_map();
         for skill in KNOWN_SKILLS {
             let path = root.join("skills").join(skill).join("SKILL.md");
             match fs::read_to_string(&path) {
                 Ok(contents) => {
                     skills.insert((*skill).to_string(), contents);
                 }
-                Err(err) => warnings.push(format!("missing or unreadable skill {skill}: {err}")),
+                Err(err) => warnings.push(format!(
+                    "missing or unreadable skill {skill}: {err}; using bundled default"
+                )),
             }
         }
 
@@ -240,7 +282,7 @@ impl PersonaConfig {
         push_section(&mut prompt, "Core runtime", base_system_prompt);
         match &assets.soul {
             Some(soul) => push_section(&mut prompt, "SOUL.md", soul),
-            None => push_section(&mut prompt, "SOUL.md fallback", FALLBACK_SOUL_PROMPT),
+            None => push_section(&mut prompt, "SOUL.md", BUNDLED_SOUL),
         }
 
         let active_skills = if profile.active_skills.is_empty() {
@@ -249,10 +291,11 @@ impl PersonaConfig {
             profile.active_skills.join(", ")
         };
         let mode_profile = format!(
-            "{}\n\nLabel: {}\nVoice cap: {}\nDefault scope: {}\nCapability class: {}\nActive skills: {}",
+            "{}\n\nLabel: {}\nVoice cap: {}\nVoice guidance: {}\nDefault scope: {}\nCapability class: {}\nActive skills: {}",
             profile.addendum,
             profile.label,
             profile.voice_cap,
+            mode.voice_cap_guidance(),
             profile.default_scope,
             profile.capability_class,
             active_skills
@@ -289,6 +332,24 @@ impl PersonaConfig {
             warnings: assets.warnings,
         }
     }
+}
+
+fn bundled_assets() -> PersonaAssets {
+    PersonaAssets {
+        status: PersonaStatus::Loaded {
+            path: PathBuf::from(BUNDLED_PERSONA_SOURCE),
+        },
+        soul: Some(BUNDLED_SOUL.to_string()),
+        skills: bundled_skill_map(),
+        warnings: Vec::new(),
+    }
+}
+
+fn bundled_skill_map() -> BTreeMap<String, String> {
+    BUNDLED_SKILLS
+        .iter()
+        .map(|(name, contents)| ((*name).to_string(), (*contents).to_string()))
+        .collect()
 }
 
 fn push_section(target: &mut String, title: &str, content: &str) {
@@ -329,10 +390,29 @@ mod tests {
 
     #[test]
     fn handoff_voice_cap_is_off() {
-        assert_eq!(Mode::Handoff.voice_cap(), "關");
+        assert_eq!(Mode::Handoff.voice_cap(), "off");
         assert_eq!(Mode::Handoff.default_scope(), "project:tempestmiku");
         assert!(Mode::Handoff.system_addendum().contains("mode 5"));
         assert_eq!(Mode::Handoff.active_skill_names(), ["oh-my-pi-handoff"]);
+    }
+
+    #[test]
+    fn default_config_loads_bundled_persona_assets() {
+        let assets = PersonaConfig::default().load_assets();
+        assert_eq!(
+            assets.status,
+            PersonaStatus::Loaded {
+                path: PathBuf::from("bundled:tm-persona/default-persona")
+            }
+        );
+        assert!(assets.warnings.is_empty());
+        assert!(assets.soul.unwrap().contains("Tempest Miku"));
+        for skill in KNOWN_SKILLS {
+            assert!(
+                assets.skills.contains_key(*skill),
+                "bundled persona assets are missing {skill}"
+            );
+        }
     }
 
     #[test]
@@ -365,14 +445,23 @@ mod tests {
         };
         assert!(warning.contains("SOUL.md"));
         assert!(warning.contains("miku-voice"));
+        assert!(assets.soul.unwrap().contains("Tempest Miku"));
+        assert!(
+            assets
+                .skills
+                .get("miku-voice")
+                .unwrap()
+                .contains("miku-voice")
+        );
 
         let prompt = PersonaConfig::from_path(&root).build_system_prompt(
             Mode::AmbiguityGrill,
             "base prompt",
             "capability notes",
         );
-        assert!(prompt.system_prompt.contains("SOUL.md fallback"));
-        assert!(prompt.system_prompt.contains("missing skill://miku-voice"));
+        assert!(prompt.system_prompt.contains("SOUL.md"));
+        assert!(prompt.system_prompt.contains("skill://miku-voice"));
+        assert!(!prompt.system_prompt.contains("missing skill://miku-voice"));
         assert!(prompt.system_prompt.contains("skill://ambiguity-grill"));
 
         fs::remove_dir_all(root).unwrap();
@@ -385,13 +474,13 @@ mod tests {
             assistant.active_skills,
             vec!["miku-voice", "personal-assistant-state-capture"]
         );
-        assert_eq!(assistant.voice_cap, "中");
+        assert_eq!(assistant.voice_cap, "medium");
         assert_eq!(assistant.default_scope, "global");
 
         let serious = Mode::SeriousEngineer.profile();
         assert!(serious.active_skills.is_empty());
         assert_eq!(serious.capability_class, "engineering");
-        assert_eq!(serious.voice_cap, "關");
+        assert_eq!(serious.voice_cap, "off");
         assert_eq!(serious.default_scope, "project:tempestmiku");
     }
 

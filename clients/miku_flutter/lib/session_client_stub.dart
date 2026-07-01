@@ -19,7 +19,7 @@ class ScriptedMikuClient implements MikuSessionClient {
       id: id,
       mode: 'personal_assistant',
       label: 'Personal Assistant',
-      voiceCap: '中',
+      voiceCap: 'medium',
       activeSkills: const ['miku-voice', 'personal-assistant-state-capture'],
     );
   }
@@ -46,7 +46,7 @@ class ScriptedMikuClient implements MikuSessionClient {
           data: {
             'mode': 'serious_engineer',
             'label': 'Serious Engineer',
-            'voice_cap': '關',
+            'voice_cap': 'off',
             'activeSkills': [],
           },
         ),

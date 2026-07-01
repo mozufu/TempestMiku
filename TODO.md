@@ -16,7 +16,8 @@ Ship the personal-assistant baseline:
 - Miku identity is constant and loaded through the persona layer.
 - Modes are Hermes-style operating bundles: SOUL identity + active mode profile + dedicated skills +
   capability/scope profile + voice cap.
-- Voice intensity floats by mode and seriousness; Serious Engineer and Handoff stay capped at `關`.
+- Voice intensity floats by mode and seriousness; Serious Engineer and Handoff stay capped at
+  internal `off`. Chinese density labels and examples live in `miku-voice`, not the client UI.
 - Profile/user recall is injected into turns with bounded context.
 - Personal-assistant state capture proposes durable memories instead of silently writing them.
 - Negative-state grounding stabilizes first and suggests one action that fits in 10 minutes or less.
@@ -32,7 +33,7 @@ Ship the personal-assistant baseline:
 - [ ] The client can show and resolve memory write proposals through the same approval flow.
 - [ ] Negative-State Grounding routes correctly, keeps health over productivity, and ends with no more
       than one <=10-minute next action.
-- [ ] Serious Engineer mode still uses voice cap `關` and does not inherit high-cuteness output from
+- [ ] Serious Engineer mode still uses voice cap `off` and does not inherit high-cuteness output from
       the personal-assistant layer.
 - [ ] Normal `cargo test` remains external-service-free.
 - [ ] Gated Postgres coverage proves P2 memory rows, write proposals, approval outcomes, and replay.
@@ -57,6 +58,7 @@ Acceptance:
 - [x] Add a first-class persona prompt builder that composes:
       `SOUL identity + active mode profile + active skill markdown + runtime capability notes`.
 - [x] Load configurable persona assets from `TM_PERSONA_PATH`.
+- [x] Vendor the canonical SOUL.md and 7 default skills as the bundled persona fallback.
 - [x] Preserve degraded boot behavior when assets are missing, with a visible warning in session state.
 - [x] Represent active skills separately from mode addenda so seriousness can lower voice intensity
       without changing identity.
@@ -70,7 +72,7 @@ Acceptance:
 
 - [x] Personal Assistant prompts contain identity, active mode profile, active skills, and capability
       notes in stable order.
-- [x] Serious Engineer prompts contain identity but keep voice cap `關`.
+- [x] Serious Engineer prompts contain identity but keep voice cap `off`.
 - [x] Missing persona assets do not prevent boot or session creation.
 
 ## P2.2 Personal Assistant mode baseline
@@ -86,7 +88,7 @@ Acceptance:
 Acceptance:
 
 - [ ] A normal planning/reminder prompt routes to Personal Assistant and emits mode state if needed.
-- [x] A code/safety/irreversible prompt routes or locks to Serious Engineer with voice cap `關`.
+- [x] A code/safety/irreversible prompt routes or locks to Serious Engineer with voice cap `off`.
 - [x] User locks remain final.
 
 ## P2.3 Memory auto-context and profile recall
@@ -175,6 +177,8 @@ Acceptance:
 
 ## P2.8 Client support
 
+- [x] Keep voice-cap labels internal to the persona layer; clients show mode names, not
+      `high`/`medium`/`off` or the skill-local Chinese density labels.
 - [ ] Render `write_proposal` events in Flutter Web/PWA.
 - [ ] Let the user approve/deny memory proposals through the existing approval resolution flow.
 - [ ] Show memory proposal text, scope, and provenance in a compact mobile-friendly layout.

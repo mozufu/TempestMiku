@@ -84,27 +84,18 @@ Color _textOn(Color bg) {
 // ─── Mode definitions ─────────────────────────────────────────────────────────
 
 class _Mode {
-  final String id, zh, short, cap, temp, tip;
+  final String id, zh, short, temp, tip;
   final double intensity; // 0–100
   final IconData icon;
   const _Mode({
     required this.id,
     required this.zh,
     required this.short,
-    required this.cap,
     required this.temp,
     required this.tip,
     required this.intensity,
     required this.icon,
   });
-
-  String get tempLabel => switch (temp) {
-        'hot' => '尖銳 · 濃',
-        'soft' => '安撫 · 濃',
-        'warm' => '親切 · 中',
-        'cool' => '克制 · 關',
-        _ => '中',
-      };
 }
 
 const _kModes = <_Mode>[
@@ -112,7 +103,6 @@ const _kModes = <_Mode>[
     id: 'personal_assistant',
     zh: '個人助理',
     short: '助理',
-    cap: '中',
     temp: 'warm',
     intensity: 46,
     tip: '規劃 · 提醒 · 寫作 · 開放迴圈',
@@ -122,7 +112,6 @@ const _kModes = <_Mode>[
     id: 'ambiguity_grill',
     zh: '燒烤我',
     short: '燒烤',
-    cap: '濃',
     temp: 'hot',
     intensity: 8,
     tip: '模糊 / 矛盾 → 3–7 個尖銳提問',
@@ -132,7 +121,6 @@ const _kModes = <_Mode>[
     id: 'negative_state_grounding',
     zh: '著陸',
     short: '著陸',
-    cap: '濃',
     temp: 'soft',
     intensity: 24,
     tip: '情緒過載 → 一個 ≤10 分鐘行動',
@@ -142,7 +130,6 @@ const _kModes = <_Mode>[
     id: 'serious_engineer',
     zh: '認真工程師',
     short: '工程',
-    cap: '關',
     temp: 'cool',
     intensity: 76,
     tip: '程式 / 金錢 / 不可逆 / 正式環境',
@@ -152,7 +139,6 @@ const _kModes = <_Mode>[
     id: 'handoff',
     zh: '交棒',
     short: '交棒',
-    cap: '關',
     temp: 'cool',
     intensity: 88,
     tip: '委派編碼 agent + 任務簡報',
@@ -733,7 +719,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     for (final msg in _history) {
       if (msg.isModeChange) {
         final m = _findMode(msg.modeChangeId);
-        items.add(_ModeChangeEvent(tok: tok, modeZh: m.zh, modeCap: m.cap));
+        items.add(_ModeChangeEvent(tok: tok, modeZh: m.zh));
       } else if (msg.isUser) {
         items.add(
           _UserBubble(tok: tok, text: msg.text, accent: tok.accentSoft),
@@ -1019,11 +1005,10 @@ class _ModeChangeEvent extends StatelessWidget {
   const _ModeChangeEvent({
     required this.tok,
     required this.modeZh,
-    required this.modeCap,
   });
 
   final _Tok tok;
-  final String modeZh, modeCap;
+  final String modeZh;
 
   @override
   Widget build(BuildContext context) {
@@ -1038,7 +1023,7 @@ class _ModeChangeEvent extends StatelessWidget {
             borderRadius: BorderRadius.circular(999),
           ),
           child: Text(
-            '語氣轉為 $modeCap · 切到$modeZh',
+            '切到$modeZh',
             style: TextStyle(
               color: tok.muted,
               fontSize: 11,
@@ -1151,7 +1136,7 @@ class _MikuBubble extends StatelessWidget {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
-                      '${mode.zh} · ${mode.cap}',
+                      mode.zh,
                       style: TextStyle(
                         color: tok.muted,
                         fontSize: 10.5,
@@ -1527,23 +1512,6 @@ class _ModeSheet extends StatelessWidget {
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
-                                const SizedBox(width: 7),
-                                Container(
-                                  padding:
-                                      const EdgeInsets.symmetric(horizontal: 6),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: tok.border),
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                  child: Text(
-                                    m.cap,
-                                    style: TextStyle(
-                                      color: tok.muted,
-                                      fontSize: 9.5,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
                               ],
                             ),
                             const SizedBox(height: 2),
@@ -1777,21 +1745,6 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                       ),
                     ),
                   ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  border: Border.all(color: tok.border),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  '關',
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                  ),
                 ),
               ),
             ],

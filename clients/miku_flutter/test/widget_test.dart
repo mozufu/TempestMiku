@@ -12,7 +12,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('TempestMiku'), findsWidgets);
-    expect(find.textContaining('個人助理'), findsWidgets);
+    expect(find.text('助理'), findsWidgets);
+    expect(find.text('濃'), findsNothing);
+    expect(find.text('中'), findsNothing);
+    expect(find.text('關'), findsNothing);
 
     await tester.enterText(
         find.byType(EditableText), 'please fix code artifact://0');
@@ -22,6 +25,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.textContaining('認真工程師'), findsWidgets);
+    expect(find.text('濃'), findsNothing);
+    expect(find.text('中'), findsNothing);
+    expect(find.text('關'), findsNothing);
     expect(find.textContaining('Miku heard: please fix code artifact://0'),
         findsWidgets);
     expect(find.text('artifact://0'), findsOneWidget);

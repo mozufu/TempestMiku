@@ -2305,7 +2305,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["mode", "text", "final"]
         );
-        assert_eq!(all[0].payload_json["voice_cap"], serde_json::json!("中"));
+        assert_eq!(
+            all[0].payload_json["voice_cap"],
+            serde_json::json!("medium")
+        );
         assert_eq!(
             all[0].payload_json["activeSkills"],
             json!(["miku-voice", "personal-assistant-state-capture"])
@@ -2513,7 +2516,7 @@ mod tests {
     async fn serious_engineer_session_uses_project_scope_and_recalls_next_session() {
         let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
         let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-        assert_eq!(session_a.voice_cap, "關");
+        assert_eq!(session_a.voice_cap, "off");
         assert_eq!(session_a.default_scope, "project:tempestmiku");
         assert!(session_a.active_skills.is_empty());
         let res = app
@@ -3111,7 +3114,7 @@ display({
             mode_events[1].payload_json["mode"],
             json!("serious_engineer")
         );
-        assert_eq!(mode_events[1].payload_json["voice_cap"], json!("關"));
+        assert_eq!(mode_events[1].payload_json["voice_cap"], json!("off"));
         assert_eq!(mode_events[1].payload_json["activeSkills"], json!([]));
         assert!(
             mode_events[1].payload_json["router_reason"]
@@ -3141,7 +3144,7 @@ display({
         assert_eq!(lock.status(), StatusCode::OK);
         let lock_json = response_json(lock).await;
         assert_eq!(lock_json["modeState"]["lockSource"], json!("user"));
-        assert_eq!(lock_json["voiceCap"], json!("中"));
+        assert_eq!(lock_json["voiceCap"], json!("medium"));
         assert_eq!(
             lock_json["activeSkills"],
             json!(["miku-voice", "personal-assistant-state-capture"])
@@ -3192,7 +3195,7 @@ display({
         assert_eq!(reroute.status(), StatusCode::OK);
         let latest = store.get_session(session.id).await.unwrap();
         assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
-        assert_eq!(latest.mode_state.mode.voice_cap(), "關");
+        assert_eq!(latest.mode_state.mode.voice_cap(), "off");
     }
 
     #[tokio::test]

@@ -22,7 +22,7 @@ use tm_host::{
     P0HostConfig,
 };
 use tm_llm::OpenAiClient;
-use tm_persona::Mode;
+use tm_persona::{Mode, PersonaConfig};
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions, StubSandbox};
 
 #[tokio::main(flavor = "current_thread")]
@@ -244,25 +244,29 @@ fn build_agent_config(
 }
 
 fn serious_engineer_prompt(_host_config: &P0HostConfig, linked_folders: &LinkedFolders) -> String {
-    let mut prompt = tm_core::DEFAULT_SYSTEM_PROMPT.to_string();
-    prompt.push_str("\n\n");
-    prompt.push_str(Mode::SeriousEngineer.system_addendum());
-    prompt.push('\n');
+    let mut capability_notes = String::new();
     if linked_folders.is_empty() {
-        prompt.push_str("No linked folders configured; fs.*, code.*, and proc.* will fail closed.");
+        capability_notes
+            .push_str("No linked folders configured; fs.*, code.*, and proc.* will fail closed.");
     } else {
         for policy in linked_folders.policies() {
             let mode = match policy.mode {
                 tm_host::FsMode::Ro => "ro",
                 tm_host::FsMode::Rw => "rw",
             };
-            prompt.push_str(&format!(
+            capability_notes.push_str(&format!(
                 "Linked folders: {} ({mode}) at linked://{}/\n",
                 policy.alias, policy.alias
             ));
         }
     }
-    prompt
+    PersonaConfig::default()
+        .build_system_prompt(
+            Mode::SeriousEngineer,
+            tm_core::DEFAULT_SYSTEM_PROMPT,
+            &capability_notes,
+        )
+        .system_prompt
 }
 
 fn build_sandbox(
@@ -447,7 +451,9 @@ mod tests {
         );
         assert_eq!(cfg.max_turns, 8);
         assert_eq!(cfg.cell_budget.output_bytes, 50_000);
+        assert!(cfg.system_prompt.contains("SOUL.md"));
+        assert!(cfg.system_prompt.contains("Tempest Miku"));
         assert!(cfg.system_prompt.contains("Active mode: Serious Engineer"));
-        assert!(cfg.system_prompt.contains("Voice cap: 關"));
+        assert!(cfg.system_prompt.contains("Voice cap: off"));
     }
 }

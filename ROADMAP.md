@@ -42,12 +42,12 @@ Current implementation has advanced past the original M0-only substrate. The wor
 `tm-host`, `tm-persona`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The
 implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP bridging, the native
 P0 Serious Engineer dogfood slice, the CLI native cutover proof for linked-repo edit/run/artifact
-workflows, and the P1 project-manager remote-control surface. Normal Rust tests pass when local
-loopback networking is available; managed sandboxes may need elevated permissions for tests that bind
-`127.0.0.1`.
+workflows, native Deno HTTP approvals for the Serious Engineer backend, and the P1 project-manager
+remote-control surface. Normal Rust tests pass when local loopback networking is available; managed
+sandboxes may need elevated permissions for tests that bind `127.0.0.1`.
 
 Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, `tm-agents`, and
-`tm-drive` crates; scheduler/dreaming; native server HTTP approval plumbing for manual SDK approvals;
+`tm-drive` crates; scheduler/dreaming; product approval surfaces for future memory/drive/skill writes;
 Android OS packaging; generated SDK docs from the runtime registry; and production egress/secret
 hardening.
 
@@ -60,7 +60,7 @@ each milestone is done only when its acceptance checks pass.
 | 1 | **DONE — M1 real REPL + SDK spine** | 4–7d | Add `deno_core` backend behind `Sandbox`; implement persistent cells, cancel/reset, `display`, `http.get` allowlist, artifact writes; add `tm-artifacts` spill store; enforce `CellBudget` and output caps. | Rust tests cover TypeScript cells, persistent state, reset, display/print capture, blocked raw APIs/network, timeout/cancel, shaped output truncation, and artifact spill/readback. |
 | 2 | **DONE — host registry + approvals foundation** | 3–5d | Add `tm-host`; define `HostFn`, capability grants, `ResourceRegistry`, `ApprovalPolicy`; wire SDK dispatch from sandbox ops; fail closed on unknown schemes/capabilities. | Unit tests prove denied capability cannot execute, approval timeout denies by default, `artifact://` resolves through the registry, linked paths cannot escape roots, and unsafe operations gate or fail closed. |
 | 2.5 | **DONE — P0a OMP ACP bridge path** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | Tests cover ACP event normalization, diff/artifact events, generated approval mode, permission request round trips, approval route resolution, and replay from `Last-Event-ID`. Live `omp acp` dogfood remains backend-environment dependent. |
-| 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement `fs.*`, search, patch-only `code.edit`, `proc.run(cmd,args)` allowlist, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, patch edit and stale-tag rejection, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI Deno host ops, serious-mode voice cap, and project summary/open-loop recall. |
+| 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement `fs.*`, search, patch-only `code.edit`, `proc.run(cmd,args)` allowlist, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, patch edit and stale-tag rejection, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI Deno host ops, native Deno approve/deny/timeout through the HTTP approval route, serious-mode voice cap, and project summary/open-loop recall. |
 | 4 | **DONE — P1 project manager + remote control** | 4–7d | Added the project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Tests and smoke coverage prove reconnect replay from event id, router lock/unlock, project status and decisions across sessions, `POST /sessions/:id/promote` to `project://` resources with provenance, approval/resource workflows, and Flutter Web/PWA attach/send/watch/resume behavior. |
 | 5 | **P2 — personal assistant** | 5–8d | Add full persona overlay, configurable SOUL / skills asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminders. | Token-by-token Miku response over SSE; profile/recall context injected; voice is characterful outside serious mode; memory writes are approval-gated; health-over-productivity and proactivity bounds hold. |
 | 6 | **P3 — handoff + sub-agent actors** | 6–10d | Add `tm-agents` actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` resources, supervision defaults; implement Handoff brief template. | Fan-out N workers, only digest returns to parent context; siblings coordinate by messages; child crash isolated/restarted/degraded; handoff matches `oh-my-pi-handoff`. |
@@ -71,13 +71,13 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Finish native server approval plumbing** — keep OMP ACP replaceable, but let native server
-   `fs.*` / `code.*` / `proc.*` approval-gated SDK calls suspend through the same HTTP approval
-   surface instead of default-denying `manual` mode.
-2. **Start the P2 personal-assistant baseline** — add the full persona overlay, profile/user recall,
+1. **Start the P2 personal-assistant baseline** — add the full persona overlay, profile/user recall,
    personal-assistant state capture, negative-state grounding, and bounded proactive reminders while
    preserving manual approval gates for memory writes.
-3. **Defer expansion crates until the native cutover and P2 baseline are stable** — `tm-agents`,
+2. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
+   native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
+   artifacts, and HTTP-routed manual approvals.
+3. **Defer expansion crates until the P2 baseline and server/resource surface are stable** — `tm-agents`,
    `tm-drive`, `tm-mcp`, scheduler/dreaming, and Android OS packaging should build on the settled
    server/resource surface.
 
@@ -93,19 +93,19 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 | `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
 | `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as the deterministic allowlist helper until P7 hardening. |
 | `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
-| `code.ast` / `code.lsp` | **P1.5/P2 tech slice** | Can land after the native cutover story is proven if structured code edits need it; keep it out of the critical companion baseline unless it has a concrete user. |
+| `code.ast` / `code.lsp` | **P1.5/P2 tech slice** | Now unblocked by the native cutover proof, but keep it out of the critical companion baseline unless structured code edits have a concrete user. |
 
 ### Parallelization seams
 
 - Generated SDK docs/type maintenance can proceed independently of P2 work, as long as it reads from
   the existing host registry contract.
-- Native dogfood cutover work can proceed independently of the P2 companion baseline as long as both
-  preserve the same approval/resource boundaries.
+- Native coding-backend hardening can proceed independently of the P2 companion baseline as long as
+  both preserve the same approval/resource boundaries.
 - After actor mailbox semantics are fixed, supervision and `agent://` resource handling can split.
 
 ### Do-not-start-yet list
 
-- Android OS packaging before the native cutover and P2/P3 product surfaces stabilize.
+- Android OS packaging before the P2/P3 product surfaces stabilize.
 - Drive auto-organizer before approval policy and memory scopes exist.
 - Self-evolution writes before audit/replay and tier gates exist.
 - Research/deep orchestration before `agents.*`, artifacts, memory scopes, and scheduler are real.

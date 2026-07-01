@@ -126,10 +126,13 @@ There is no external deriver/dreamer to depend on or fall behind: steps 2–6 *a
 - **Scope:** a `scope` column on every row — a **global** scope (Brian) always, plus a
   **per-linked-project** scope when a folder/repo is linked (§24), so repo lore stays isolated.
 
-### 22.6.1 P0 minimum schema
+### 22.6.1 P0/P1 minimum schema
 
-P0 uses **Postgres directly** for the coding-agent dogfood slice instead of SQLite or file replay logs.
-The schema is deliberately expandable toward the full §22 engine while preserving project continuity:
+P0/P1 uses a **Postgres-shaped store** for the coding-agent and project-manager dogfood slices instead
+of SQLite or file replay logs. `tm-server` can persist this store in Postgres when `TM_DATABASE_URL`
+is configured; normal local development and `cargo test` may use the in-memory implementation so the
+baseline suite stays external-service-free. The schema is deliberately expandable toward the full §22
+engine while preserving project continuity:
 
 - `sessions(id, created_at, updated_at, status, mode, persona_status)`
 - `session_events(session_id, seq, event_type, payload_json, created_at)` — SSE replay source (§27)
@@ -138,9 +141,9 @@ The schema is deliberately expandable toward the full §22 engine while preservi
 - `recall_chunks(id, scope, text, source, created_at, embedding?)` — project summaries, decisions,
   open loops, and profile/user recall
 
-P0 recall is profile facts + scoped recall chunks, enough to remember what changed, why it changed,
-and what remains open between coding sessions. Full dreaming, graph, RRF fusion, and skill generation
-remain later §22 work.
+P0/P1 recall is profile facts + scoped recall chunks, enough to remember what changed, why it changed,
+and what remains open between coding sessions and promoted projects. Full dreaming, graph, RRF fusion,
+and skill generation remain later §22 work.
 
 ## 22.7 honcho.json behavior → `tm-memory` config
 

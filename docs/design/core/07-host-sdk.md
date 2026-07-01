@@ -521,4 +521,4 @@ approval, and audit boundaries. The root roadmap is canonical (§28), but the SD
 | `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, and drive organizer flows. |
 | `http.*` hardening | P5 or P7 | Keep current `http.get` as deterministic allowlisted helper; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |
 | `secrets.use` | P7 | Requires opaque egress-scoped handles from a secret broker; secret values must never materialize in JS heap, artifacts, or model context. |
-| `code.ast` / `code.lsp` | P1.5/P2 tech slice | Add after the P1 server/resource surface stabilizes; do not block project-manager remote control. |
+| `code.ast` / `code.lsp` | P1.5/P2 tech slice | Native cutover makes this possible, but add only for a concrete structured-edit user; do not block the P2 companion baseline. |

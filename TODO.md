@@ -1,9 +1,12 @@
 # TODO
 
-This file tracks the active P1 execution checklist. `ROADMAP.md` remains the canonical milestone
-order and source of deferred namespace placement.
+This file archives the completed P1 execution checklist. `ROADMAP.md` remains the canonical active
+milestone order and source of deferred namespace placement.
 
 ## P1 — project manager + remote control
+
+Status: complete. Current active work has moved to the P2 personal-assistant baseline in
+`ROADMAP.md`.
 
 P1 is done only when the server/client surface preserves the current TempestMiku parity constraints:
 Miku identity remains constant, Serious Engineer voice cap stays `關`, manual approvals remain the
@@ -110,4 +113,4 @@ Acceptance:
 - [x] Do not implement `drive.*`; this belongs to P5.
 - [x] Do not implement `secrets.use` or full `http.*` egress hardening; these belong to P7 or P5
       research if live egress becomes necessary.
-- [x] Do not start Android OS packaging before the P1 server API stabilizes.
+- [x] Do not start Android OS packaging before the P2/P3 product surfaces stabilize.

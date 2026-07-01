@@ -17,7 +17,9 @@
 - **Filesystem jail.** All `fs.*` resolved against a workspace root; path traversal rejected.
 - **Resource limits** (§6.3) enforced by the isolate + host.
 - **Approval gates.** Capabilities flagged `sensitive` (send email, write to prod, spend money)
-  pause for human approval before the host executes them.
+  pause for human approval before the host executes them. In the current server slice, the native
+  Serious Engineer Deno backend routes approval-gated `fs.*` / `code.*` / `proc.*` host calls through
+  the HTTP approval broker; timeout and unsupported flows deny by default.
 - **Untrusted-content discipline.** Data fetched from the world is treated as data, never as
   instructions; the runtime never auto-promotes tool output into the system/instruction channel.
 

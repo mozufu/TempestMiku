@@ -5,10 +5,11 @@ self-hosted, single-user, characterful AI companion built on a streaming code-ex
 runtime.
 
 Current implementation status: the workspace has the M0 streaming skeleton, M1 `deno_core`
-sandbox, host/artifact foundation, P0a OMP ACP bridge, and native P0 Serious Engineer dogfood
-slice in place with Rust test coverage. The next product work is P1 project manager + remote
-control, while the runtime SDK contract still needs documentation polish such as an authoritative
-`tm-runtime.d.ts`.
+sandbox, host/artifact foundation, P0a OMP ACP bridge, native P0 Serious Engineer dogfood slice,
+native Deno HTTP approvals, and the P1 project-manager remote-control surface in place with Rust
+test coverage. The next product work is P2: the full personal-assistant baseline for Miku voice,
+profile/user recall, personal-assistant state capture, negative-state grounding, and bounded
+proactivity.
 
 ## Project docs
 

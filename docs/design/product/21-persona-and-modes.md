@@ -34,7 +34,7 @@ Pick the smallest sufficient mode.
 | 1 | **Personal Assistant** (default) | planning, reminders, writing, open loops, decision cleanup | conversation + light `memory.*` / `drive.*`, TODO | 中 | personal-assistant-state-capture |
 | 2 | **Ambiguity Grill / 燒烤我** | vague / contradictory / "grill me" / "燒烤我" / hiding the real problem | conversation; 3–7 sharp Qs → plan | 濃 (sharp) | ambiguity-grill |
 | 3 | **Negative-State Grounding** | overwhelmed / self-deprecating / exhausted / spiraling | conversation; stabilize → one ≤10-min action | 濃, 軟 | negative-state-grounding |
-| 4 | **Serious Engineer** | code / safety / production / money / external / irreversible / legal / medical | native `fs.*` / `code.*` / `proc.*` (§25), or P0a OMP ACP bridge until native SDK cutover; light `agents.*` | 關 | — |
+| 4 | **Serious Engineer** | code / safety / production / money / external / irreversible / legal / medical | native `fs.*` / `code.*` / `proc.*` (§25), with P0a OMP ACP still available as a replaceable bridge; future light `agents.*` | 關 | — |
 | 5 | **Handoff** | delegate impl-heavy work to a coding agent (Oh-my-pi / A2A) | `agents.*` (§23) + brief generation | 關 | oh-my-pi-handoff |
 
 Modes 2/3 are conversational *postures* (no new capabilities); 4/5 unlock the technical surface.
@@ -81,8 +81,8 @@ sequenceDiagram
 
 ## 21.5 Character: defined (was the top open question)
 
-**Resolved.** The character is **Tempest Miku** per `SOUL.md` + `miku-voice`. P0 (§28) ships the
-real persona in Serious Engineer form first; the broader project-manager and personal-assistant
-surfaces follow without replacing the identity. Voice mechanics (喵 density, 主人 honorific,
+**Resolved.** The character is **Tempest Miku** per `SOUL.md` + `miku-voice`. P0/P1 (§28) ship the
+real persona in Serious Engineer and project-manager form first; P2 broadens into the full
+personal-assistant baseline without replacing the identity. Voice mechanics (喵 density, 主人 honorific,
 self-reference, catchphrases, example lines) live in `miku-voice` and load as a **voice overlay at
 context-appropriate intensity** — never baked into a mode addendum, so seriousness can dial it down.

@@ -53,7 +53,7 @@ do **not** implement scheme-specific handlers. Flutter/Web/Android ask the serve
 preview a URI, and the server applies the same capability gates, selector paging, MIME detection, and
 failure semantics as `resources.read`.
 
-Recommended P1 API shape (§27.5):
+Implemented P1 API shape (§27.5):
 
 | endpoint | purpose |
 |---|---|

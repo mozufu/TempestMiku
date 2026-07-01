@@ -7,14 +7,19 @@ tempest-miku/
 ├── crates/
 │   ├── tm-core/        # message types, the agent loop, result-shaping policy, config
 │   ├── tm-llm/         # OpenAI-compatible client (chat + streaming), LlmClient trait
-│   ├── tm-sandbox/     # Sandbox/Session traits + backends (deno, quickjs, py-subprocess)
-│   ├── tm-host/        # host capability registry, ops, capability policy, secret broker, resource resolver registry (§9.2)
+│   ├── tm-sandbox/     # Sandbox/Session traits + backends (stub, deno_core; more planned)
+│   ├── tm-host/        # host capability registry, linked folders, approvals, resource handlers (§9.2)
 │   ├── tm-artifacts/   # content-addressed artifact store
-│   ├── tm-mcp/         # MCP client -> imports external tools into the catalog
-│   └── tm-trace/       # tracing, transcript record/replay
+│   ├── tm-persona/     # mode labels, default scopes, voice caps, persona asset status
+│   └── tm-server/      # axum sessions, SSE replay, approvals, project views, coding backends
 └── apps/
     └── tm-cli/         # binary: wiring, config, REPL/chat entrypoint
 ```
+
+Client scaffolds live under `clients/` (`miku_flutter` for Web/PWA now and Android later, plus web
+smoke coverage). Planned product/support crates remain `tm-memory`, `tm-agents`, `tm-drive`,
+`tm-mcp`, and `tm-trace`; they should be extracted only when the settled server/resource surface has
+two concrete users.
 
 ### 10.2 Key types & traits
 
@@ -173,6 +178,13 @@ The default CLI path now wires the streaming `Agent` to `DenoSandbox`, backed by
 `display`, `tools`, `resources`, `artifacts`, `fs`, `code`, `proc`, plus allowlisted `http.get`),
 uses `tm-artifacts` for spill/readback, and calls host capabilities through `tm-host` grants,
 resource handlers, and approval policy.
+
+The server path now has two coding backends behind the same `CodingBackend` interface: the
+replaceable P0a `omp_acp` bridge and the native Deno backend. The native Serious Engineer backend
+maps approval-gated host calls such as unsafe `proc.run`, overwrites, and destructive edits into the
+same HTTP approval broker used by the client API; timeout still denies by default. The general
+non-coding chat runner keeps a conservative default-deny approval policy until a product surface owns
+that manual flow.
 
 That boundary remains deliberate:
 

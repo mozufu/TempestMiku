@@ -29,10 +29,10 @@ Engaged by **Serious Engineer** and **Handoff** modes (§21). Reference: **Oh My
 
 ## 25.0.1 P0a transitional OMP ACP backend
 
-P0a may adopt Oh My Pi first as an external coding backend over Agent Client Protocol (ACP). This is a
+P0a adopted Oh My Pi first as an external coding backend over Agent Client Protocol (ACP). This is a
 bridge, not a replacement for the single-`execute` bet: TempestMiku still owns persona, mode routing,
 session ids, SSE replay, approvals, memory, and artifact/resource presentation; OMP owns coding-agent
-execution behind the adapter.
+execution behind the adapter when that backend is explicitly enabled.
 
 The bridge shape is deliberately small:
 
@@ -51,7 +51,8 @@ The bridge shape is deliberately small:
 P0a acceptance: a UI/API Serious Engineer session dispatches a real TempestMiku coding task through
 `omp acp`, applies a patch in a linked repo, runs a targeted test, streams progress through existing
 SSE, routes at least one permission path through TempestMiku approvals, and replays from
-`Last-Event-ID`. Native `fs.*` / `code.*` / `proc.*` remains P0 proper.
+`Last-Event-ID`. Native `fs.*` / `code.*` / `proc.*` is now the P0/P1 dogfood path; OMP remains a
+replaceable backend for parity comparison and fallback, not the final SDK surface.
 
 ## 25.1 Translation map
 
@@ -147,6 +148,10 @@ is intentionally narrower than the full translation map:
 - **Edit shape:** `code.edit` takes JSON hunks, not a string patch grammar.
 - **Process shape:** `proc.run(cmd, args, opts)` is argv-vector only. Shell strings, pipes, redirects,
   and command concatenation are not accepted.
+- **Approval shape:** in the native server Serious Engineer backend, approval-gated `fs.*`,
+  `code.*`, and unsafe `proc.run` actions suspend through the same `approval` SSE event and
+  `POST /sessions/:id/approvals/:approval_id` route as ACP permissions. `manual` mode waits for that
+  route; `deny` and timeouts fail closed.
 
 ## 25.3 Artifact handler — two tiers (adopt OMP model into §09)
 
@@ -205,6 +210,8 @@ this is what keeps big data and fan-out **out of the window**.
   effect; never auto-allow because a client capability is missing.
 - **ACP output cannot be mirrored** — keep the bounded event-log summary, mark artifact persistence
   degraded, and preserve the raw backend ref if one exists.
+- **Native approval route unavailable / timed out** — approval-gated SDK calls return
+  `ApprovalDeniedError` or `ApprovalTimeoutError`; the effect is skipped and the loop continues.
 
 - **Non-allowlisted command** — `proc.run` rejects it (fail-closed); **no linked folder** → no
   real-FS reach (sandbox only); **destructive/external/out-of-grant action** → approval or fail-closed;

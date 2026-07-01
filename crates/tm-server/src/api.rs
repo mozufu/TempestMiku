@@ -24,14 +24,15 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use tm_artifacts::{ResourceContent, preview};
+use tm_core::DEFAULT_SYSTEM_PROMPT;
 use tm_host::{
     CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
     ResourceRegistry,
 };
 
 use crate::{
-    ApprovalBroker, AuthConfig, ChatRunner, CodingBackend, CodingTurn, MemoryProvider, Mode,
-    NewProjectItem, NewSession, PersistingEventSink, PersonaConfig, ProjectItemKind,
+    ApprovalBroker, AuthConfig, ChatRunner, ChatTurn, CodingBackend, CodingTurn, MemoryProvider,
+    Mode, NewProjectItem, NewSession, PersistingEventSink, PersonaConfig, ProjectItemKind,
     ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent, Store,
     StoreCodingEventSink, StoreEvent, store::ModeState, store::RecallChunkRecord,
 };
@@ -199,6 +200,8 @@ pub struct CreateSessionResponse {
     pub label: String,
     pub voice_cap: String,
     pub default_scope: String,
+    #[serde(rename = "activeSkills")]
+    pub active_skills: Vec<String>,
 }
 
 async fn create_session<S, M, C>(
@@ -263,6 +266,7 @@ fn session_response(
         label: session.mode.label().to_string(),
         voice_cap: session.mode.voice_cap().to_string(),
         default_scope: session.mode.default_scope().to_string(),
+        active_skills: active_skills(session.mode),
     }
 }
 
@@ -308,6 +312,7 @@ where
         .scope
         .clone()
         .unwrap_or_else(|| session.mode_state.mode.default_scope().to_string());
+    let persona_prompt = build_turn_prompt(&state, session.mode_state.mode);
     state
         .store
         .append_message(session_id, "user", &payload.content)
@@ -340,6 +345,7 @@ where
                     CodingTurn {
                         session_id,
                         user_prompt,
+                        system_prompt: persona_prompt.system_prompt.clone(),
                         mode: session.mode_state.mode,
                         scope: scope.clone(),
                     },
@@ -355,7 +361,16 @@ where
             ));
             let response = state
                 .chat
-                .run_turn(session_id, user_prompt, sink.clone())
+                .run_turn(
+                    ChatTurn {
+                        session_id,
+                        user_prompt,
+                        system_prompt: persona_prompt.system_prompt.clone(),
+                        mode: session.mode_state.mode,
+                        scope: scope.clone(),
+                    },
+                    sink.clone(),
+                )
                 .await?;
             sink.flush().await?;
             response
@@ -368,7 +383,16 @@ where
         ));
         let response = state
             .chat
-            .run_turn(session_id, user_prompt, sink.clone())
+            .run_turn(
+                ChatTurn {
+                    session_id,
+                    user_prompt,
+                    system_prompt: persona_prompt.system_prompt,
+                    mode: session.mode_state.mode,
+                    scope: scope.clone(),
+                },
+                sink.clone(),
+            )
             .await?;
         sink.flush().await?;
         response
@@ -425,6 +449,7 @@ pub struct ModeResponse {
     pub label: String,
     pub voice_cap: String,
     pub default_scope: String,
+    pub active_skills: Vec<String>,
     pub changed: bool,
     pub ignored_reason: Option<String>,
 }
@@ -588,6 +613,7 @@ fn mode_response(
         label: mode_state.label().to_string(),
         voice_cap: mode_state.voice_cap().to_string(),
         default_scope: mode_state.mode.default_scope().to_string(),
+        active_skills: active_skills(mode_state.mode),
         mode_state,
         changed,
         ignored_reason,
@@ -632,12 +658,48 @@ fn mode_changed_payload(
         mode: mode_state.mode,
         label: mode_state.label().to_string(),
         voice_cap: mode_state.voice_cap().to_string(),
+        active_skills: active_skills(mode_state.mode),
         router_reason: mode_state.router_reason.clone(),
         lock_source: mode_state.lock_source.clone(),
         override_source: mode_state.override_source.clone(),
         updated_at: mode_state.updated_at,
         persona_status,
     })?)
+}
+
+fn active_skills(mode: Mode) -> Vec<String> {
+    mode.active_skill_names()
+        .iter()
+        .map(|skill| (*skill).to_string())
+        .collect()
+}
+
+fn build_turn_prompt<S, M, C>(state: &AppState<S, M, C>, mode: Mode) -> tm_persona::PersonaPrompt {
+    state.persona.build_system_prompt(
+        mode,
+        DEFAULT_SYSTEM_PROMPT,
+        &linked_folder_capability_notes(&state.linked_folders),
+    )
+}
+
+fn linked_folder_capability_notes(linked_folders: &LinkedFolders) -> String {
+    if linked_folders.is_empty() {
+        return "No linked folders configured; fs.*, code.*, and proc.* will fail closed."
+            .to_string();
+    }
+
+    let mut notes = String::new();
+    for policy in linked_folders.policies() {
+        let mode = match policy.mode {
+            tm_host::FsMode::Ro => "ro",
+            tm_host::FsMode::Rw => "rw",
+        };
+        notes.push_str(&format!(
+            "Linked folders: {} ({mode}) at linked://{}/\n",
+            policy.alias, policy.alias
+        ));
+    }
+    notes
 }
 
 fn route_mode_for_prompt(content: &str) -> Option<(Mode, String)> {
@@ -1902,12 +1964,13 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        AgentChatRunner, ApprovalOption, ApprovalPrompt, CodingEventSink, CodingTurn,
-        CodingTurnResult, EchoChatRunner, InMemoryStore, NativeApprovalMode, NativeDenoBackend,
-        StoreMemoryProvider,
+        AgentChatRunner, ApprovalOption, ApprovalPrompt, ChatRunner, ChatTurn, CodingEventSink,
+        CodingTurn, CodingTurnResult, EchoChatRunner, InMemoryStore, NativeApprovalMode,
+        NativeDenoBackend, StoreMemoryProvider,
         auth::ForwardedAuthConfig,
         store::{ProfileFactRecord, RecallChunkRecord},
     };
+    use tm_persona::KNOWN_SKILLS;
 
     fn test_app(persona: PersonaConfig, auth: AuthConfig) -> (Router, Arc<InMemoryStore>) {
         let store = Arc::new(InMemoryStore::default());
@@ -2102,6 +2165,54 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingChatRunner {
+        turns: Arc<Mutex<Vec<ChatTurn>>>,
+    }
+
+    #[async_trait]
+    impl ChatRunner for RecordingChatRunner {
+        async fn run_turn(
+            &self,
+            turn: ChatTurn,
+            sink: Arc<dyn tm_core::EventSink + Send + Sync>,
+        ) -> Result<String> {
+            self.turns.lock().push(turn);
+            let text = "recorded chat turn".to_string();
+            sink.on_text(&text);
+            sink.on_final(&text);
+            Ok(text)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        turns: Arc<Mutex<Vec<CodingTurn>>>,
+    }
+
+    #[async_trait]
+    impl CodingBackend for RecordingBackend {
+        async fn run_turn(
+            &self,
+            turn: CodingTurn,
+            sink: Arc<dyn CodingEventSink>,
+        ) -> Result<CodingTurnResult> {
+            self.turns.lock().push(turn);
+            let final_text = "recorded coding turn".to_string();
+            sink.emit(
+                "final",
+                serde_json::to_value(StoreEvent::Final {
+                    text: final_text.clone(),
+                })?,
+            )
+            .await?;
+            Ok(CodingTurnResult {
+                final_text,
+                transcript_artifact: None,
+            })
+        }
+    }
+
     async fn response_json(res: axum::response::Response) -> Value {
         let body = axum::body::to_bytes(res.into_body(), 1024 * 1024)
             .await
@@ -2133,10 +2244,31 @@ mod tests {
         serde_json::from_slice(&body).unwrap()
     }
 
+    fn write_persona_fixture(root: &std::path::Path) {
+        std::fs::write(
+            root.join("SOUL.md"),
+            "# Fixture SOUL\nIdentity constant and Mode Router fixture.",
+        )
+        .unwrap();
+        for skill in KNOWN_SKILLS {
+            let dir = root.join("skills").join(skill);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("SKILL.md"),
+                format!("# {skill}\n{skill} fixture body"),
+            )
+            .unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn session_creation_message_append_event_append_and_replay_work() {
         let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
         let session = create(&app).await;
+        assert_eq!(
+            session.active_skills,
+            vec!["miku-voice", "personal-assistant-state-capture"]
+        );
         let res = app
             .clone()
             .oneshot(
@@ -2174,6 +2306,10 @@ mod tests {
             vec!["mode", "text", "final"]
         );
         assert_eq!(all[0].payload_json["voice_cap"], serde_json::json!("中"));
+        assert_eq!(
+            all[0].payload_json["activeSkills"],
+            json!(["miku-voice", "personal-assistant-state-capture"])
+        );
         let replay = store.events_after(session.id, Some(1)).await.unwrap();
         assert_eq!(
             replay
@@ -2195,6 +2331,128 @@ mod tests {
             crate::PersonaStatus::Degraded { warning } => assert!(warning.contains("missing")),
             crate::PersonaStatus::Loaded { .. } => panic!("missing path must degrade"),
         }
+    }
+
+    #[tokio::test]
+    async fn chat_turn_prompt_uses_active_persona_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        write_persona_fixture(temp.path());
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(RecordingChatRunner::default());
+        let turns = Arc::clone(&chat.turns);
+        let state = AppState::new(
+            store,
+            memory,
+            chat,
+            PersonaConfig::from_path(temp.path()),
+            AuthConfig::NoAuth,
+        );
+        let app = app(state);
+        let session = create(&app).await;
+
+        for content in [
+            "hello",
+            "燒烤我 about this fuzzy plan",
+            "i am overwhelmed and exhausted",
+        ] {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{}/messages", session.id))
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({ "content": content }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+        }
+
+        let turns = turns.lock();
+        assert_eq!(turns.len(), 3);
+        assert_eq!(turns[0].mode, Mode::PersonalAssistant);
+        assert!(turns[0].system_prompt.contains("Fixture SOUL"));
+        assert!(turns[0].system_prompt.contains("skill://miku-voice"));
+        assert!(
+            turns[0]
+                .system_prompt
+                .contains("skill://personal-assistant-state-capture")
+        );
+
+        assert_eq!(turns[1].mode, Mode::AmbiguityGrill);
+        assert!(turns[1].system_prompt.contains("skill://ambiguity-grill"));
+        assert!(
+            !turns[1]
+                .system_prompt
+                .contains("skill://negative-state-grounding")
+        );
+
+        assert_eq!(turns[2].mode, Mode::NegativeStateGrounding);
+        assert!(
+            turns[2]
+                .system_prompt
+                .contains("skill://negative-state-grounding")
+        );
+        assert_eq!(turns[2].scope, "global");
+    }
+
+    #[tokio::test]
+    async fn coding_turn_prompt_uses_active_persona_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        write_persona_fixture(temp.path());
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let backend = Arc::new(RecordingBackend::default());
+        let turns = Arc::clone(&backend.turns);
+        let state = AppState::new(
+            store,
+            memory,
+            chat,
+            PersonaConfig::from_path(temp.path()),
+            AuthConfig::NoAuth,
+        )
+        .with_coding_backend(backend);
+        let app = app(state);
+        let serious = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+        let handoff = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
+
+        for (session_id, content) in [
+            (serious.id, "fix the Rust code"),
+            (handoff.id, "delegate this implementation handoff"),
+        ] {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{session_id}/messages"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({ "content": content }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+        }
+
+        let turns = turns.lock();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].mode, Mode::SeriousEngineer);
+        assert!(turns[0].system_prompt.contains("Fixture SOUL"));
+        assert!(
+            turns[0]
+                .system_prompt
+                .contains("Active mode: Serious Engineer")
+        );
+        assert!(!turns[0].system_prompt.contains("skill://miku-voice"));
+
+        assert_eq!(turns[1].mode, Mode::Handoff);
+        assert!(turns[1].system_prompt.contains("skill://oh-my-pi-handoff"));
+        assert_eq!(turns[1].scope, "project:tempestmiku");
     }
 
     #[tokio::test]
@@ -2257,6 +2515,7 @@ mod tests {
         let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
         assert_eq!(session_a.voice_cap, "關");
         assert_eq!(session_a.default_scope, "project:tempestmiku");
+        assert!(session_a.active_skills.is_empty());
         let res = app
             .clone()
             .oneshot(
@@ -2853,6 +3112,7 @@ display({
             json!("serious_engineer")
         );
         assert_eq!(mode_events[1].payload_json["voice_cap"], json!("關"));
+        assert_eq!(mode_events[1].payload_json["activeSkills"], json!([]));
         assert!(
             mode_events[1].payload_json["router_reason"]
                 .as_str()
@@ -2882,6 +3142,10 @@ display({
         let lock_json = response_json(lock).await;
         assert_eq!(lock_json["modeState"]["lockSource"], json!("user"));
         assert_eq!(lock_json["voiceCap"], json!("中"));
+        assert_eq!(
+            lock_json["activeSkills"],
+            json!(["miku-voice", "personal-assistant-state-capture"])
+        );
 
         let locked_message = app
             .clone()

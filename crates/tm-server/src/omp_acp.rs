@@ -671,6 +671,7 @@ mod tests {
             turn: CodingTurn {
                 session_id,
                 user_prompt: "prompt".to_string(),
+                system_prompt: "system prompt".to_string(),
                 mode: tm_persona::Mode::Handoff,
                 scope: "project:tempestmiku".to_string(),
             },

@@ -7,6 +7,7 @@ class MikuSession {
     required this.label,
     required this.voiceCap,
     this.defaultScope = 'global',
+    this.activeSkills = const [],
     this.lastEventId,
     this.locked = false,
   });
@@ -16,6 +17,7 @@ class MikuSession {
   final String label;
   final String voiceCap;
   final String defaultScope;
+  final List<String> activeSkills;
   final String? lastEventId;
   final bool locked;
 }

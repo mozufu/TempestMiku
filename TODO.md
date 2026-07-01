@@ -14,6 +14,8 @@ events, capability grants, and manual approvals remain the boundaries.
 Ship the personal-assistant baseline:
 
 - Miku identity is constant and loaded through the persona layer.
+- Modes are Hermes-style operating bundles: SOUL identity + active mode profile + dedicated skills +
+  capability/scope profile + voice cap.
 - Voice intensity floats by mode and seriousness; Serious Engineer and Handoff stay capped at `關`.
 - Profile/user recall is injected into turns with bounded context.
 - Personal-assistant state capture proposes durable memories instead of silently writing them.
@@ -23,7 +25,7 @@ Ship the personal-assistant baseline:
 
 ## P2 acceptance gate
 
-- [ ] Token-by-token responses over SSE include the active persona/mode/memory context path.
+- [x] Token-by-token responses over SSE include the active persona/mode/memory context path.
 - [ ] Personal Assistant mode can recall profile facts and scoped recall chunks across sessions.
 - [ ] Durable memory writes are approval-gated: approve writes, deny does not write, timeout defaults
       to deny, and all outcomes are replayable as events.
@@ -50,38 +52,42 @@ Acceptance:
 - [ ] P2 implementation can be reviewed as additive product behavior over the existing server loop.
 - [ ] No new runtime loop, raw shell escape hatch, or chat-native tool sprawl is introduced.
 
-## P2.1 Persona asset and prompt overlay
+## P2.1 Persona asset and mode skill bundles
 
-- [ ] Add a first-class persona prompt builder that composes:
-      `SOUL identity + active mode addendum + voice overlay + bounded memory context`.
-- [ ] Load configurable persona assets from a `TM_PERSONA_ASSET_PATH` or config-equivalent path.
-- [ ] Preserve degraded boot behavior when assets are missing, with a visible warning in session state.
-- [ ] Represent the voice overlay separately from mode addenda so seriousness can lower voice intensity
+- [x] Add a first-class persona prompt builder that composes:
+      `SOUL identity + active mode profile + active skill markdown + runtime capability notes`.
+- [x] Load configurable persona assets from `TM_PERSONA_PATH`.
+- [x] Preserve degraded boot behavior when assets are missing, with a visible warning in session state.
+- [x] Represent active skills separately from mode addenda so seriousness can lower voice intensity
       without changing identity.
-- [ ] Add tests for loaded assets, degraded assets, prompt composition order, and Serious Engineer
+- [x] Add tests for loaded assets, degraded assets, prompt composition order, and Serious Engineer
       voice cap.
+- [x] Expose `activeSkills` on session/mode responses and `ModeChanged` events.
+- [x] Thread active per-turn persona prompts through normal chat, native Deno, and Handoff/coding
+      backends.
 
 Acceptance:
 
-- [ ] Personal Assistant prompts contain identity, mode, voice, and memory sections in stable order.
-- [ ] Serious Engineer prompts contain identity but keep voice cap `關`.
-- [ ] Missing persona assets do not prevent boot or session creation.
+- [x] Personal Assistant prompts contain identity, active mode profile, active skills, and capability
+      notes in stable order.
+- [x] Serious Engineer prompts contain identity but keep voice cap `關`.
+- [x] Missing persona assets do not prevent boot or session creation.
 
 ## P2.2 Personal Assistant mode baseline
 
 - [ ] Make Personal Assistant the default conversational mode for non-coding planning, writing,
       reminders, decisions, and open-loop cleanup.
-- [ ] Ensure Personal Assistant mode only receives conversational/light memory capabilities in its
+- [x] Ensure Personal Assistant mode only receives conversational/light memory capabilities in its
       addendum, not engineering host capabilities.
 - [ ] Add router tests for default personal-assistant prompts, explicit user lock, and override back to
       Serious Engineer.
-- [ ] Keep mode badges and `ModeChanged` replay behavior from P1.
+- [x] Keep mode badges and `ModeChanged` replay behavior from P1.
 
 Acceptance:
 
 - [ ] A normal planning/reminder prompt routes to Personal Assistant and emits mode state if needed.
-- [ ] A code/safety/irreversible prompt routes or locks to Serious Engineer with voice cap `關`.
-- [ ] User locks remain final.
+- [x] A code/safety/irreversible prompt routes or locks to Serious Engineer with voice cap `關`.
+- [x] User locks remain final.
 
 ## P2.3 Memory auto-context and profile recall
 
@@ -200,9 +206,10 @@ Acceptance:
 ## P2.10 Docs and parity fixtures
 
 - [ ] Update product docs if implementation changes any behavior described in §21, §22, §27, or §29.
-- [ ] Add small parity fixtures for SOUL/miku-voice/personal-assistant-state-capture behavior if the
+- [x] Add small parity fixtures for SOUL/miku-voice/personal-assistant-state-capture behavior if the
       real deployment assets are not checked into this repository.
-- [ ] Document config/env required for persona assets and memory approval behavior.
+- [ ] Document config/env required for memory approval behavior.
+- [x] Document config/env required for persona assets.
 - [ ] Keep roadmap wording accurate: do not mark P2 done until the acceptance gate above passes.
 
 Acceptance:
@@ -212,7 +219,7 @@ Acceptance:
 
 ## P2 suggested implementation order
 
-1. [ ] Persona prompt builder and tests.
+1. [x] Persona prompt builder and tests.
 2. [ ] Memory context shape, budget, and profile recall tests.
 3. [ ] Memory write proposal data model and server event path.
 4. [ ] Approval-backed write commit path for profile facts and recall chunks.

@@ -106,7 +106,7 @@ impl CodingBackend for NativeDenoBackend {
 
 async fn run_native_turn(
     llm: Arc<dyn LlmClient>,
-    cfg: AgentConfig,
+    mut cfg: AgentConfig,
     mut options: DenoSandboxOptions,
     approval_mode: NativeApprovalMode,
     approval_broker: Arc<ApprovalBroker>,
@@ -122,6 +122,7 @@ async fn run_native_turn(
             sink: Arc::clone(&sink),
         }),
     };
+    cfg.system_prompt = turn.system_prompt.clone();
 
     let sandbox = Arc::new(DenoSandbox::new(options));
     let agent = Agent::new(llm, sandbox, cfg);

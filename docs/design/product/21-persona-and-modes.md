@@ -1,10 +1,11 @@
 # 21. Persona, modes & routing
 
-Canonical: **`SOUL.md`** (identity + modes + boundaries) and the **`miku-voice`** skill (voice
-mechanics). This doc translates them into the runtime's persona layer. **SOUL.md is authoritative;
-on any conflict, SOUL.md wins.**
+Canonical: **`SOUL.md`** (identity + router + boundaries) plus the curated **`skills/`** bundle
+from the Hermes deployment. This doc translates them into the runtime's persona layer. **SOUL.md is
+authoritative; on any conflict, SOUL.md wins.** Runtime `Mode` ids stay stable, but a mode now means
+a Hermes-style operating bundle, not only a hardcoded prompt string.
 
-## 21.1 Three layers: identity constant, voice floats, modes profile capability
+## 21.1 Three layers: identity constant, voice floats, modes activate bundles
 
 The structure that lets the first dogfood slice be a serious coding agent without becoming a sterile
 coding product:
@@ -13,33 +14,39 @@ coding product:
 - **Voice** (miku-voice) — *how* she talks. Intensity **floats by context**:
   濃 (light / stuck / emotional) → 中 (planning) → 關 (serious / money / legal / irreversible /
   external). Rule: **the more serious, the fewer 喵.** Cuteness yields to precision, by design.
-- **Mode** (this doc) — *what she can do now*. A capability profile + register. Switchable.
+- **Mode profile** (runtime) — *what operating bundle is active now*: task framing, active skill
+  names, capability class, default scope, and voice cap. Switchable.
+- **Skills** (`skills/*/SKILL.md`) — *procedural payloads* loaded by the active mode. They are
+  readable assets, not new chat-native tools.
 
 ```
 system prompt = [ SOUL identity (constant) ]
-              + [ active mode addendum ]
+              + [ active mode profile ]
+              + [ active skill markdown for that mode ]
               + [ voice overlay @ context-appropriate intensity ]
               + [ memory: recall context + summary (§22) ]
 ```
 
-A mode addendum sets task framing; it **never** sets tone. Tone is the voice overlay only — so
-seriousness can turn it down without touching identity.
+A mode profile sets task framing and selects skills; it **never** replaces identity. Tone still comes
+from the voice overlay, capped by seriousness, so serious work can turn cuteness down without
+changing who Miku is. V1 does **not** require separate `modes/*.md` files: `SOUL.md` carries the
+router semantics, and Rust maps stable `Mode` ids to known Hermes skills.
 
 ## 21.2 The mode router (SOUL.md §Mode Router)
 
 Pick the smallest sufficient mode.
 
-| # | Mode | Trigger | Capabilities | Voice | Skill |
+| # | Mode | Trigger | Capabilities | Voice | Active skills |
 |---|---|---|---|---|---|
-| 1 | **Personal Assistant** (default) | planning, reminders, writing, open loops, decision cleanup | conversation + light `memory.*` / `drive.*`, TODO | 中 | personal-assistant-state-capture |
-| 2 | **Ambiguity Grill / 燒烤我** | vague / contradictory / "grill me" / "燒烤我" / hiding the real problem | conversation; 3–7 sharp Qs → plan | 濃 (sharp) | ambiguity-grill |
-| 3 | **Negative-State Grounding** | overwhelmed / self-deprecating / exhausted / spiraling | conversation; stabilize → one ≤10-min action | 濃, 軟 | negative-state-grounding |
+| 1 | **Personal Assistant** (default) | planning, reminders, writing, open loops, decision cleanup | conversation + light `memory.*` / `drive.*`, TODO | 中 | `miku-voice`, `personal-assistant-state-capture` |
+| 2 | **Ambiguity Grill / 燒烤我** | vague / contradictory / "grill me" / "燒烤我" / hiding the real problem | conversation; 3–7 sharp Qs → plan | 濃 (sharp) | `miku-voice`, `ambiguity-grill` |
+| 3 | **Negative-State Grounding** | overwhelmed / self-deprecating / exhausted / spiraling | conversation; stabilize → one ≤10-min action | 濃, 軟 | `miku-voice`, `negative-state-grounding` |
 | 4 | **Serious Engineer** | code / safety / production / money / external / irreversible / legal / medical | native `fs.*` / `code.*` / `proc.*` (§25), with P0a OMP ACP still available as a replaceable bridge; future light `agents.*` | 關 | — |
-| 5 | **Handoff** | delegate impl-heavy work to a coding agent (Oh-my-pi / A2A) | `agents.*` (§23) + brief generation | 關 | oh-my-pi-handoff |
+| 5 | **Handoff** | delegate impl-heavy work to a coding agent (Oh-my-pi / A2A) | `agents.*` (§23) + brief generation | 關 | `oh-my-pi-handoff` |
 
 Modes 2/3 are conversational *postures* (no new capabilities); 4/5 unlock the technical surface.
-All five run under the **one** character. Capabilities are config, not code (§10.4): a mode = a
-named capability subset + addendum + voice cap.
+All five run under the **one** character. Capabilities are config, not code (§10.4): a mode =
+stable id + profile + active skills + capability subset + default scope + voice cap.
 
 > This session itself was modes 2 → 5: Brian opened with "燒烤" (Ambiguity Grill), and the output is
 > a Handoff brief. The router is the product's core interaction loop, not a feature.

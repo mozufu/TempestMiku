@@ -20,6 +20,7 @@ class ScriptedMikuClient implements MikuSessionClient {
       mode: 'personal_assistant',
       label: 'Personal Assistant',
       voiceCap: '中',
+      activeSkills: const ['miku-voice', 'personal-assistant-state-capture'],
     );
   }
 
@@ -46,6 +47,7 @@ class ScriptedMikuClient implements MikuSessionClient {
             'mode': 'serious_engineer',
             'label': 'Serious Engineer',
             'voice_cap': '關',
+            'activeSkills': [],
           },
         ),
       );
@@ -71,6 +73,7 @@ class ScriptedMikuClient implements MikuSessionClient {
         data: {
           'mode': mode,
           'label': _label(mode),
+          'activeSkills': _activeSkills(mode),
           'lock_source': 'user',
         },
       ),
@@ -82,7 +85,11 @@ class ScriptedMikuClient implements MikuSessionClient {
     _controllers[sessionId]?.add(
       const MikuEvent(
         type: 'mode',
-        data: {'mode': 'personal_assistant', 'label': 'Personal Assistant'},
+        data: {
+          'mode': 'personal_assistant',
+          'label': 'Personal Assistant',
+          'activeSkills': ['miku-voice', 'personal-assistant-state-capture'],
+        },
       ),
     );
   }
@@ -129,6 +136,19 @@ class ScriptedMikuClient implements MikuSessionClient {
       'ambiguity_grill' => 'Ambiguity Grill',
       'negative_state_grounding' => 'Negative-State Grounding',
       _ => 'Personal Assistant',
+    };
+  }
+
+  List<String> _activeSkills(String mode) {
+    return switch (mode) {
+      'ambiguity_grill' => const ['miku-voice', 'ambiguity-grill'],
+      'negative_state_grounding' => const [
+          'miku-voice',
+          'negative-state-grounding',
+        ],
+      'serious_engineer' => const [],
+      'handoff' => const ['oh-my-pi-handoff'],
+      _ => const ['miku-voice', 'personal-assistant-state-capture'],
     };
   }
 }

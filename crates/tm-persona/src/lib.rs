@@ -1,6 +1,22 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+pub const KNOWN_SKILLS: &[&str] = &[
+    "miku-voice",
+    "ambiguity-grill",
+    "negative-state-grounding",
+    "oh-my-pi-handoff",
+    "personal-assistant-state-capture",
+    "scope-guard",
+    "weekly-ship-ledger",
+];
+
+const FALLBACK_SOUL_PROMPT: &str = "\
+Persona assets are degraded, so the full SOUL.md is unavailable. Preserve the Tempest Miku \
+identity from the built-in contract: one constant Miku identity, serious-mode precision when the \
+work is technical/safety-critical, and bounded proactivity with explicit approval for destructive \
+or external actions.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +76,54 @@ impl Mode {
             }
         }
     }
+
+    pub fn active_skill_names(self) -> &'static [&'static str] {
+        match self {
+            Self::PersonalAssistant => &["miku-voice", "personal-assistant-state-capture"],
+            Self::AmbiguityGrill => &["miku-voice", "ambiguity-grill"],
+            Self::NegativeStateGrounding => &["miku-voice", "negative-state-grounding"],
+            Self::SeriousEngineer => &[],
+            Self::Handoff => &["oh-my-pi-handoff"],
+        }
+    }
+
+    pub fn capability_class(self) -> &'static str {
+        match self {
+            Self::PersonalAssistant | Self::AmbiguityGrill | Self::NegativeStateGrounding => {
+                "conversation"
+            }
+            Self::SeriousEngineer => "engineering",
+            Self::Handoff => "handoff",
+        }
+    }
+
+    pub fn profile(self) -> ModeProfile {
+        ModeProfile {
+            mode: self,
+            label: self.label().to_string(),
+            voice_cap: self.voice_cap().to_string(),
+            default_scope: self.default_scope().to_string(),
+            active_skills: self
+                .active_skill_names()
+                .iter()
+                .map(|skill| (*skill).to_string())
+                .collect(),
+            capability_class: self.capability_class().to_string(),
+            addendum: self.system_addendum().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeProfile {
+    pub mode: Mode,
+    pub label: String,
+    pub voice_cap: String,
+    pub default_scope: String,
+    pub active_skills: Vec<String>,
+    pub capability_class: String,
+    pub addendum: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +131,22 @@ impl Mode {
 pub enum PersonaStatus {
     Loaded { path: PathBuf },
     Degraded { warning: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonaAssets {
+    pub status: PersonaStatus,
+    pub soul: Option<String>,
+    pub skills: BTreeMap<String, String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonaPrompt {
+    pub system_prompt: String,
+    pub profile: ModeProfile,
+    pub status: PersonaStatus,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,21 +162,154 @@ impl PersonaConfig {
     }
 
     pub fn load_status(&self) -> PersonaStatus {
-        match &self.asset_path {
-            Some(path) if path.exists() => PersonaStatus::Loaded { path: path.clone() },
-            Some(path) => PersonaStatus::Degraded {
-                warning: format!("persona assets missing at {}", path.display()),
-            },
-            None => PersonaStatus::Degraded {
-                warning: "persona asset path not configured".to_string(),
-            },
+        self.load_assets().status
+    }
+
+    pub fn load_assets(&self) -> PersonaAssets {
+        let Some(root) = &self.asset_path else {
+            let warning = "persona asset path not configured".to_string();
+            return PersonaAssets {
+                status: PersonaStatus::Degraded {
+                    warning: warning.clone(),
+                },
+                soul: None,
+                skills: BTreeMap::new(),
+                warnings: vec![warning],
+            };
+        };
+
+        if !root.exists() {
+            let warning = format!("persona assets missing at {}", root.display());
+            return PersonaAssets {
+                status: PersonaStatus::Degraded {
+                    warning: warning.clone(),
+                },
+                soul: None,
+                skills: BTreeMap::new(),
+                warnings: vec![warning],
+            };
+        }
+
+        let mut warnings = Vec::new();
+        let soul_path = root.join("SOUL.md");
+        let soul = match fs::read_to_string(&soul_path) {
+            Ok(contents) => Some(contents),
+            Err(err) => {
+                warnings.push(format!("missing or unreadable SOUL.md: {err}"));
+                None
+            }
+        };
+
+        let mut skills = BTreeMap::new();
+        for skill in KNOWN_SKILLS {
+            let path = root.join("skills").join(skill).join("SKILL.md");
+            match fs::read_to_string(&path) {
+                Ok(contents) => {
+                    skills.insert((*skill).to_string(), contents);
+                }
+                Err(err) => warnings.push(format!("missing or unreadable skill {skill}: {err}")),
+            }
+        }
+
+        let status = if warnings.is_empty() {
+            PersonaStatus::Loaded { path: root.clone() }
+        } else {
+            PersonaStatus::Degraded {
+                warning: warnings.join("; "),
+            }
+        };
+
+        PersonaAssets {
+            status,
+            soul,
+            skills,
+            warnings,
+        }
+    }
+
+    pub fn build_system_prompt(
+        &self,
+        mode: Mode,
+        base_system_prompt: &str,
+        capability_notes: &str,
+    ) -> PersonaPrompt {
+        let assets = self.load_assets();
+        let profile = mode.profile();
+        let mut prompt = String::new();
+
+        push_section(&mut prompt, "Core runtime", base_system_prompt);
+        match &assets.soul {
+            Some(soul) => push_section(&mut prompt, "SOUL.md", soul),
+            None => push_section(&mut prompt, "SOUL.md fallback", FALLBACK_SOUL_PROMPT),
+        }
+
+        let active_skills = if profile.active_skills.is_empty() {
+            "none".to_string()
+        } else {
+            profile.active_skills.join(", ")
+        };
+        let mode_profile = format!(
+            "{}\n\nLabel: {}\nVoice cap: {}\nDefault scope: {}\nCapability class: {}\nActive skills: {}",
+            profile.addendum,
+            profile.label,
+            profile.voice_cap,
+            profile.default_scope,
+            profile.capability_class,
+            active_skills
+        );
+        push_section(&mut prompt, "Active mode profile", &mode_profile);
+
+        for skill in &profile.active_skills {
+            match assets.skills.get(skill.as_str()) {
+                Some(contents) => push_section(&mut prompt, &format!("skill://{skill}"), contents),
+                None => push_section(
+                    &mut prompt,
+                    &format!("missing skill://{skill}"),
+                    "This active skill is unavailable from persona assets. Use the built-in mode profile as the fallback.",
+                ),
+            }
+        }
+
+        if !capability_notes.trim().is_empty() {
+            push_section(&mut prompt, "Runtime capabilities", capability_notes);
+        }
+
+        if !assets.warnings.is_empty() {
+            push_section(
+                &mut prompt,
+                "Persona asset warnings",
+                &assets.warnings.join("\n"),
+            );
+        }
+
+        PersonaPrompt {
+            system_prompt: prompt,
+            profile,
+            status: assets.status,
+            warnings: assets.warnings,
         }
     }
 }
 
+fn push_section(target: &mut String, title: &str, content: &str) {
+    if !target.is_empty() {
+        target.push_str("\n\n");
+    }
+    target.push_str("## ");
+    target.push_str(title);
+    target.push('\n');
+    target.push_str(content.trim());
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Mode;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{KNOWN_SKILLS, Mode, PersonaConfig, PersonaStatus};
 
     #[test]
     fn handoff_label_is_handoff() {
@@ -108,6 +321,10 @@ mod tests {
         assert_eq!(Mode::AmbiguityGrill.label(), "Ambiguity Grill");
         assert_eq!(Mode::NegativeStateGrounding.default_scope(), "global");
         assert!(Mode::AmbiguityGrill.system_addendum().contains("mode 2"));
+        assert_eq!(
+            Mode::AmbiguityGrill.active_skill_names(),
+            ["miku-voice", "ambiguity-grill"]
+        );
     }
 
     #[test]
@@ -115,5 +332,90 @@ mod tests {
         assert_eq!(Mode::Handoff.voice_cap(), "關");
         assert_eq!(Mode::Handoff.default_scope(), "project:tempestmiku");
         assert!(Mode::Handoff.system_addendum().contains("mode 5"));
+        assert_eq!(Mode::Handoff.active_skill_names(), ["oh-my-pi-handoff"]);
+    }
+
+    #[test]
+    fn loads_fixture_soul_and_known_skills() {
+        let root = temp_persona_root();
+        write_fixture(&root, true, KNOWN_SKILLS);
+
+        let assets = PersonaConfig::from_path(&root).load_assets();
+        assert_eq!(assets.status, PersonaStatus::Loaded { path: root.clone() });
+        assert!(assets.soul.unwrap().contains("Fixture SOUL"));
+        assert!(
+            assets
+                .skills
+                .get("miku-voice")
+                .unwrap()
+                .contains("miku-voice fixture")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn degrades_when_soul_or_active_skills_are_missing() {
+        let root = temp_persona_root();
+        write_fixture(&root, false, &["ambiguity-grill"]);
+
+        let assets = PersonaConfig::from_path(&root).load_assets();
+        let PersonaStatus::Degraded { warning } = assets.status else {
+            panic!("missing SOUL.md and skills should degrade");
+        };
+        assert!(warning.contains("SOUL.md"));
+        assert!(warning.contains("miku-voice"));
+
+        let prompt = PersonaConfig::from_path(&root).build_system_prompt(
+            Mode::AmbiguityGrill,
+            "base prompt",
+            "capability notes",
+        );
+        assert!(prompt.system_prompt.contains("SOUL.md fallback"));
+        assert!(prompt.system_prompt.contains("missing skill://miku-voice"));
+        assert!(prompt.system_prompt.contains("skill://ambiguity-grill"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mode_profiles_map_expected_skills_voice_and_scope() {
+        let assistant = Mode::PersonalAssistant.profile();
+        assert_eq!(
+            assistant.active_skills,
+            vec!["miku-voice", "personal-assistant-state-capture"]
+        );
+        assert_eq!(assistant.voice_cap, "中");
+        assert_eq!(assistant.default_scope, "global");
+
+        let serious = Mode::SeriousEngineer.profile();
+        assert!(serious.active_skills.is_empty());
+        assert_eq!(serious.capability_class, "engineering");
+        assert_eq!(serious.voice_cap, "關");
+        assert_eq!(serious.default_scope, "project:tempestmiku");
+    }
+
+    fn temp_persona_root() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("tm-persona-test-{}-{nanos}", std::process::id()))
+    }
+
+    fn write_fixture(root: &Path, include_soul: bool, skills: &[&str]) {
+        fs::create_dir_all(root.join("skills")).unwrap();
+        if include_soul {
+            fs::write(root.join("SOUL.md"), "# Fixture SOUL\nidentity constant").unwrap();
+        }
+        for skill in skills {
+            let dir = root.join("skills").join(skill);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("# {skill}\n{skill} fixture skill body"),
+            )
+            .unwrap();
+        }
     }
 }

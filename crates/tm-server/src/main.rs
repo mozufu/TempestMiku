@@ -4,7 +4,7 @@ use tm_artifacts::default_root;
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient};
 use tm_host::{ApprovalPolicy, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig};
 use tm_llm::OpenAiClient;
-use tm_persona::{Mode, PersonaConfig};
+use tm_persona::PersonaConfig;
 use tm_sandbox::DenoSandboxOptions;
 
 use tm_server::{
@@ -96,10 +96,9 @@ fn build_runtime(
 
     let llm: Arc<dyn LlmClient> = Arc::new(OpenAiClient::from_env()?);
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    let system_prompt = server_agent_prompt(linked_folders);
     let cfg = AgentConfig {
         model: model.clone(),
-        system_prompt,
+        system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
         cell_budget: CellBudget {
             wall_ms: 240_000,
             output_bytes: 50_000,
@@ -191,29 +190,6 @@ fn chat_approval_policy(
         "deny" | "" | "manual" => Ok(Arc::new(DefaultDenyApprovalPolicy)),
         other => Err(format!("unsupported approval mode {other}").into()),
     }
-}
-
-fn server_agent_prompt(linked_folders: &LinkedFolders) -> String {
-    let mut prompt = format!(
-        "{DEFAULT_SYSTEM_PROMPT}\n\n{}",
-        Mode::PersonalAssistant.system_addendum()
-    );
-    prompt.push('\n');
-    if linked_folders.is_empty() {
-        prompt.push_str("No linked folders configured; fs.*, code.*, and proc.* will fail closed.");
-    } else {
-        for policy in linked_folders.policies() {
-            let mode = match policy.mode {
-                tm_host::FsMode::Ro => "ro",
-                tm_host::FsMode::Rw => "rw",
-            };
-            prompt.push_str(&format!(
-                "Linked folders: {} ({mode}) at linked://{}/\n",
-                policy.alias, policy.alias
-            ));
-        }
-    }
-    prompt
 }
 
 async fn serve<S, M, C>(

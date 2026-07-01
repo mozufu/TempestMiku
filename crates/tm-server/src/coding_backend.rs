@@ -22,6 +22,7 @@ pub trait CodingBackend: Send + Sync + 'static {
 pub struct CodingTurn {
     pub session_id: Uuid,
     pub user_prompt: String,
+    pub system_prompt: String,
     pub mode: tm_persona::Mode,
     pub scope: String,
 }

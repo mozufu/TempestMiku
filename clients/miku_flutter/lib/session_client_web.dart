@@ -247,6 +247,11 @@ class WebMikuSessionClient implements MikuSessionClient {
       defaultScope: (json['default_scope'] as String?) ??
           (json['defaultScope'] as String?) ??
           'global',
+      activeSkills: ((json['activeSkills'] as List?) ??
+              (json['active_skills'] as List?) ??
+              const [])
+          .map((skill) => skill.toString())
+          .toList(),
       locked:
           modeState['lockSource'] != null || modeState['lock_source'] != null,
       lastEventId: lastEventId,

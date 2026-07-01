@@ -6,17 +6,26 @@ use std::{
 use async_trait::async_trait;
 use serde_json::json;
 use tm_core::{Agent, AgentConfig, EventSink, LlmClient, Sandbox};
+use tm_persona::Mode;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use uuid::Uuid;
 
 use crate::{Result, ServerError, SessionEvent, Store, StoreEvent};
 
+#[derive(Debug, Clone)]
+pub struct ChatTurn {
+    pub session_id: Uuid,
+    pub user_prompt: String,
+    pub mode: Mode,
+    pub scope: String,
+    pub system_prompt: String,
+}
+
 #[async_trait]
 pub trait ChatRunner: Send + Sync + 'static {
     async fn run_turn(
         &self,
-        session_id: Uuid,
-        user: String,
+        turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
     ) -> Result<String>;
 }
@@ -25,17 +34,15 @@ pub trait ChatRunner: Send + Sync + 'static {
 impl<T: ChatRunner + ?Sized> ChatRunner for Arc<T> {
     async fn run_turn(
         &self,
-        session_id: Uuid,
-        user: String,
+        turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
     ) -> Result<String> {
-        (**self).run_turn(session_id, user, sink).await
+        (**self).run_turn(turn, sink).await
     }
 }
 
 struct AgentRequest {
-    session_id: Uuid,
-    user: String,
+    turn: ChatTurn,
     sink: Arc<dyn EventSink + Send + Sync>,
     reply: tokio::sync::oneshot::Sender<Result<String>>,
 }
@@ -54,7 +61,7 @@ impl AgentChatRunner {
                 .expect("agent worker runtime builds");
             for request in receiver {
                 let result = runtime
-                    .block_on(agent.run(&request.user, request.sink.as_ref()))
+                    .block_on(agent.run(&request.turn.user_prompt, request.sink.as_ref()))
                     .map_err(|err| ServerError::Store(err.to_string()));
                 let _ = request.reply.send(result);
             }
@@ -89,10 +96,12 @@ impl AgentChatRunner {
                 .build()
                 .expect("agent worker runtime builds");
             for request in receiver {
-                let sandbox = sandbox_factory(request.session_id);
-                let agent = Agent::new(Arc::clone(&llm), sandbox, cfg.clone());
+                let sandbox = sandbox_factory(request.turn.session_id);
+                let mut cfg = cfg.clone();
+                cfg.system_prompt = request.turn.system_prompt.clone();
+                let agent = Agent::new(Arc::clone(&llm), sandbox, cfg);
                 let result = runtime
-                    .block_on(agent.run(&request.user, request.sink.as_ref()))
+                    .block_on(agent.run(&request.turn.user_prompt, request.sink.as_ref()))
                     .map_err(|err| ServerError::Store(err.to_string()));
                 let _ = request.reply.send(result);
             }
@@ -107,8 +116,7 @@ impl AgentChatRunner {
 impl ChatRunner for AgentChatRunner {
     async fn run_turn(
         &self,
-        session_id: Uuid,
-        user: String,
+        turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
     ) -> Result<String> {
         let (reply, response) = tokio::sync::oneshot::channel();
@@ -118,12 +126,7 @@ impl ChatRunner for AgentChatRunner {
                 .lock()
                 .map_err(|_| ServerError::Store("agent sender lock poisoned".to_string()))?;
             sender
-                .send(AgentRequest {
-                    session_id,
-                    user,
-                    sink,
-                    reply,
-                })
+                .send(AgentRequest { turn, sink, reply })
                 .map_err(|_| ServerError::Store("agent worker stopped".to_string()))?;
         }
         response
@@ -139,11 +142,10 @@ pub struct EchoChatRunner;
 impl ChatRunner for EchoChatRunner {
     async fn run_turn(
         &self,
-        _session_id: Uuid,
-        user: String,
+        turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
     ) -> Result<String> {
-        let text = format!("Miku heard: {user}");
+        let text = format!("Miku heard: {}", turn.user_prompt);
         sink.on_text(&text);
         sink.on_final(&text);
         Ok(text)
@@ -161,13 +163,12 @@ pub enum ServerChatRunner {
 impl ChatRunner for ServerChatRunner {
     async fn run_turn(
         &self,
-        session_id: Uuid,
-        user: String,
+        turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
     ) -> Result<String> {
         match self {
-            Self::Echo(r) => r.run_turn(session_id, user, sink).await,
-            Self::Agent(r) => r.run_turn(session_id, user, sink).await,
+            Self::Echo(r) => r.run_turn(turn, sink).await,
+            Self::Agent(r) => r.run_turn(turn, sink).await,
         }
     }
 }

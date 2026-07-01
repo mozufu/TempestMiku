@@ -775,6 +775,8 @@ pub enum StoreEvent {
         mode: Mode,
         label: String,
         voice_cap: String,
+        #[serde(rename = "activeSkills")]
+        active_skills: Vec<String>,
         router_reason: Option<String>,
         lock_source: Option<String>,
         override_source: Option<String>,
@@ -836,6 +838,11 @@ mod tests {
                     mode: Mode::SeriousEngineer,
                     label: Mode::SeriousEngineer.label().to_string(),
                     voice_cap: Mode::SeriousEngineer.voice_cap().to_string(),
+                    active_skills: Mode::SeriousEngineer
+                        .active_skill_names()
+                        .iter()
+                        .map(|skill| (*skill).to_string())
+                        .collect(),
                     router_reason: mode_state.router_reason,
                     lock_source: None,
                     override_source: None,

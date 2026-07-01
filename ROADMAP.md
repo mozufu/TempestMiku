@@ -35,19 +35,19 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
 
-## Execution plan from current workspace (2026-06-30)
+## Execution plan from current workspace (2026-07-01)
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
 `tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
 `tm-host`, `tm-persona`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The
-implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP bridging, and the
-native P0 Serious Engineer dogfood slice. Normal Rust tests pass when local loopback networking is
-available; managed sandboxes may need elevated permissions for tests that bind `127.0.0.1`.
+implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP bridging, the native
+P0 Serious Engineer dogfood slice, and the P1 project-manager remote-control surface. Normal Rust
+tests pass when local loopback networking is available; managed sandboxes may need elevated
+permissions for tests that bind `127.0.0.1`.
 
 Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, `tm-agents`, and
-`tm-drive` crates; scheduler/dreaming; full mode router lock/override; project promotion and
-project/open-loop views; Android OS packaging; generated SDK docs from the runtime registry; and
-production egress/secret hardening.
+`tm-drive` crates; scheduler/dreaming; Android OS packaging; generated SDK docs from the runtime
+registry; and production egress/secret hardening.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -59,7 +59,7 @@ each milestone is done only when its acceptance checks pass.
 | 2 | **DONE — host registry + approvals foundation** | 3–5d | Add `tm-host`; define `HostFn`, capability grants, `ResourceRegistry`, `ApprovalPolicy`; wire SDK dispatch from sandbox ops; fail closed on unknown schemes/capabilities. | Unit tests prove denied capability cannot execute, approval timeout denies by default, `artifact://` resolves through the registry, linked paths cannot escape roots, and unsafe operations gate or fail closed. |
 | 2.5 | **DONE — P0a OMP ACP bridge path** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | Tests cover ACP event normalization, diff/artifact events, generated approval mode, permission request round trips, approval route resolution, and replay from `Last-Event-ID`. Live `omp acp` dogfood remains backend-environment dependent. |
 | 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement `fs.*`, search, patch-only `code.edit`, `proc.run(cmd,args)` allowlist, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, patch edit and stale-tag rejection, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI Deno host ops, serious-mode voice cap, and project summary/open-loop recall. |
-| 4 | **NEXT — P1 project manager + remote control** | 4–7d | Add the missing project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Reconnect replays from event id; router fires; user can lock; project status and decisions survive across sessions; `POST /sessions/:id/promote` turns workspace files/artifacts/summary/open loops into `project://` resources with provenance; a phone/browser can send a task, watch streaming events, approve/deny a gated action, open resource links, disconnect, and resume without losing state. |
+| 4 | **DONE — P1 project manager + remote control** | 4–7d | Added the project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Tests and smoke coverage prove reconnect replay from event id, router lock/unlock, project status and decisions across sessions, `POST /sessions/:id/promote` to `project://` resources with provenance, approval/resource workflows, and Flutter Web/PWA attach/send/watch/resume behavior. |
 | 5 | **P2 — personal assistant** | 5–8d | Add full persona overlay, configurable SOUL / skills asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminders. | Token-by-token Miku response over SSE; profile/recall context injected; voice is characterful outside serious mode; memory writes are approval-gated; health-over-productivity and proactivity bounds hold. |
 | 6 | **P3 — handoff + sub-agent actors** | 6–10d | Add `tm-agents` actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` resources, supervision defaults; implement Handoff brief template. | Fan-out N workers, only digest returns to parent context; siblings coordinate by messages; child crash isolated/restarted/degraded; handoff matches `oh-my-pi-handoff`. |
 | 7 | **P4 — dreaming + scheduler** | 6–10d | Expand `tm-memory` to Postgres/pgvector + FTS; async episodic writes; dream queue; extraction, reflection, summaries, skill proposal; add cron scheduler. | Session end enqueues dream; dream writes summary + at least one approval-gated skill proposal; weekly ship ledger runs under cron bounds. |
@@ -69,15 +69,14 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Ship P1 project-manager remote control** — router lock/override, project/open-loop/decision
-   views, session promotion, and mobile-sized Flutter Web/PWA approval/resource workflows over the
-   existing SSE + POST API.
-2. **Harden server persistence boundaries** — keep normal tests external-service-free, but add gated
-   Postgres coverage for event replay, memory rows, approvals, and artifact/resource references.
-3. **Prepare the native cutover story from P0a** — keep OMP ACP replaceable; prove native `fs.*` /
+1. **Prepare the native cutover story from P0a** — keep OMP ACP replaceable; prove native `fs.*` /
    `code.*` / `proc.*` can handle the same dogfood edits without weakening approval/security.
-4. **Defer expansion crates until P1 stabilizes** — `tm-memory`, `tm-agents`, `tm-drive`, `tm-mcp`,
-   scheduler/dreaming, and Android OS packaging should build on the settled server/resource surface.
+2. **Start the P2 personal-assistant baseline** — add the full persona overlay, profile/user recall,
+   personal-assistant state capture, negative-state grounding, and bounded proactive reminders while
+   preserving manual approval gates for memory writes.
+3. **Defer expansion crates until the native cutover and P2 baseline are stable** — `tm-agents`,
+   `tm-drive`, `tm-mcp`, scheduler/dreaming, and Android OS packaging should build on the settled
+   server/resource surface.
 
 ### Deferred SDK namespace placement
 
@@ -91,19 +90,19 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 | `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
 | `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as the deterministic allowlist helper until P7 hardening. |
 | `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
-| `code.ast` / `code.lsp` | **P1.5/P2 tech slice** | Can land after the P1 server/resource surface is stable; keep it out of the critical P1 project-manager path. |
+| `code.ast` / `code.lsp` | **P1.5/P2 tech slice** | Can land after the native cutover story is proven if structured code edits need it; keep it out of the critical companion baseline unless it has a concrete user. |
 
 ### Parallelization seams
 
-- Generated SDK docs/type maintenance can proceed independently of P1 UI work, as long as it reads from the
-  existing host registry contract.
-- Project promotion and project/open-loop views can split after the `project://` resource shape is
-  fixed.
+- Generated SDK docs/type maintenance can proceed independently of P2 work, as long as it reads from
+  the existing host registry contract.
+- Native dogfood cutover work can proceed independently of the P2 companion baseline as long as both
+  preserve the same approval/resource boundaries.
 - After actor mailbox semantics are fixed, supervision and `agent://` resource handling can split.
 
 ### Do-not-start-yet list
 
-- Android OS packaging before P1 server APIs stabilize; phone/browser remote control itself belongs in P1 through the shared SSE + POST API and Flutter Web/PWA target.
+- Android OS packaging before the native cutover and P2/P3 product surfaces stabilize.
 - Drive auto-organizer before approval policy and memory scopes exist.
 - Self-evolution writes before audit/replay and tier gates exist.
 - Research/deep orchestration before `agents.*`, artifacts, memory scopes, and scheduler are real.

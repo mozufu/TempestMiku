@@ -2,7 +2,9 @@ import { expect, test } from '@playwright/test';
 
 test('session API streams text, finalizes, and replay resumes by Last-Event-ID', async ({ request }) => {
   const root = await request.get('/');
-  expect(root.status()).toBe(404);
+  expect(root.status()).toBe(200);
+  expect(root.headers()['content-type']).toContain('text/html');
+  expect(await root.text()).toContain('TempestMiku Remote');
 
   const created = await request.post('/sessions');
   expect(created.ok()).toBeTruthy();

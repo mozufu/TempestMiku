@@ -1903,7 +1903,8 @@ mod tests {
 
     use crate::{
         AgentChatRunner, ApprovalOption, ApprovalPrompt, CodingEventSink, CodingTurn,
-        CodingTurnResult, EchoChatRunner, InMemoryStore, StoreMemoryProvider,
+        CodingTurnResult, EchoChatRunner, InMemoryStore, NativeApprovalMode, NativeDenoBackend,
+        StoreMemoryProvider,
         auth::ForwardedAuthConfig,
         store::{ProfileFactRecord, RecallChunkRecord},
     };
@@ -2426,6 +2427,155 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.payload_json["outcome"], json!("selected"));
         assert_eq!(resolved.payload_json["optionId"], json!("allow"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_deno_backend_approval_route_approves_proc_run() {
+        let (app, store, llm, session, _temp) =
+            native_deno_approval_app(Duration::from_secs(5), native_proc_script()).await;
+        let post_app = app.clone();
+        let session_id = session.id;
+        let message = tokio::spawn(async move {
+            post_app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{session_id}/messages"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"content":"run an unsafe proc command"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+
+        let approval = wait_for_event_payload(&store, session_id, "approval").await;
+        assert_eq!(approval["backend"], json!("native-deno"));
+        assert_eq!(approval["action"], json!("proc.run cargo clean"));
+        let approval_id = approval["approvalId"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"decision":"approve"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(message.await.unwrap().status(), StatusCode::OK);
+
+        let resolved = store
+            .events_after(session_id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == "approval_resolved")
+            .unwrap();
+        assert_eq!(resolved.payload_json["backend"], json!("native-deno"));
+        assert_eq!(resolved.payload_json["optionId"], json!("allow"));
+        assert!(native_tool_result(&llm).contains("\"ok\": true"));
+        assert!(
+            store
+                .events_after(session_id, None)
+                .await
+                .unwrap()
+                .iter()
+                .any(|event| event.event_type == "cell_result")
+        );
+    }
+
+    #[serial_test::serial]
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_deno_backend_approval_route_denies_proc_run() {
+        let (app, store, llm, session, _temp) =
+            native_deno_approval_app(Duration::from_secs(5), native_proc_script()).await;
+        let post_app = app.clone();
+        let session_id = session.id;
+        let message = tokio::spawn(async move {
+            post_app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{session_id}/messages"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"content":"deny an unsafe proc command"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+
+        let approval_id =
+            wait_for_event_payload(&store, session_id, "approval").await["approvalId"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap();
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"decision":"deny"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(message.await.unwrap().status(), StatusCode::OK);
+        assert!(native_tool_result(&llm).contains("ApprovalDeniedError"));
+        let resolved = store
+            .events_after(session_id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == "approval_resolved")
+            .unwrap();
+        assert_eq!(resolved.payload_json["backend"], json!("native-deno"));
+        assert_eq!(resolved.payload_json["optionId"], json!("reject"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_deno_backend_approval_timeout_defaults_to_deny() {
+        let (app, store, llm, session, _temp) =
+            native_deno_approval_app(Duration::from_millis(1), native_proc_script()).await;
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"content":"timeout an unsafe proc command"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(native_tool_result(&llm).contains("ApprovalTimeoutError"));
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert!(events.iter().any(|event| {
+            event.event_type == "approval" && event.payload_json["backend"] == json!("native-deno")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_type == "approval_resolved"
+                && event.payload_json["backend"] == json!("native-deno")
+                && event.payload_json["optionId"] == json!("reject")
+        }));
     }
 
     #[tokio::test]
@@ -3010,6 +3160,113 @@ display({
             .unwrap();
         assert_eq!(resolved.payload_json["backend"], json!("project-promotion"));
         assert_eq!(resolved.payload_json["optionId"], json!("reject"));
+    }
+
+    async fn native_deno_approval_app(
+        timeout: Duration,
+        code: &str,
+    ) -> (
+        Router,
+        Arc<InMemoryStore>,
+        Arc<ScriptedLlm>,
+        CreateSessionResponse,
+        tempfile::TempDir,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let linked_root = temp.path().join("repo");
+        std::fs::create_dir_all(linked_root.join("src")).unwrap();
+        std::fs::write(
+            linked_root.join("Cargo.toml"),
+            "[package]\nname = \"native-deno-approval-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::write(linked_root.join("src/lib.rs"), "pub fn x() -> i32 { 1 }\n").unwrap();
+        let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+            name: "repo".to_string(),
+            path: linked_root,
+            mode: FsMode::Rw,
+            commands: vec!["cargo".to_string()],
+            safe_args: vec![vec!["cargo".to_string(), "test".to_string()]],
+        }])
+        .unwrap();
+        let tool_args = json!({ "code": code }).to_string();
+        let llm = Arc::new(ScriptedLlm::new(vec![
+            vec![
+                StreamEvent::ToolCall {
+                    index: 0,
+                    id: Some("call_native_deno".to_string()),
+                    name: Some("execute".to_string()),
+                    arguments: Some(tool_args),
+                },
+                StreamEvent::Finish {
+                    reason: Some("tool_calls".to_string()),
+                },
+            ],
+            vec![
+                StreamEvent::Text("done".to_string()),
+                StreamEvent::Finish {
+                    reason: Some("stop".to_string()),
+                },
+            ],
+        ]));
+        let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+        let cfg = AgentConfig {
+            model: "fake".to_string(),
+            max_turns: 3,
+            cell_budget: CellBudget {
+                wall_ms: 240_000,
+                output_bytes: 50_000,
+            },
+            ..AgentConfig::default()
+        };
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let mut state = AppState::new(
+            store.clone(),
+            memory,
+            chat,
+            PersonaConfig::default(),
+            AuthConfig::NoAuth,
+        )
+        .with_artifact_root(artifact_root.clone())
+        .with_linked_folders(linked.clone());
+        let backend = NativeDenoBackend::new(
+            llm_for_backend,
+            cfg,
+            DenoSandboxOptions {
+                artifact_root,
+                linked_folders: Some(linked),
+                approval_timeout: timeout,
+                ..DenoSandboxOptions::default()
+            },
+            NativeApprovalMode::Manual,
+            Arc::clone(&state.approval_broker),
+        );
+        state = state.with_coding_backend(Arc::new(backend));
+        let router = app(state);
+        let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+        (router, store, llm, session, temp)
+    }
+
+    fn native_proc_script() -> &'static str {
+        r#"
+const result = await proc.run("cargo", ["clean"], { cwd: "repo:" })
+  .then(ok => ({ ok: true, exitCode: ok.exitCode }))
+  .catch(err => ({ ok: false, name: err.name, retryable: err.retryable }));
+display(result);
+"#
+    }
+
+    fn native_tool_result(llm: &ScriptedLlm) -> String {
+        let requests = llm.requests.lock();
+        requests[1]
+            .iter()
+            .find(|message| message.role == Role::Tool)
+            .expect("tool result is fed back before final turn")
+            .content
+            .clone()
     }
 
     async fn wait_for_event_payload(

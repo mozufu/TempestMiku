@@ -879,7 +879,7 @@ impl HostFn for FsWriteFn {
         &self.docs
     }
 
-    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Args {
@@ -903,6 +903,10 @@ impl HostFn for FsWriteFn {
                 "{} already exists; set overwrite=true",
                 resolved.display
             )));
+        }
+        if existed {
+            ctx.require_approval(&format!("fs.write overwrite {}", args.path))
+                .await?;
         }
         fs::write(&resolved.path, args.data.as_bytes())
             .map_err(|err| HostError::HostCall(err.to_string()))?;
@@ -1614,7 +1618,7 @@ fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) -> ToolDocs
         },
         "fs.write" => ToolDocs {
             description: Some(
-                "Write UTF-8 text below a writable linked-folder grant. Binary writes are deferred."
+                "Write UTF-8 text below a writable linked-folder grant. Overwrites require approval. Binary writes are deferred."
                     .to_string(),
             ),
             signature:
@@ -1641,6 +1645,8 @@ fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) -> ToolDocs
             }],
             errors: vec![
                 tool_error("CapabilityDeniedError", "The linked folder is read-only or fs.write is not granted.", false),
+                tool_error("ApprovalDeniedError", "The user denies an overwrite.", false),
+                tool_error("ApprovalTimeoutError", "The overwrite approval request times out and defaults to deny.", true),
                 tool_error("InvalidPathError", "The path is outside the linked root or the parent is unavailable.", false),
                 tool_error("InvalidArgsError", "The target exists without overwrite=true, or args do not match the schema.", false),
                 tool_error("HostCallError", "The host write fails after policy checks.", false),
@@ -2788,6 +2794,64 @@ mod tests {
         )
         .await;
         assert_eq!(included.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn fs_write_gates_overwrites_only() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.txt");
+        let write = FsWriteFn::new(temp_linked(root.path(), FsMode::Rw));
+        let denied_ctx = InvocationCtx::with_approvals(
+            ctx().grants,
+            Arc::new(StaticApproval(ApprovalDecision::Denied)),
+            Duration::from_secs(1),
+        );
+        write
+            .call(
+                json!({"path":"tempestmiku:new.txt","data":"new"}),
+                &denied_ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("new.txt")).unwrap(),
+            "new"
+        );
+
+        fs::write(&path, "old").unwrap();
+        let denied = write
+            .call(
+                json!({"path":"tempestmiku:note.txt","data":"denied","overwrite":true}),
+                &denied_ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(denied, HostError::ApprovalDenied(_)));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+
+        let timed_out = write
+            .call(
+                json!({"path":"tempestmiku:note.txt","data":"timeout","overwrite":true}),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(timed_out, HostError::ApprovalTimeout(_)));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+
+        let approved_ctx = InvocationCtx::with_approvals(
+            ctx().grants,
+            Arc::new(StaticApproval(ApprovalDecision::Approved)),
+            Duration::from_secs(1),
+        );
+        write
+            .call(
+                json!({"path":"tempestmiku:note.txt","data":"approved","overwrite":true}),
+                &approved_ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "approved");
     }
 
     #[tokio::test]

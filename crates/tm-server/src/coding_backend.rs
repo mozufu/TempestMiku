@@ -105,6 +105,20 @@ pub enum ApprovalOutcome {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalStatus {
+    Approved,
+    Denied,
+    TimedOut,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailedApprovalOutcome {
+    pub outcome: ApprovalOutcome,
+    pub status: ApprovalStatus,
+}
+
 #[derive(Default)]
 pub struct ApprovalBroker {
     pending: Mutex<BTreeMap<Uuid, PendingApproval>>,
@@ -135,6 +149,20 @@ impl ApprovalBroker {
         timeout: Duration,
         sink: Arc<dyn CodingEventSink>,
     ) -> Result<ApprovalOutcome> {
+        Ok(self
+            .request_permission_detailed_for_backend(session_id, backend, prompt, timeout, sink)
+            .await?
+            .outcome)
+    }
+
+    pub async fn request_permission_detailed_for_backend(
+        &self,
+        session_id: Uuid,
+        backend: &str,
+        prompt: ApprovalPrompt,
+        timeout: Duration,
+        sink: Arc<dyn CodingEventSink>,
+    ) -> Result<DetailedApprovalOutcome> {
         let approval_id = Uuid::new_v4();
         let (sender, receiver) = oneshot::channel();
         self.pending
@@ -154,22 +182,47 @@ impl ApprovalBroker {
             return Err(err);
         }
 
+        enum RequestState {
+            Resolved(ResolveApprovalRequest),
+            Closed,
+            TimedOut,
+        }
+
         let request = match tokio::time::timeout(timeout, receiver).await {
-            Ok(Ok(request)) => Some(request),
-            Ok(Err(_closed)) => None,
+            Ok(Ok(request)) => RequestState::Resolved(request),
+            Ok(Err(_closed)) => RequestState::Closed,
             Err(_elapsed) => {
                 self.pending.lock().remove(&approval_id);
-                None
+                RequestState::TimedOut
             }
         };
 
-        let outcome = match request {
-            Some(request) => self.resolve_outcome(&prompt, request),
-            None => self.reject_outcome(&prompt),
+        let detailed = match request {
+            RequestState::Resolved(request) => {
+                let outcome = self.resolve_outcome(&prompt, request);
+                DetailedApprovalOutcome {
+                    status: status_for_outcome(&prompt, &outcome),
+                    outcome,
+                }
+            }
+            RequestState::Closed => {
+                let outcome = self.reject_outcome(&prompt);
+                DetailedApprovalOutcome {
+                    status: ApprovalStatus::Cancelled,
+                    outcome,
+                }
+            }
+            RequestState::TimedOut => {
+                let outcome = self.reject_outcome(&prompt);
+                DetailedApprovalOutcome {
+                    status: ApprovalStatus::TimedOut,
+                    outcome,
+                }
+            }
         };
-        self.emit_resolution(approval_id, backend, &outcome, sink)
+        self.emit_resolution(approval_id, backend, &detailed.outcome, sink)
             .await?;
-        Ok(outcome)
+        Ok(detailed)
     }
 
     pub fn resolve(
@@ -266,6 +319,26 @@ fn select_option(prompt: &ApprovalPrompt, predicate: impl Fn(&str) -> bool) -> O
         .iter()
         .find(|option| predicate(&option.kind))
         .map(|option| option.option_id.clone())
+}
+
+fn status_for_outcome(prompt: &ApprovalPrompt, outcome: &ApprovalOutcome) -> ApprovalStatus {
+    match outcome {
+        ApprovalOutcome::Selected { option_id } => prompt
+            .options
+            .iter()
+            .find(|option| option.option_id == *option_id)
+            .map(|option| {
+                if option.kind.starts_with("allow_") {
+                    ApprovalStatus::Approved
+                } else if option.kind.starts_with("reject_") {
+                    ApprovalStatus::Denied
+                } else {
+                    ApprovalStatus::Cancelled
+                }
+            })
+            .unwrap_or(ApprovalStatus::Cancelled),
+        ApprovalOutcome::Cancelled => ApprovalStatus::Cancelled,
+    }
 }
 
 #[cfg(test)]
@@ -433,6 +506,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cancelled, ApprovalOutcome::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn detailed_permission_preserves_timeout_status() {
+        let broker = Arc::new(ApprovalBroker::default());
+        let sink = Arc::new(RecordingSink::default());
+        let session_id = Uuid::new_v4();
+        let timed_out = broker
+            .request_permission_detailed_for_backend(
+                session_id,
+                "native-deno",
+                prompt(vec![("reject", "reject_once"), ("allow", "allow_once")]),
+                Duration::from_millis(1),
+                sink,
+            )
+            .await
+            .unwrap();
+        assert_eq!(timed_out.status, ApprovalStatus::TimedOut);
+        assert_eq!(
+            timed_out.outcome,
+            ApprovalOutcome::Selected {
+                option_id: "reject".to_string()
+            }
+        );
     }
 
     #[tokio::test]

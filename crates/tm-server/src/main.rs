@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use tm_artifacts::default_root;
-use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT};
+use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient};
 use tm_host::{ApprovalPolicy, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig};
 use tm_llm::OpenAiClient;
 use tm_persona::{Mode, PersonaConfig};
@@ -9,7 +9,8 @@ use tm_sandbox::DenoSandboxOptions;
 
 use tm_server::{
     AgentChatRunner, AppState, AuthConfig, CodingBackend, EchoChatRunner, InMemoryStore,
-    OmpAcpBackend, OmpAcpConfig, PostgresStore, ServerChatRunner, StoreMemoryProvider, app,
+    NativeApprovalMode, NativeDenoBackend, OmpAcpBackend, OmpAcpConfig, PostgresStore,
+    ServerChatRunner, StoreMemoryProvider, app,
 };
 
 #[tokio::main]
@@ -29,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_config = load_host_config()?;
     let linked_folders = host_config.linked_folders()?;
     let artifact_root = server_artifact_root(&host_config);
-    let chat = build_chat(&host_config, &linked_folders, artifact_root.clone())?;
+    let runtime = build_runtime(&host_config, &linked_folders, artifact_root.clone())?;
 
     if let Ok(dsn) = std::env::var("TM_DATABASE_URL")
         && !dsn.trim().is_empty()
@@ -37,9 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = Arc::new(PostgresStore::connect(&dsn).await?);
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(
-            AppState::new(store, memory, chat, persona, AuthConfig::NoAuth),
+            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth),
             &linked_folders,
             artifact_root.clone(),
+            runtime.native_deno,
         )?;
         serve(addr, state).await?;
     } else {
@@ -49,9 +51,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = Arc::new(InMemoryStore::default());
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(
-            AppState::new(store, memory, chat, persona, AuthConfig::NoAuth),
+            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth),
             &linked_folders,
             artifact_root.clone(),
+            runtime.native_deno,
         )?;
         serve(addr, state).await?;
     }
@@ -59,11 +62,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn build_chat(
+struct BuiltRuntime {
+    chat: Arc<ServerChatRunner>,
+    native_deno: Option<NativeDenoBackendConfig>,
+}
+
+struct NativeDenoBackendConfig {
+    llm: Arc<dyn LlmClient>,
+    cfg: AgentConfig,
+    sandbox_options: DenoSandboxOptions,
+    approval_mode: NativeApprovalMode,
+}
+
+fn build_runtime(
     host_config: &P0HostConfig,
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
-) -> Result<Arc<ServerChatRunner>, Box<dyn std::error::Error>> {
+) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
     let api_key_set = std::env::var("OPENAI_API_KEY")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
@@ -73,10 +88,13 @@ fn build_chat(
 
     if !api_key_set && !base_url_set {
         tracing::warn!("OPENAI_API_KEY / OPENAI_BASE_URL not set — falling back to EchoChatRunner");
-        return Ok(Arc::new(ServerChatRunner::Echo(EchoChatRunner)));
+        return Ok(BuiltRuntime {
+            chat: Arc::new(ServerChatRunner::Echo(EchoChatRunner)),
+            native_deno: None,
+        });
     }
 
-    let llm = Arc::new(OpenAiClient::from_env()?);
+    let llm: Arc<dyn LlmClient> = Arc::new(OpenAiClient::from_env()?);
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
     let system_prompt = server_agent_prompt(linked_folders);
     let cfg = AgentConfig {
@@ -92,22 +110,32 @@ fn build_chat(
     let sandbox_options = DenoSandboxOptions {
         artifact_root,
         linked_folders,
-        approval_policy: approval_policy(host_config)?,
+        approval_policy: chat_approval_policy(host_config)?,
         approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
         ..DenoSandboxOptions::default()
     };
+    let approval_mode = NativeApprovalMode::parse(&host_config.approvals.mode)?;
     tracing::info!(model, "real LLM agent runner configured");
-    Ok(Arc::new(ServerChatRunner::Agent(AgentChatRunner::deno(
-        llm,
-        cfg,
-        sandbox_options,
-    ))))
+    Ok(BuiltRuntime {
+        chat: Arc::new(ServerChatRunner::Agent(AgentChatRunner::deno(
+            Arc::clone(&llm),
+            cfg.clone(),
+            sandbox_options.clone(),
+        ))),
+        native_deno: Some(NativeDenoBackendConfig {
+            llm,
+            cfg,
+            sandbox_options,
+            approval_mode,
+        }),
+    })
 }
 
 fn configure_coding_backend<S, M, C>(
     mut state: AppState<S, M, C>,
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
+    native_deno: Option<NativeDenoBackendConfig>,
 ) -> Result<AppState<S, M, C>, Box<dyn std::error::Error>> {
     state = state
         .with_artifact_root(artifact_root)
@@ -117,6 +145,15 @@ fn configure_coding_backend<S, M, C>(
             OmpAcpConfig::from_env()?,
             Arc::clone(&state.approval_broker),
         )?);
+        state = state.with_coding_backend(backend);
+    } else if let Some(native_deno) = native_deno {
+        let backend: Arc<dyn CodingBackend> = Arc::new(NativeDenoBackend::new(
+            native_deno.llm,
+            native_deno.cfg,
+            native_deno.sandbox_options,
+            native_deno.approval_mode,
+            Arc::clone(&state.approval_broker),
+        ));
         state = state.with_coding_backend(backend);
     }
     Ok(state)
@@ -147,17 +184,11 @@ fn server_artifact_root(host_config: &P0HostConfig) -> PathBuf {
         .unwrap_or_else(default_root)
 }
 
-fn approval_policy(
+fn chat_approval_policy(
     config: &P0HostConfig,
 ) -> Result<Arc<dyn ApprovalPolicy>, Box<dyn std::error::Error>> {
     match config.approvals.mode.as_str() {
-        "deny" | "" => Ok(Arc::new(DefaultDenyApprovalPolicy)),
-        "manual" => {
-            tracing::warn!(
-                "native server agent approval mode manual is not wired to HTTP approvals yet; using default-deny"
-            );
-            Ok(Arc::new(DefaultDenyApprovalPolicy))
-        }
+        "deny" | "" | "manual" => Ok(Arc::new(DefaultDenyApprovalPolicy)),
         other => Err(format!("unsupported approval mode {other}").into()),
     }
 }

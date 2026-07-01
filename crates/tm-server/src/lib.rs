@@ -10,6 +10,7 @@ pub mod chat;
 pub mod coding_backend;
 pub mod error;
 pub mod memory;
+pub mod native_deno;
 pub mod omp_acp;
 pub mod store;
 pub mod webui;
@@ -21,11 +22,12 @@ pub use chat::{
 };
 pub use coding_backend::{
     ApprovalBroker, ApprovalOption, ApprovalOutcome, ApprovalPrompt, ApprovalResolveDecision,
-    CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult, ResolveApprovalRequest,
-    StoreCodingEventSink,
+    ApprovalStatus, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
+    DetailedApprovalOutcome, ResolveApprovalRequest, StoreCodingEventSink,
 };
 pub use error::{Result, ServerError};
 pub use memory::{MemoryContext, MemoryProvider, StoreMemoryProvider};
+pub use native_deno::{NativeApprovalMode, NativeDenoBackend};
 pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
 pub use store::{
     InMemoryStore, MessageRecord, ModeState, NewProjectItem, NewSession, PostgresStore,

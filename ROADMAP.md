@@ -41,13 +41,15 @@ Current implementation has advanced past the original M0-only substrate. The wor
 `tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
 `tm-host`, `tm-persona`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The
 implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP bridging, the native
-P0 Serious Engineer dogfood slice, and the P1 project-manager remote-control surface. Normal Rust
-tests pass when local loopback networking is available; managed sandboxes may need elevated
-permissions for tests that bind `127.0.0.1`.
+P0 Serious Engineer dogfood slice, the CLI native cutover proof for linked-repo edit/run/artifact
+workflows, and the P1 project-manager remote-control surface. Normal Rust tests pass when local
+loopback networking is available; managed sandboxes may need elevated permissions for tests that bind
+`127.0.0.1`.
 
 Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, `tm-agents`, and
-`tm-drive` crates; scheduler/dreaming; Android OS packaging; generated SDK docs from the runtime
-registry; and production egress/secret hardening.
+`tm-drive` crates; scheduler/dreaming; native server HTTP approval plumbing for manual SDK approvals;
+Android OS packaging; generated SDK docs from the runtime registry; and production egress/secret
+hardening.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -69,8 +71,9 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Prepare the native cutover story from P0a** — keep OMP ACP replaceable; prove native `fs.*` /
-   `code.*` / `proc.*` can handle the same dogfood edits without weakening approval/security.
+1. **Finish native server approval plumbing** — keep OMP ACP replaceable, but let native server
+   `fs.*` / `code.*` / `proc.*` approval-gated SDK calls suspend through the same HTTP approval
+   surface instead of default-denying `manual` mode.
 2. **Start the P2 personal-assistant baseline** — add the full persona overlay, profile/user recall,
    personal-assistant state capture, negative-state grounding, and bounded proactive reminders while
    preserving manual approval gates for memory writes.

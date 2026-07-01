@@ -3949,6 +3949,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "thiserror",
  "tm-artifacts",

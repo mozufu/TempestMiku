@@ -353,7 +353,10 @@ where
                 Arc::clone(&state.store),
                 state.sender(session_id),
             ));
-            let response = state.chat.run_turn(user_prompt, sink.clone()).await?;
+            let response = state
+                .chat
+                .run_turn(session_id, user_prompt, sink.clone())
+                .await?;
             sink.flush().await?;
             response
         }
@@ -363,7 +366,10 @@ where
             Arc::clone(&state.store),
             state.sender(session_id),
         ));
-        let response = state.chat.run_turn(user_prompt, sink.clone()).await?;
+        let response = state
+            .chat
+            .run_turn(session_id, user_prompt, sink.clone())
+            .await?;
         sink.flush().await?;
         response
     };
@@ -1882,15 +1888,22 @@ mod tests {
         http::{Method, Request, StatusCode},
     };
     use chrono::Utc;
-    use std::path::PathBuf;
+    use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
     use async_trait::async_trait;
+    use futures::stream::{self, BoxStream};
+    use parking_lot::Mutex;
+    use tm_core::{
+        AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Message,
+        Result as CoreResult, Role, StreamEvent,
+    };
     use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
+    use tm_sandbox::DenoSandboxOptions;
     use tower::ServiceExt;
 
     use crate::{
-        ApprovalOption, ApprovalPrompt, CodingEventSink, CodingTurn, CodingTurnResult,
-        EchoChatRunner, InMemoryStore, StoreMemoryProvider,
+        AgentChatRunner, ApprovalOption, ApprovalPrompt, CodingEventSink, CodingTurn,
+        CodingTurnResult, EchoChatRunner, InMemoryStore, StoreMemoryProvider,
         auth::ForwardedAuthConfig,
         store::{ProfileFactRecord, RecallChunkRecord},
     };
@@ -1918,6 +1931,34 @@ mod tests {
         Events,
         Approval { broker: Arc<ApprovalBroker> },
         Artifact { root: PathBuf },
+    }
+
+    struct ScriptedLlm {
+        scripts: Mutex<VecDeque<Vec<StreamEvent>>>,
+        requests: Mutex<Vec<Vec<Message>>>,
+    }
+
+    impl ScriptedLlm {
+        fn new(scripts: Vec<Vec<StreamEvent>>) -> Self {
+            Self {
+                scripts: Mutex::new(scripts.into()),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for ScriptedLlm {
+        async fn chat_stream(
+            &self,
+            req: &ChatRequest,
+        ) -> CoreResult<BoxStream<'static, CoreResult<StreamEvent>>> {
+            self.requests.lock().push(req.messages.clone());
+            let script = self.scripts.lock().pop_front().unwrap_or_default();
+            Ok(Box::pin(stream::iter(
+                script.into_iter().map(Ok::<StreamEvent, CoreError>),
+            )))
+        }
     }
 
     impl ScriptedBackend {
@@ -2453,6 +2494,182 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("scripted transcript")
+        );
+    }
+
+    #[serial_test::serial]
+    #[tokio::test(flavor = "current_thread")]
+    async fn server_agent_route_uses_deno_sdk_and_preserves_denials() {
+        let temp = tempfile::tempdir().unwrap();
+        let artifact_root = temp.path().join("artifacts");
+        let linked_root = temp.path().join("repo");
+        std::fs::create_dir_all(&linked_root).unwrap();
+        std::fs::write(
+            linked_root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .unwrap();
+        let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+            name: "repo".to_string(),
+            path: linked_root,
+            mode: FsMode::Rw,
+            commands: vec!["cargo".to_string()],
+            safe_args: vec![vec!["cargo".to_string(), "test".to_string()]],
+        }])
+        .unwrap();
+
+        let code = r#"
+const doc = await fs.read("linked://repo/Cargo.toml");
+const artifact = artifacts.put(`server sdk artifact\n${doc.content}`, {
+  title: "server-sdk",
+  mime: "text/plain"
+});
+const unsafeProc = await proc.run("cargo", ["clean"], { cwd: "repo:" })
+  .catch(err => ({ name: err.name, retryable: err.retryable }));
+const deniedHttp = await http.get("https://evil.test/")
+  .catch(err => ({ name: err.name, capability: err.capability }));
+display({
+  ok: doc.content.includes("[workspace]"),
+  artifact: artifact.uri,
+  unsafeProc,
+  deniedHttp
+});
+"#;
+        let tool_args = json!({ "code": code }).to_string();
+        let llm = Arc::new(ScriptedLlm::new(vec![
+            vec![
+                StreamEvent::ToolCall {
+                    index: 0,
+                    id: Some("call_server_sdk".to_string()),
+                    name: Some("execute".to_string()),
+                    arguments: Some(tool_args),
+                },
+                StreamEvent::Finish {
+                    reason: Some("tool_calls".to_string()),
+                },
+            ],
+            vec![
+                StreamEvent::Text("done".to_string()),
+                StreamEvent::Finish {
+                    reason: Some("stop".to_string()),
+                },
+            ],
+        ]));
+        let cfg = AgentConfig {
+            model: "fake".to_string(),
+            max_turns: 3,
+            cell_budget: CellBudget {
+                wall_ms: 240_000,
+                output_bytes: 50_000,
+            },
+            ..AgentConfig::default()
+        };
+        let chat = Arc::new(AgentChatRunner::deno(
+            llm.clone(),
+            cfg,
+            DenoSandboxOptions {
+                artifact_root: artifact_root.clone(),
+                linked_folders: Some(linked.clone()),
+                approval_timeout: Duration::from_millis(1),
+                ..DenoSandboxOptions::default()
+            },
+        ));
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let state = AppState::new(
+            store.clone(),
+            memory,
+            chat,
+            PersonaConfig::default(),
+            AuthConfig::NoAuth,
+        )
+        .with_artifact_root(artifact_root.clone())
+        .with_linked_folders(linked);
+        let router = app(state);
+        let session = create(&router).await;
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/messages", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"exercise the server sdk"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let requests = llm.requests.lock();
+        assert_eq!(requests.len(), 2);
+        let tool_result = requests[1]
+            .iter()
+            .find(|message| message.role == Role::Tool)
+            .expect("tool result is fed back before final turn");
+        assert!(
+            tool_result.content.contains("\"ok\": true"),
+            "tool result: {}",
+            tool_result.content
+        );
+        assert!(
+            tool_result.content.contains("artifact://0"),
+            "tool result: {}",
+            tool_result.content
+        );
+        assert!(
+            tool_result.content.contains("ApprovalTimeoutError"),
+            "tool result: {}",
+            tool_result.content
+        );
+        assert!(
+            tool_result.content.contains("CapabilityDeniedError"),
+            "tool result: {}",
+            tool_result.content
+        );
+        drop(requests);
+
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert!(events.iter().any(|event| event.event_type == "cell_start"));
+        assert!(events.iter().any(|event| event.event_type == "cell_result"));
+        assert!(
+            events.iter().any(|event| event.event_type == "final"
+                && event.payload_json.to_string().contains("done"))
+        );
+
+        let list = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}/resources/artifacts", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list.status(), StatusCode::OK);
+        let list_json = response_json(list).await;
+        assert_eq!(list_json[0]["uri"], json!("artifact://0"));
+
+        let read = router
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}/resources/artifacts/0", session.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        let read_json = response_json(read).await;
+        assert!(
+            read_json["content"]
+                .as_str()
+                .unwrap()
+                .contains("server sdk artifact")
         );
     }
 

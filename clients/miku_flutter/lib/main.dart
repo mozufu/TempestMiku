@@ -528,6 +528,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         tok: tok,
         projectStatus: _projectStatus,
         nextActions: _nextActions,
+        isDark: _isDark,
         onRefresh: () {
           Navigator.pop(context);
           _loadProject();
@@ -535,6 +536,10 @@ class _MikuHomePageState extends State<MikuHomePage>
         onPromote: () {
           Navigator.pop(context);
           _promoteSession();
+        },
+        onThemeToggle: () {
+          Navigator.pop(context);
+          setState(() => _isDark = !_isDark);
         },
       ),
     );
@@ -559,8 +564,6 @@ class _MikuHomePageState extends State<MikuHomePage>
               _buildHeader(tok, mode, accent),
               _buildModeRail(tok, mode, accent),
               const SizedBox(height: 6),
-              _buildIntensityMeter(tok, mode, accent),
-              const SizedBox(height: 2),
               Expanded(child: _buildThread(tok, mode, accent)),
               _buildComposer(tok, accent),
               SafeArea(
@@ -615,30 +618,14 @@ class _MikuHomePageState extends State<MikuHomePage>
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'TempestMiku',
-                  style: TextStyle(
-                    color: tok.text,
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.3,
-                    height: 1.1,
-                  ),
-                ),
-                Text(
-                  'Miku · ${mode.zh} · voice ${mode.cap}',
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    height: 1.3,
-                  ),
-                ),
-              ],
+            child: Text(
+              'TempestMiku',
+              style: TextStyle(
+                color: tok.text,
+                fontSize: 15.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.3,
+              ),
             ),
           ),
           Container(
@@ -664,12 +651,6 @@ class _MikuHomePageState extends State<MikuHomePage>
             tok: tok,
             icon: Icons.more_horiz,
             onTap: _showOverflowSheet,
-          ),
-          const SizedBox(width: 6),
-          _TokIconBtn(
-            tok: tok,
-            icon: _isDark ? Icons.wb_sunny_outlined : Icons.nightlight_outlined,
-            onTap: () => setState(() => _isDark = !_isDark),
           ),
         ],
       ),
@@ -730,133 +711,6 @@ class _MikuHomePageState extends State<MikuHomePage>
               ),
             );
           }).toList(),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildIntensityMeter(_Tok tok, _Mode mode, Color accent) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(13, 9, 13, 10),
-        decoration: BoxDecoration(
-          color: tok.surface,
-          border: Border.all(color: tok.border),
-          borderRadius: BorderRadius.circular(13),
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Icon(Icons.show_chart, size: 13, color: accent),
-                const SizedBox(width: 6),
-                Text(
-                  '語音強度',
-                  style: TextStyle(
-                    color: tok.text,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  mode.tempLabel,
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 7),
-            LayoutBuilder(
-              builder: (_, constraints) {
-                final w = constraints.maxWidth;
-                final thumbX =
-                    (mode.intensity / 100 * w).clamp(8.0, w - 8.0) - 8.0;
-                return SizedBox(
-                  height: 16,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned.fill(
-                        child: Center(
-                          child: Container(
-                            height: 8,
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(999),
-                              gradient: const LinearGradient(
-                                colors: [
-                                  Color(0xFFB84A30), // hot
-                                  Color(0xFFA1736B), // warm/clay
-                                  Color(0xFF79837F), // cool
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: thumbX,
-                        top: 0,
-                        bottom: 0,
-                        child: Center(
-                          child: Container(
-                            width: 16,
-                            height: 16,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: tok.bg,
-                              border: Border.all(color: accent, width: 3),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.2),
-                                  blurRadius: 4,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Text(
-                  '濃 · 感性',
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  '中 · 規劃',
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  '關 · 嚴肅',
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ],
         ),
       ),
     );
@@ -2132,14 +1986,17 @@ class _OverflowSheet extends StatelessWidget {
     required this.tok,
     required this.projectStatus,
     required this.nextActions,
+    required this.isDark,
     required this.onRefresh,
     required this.onPromote,
+    required this.onThemeToggle,
   });
 
   final _Tok tok;
   final String projectStatus;
   final List<String> nextActions;
-  final VoidCallback onRefresh, onPromote;
+  final bool isDark;
+  final VoidCallback onRefresh, onPromote, onThemeToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -2210,6 +2067,13 @@ class _OverflowSheet extends StatelessWidget {
             ],
             const SizedBox(height: 12),
           ],
+          _ActionRow(
+            tok: tok,
+            icon: isDark ? Icons.wb_sunny_outlined : Icons.nightlight_outlined,
+            label: isDark ? '切換淺色模式' : '切換深色模式',
+            onTap: onThemeToggle,
+          ),
+          const SizedBox(height: 8),
           _ActionRow(
             tok: tok,
             icon: Icons.refresh,

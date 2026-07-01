@@ -77,6 +77,10 @@ Standing behavior from SOUL.md — enforced regardless of mode:
 
 - **Model runs the router.** The model selects the smallest sufficient mode and calls
   `mode.suggest(target, reason)`; default behavior applies it and sets the voice cap.
+- **Personal Assistant is the fallback.** Prompts that do not match Handoff, Ambiguity Grill,
+  Negative-State Grounding, or Serious Engineer route back to Personal Assistant, including from a
+  router-owned Serious Engineer session. User locks and manual Serious Engineer overrides suppress
+  that fallback until Brian clears or changes the mode.
 - **User is final.** Brian can **lock** a mode or **override** anytime.
 - **Visible.** Each switch emits `ModeChanged` (§10.2); clients render a **mode badge** (§27).
 

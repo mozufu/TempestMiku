@@ -296,9 +296,13 @@ where
 {
     state.auth.authorize(&headers)?;
     let mut session = state.store.get_session(session_id).await?;
-    if let Some((suggested, reason)) = route_mode_for_prompt(&payload.content)
-        && session.mode_state.lock_source.is_none()
+    let (suggested, reason) = route_mode_for_prompt(&payload.content);
+    let preserves_serious_override = session.mode_state.mode == Mode::SeriousEngineer
+        && session.mode_state.override_source.is_some()
+        && suggested == Mode::PersonalAssistant;
+    if session.mode_state.lock_source.is_none()
         && suggested != session.mode_state.mode
+        && !preserves_serious_override
     {
         let mut next = session.mode_state.clone();
         next.mode = suggested;
@@ -702,23 +706,23 @@ fn linked_folder_capability_notes(linked_folders: &LinkedFolders) -> String {
     notes
 }
 
-fn route_mode_for_prompt(content: &str) -> Option<(Mode, String)> {
+fn route_mode_for_prompt(content: &str) -> (Mode, String) {
     let lower = content.to_lowercase();
     if lower.contains("handoff") || lower.contains("delegate") {
-        return Some((Mode::Handoff, "handoff/delegation prompt".to_string()));
+        return (Mode::Handoff, "handoff/delegation prompt".to_string());
     }
     if lower.contains("燒烤") || lower.contains("grill me") || lower.contains("ambiguous") {
-        return Some((Mode::AmbiguityGrill, "ambiguity-grill trigger".to_string()));
+        return (Mode::AmbiguityGrill, "ambiguity-grill trigger".to_string());
     }
     if lower.contains("overwhelmed")
         || lower.contains("spiraling")
         || lower.contains("exhausted")
         || lower.contains("i can't")
     {
-        return Some((
+        return (
             Mode::NegativeStateGrounding,
             "negative-state grounding trigger".to_string(),
-        ));
+        );
     }
     let engineering_markers = [
         "code",
@@ -730,6 +734,7 @@ fn route_mode_for_prompt(content: &str) -> Option<(Mode, String)> {
         "fix",
         "repo",
         "patch",
+        "proc",
         "crates/",
         "apps/",
         "src/",
@@ -739,15 +744,19 @@ fn route_mode_for_prompt(content: &str) -> Option<(Mode, String)> {
         "migration",
         "production",
     ];
-    engineering_markers
+    if engineering_markers
         .iter()
         .any(|marker| lower.contains(marker))
-        .then(|| {
-            (
-                Mode::SeriousEngineer,
-                "coding/production prompt requires Serious Engineer".to_string(),
-            )
-        })
+    {
+        return (
+            Mode::SeriousEngineer,
+            "coding/production prompt requires Serious Engineer".to_string(),
+        );
+    }
+    (
+        Mode::PersonalAssistant,
+        "default personal-assistant route for non-coding prompt".to_string(),
+    )
 }
 
 async fn resolve_approval<S, M, C>(
@@ -2244,6 +2253,22 @@ mod tests {
         serde_json::from_slice(&body).unwrap()
     }
 
+    async fn post_user_message(app: &Router, session_id: Uuid, content: &str) {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "content": content }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
     fn write_persona_fixture(root: &std::path::Path) {
         std::fs::write(
             root.join("SOUL.md"),
@@ -2526,7 +2551,7 @@ mod tests {
                     .method(Method::POST)
                     .uri(format!("/sessions/{}/messages", session_a.id))
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"content":"tempestmiku open loop"}"#))
+                    .body(Body::from(r#"{"content":"tempestmiku code open loop"}"#))
                     .unwrap(),
             )
             .await
@@ -2550,7 +2575,7 @@ mod tests {
                     .method(Method::POST)
                     .uri(format!("/sessions/{}/messages", session_b.id))
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"content":"tempestmiku open loop"}"#))
+                    .body(Body::from(r#"{"content":"tempestmiku code open loop"}"#))
                     .unwrap(),
             )
             .await
@@ -2592,7 +2617,7 @@ mod tests {
                     .method(Method::POST)
                     .uri(format!("/sessions/{}/messages", session.id))
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"content":"ship p0a"}"#))
+                    .body(Body::from(r#"{"content":"ship p0a production code"}"#))
                     .unwrap(),
             )
             .await
@@ -2649,7 +2674,9 @@ mod tests {
                         .method(Method::POST)
                         .uri(format!("/sessions/{}/messages", session.id))
                         .header("content-type", "application/json")
-                        .body(Body::from(r#"{"content":"needs approval"}"#))
+                        .body(Body::from(
+                            r#"{"content":"needs approval for a code patch"}"#,
+                        ))
                         .unwrap(),
                 )
                 .await
@@ -2866,7 +2893,7 @@ mod tests {
                     .method(Method::POST)
                     .uri(format!("/sessions/{}/messages", session.id))
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"content":"write transcript"}"#))
+                    .body(Body::from(r#"{"content":"write code transcript"}"#))
                     .unwrap(),
             )
             .await
@@ -3083,6 +3110,180 @@ display({
                 .unwrap()
                 .contains("server sdk artifact")
         );
+    }
+
+    #[tokio::test]
+    async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+
+        post_user_message(&app, session.id, "please fix this Rust code bug").await;
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+        assert_eq!(latest.mode_state.voice_cap(), "off");
+
+        post_user_message(
+            &app,
+            session.id,
+            "help me plan tomorrow and clean up reminders",
+        )
+        .await;
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::PersonalAssistant);
+        assert_eq!(latest.mode_state.voice_cap(), "medium");
+        assert_eq!(latest.mode_state.lock_source, None);
+        assert_eq!(latest.mode_state.override_source, None);
+        assert!(
+            latest
+                .mode_state
+                .router_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("default personal-assistant")
+        );
+
+        let events = store.events_after(session.id, None).await.unwrap();
+        let mode_events = events
+            .iter()
+            .filter(|event| event.event_type == "mode")
+            .collect::<Vec<_>>();
+        let last_mode = mode_events.last().unwrap();
+        assert_eq!(last_mode.payload_json["from"], json!("serious_engineer"));
+        assert_eq!(last_mode.payload_json["mode"], json!("personal_assistant"));
+        assert_eq!(last_mode.payload_json["voice_cap"], json!("medium"));
+        assert_eq!(
+            last_mode.payload_json["activeSkills"],
+            json!(["miku-voice", "personal-assistant-state-capture"])
+        );
+    }
+
+    #[tokio::test]
+    async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+
+        let lock = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/mode/lock", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"mode":"serious_engineer","reason":"stay in engineering"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lock.status(), StatusCode::OK);
+        let lock_json = response_json(lock).await;
+        assert_eq!(lock_json["modeState"]["mode"], json!("serious_engineer"));
+        assert_eq!(lock_json["modeState"]["lockSource"], json!("user"));
+        assert_eq!(lock_json["voiceCap"], json!("off"));
+
+        post_user_message(
+            &app,
+            session.id,
+            "help me plan tomorrow and clean up reminders",
+        )
+        .await;
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+        assert_eq!(latest.mode_state.lock_source.as_deref(), Some("user"));
+
+        let unlock = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/mode/unlock", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reason":"router may choose again"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unlock.status(), StatusCode::OK);
+
+        post_user_message(
+            &app,
+            session.id,
+            "help me plan tomorrow and clean up reminders",
+        )
+        .await;
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::PersonalAssistant);
+        assert_eq!(latest.mode_state.lock_source, None);
+        assert!(
+            latest
+                .mode_state
+                .router_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("default personal-assistant")
+        );
+    }
+
+    #[tokio::test]
+    async fn user_override_can_switch_to_serious_engineer_through_lock() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+
+        let lock = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/mode/lock", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"mode":"personal_assistant","reason":"stay light"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lock.status(), StatusCode::OK);
+
+        let override_res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/mode/override", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"mode":"serious_engineer","reason":"user override"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(override_res.status(), StatusCode::OK);
+        let override_json = response_json(override_res).await;
+        assert_eq!(
+            override_json["modeState"]["mode"],
+            json!("serious_engineer")
+        );
+        assert_eq!(override_json["modeState"]["lockSource"], Value::Null);
+        assert_eq!(override_json["modeState"]["overrideSource"], json!("user"));
+        assert_eq!(override_json["voiceCap"], json!("off"));
+
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+        assert_eq!(latest.mode_state.lock_source, None);
+        assert_eq!(latest.mode_state.override_source.as_deref(), Some("user"));
+
+        post_user_message(
+            &app,
+            session.id,
+            "help me plan tomorrow and clean up reminders",
+        )
+        .await;
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+        assert_eq!(latest.mode_state.override_source.as_deref(), Some("user"));
     }
 
     #[tokio::test]

@@ -109,7 +109,7 @@ impl Mode {
                 "Active mode: Ambiguity Grill (mode 2). Ask 3-7 sharp clarifying questions before planning; keep capability scope conversational."
             }
             Self::NegativeStateGrounding => {
-                "Active mode: Negative-State Grounding (mode 3). Stabilize first, keep the next action under ten minutes, and preserve the health-over-productivity rule."
+                "Active mode: Negative-State Grounding (mode 3). This is a conversation-only posture, not a new capability set. Stabilize first, preserve the health-over-productivity rule, and offer at most one next action that takes 10 minutes or less. Do not propose memory writes from negative-state prompts unless Brian explicitly asks to remember a stable preference."
             }
             Self::SeriousEngineer => {
                 "Active mode: Serious Engineer (mode 4). Use fs.*, code.*, and proc.* through the SDK for linked-repo work. Voice cap: off — preserve Tempest Miku identity, but keep technical replies precise and avoid voice flourishes unless the context is explicitly light. Never use shell strings; use proc.run(cmd, args). Destructive, external, or out-of-grant actions require approval or fail closed."
@@ -482,6 +482,35 @@ mod tests {
         assert_eq!(serious.capability_class, "engineering");
         assert_eq!(serious.voice_cap, "off");
         assert_eq!(serious.default_scope, "project:tempestmiku");
+    }
+
+    #[test]
+    fn negative_state_grounding_prompt_is_health_first_conversational_posture() {
+        let prompt = PersonaConfig::default().build_system_prompt(
+            Mode::NegativeStateGrounding,
+            "base prompt",
+            "",
+        );
+
+        assert_eq!(prompt.profile.capability_class, "conversation");
+        assert_eq!(
+            prompt.profile.active_skills,
+            vec!["miku-voice", "negative-state-grounding"]
+        );
+        assert!(prompt.system_prompt.contains("conversation-only posture"));
+        assert!(prompt.system_prompt.contains("health-over-productivity"));
+        assert!(prompt.system_prompt.contains("at most one next action"));
+        assert!(prompt.system_prompt.contains("10 minutes or less"));
+        assert!(
+            prompt
+                .system_prompt
+                .contains("Do not propose or request memory writes")
+        );
+        assert!(
+            !prompt
+                .system_prompt
+                .contains("skill://personal-assistant-state-capture")
+        );
     }
 
     fn temp_persona_root() -> PathBuf {

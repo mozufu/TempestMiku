@@ -921,14 +921,10 @@ fn route_mode_for_prompt(content: &str) -> (Mode, String) {
     if lower.contains("燒烤") || lower.contains("grill me") || lower.contains("ambiguous") {
         return (Mode::AmbiguityGrill, "ambiguity-grill trigger".to_string());
     }
-    if lower.contains("overwhelmed")
-        || lower.contains("spiraling")
-        || lower.contains("exhausted")
-        || lower.contains("i can't")
-    {
+    if let Some(trigger) = negative_state_grounding_trigger(&lower) {
         return (
             Mode::NegativeStateGrounding,
-            "negative-state grounding trigger".to_string(),
+            format!("negative-state grounding trigger: {trigger}"),
         );
     }
     let engineering_markers = [
@@ -964,6 +960,91 @@ fn route_mode_for_prompt(content: &str) -> (Mode, String) {
         Mode::PersonalAssistant,
         "default personal-assistant route for non-coding prompt".to_string(),
     )
+}
+
+const NEGATIVE_STATE_GROUNDING_TRIGGERS: &[(&str, &[&str])] = &[
+    (
+        "overwhelmed language",
+        &[
+            "overwhelmed",
+            "overload",
+            "overloaded",
+            "too much",
+            "drowning",
+            "can't handle",
+            "cant handle",
+        ],
+    ),
+    (
+        "exhausted language",
+        &[
+            "exhausted",
+            "burned out",
+            "burnt out",
+            "drained",
+            "fried",
+            "wiped out",
+            "no energy",
+            "too tired",
+            "i'm tired",
+            "i am tired",
+            "can't keep going",
+            "cant keep going",
+        ],
+    ),
+    (
+        "self-deprecating language",
+        &[
+            "self-deprecating",
+            "self deprecating",
+            "useless",
+            "worthless",
+            "i'm a failure",
+            "i am a failure",
+            "i'm failing",
+            "i am failing",
+            "i suck",
+            "i'm stupid",
+            "i am stupid",
+            "nothing i do counts",
+            "no output",
+        ],
+    ),
+    (
+        "spiraling language",
+        &[
+            "spiral",
+            "spiraling",
+            "spiralling",
+            "spinning out",
+            "doom loop",
+            "can't stop thinking",
+            "cant stop thinking",
+        ],
+    ),
+    (
+        "stuck language",
+        &[
+            "stuck",
+            "blocked",
+            "can't start",
+            "cant start",
+            "can't move",
+            "cant move",
+            "can't make progress",
+            "cant make progress",
+            "i can't",
+            "i cant",
+            "i cannot",
+        ],
+    ),
+];
+
+fn negative_state_grounding_trigger(lower: &str) -> Option<&'static str> {
+    NEGATIVE_STATE_GROUNDING_TRIGGERS
+        .iter()
+        .find(|(_, markers)| markers.iter().any(|marker| lower.contains(marker)))
+        .map(|(trigger, _)| *trigger)
 }
 
 async fn resolve_approval<S, M, C>(
@@ -3648,6 +3729,70 @@ display({
         assert_eq!(
             last_mode.payload_json["activeSkills"],
             json!(["miku-voice", "personal-assistant-state-capture"])
+        );
+    }
+
+    #[test]
+    fn router_triggers_negative_state_grounding_for_negative_language() {
+        for (content, trigger) in [
+            (
+                "everything is too much and I am overwhelmed",
+                "overwhelmed language",
+            ),
+            ("I'm exhausted and have no energy", "exhausted language"),
+            (
+                "I'm useless and nothing I do counts",
+                "self-deprecating language",
+            ),
+            ("I am spiraling tonight", "spiraling language"),
+            (
+                "I'm stuck on this Rust bug and can't make progress",
+                "stuck language",
+            ),
+        ] {
+            let (mode, reason) = route_mode_for_prompt(content);
+            assert_eq!(mode, Mode::NegativeStateGrounding, "{content}");
+            assert!(
+                reason.contains(trigger),
+                "expected {trigger:?} in reason {reason:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+
+        post_user_message(
+            &app,
+            session.id,
+            "I'm useless, stuck, and too exhausted to keep going",
+        )
+        .await;
+
+        let latest = store.get_session(session.id).await.unwrap();
+        assert_eq!(latest.mode_state.mode, Mode::NegativeStateGrounding);
+        assert_eq!(latest.mode_state.mode.capability_class(), "conversation");
+        assert_eq!(latest.mode_state.voice_cap(), "high");
+        assert_eq!(
+            latest.mode_state.mode.active_skill_names(),
+            ["miku-voice", "negative-state-grounding"]
+        );
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event_type != "write_proposal"),
+            "negative-state chat should not emit memory write proposals"
+        );
+        assert!(store.profile_facts("brian").await.unwrap().is_empty());
+        assert!(
+            store
+                .recall_chunks("global", "useless", 5)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 

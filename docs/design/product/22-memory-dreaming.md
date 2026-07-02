@@ -168,6 +168,9 @@ The current knobs become our config (now we own every one — none is an externa
   recurring blind spots; shipped artifacts; reusable workflows.
 - **Don't:** passing moods; one-off complaints; secrets; raw logs; large notes; sensitive PII unless
   asked; project-specific commands (→ `AGENTS.md`, not user memory).
+- **Negative-state prompts:** overwhelmed / exhausted / self-deprecating / spiraling / stuck language
+  is treated as a grounding posture (§21), not a durable memory signal. Do not propose a memory write
+  from that prompt unless Brian explicitly asks to remember a stable preference, strategy, or boundary.
 - **Approval-gated** (write-approval on): Miku proposes a one-line memory/fact and asks, unless standing
   permission exists. Episodic append stays unblocked; durable **assertions** (facts/notes/skills) are
   what get gated. Redaction always runs before disk.

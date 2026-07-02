@@ -144,12 +144,12 @@ Acceptance:
 
 ## P2.6 Negative-State Grounding
 
-- [ ] Preserve mode 3 as a conversational posture, not a new capability set.
-- [ ] Add router triggers for overwhelmed, exhausted, self-deprecating, spiraling, and stuck language.
-- [ ] Prompt behavior must stabilize first, reduce demand, avoid shame, and choose one <=10-minute
+- [x] Preserve mode 3 as a conversational posture, not a new capability set.
+- [x] Add router triggers for overwhelmed, exhausted, self-deprecating, spiraling, and stuck language.
+- [x] Prompt behavior must stabilize first, reduce demand, avoid shame, and choose one <=10-minute
       next action only after grounding.
-- [ ] Do not create memory writes from negative-state content unless the user explicitly asks.
-- [ ] Add tests for routing, response constraints, health-over-productivity, and no unsolicited memory
+- [x] Do not create memory writes from negative-state content unless the user explicitly asks.
+- [x] Add tests for routing, response constraints, health-over-productivity, and no unsolicited memory
       write proposal.
 
 Acceptance:

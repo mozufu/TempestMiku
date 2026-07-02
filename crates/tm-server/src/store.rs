@@ -209,12 +209,14 @@ pub trait Store: Send + Sync + 'static {
     async fn upsert_profile_fact(&self, fact: ProfileFactRecord) -> Result<ProfileFactRecord>;
     async fn upsert_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<RecallChunkRecord>;
     async fn profile_facts(&self, subject: &str) -> Result<Vec<ProfileFactRecord>>;
+    async fn profile_fact(&self, subject: &str, id: Uuid) -> Result<ProfileFactRecord>;
     async fn recall_chunks(
         &self,
         scope: &str,
         query: &str,
         limit: usize,
     ) -> Result<Vec<RecallChunkRecord>>;
+    async fn recall_chunk(&self, scope: &str, id: Uuid) -> Result<RecallChunkRecord>;
     async fn upsert_project_item(&self, item: NewProjectItem) -> Result<ProjectItemRecord>;
     async fn project_items(
         &self,
@@ -393,6 +395,16 @@ impl Store for InMemoryStore {
         Ok(facts)
     }
 
+    async fn profile_fact(&self, subject: &str, id: Uuid) -> Result<ProfileFactRecord> {
+        self.inner
+            .lock()
+            .profile_facts
+            .iter()
+            .find(|fact| fact.subject == subject && fact.id == id && fact.valid_to.is_none())
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("profile fact {subject}/{id}")))
+    }
+
     async fn recall_chunks(
         &self,
         scope: &str,
@@ -411,6 +423,16 @@ impl Store for InMemoryStore {
         chunks.sort_by_key(|chunk| std::cmp::Reverse(chunk.created_at));
         chunks.truncate(limit);
         Ok(chunks)
+    }
+
+    async fn recall_chunk(&self, scope: &str, id: Uuid) -> Result<RecallChunkRecord> {
+        self.inner
+            .lock()
+            .recall_chunks
+            .iter()
+            .find(|chunk| chunk.scope == scope && chunk.id == id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("recall chunk {scope}/{id}")))
     }
 
     async fn upsert_project_item(&self, item: NewProjectItem) -> Result<ProjectItemRecord> {
@@ -761,6 +783,24 @@ impl Store for PostgresStore {
             .collect())
     }
 
+    async fn profile_fact(&self, subject: &str, id: Uuid) -> Result<ProfileFactRecord> {
+        let row = self.client
+            .query_opt("select id, subject, predicate, object, confidence, provenance, valid_from, valid_to from profile_facts where subject = $1 and id = $2 and valid_to is null", &[&subject, &id])
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("profile fact {subject}/{id}")))?;
+        Ok(ProfileFactRecord {
+            id: row.get("id"),
+            subject: row.get("subject"),
+            predicate: row.get("predicate"),
+            object: row.get("object"),
+            confidence: row.get("confidence"),
+            provenance: row.get("provenance"),
+            valid_from: row.get("valid_from"),
+            valid_to: row.get("valid_to"),
+        })
+    }
+
     async fn recall_chunks(
         &self,
         scope: &str,
@@ -782,6 +822,25 @@ impl Store for PostgresStore {
                 created_at: row.get("created_at"),
             })
             .collect())
+    }
+
+    async fn recall_chunk(&self, scope: &str, id: Uuid) -> Result<RecallChunkRecord> {
+        let row = self
+            .client
+            .query_opt(
+                "select id, scope, text, source, created_at from recall_chunks where scope = $1 and id = $2",
+                &[&scope, &id],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("recall chunk {scope}/{id}")))?;
+        Ok(RecallChunkRecord {
+            id: row.get("id"),
+            scope: row.get("scope"),
+            text: row.get("text"),
+            source: row.get("source"),
+            created_at: row.get("created_at"),
+        })
     }
 
     async fn upsert_project_item(&self, item: NewProjectItem) -> Result<ProjectItemRecord> {

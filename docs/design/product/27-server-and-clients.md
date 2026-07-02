@@ -124,6 +124,8 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
   `project://`, `memory://`, `drive://`, and `cron://` links. The phone is only a view and controller;
   the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
+  The P2 memory gateway currently exposes `memory://root`, `memory://user-model`, and exact approved
+  profile fact / scoped recall record URIs, with compact previews and fail-closed unknown paths (§22.9).
 - **Android target (later).** The Android app is the same Flutter codebase packaged after the server API
   and product surfaces stabilize. It adds OS integrations — secure pairing storage, push approval
   notifications, app links, reconnect/resume polish — but **no on-device sandbox** and no second
@@ -141,6 +143,11 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   session-scoped resource endpoints (§09), and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
+
+The session resource gateway supports resolve/list/preview for the live P0-P2 schemes:
+`artifact://`, `workspace://session/...`, `linked://...`, `project://...`, and the P2 `memory://`
+surface (§22.9). `GET /sessions/:id/resources/preview` returns a bounded metadata envelope with empty
+`content`; clients resolve full content only on demand.
 
 Coding execution is a backend choice behind the same API. `TM_OMP_ACP_ENABLED=1` dispatches Serious
 Engineer / Handoff turns to the P0a OMP ACP bridge; otherwise, when a real LLM is configured,
@@ -181,7 +188,8 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 
 - `api` — inbound HTTP: session create / send, mode lock, approval resolve, session promote,
   session-scoped resource resolve/list/preview gateway for `artifact://`, `workspace://`, `linked://`,
-  `project://`, and the other registered schemes (§09), browser feeds; optional OpenAI-compatible endpoint (§27.5).
+  `project://`, `memory://`, and the other registered schemes (§09), browser feeds; optional
+  OpenAI-compatible endpoint (§27.5).
 - `store` — in-memory and Postgres-shaped session storage: sessions, messages, append-only events,
   approvals, project refs, and replay from `Last-Event-ID`.
 - `schedule` — cron-style scheduler; job table; bounds (`max_turns`, `cron_mode`); registers the `cron://` handler (list jobs / a job's def + run history) into the §9.2 registry.

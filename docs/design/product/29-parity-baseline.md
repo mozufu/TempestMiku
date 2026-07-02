@@ -44,6 +44,9 @@ Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
 - **Replaces Honcho** (today's memory service) with a self-built `tm-memory` engine — episodic +
   vector + BM25 + facts fused by RRF + memory-stream scoring; the user model / ToM and "dreaming"
   are ours, no external memory dependency (§22).
+- **Adds the P2 memory resource gateway:** `memory://root`, `memory://user-model`, and approved
+  profile fact / scoped recall record URIs resolve through the same preview/list/read path as artifacts
+  and linked resources, with unknown or ungranted memory paths denied (§22.9 / §27.5).
 - **Keeps:** SOUL identity + 5 modes (§21); the **memory behavior** — hybrid recall, user profile +
   ToM, async write, ~1600-tok context, write-approval (§22, now self-built); the 7 skills (§26.2);
   manual approvals + proactivity bounds (§21.3); cron-driven reviews (§27.2); model-role system (§27.3).

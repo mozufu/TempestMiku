@@ -38,6 +38,8 @@ use crate::{
     StoreCodingEventSink, StoreEvent, store::ModeState, store::RecallChunkRecord,
 };
 
+const SESSION_RESOURCE_PREVIEW_BYTES: usize = 512;
+
 pub struct AppState<S, M, C> {
     pub store: Arc<S>,
     pub memory: Arc<M>,
@@ -1758,9 +1760,9 @@ where
     let uri = query.uri.ok_or_else(|| {
         ServerError::InvalidRequest("uri query parameter is required".to_string())
     })?;
-    let mut content = read_resource_content(&state, session_id, &uri, None).await?;
-    content.content.clear();
-    Ok(Json(content))
+    preview_resource_content(&state, session_id, &uri)
+        .await
+        .map(Json)
 }
 
 async fn list_resources<S, M, C>(
@@ -1804,13 +1806,31 @@ where
         }
         Some("linked") => read_linked_resource(&state.linked_folders, uri, selector).await,
         Some("project") => read_project_resource(state, session_id, uri).await,
+        Some("memory") => read_memory_resource(state, session_id, uri, selector).await,
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project"
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory"
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
         ))),
     }
+}
+
+async fn preview_resource_content<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let content = match resource_scheme(uri).as_deref() {
+        Some("memory") => preview_memory_resource(state, session_id, uri).await?,
+        _ => read_resource_content(state, session_id, uri, None).await?,
+    };
+    Ok(compact_resource_preview(content))
 }
 
 async fn list_resource_entries<S, M, C>(
@@ -1824,7 +1844,7 @@ where
     C: ChatRunner,
 {
     let Some(uri) = uri.filter(|uri| !uri.is_empty()) else {
-        return Ok(["artifact", "linked", "workspace", "project"]
+        return Ok(["artifact", "linked", "workspace", "project", "memory"]
             .into_iter()
             .map(|scheme| ResourceEntry {
                 uri: format!("{scheme}://"),
@@ -1857,8 +1877,9 @@ where
         Some("workspace") => list_workspace_resources(&state.artifact_root, session_id, uri),
         Some("linked") => list_linked_resources(&state.linked_folders, Some(uri)).await,
         Some("project") => list_project_resources(state, session_id, uri).await,
+        Some("memory") => list_memory_resources(state, session_id, uri).await,
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project"
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory"
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
@@ -1892,6 +1913,85 @@ async fn list_linked_resources(
     registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"));
     registry.list(uri, &ctx).await.map_err(map_host_error)
+}
+
+async fn read_memory_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let session = state.store.get_session(session_id).await?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
+        Arc::clone(&state.store),
+        default_subject(),
+        session.mode_state.mode.default_scope(),
+    )));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
+    registry
+        .read(uri, selector, &ctx)
+        .await
+        .map_err(map_host_error)
+}
+
+async fn preview_memory_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let session = state.store.get_session(session_id).await?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
+        Arc::clone(&state.store),
+        default_subject(),
+        session.mode_state.mode.default_scope(),
+    )));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
+    registry.preview(uri, &ctx).await.map_err(map_host_error)
+}
+
+async fn list_memory_resources<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let session = state.store.get_session(session_id).await?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
+        Arc::clone(&state.store),
+        default_subject(),
+        session.mode_state.mode.default_scope(),
+    )));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
+    registry.list(Some(uri), &ctx).await.map_err(map_host_error)
+}
+
+fn compact_resource_preview(mut content: ResourceContent) -> ResourceContent {
+    let basis = if content.content.is_empty() {
+        content.preview.clone()
+    } else {
+        content.content.clone()
+    };
+    content.preview = preview(&basis, SESSION_RESOURCE_PREVIEW_BYTES);
+    content.has_more = content.has_more || basis.len() > SESSION_RESOURCE_PREVIEW_BYTES;
+    content.content.clear();
+    content
 }
 
 fn read_workspace_resource(
@@ -2256,7 +2356,10 @@ mod tests {
         AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Message,
         Result as CoreResult, Role, StreamEvent,
     };
-    use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
+    use tm_host::{
+        CapabilityGrants, FsMode, HostError, InvocationCtx, LinkedFolderConfig, LinkedFolders,
+        ResourceRegistry,
+    };
     use tm_sandbox::DenoSandboxOptions;
     use tower::ServiceExt;
 
@@ -2887,11 +2990,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_json(response).await;
         assert_eq!(body["status"], json!("approved"));
+        let record_uri = body["record"]["uri"].as_str().unwrap().to_string();
         assert!(
-            body["record"]["uri"]
-                .as_str()
-                .unwrap()
-                .starts_with("memory://profile/brian/facts/")
+            record_uri.starts_with("memory://profile/brian/facts/"),
+            "{record_uri}"
         );
 
         let facts = store.profile_facts("brian").await.unwrap();
@@ -2899,6 +3001,52 @@ mod tests {
         assert_eq!(facts[0].predicate, "prefers");
         assert_eq!(facts[0].object, "approval-backed memory writes");
         assert_eq!(facts[0].provenance, "user-confirmed");
+
+        let record = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{session_id}/resources/resolve?uri={record_uri}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(record.status(), StatusCode::OK);
+        let record_json = response_json(record).await;
+        assert_eq!(record_json["uri"], json!(record_uri));
+        assert!(
+            record_json["content"]
+                .as_str()
+                .unwrap()
+                .contains("approval-backed memory writes")
+        );
+
+        let preview = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{session_id}/resources/preview?uri={record_uri}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview.status(), StatusCode::OK);
+        let preview_json = response_json(preview).await;
+        assert_eq!(preview_json["content"], json!(""));
+        assert!(
+            preview_json["preview"]
+                .as_str()
+                .unwrap()
+                .contains("approval-backed memory writes")
+        );
 
         let events = store.events_after(session_id, None).await.unwrap();
         let write_statuses = events
@@ -4238,6 +4386,144 @@ display({
             .await
             .unwrap();
         assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn memory_resource_gateway_reads_root_user_model_and_records() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        let fact_id = Uuid::new_v4();
+        let chunk_id = Uuid::new_v4();
+        store
+            .add_profile_fact(ProfileFactRecord {
+                id: fact_id,
+                subject: "brian".to_string(),
+                predicate: "prefers".to_string(),
+                object: "memory resource tests".to_string(),
+                confidence: 0.95,
+                provenance: "test".to_string(),
+                valid_from: Utc::now(),
+                valid_to: None,
+            })
+            .await
+            .unwrap();
+        store
+            .add_recall_chunk(RecallChunkRecord {
+                id: chunk_id,
+                scope: "global".to_string(),
+                text: "scoped memory resource recall".to_string(),
+                source: "test".to_string(),
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        let fact_uri = format!("memory://profile/brian/facts/{fact_id}");
+        let chunk_uri = format!("memory://scopes/global/chunks/{chunk_id}");
+        for (uri, expected) in [
+            ("memory://root".to_string(), "memory://user-model"),
+            ("memory://user-model".to_string(), "memory resource tests"),
+            (fact_uri, "Predicate: prefers"),
+            (chunk_uri, "scoped memory resource recall"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri(format!(
+                            "/sessions/{}/resources/resolve?uri={}",
+                            session.id, uri
+                        ))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let json = response_json(response).await;
+            assert_eq!(json["uri"], json!(uri));
+            assert!(
+                json["content"].as_str().unwrap().contains(expected),
+                "content for {uri}: {json}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_resource_gateway_denies_unknown_and_ungranted_reads() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        let unknown = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{}/resources/resolve?uri=memory://secret",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
+
+        let mut registry = ResourceRegistry::new();
+        registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
+            Arc::clone(&store),
+            "brian",
+            "global",
+        )));
+        let ctx = InvocationCtx::new(CapabilityGrants::default());
+        let err = registry
+            .read("memory://root", None, &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::CapabilityDenied(capability) if capability == "resources.read:memory"
+        ));
+    }
+
+    #[tokio::test]
+    async fn session_resource_preview_returns_compact_bounded_memory_preview() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        store
+            .add_recall_chunk(RecallChunkRecord {
+                id: Uuid::new_v4(),
+                scope: "global".to_string(),
+                text: "long memory ".repeat(200),
+                source: "test".to_string(),
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{}/resources/preview?uri=memory://root",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(json["content"], json!(""));
+        assert_eq!(json["uri"], json!("memory://root"));
+        let preview = json["preview"].as_str().unwrap();
+        assert!(preview.contains("long memory"));
+        assert!(preview.len() <= SESSION_RESOURCE_PREVIEW_BYTES + 64);
+        assert_eq!(json["has_more"], json!(true));
     }
 
     #[tokio::test]

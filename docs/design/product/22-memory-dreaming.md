@@ -178,7 +178,8 @@ The current knobs become our config (now we own every one — none is an externa
   facts, scoped recall chunks, provenance labels, and budget metadata. Durable profile facts and scoped
   recall chunks are created through `write_proposal` events plus the shared `approval` / `approval_resolved`
   path; approve writes idempotently by normalized content, while deny/timeout writes nothing and remains
-  replayable in `session_events`.
+  replayable in `session_events`. Approved writes emit previewable `memory://profile/<subject>/facts/<id>`
+  and `memory://scopes/<scope>/chunks/<id>` record URIs.
 
 ## 22.9 `memory.*` capability + `memory://` resources
 
@@ -192,8 +193,13 @@ The current knobs become our config (now we own every one — none is an externa
 | `memory.reflect()` | enqueue a dream (extract → reflect → summarize → skills) |
 | `memory.card()` | current profile snapshot (top facts) |
 
-`memory://` URLs (resolved via the §9.2 registry): `memory://root` (injected summary), `…/MEMORY.md`,
-`…/user-model` (profile/facts), `…/episodic?q=…` (search), `…/projects/<name>/…`. Skills are addressed
+`memory://` URLs are resolved via the §9.2 registry and the session resource gateway. The implemented
+P2 surface is deliberately small and fail-closed: `memory://root` returns the current injected memory
+summary for Brian and the active session scope; `memory://user-model` returns the active profile/facts
+view; approved write proposals expose exact record views at `memory://profile/<subject>/facts/<id>` and
+`memory://scopes/<scope>/chunks/<id>`. The server grants these reads through `resources.read:memory`,
+and unknown memory paths or missing grants are denied. Broader resources such as `…/MEMORY.md`,
+`…/episodic?q=…`, and `…/projects/<name>/…` remain later `tm-memory` work. Skills are addressed
 first-class as `skill://<name>` (→ `SKILL.md`), promoted out of the `memory://…/skills/` path (§9.3).
 
 ## 22.10 Crate layout (`tm-memory`, §28)

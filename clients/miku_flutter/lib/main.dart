@@ -195,6 +195,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final List<ApprovalPrompt> _approvals = [];
+  final List<MemoryWriteProposal> _memoryProposals = [];
   final List<String> _nextActions = [];
   final List<_Msg> _history = [];
 
@@ -271,7 +272,9 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   void _onEvent(MikuEvent e) {
     final eventId = e.id;
-    if (eventId != null && eventId.isNotEmpty) {
+    if (eventId != null &&
+        eventId.isNotEmpty &&
+        shouldRememberEventId(e.type, e.data)) {
       _lastEventId = eventId;
       final sessionId = _sessionId;
       if (sessionId != null) {
@@ -301,11 +304,12 @@ class _MikuHomePageState extends State<MikuHomePage>
             _modeId = newId;
           }
         case 'approval':
-          _approvals.add(ApprovalPrompt(
+          final approval = ApprovalPrompt(
             approvalId: e.data['approvalId'] as String? ?? '',
             action: e.data['action'] as String? ?? 'Approval requested',
             scope:
                 (e.data['scope'] as Map?)?.cast<String, Object?>() ?? const {},
+            backend: e.data['backend'] as String? ?? '',
             options: ((e.data['options'] as List?) ?? const [])
                 .whereType<Map>()
                 .map(
@@ -321,12 +325,46 @@ class _MikuHomePageState extends State<MikuHomePage>
                 .toList(),
             timeoutMs: (e.data['timeoutMs'] as num?)?.toInt() ??
                 (e.data['timeout_ms'] as num?)?.toInt(),
-          ));
+          );
+          _upsertApproval(approval);
+          final proposal = MemoryWriteProposal.fromApproval(approval);
+          if (proposal != null) {
+            _upsertMemoryProposal(proposal, onlyIfMissing: true);
+          }
         case 'approval_resolved':
           _approvals.removeWhere((a) => a.approvalId == e.data['approvalId']);
+        case 'write_proposal':
+          final proposal = MemoryWriteProposal.fromEvent(e.data);
+          if (proposal != null) {
+            _upsertMemoryProposal(proposal);
+          }
       }
     });
     _scrollToBottom();
+  }
+
+  void _upsertApproval(ApprovalPrompt approval) {
+    if (approval.approvalId.isEmpty) return;
+    _approvals.removeWhere((item) => item.approvalId == approval.approvalId);
+    _approvals.add(approval);
+  }
+
+  void _upsertMemoryProposal(
+    MemoryWriteProposal proposal, {
+    bool onlyIfMissing = false,
+  }) {
+    final index = _memoryProposals.indexWhere(
+      (item) => item.proposalId == proposal.proposalId,
+    );
+    if (!proposal.isPending) {
+      if (index != -1) _memoryProposals.removeAt(index);
+      return;
+    }
+    if (index != -1) {
+      if (!onlyIfMissing) _memoryProposals[index] = proposal;
+      return;
+    }
+    _memoryProposals.add(proposal);
   }
 
   void _scrollToBottom() {
@@ -367,6 +405,20 @@ class _MikuHomePageState extends State<MikuHomePage>
       optionId: optionId,
     );
     setState(() => _approvals.remove(a));
+  }
+
+  ApprovalPrompt? _approvalForProposal(MemoryWriteProposal proposal) {
+    for (final approval in _approvals) {
+      if (approval.proposalId == proposal.proposalId) return approval;
+    }
+    return null;
+  }
+
+  bool _isRenderedAsMemoryProposal(ApprovalPrompt approval) {
+    final proposalId = approval.proposalId;
+    if (proposalId == null) return false;
+    return approval.isMemoryProposal &&
+        _memoryProposals.any((proposal) => proposal.proposalId == proposalId);
   }
 
   Future<void> _loadProject() async {
@@ -759,8 +811,25 @@ class _MikuHomePageState extends State<MikuHomePage>
       items.add(const SizedBox(height: 14));
     }
 
+    // Pending memory proposals
+    for (final proposal in _memoryProposals) {
+      final approval = _approvalForProposal(proposal);
+      items.add(
+        _MemoryProposalCard(
+          tok: tok,
+          proposal: proposal,
+          approval: approval,
+          accent: accent,
+          onApprove:
+              approval == null ? null : () => _resolve(approval, 'approve'),
+          onDeny: approval == null ? null : () => _resolve(approval, 'deny'),
+        ),
+      );
+      items.add(const SizedBox(height: 10));
+    }
+
     // Pending approvals
-    for (final a in _approvals) {
+    for (final a in _approvals.where((a) => !_isRenderedAsMemoryProposal(a))) {
       items.add(
         _ApprovalCard(
           tok: tok,
@@ -1392,6 +1461,248 @@ class _ApprovalCard extends StatelessWidget {
             ),
             Icon(Icons.chevron_right, color: tok.muted, size: 18),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MemoryProposalCard extends StatelessWidget {
+  const _MemoryProposalCard({
+    required this.tok,
+    required this.proposal,
+    required this.approval,
+    required this.accent,
+    required this.onApprove,
+    required this.onDeny,
+  });
+
+  final _Tok tok;
+  final MemoryWriteProposal proposal;
+  final ApprovalPrompt? approval;
+  final Color accent;
+  final VoidCallback? onApprove;
+  final VoidCallback? onDeny;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasApproval = approval != null;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+      decoration: BoxDecoration(
+        color: tok.surface,
+        border: Border.all(color: accent.withOpacity(0.46)),
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: accent,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(Icons.memory, color: _textOn(accent), size: 18),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Memory proposal',
+                        style: TextStyle(
+                          color: tok.text,
+                          fontSize: 12.8,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        hasApproval ? 'pending' : 'syncing',
+                        style: TextStyle(
+                          color: accent,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  proposal.displayText,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: tok.text,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    height: 1.42,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    _ProposalChip(
+                      tok: tok,
+                      icon: Icons.label_outline,
+                      text: proposal.kindLabel,
+                    ),
+                    _ProposalChip(
+                      tok: tok,
+                      icon: Icons.folder_outlined,
+                      text: 'scope ${proposal.scopeLabel}',
+                    ),
+                    _ProposalChip(
+                      tok: tok,
+                      icon: Icons.history,
+                      text: 'provenance ${proposal.provenanceText}',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    _ProposalActionButton(
+                      tok: tok,
+                      icon: Icons.close,
+                      label: 'Deny',
+                      onTap: onDeny,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _ProposalActionButton(
+                        tok: tok,
+                        icon: Icons.check,
+                        label: 'Save memory',
+                        accent: accent,
+                        onTap: onApprove,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProposalChip extends StatelessWidget {
+  const _ProposalChip({
+    required this.tok,
+    required this.icon,
+    required this.text,
+  });
+
+  final _Tok tok;
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: tok.bg,
+        border: Border.all(color: tok.border),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: tok.muted),
+          const SizedBox(width: 5),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 210),
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: tok.muted,
+                fontSize: 10.8,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProposalActionButton extends StatelessWidget {
+  const _ProposalActionButton({
+    required this.tok,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.accent,
+  });
+
+  final _Tok tok;
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  final Color? accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = onTap != null;
+    final bg = accent ?? tok.bg;
+    final fg = accent == null ? tok.text : _textOn(accent!);
+    final border = accent ?? tok.border;
+    return Opacity(
+      opacity: active ? 1 : 0.54,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: bg,
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: fg, size: 15),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    active ? label : 'Waiting',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 12.3,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

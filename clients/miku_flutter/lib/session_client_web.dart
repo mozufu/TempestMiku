@@ -65,15 +65,16 @@ class WebMikuSessionClient implements MikuSessionClient {
       source.addEventListener(type, (Event event) {
         final message = event as MessageEvent;
         final eventId = message.lastEventId;
-        if (eventId.isNotEmpty) {
+        final data = (jsonDecode(message.data as String) as Map)
+            .cast<String, Object?>();
+        if (eventId.isNotEmpty && shouldRememberEventId(type, data)) {
           rememberLastEventId(sessionId, eventId);
         }
         controller.add(
           MikuEvent(
             type: type,
             id: eventId,
-            data: (jsonDecode(message.data as String) as Map)
-                .cast<String, Object?>(),
+            data: data,
           ),
         );
       });

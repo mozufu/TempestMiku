@@ -3,8 +3,27 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:miku_flutter/main.dart';
 import 'package:miku_flutter/session_client_stub.dart';
+import 'package:miku_flutter/session_models.dart';
 
 void main() {
+  test('does not advance the persisted cursor past unresolved gates', () {
+    expect(shouldRememberEventId('approval', const {}), isFalse);
+    expect(
+      shouldRememberEventId(
+        'write_proposal',
+        const {'kind': 'memory', 'status': 'pending'},
+      ),
+      isFalse,
+    );
+    expect(
+      shouldRememberEventId(
+        'write_proposal',
+        const {'kind': 'memory', 'status': 'approved'},
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets('shows remote control stream, final, mode, and project state',
       (WidgetTester tester) async {
     await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
@@ -61,5 +80,34 @@ void main() {
 
     expect(find.text('project://tempestmiku · 2 promoted'), findsOneWidget);
     expect(find.text('Continue from latest session result'), findsOneWidget);
+  });
+
+  testWidgets('renders and resolves memory write proposals',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'remember this for me');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Memory proposal'), findsOneWidget);
+    expect(find.text('Brian prefers approval-backed memory writes.'),
+        findsOneWidget);
+    expect(find.text('scope global'), findsOneWidget);
+    expect(find.text('provenance scripted chat turn'), findsOneWidget);
+    expect(find.textContaining('待核可 · memory.write'), findsNothing);
+
+    await tester.tap(find.text('Save memory'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(client.resolvedApprovals, hasLength(1));
+    expect(client.resolvedApprovals.single, endsWith(':approve'));
+    expect(find.text('Memory proposal'), findsNothing);
   });
 }

@@ -6,7 +6,12 @@ MikuSessionClient createClient() => ScriptedMikuClient();
 
 class ScriptedMikuClient implements MikuSessionClient {
   final Map<String, StreamController<MikuEvent>> _controllers = {};
+  final Map<String, String> _approvalSessions = {};
+  final Map<String, String> _approvalProposals = {};
+  final Map<String, Map<String, Object?>> _proposals = {};
+  final List<String> resolvedApprovals = [];
   int _nextId = 0;
+  int _nextEventId = 1;
 
   @override
   Future<MikuSession> createOrReuseSession() => createSession();
@@ -40,10 +45,10 @@ class ScriptedMikuClient implements MikuSessionClient {
     if (controller == null) return;
     if (content.toLowerCase().contains('code')) {
       controller.add(
-        const MikuEvent(
+        MikuEvent(
           type: 'mode',
-          id: '2',
-          data: {
+          id: _eventId(),
+          data: const {
             'mode': 'serious_engineer',
             'label': 'Serious Engineer',
             'voice_cap': 'off',
@@ -53,8 +58,71 @@ class ScriptedMikuClient implements MikuSessionClient {
       );
     }
     final text = 'Miku heard: $content';
-    controller.add(MikuEvent(type: 'text', id: '3', data: {'delta': text}));
-    controller.add(MikuEvent(type: 'final', id: '4', data: {'text': text}));
+    controller.add(MikuEvent(type: 'text', id: _eventId(), data: {
+      'delta': text,
+    }));
+    controller.add(MikuEvent(type: 'final', id: _eventId(), data: {
+      'text': text,
+    }));
+    if (content.toLowerCase().contains('remember')) {
+      final proposalId = 'proposal-${_nextEventId++}';
+      final approvalId = 'approval-${_nextEventId++}';
+      final proposal = <String, Object?>{
+        'kind': 'memory',
+        'proposalId': proposalId,
+        'memoryKind': 'profile_fact',
+        'status': 'pending',
+        'subject': 'brian',
+        'scope': 'global',
+        'text': 'Brian prefers approval-backed memory writes.',
+        'predicate': 'prefers',
+        'object': 'approval-backed memory writes',
+        'confidence': 0.82,
+        'source': 'scripted-widget-test',
+        'provenanceLabel': 'scripted chat turn',
+        'provenance': {'sessionId': sessionId},
+        'dedupeKey': 'scripted-memory-proposal',
+        'recordId': 'record-scripted',
+      };
+      _approvalSessions[approvalId] = sessionId;
+      _approvalProposals[approvalId] = proposalId;
+      _proposals[proposalId] = proposal;
+      controller.add(
+        MikuEvent(
+          type: 'write_proposal',
+          id: _eventId(),
+          data: proposal,
+        ),
+      );
+      controller.add(
+        MikuEvent(
+          type: 'approval',
+          id: _eventId(),
+          data: {
+            'approvalId': approvalId,
+            'backend': 'memory',
+            'action': 'memory.write profile_fact',
+            'scope': {
+              'proposal': proposal,
+              'timeoutMs': 60000,
+            },
+            'options': const [
+              {
+                'optionId': 'allow',
+                'name': 'Save memory',
+                'kind': 'allow_once',
+              },
+              {
+                'optionId': 'reject',
+                'name': 'Reject memory',
+                'kind': 'reject_once',
+              },
+            ],
+            'timeoutMs': 60000,
+          },
+        ),
+      );
+    }
   }
 
   @override
@@ -63,7 +131,46 @@ class ScriptedMikuClient implements MikuSessionClient {
     String approvalId,
     String decision, {
     String? optionId,
-  }) async {}
+  }) async {
+    resolvedApprovals.add('$approvalId:$decision');
+    final controller = _controllers[sessionId];
+    if (controller == null || _approvalSessions[approvalId] != sessionId) {
+      return;
+    }
+    final approved = decision == 'approve';
+    controller.add(
+      MikuEvent(
+        type: 'approval_resolved',
+        id: _eventId(),
+        data: {
+          'approvalId': approvalId,
+          'backend': 'memory',
+          'status': approved ? 'approved' : 'denied',
+          'outcome': 'selected',
+          'optionId': approved ? 'allow' : 'reject',
+        },
+      ),
+    );
+    final proposalId = _approvalProposals[approvalId];
+    final proposal = _proposals[proposalId];
+    if (proposal == null) return;
+    controller.add(
+      MikuEvent(
+        type: 'write_proposal',
+        id: _eventId(),
+        data: {
+          ...proposal,
+          'status': approved ? 'approved' : 'denied',
+          if (approved)
+            'record': {
+              'id': proposal['recordId'],
+              'uri': 'memory://profile/brian/facts/${proposal['recordId']}',
+              'kind': proposal['memoryKind'],
+            },
+        },
+      ),
+    );
+  }
 
   @override
   Future<void> lockMode(String sessionId, String mode) async {
@@ -151,4 +258,6 @@ class ScriptedMikuClient implements MikuSessionClient {
       _ => const ['miku-voice', 'personal-assistant-state-capture'],
     };
   }
+
+  String _eventId() => '${_nextEventId++}';
 }

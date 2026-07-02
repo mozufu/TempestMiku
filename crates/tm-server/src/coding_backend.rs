@@ -106,12 +106,24 @@ pub enum ApprovalOutcome {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ApprovalStatus {
     Approved,
     Denied,
     TimedOut,
     Cancelled,
+}
+
+impl ApprovalStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+            Self::TimedOut => "timed_out",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +233,7 @@ impl ApprovalBroker {
                 }
             }
         };
-        self.emit_resolution(approval_id, backend, &detailed.outcome, sink)
+        self.emit_resolution(approval_id, backend, &detailed, sink)
             .await?;
         Ok(detailed)
     }
@@ -294,19 +306,21 @@ impl ApprovalBroker {
         &self,
         approval_id: Uuid,
         backend: &str,
-        outcome: &ApprovalOutcome,
+        detailed: &DetailedApprovalOutcome,
         sink: Arc<dyn CodingEventSink>,
     ) -> Result<SessionEvent> {
-        let payload = match outcome {
+        let payload = match &detailed.outcome {
             ApprovalOutcome::Selected { option_id } => json!({
                 "approvalId": approval_id,
                 "backend": backend,
+                "status": detailed.status.as_str(),
                 "outcome": "selected",
                 "optionId": option_id,
             }),
             ApprovalOutcome::Cancelled => json!({
                 "approvalId": approval_id,
                 "backend": backend,
+                "status": detailed.status.as_str(),
                 "outcome": "cancelled",
             }),
         };

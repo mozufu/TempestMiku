@@ -31,8 +31,9 @@ use tm_host::{
 };
 
 use crate::{
-    ApprovalBroker, AuthConfig, ChatRunner, ChatTurn, CodingBackend, CodingTurn, MemoryProvider,
-    Mode, NewProjectItem, NewSession, PersistingEventSink, PersonaConfig, ProjectItemKind,
+    ApprovalBroker, ApprovalStatus, AuthConfig, ChatRunner, ChatTurn, CodingBackend, CodingTurn,
+    MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, Mode,
+    NewProjectItem, NewSession, PersistingEventSink, PersonaConfig, ProjectItemKind,
     ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent, Store,
     StoreCodingEventSink, StoreEvent, store::ModeState, store::RecallChunkRecord,
 };
@@ -126,6 +127,10 @@ where
         .route("/sessions/:id", get(get_session::<S, M, C>))
         .route("/sessions/:id/events", get(session_events::<S, M, C>))
         .route("/sessions/:id/messages", post(post_message::<S, M, C>))
+        .route(
+            "/sessions/:id/memory/proposals",
+            post(propose_memory_write::<S, M, C>),
+        )
         .route("/sessions/:id/mode", get(get_mode::<S, M, C>))
         .route("/sessions/:id/mode/suggest", post(suggest_mode::<S, M, C>))
         .route("/sessions/:id/mode/apply", post(apply_mode::<S, M, C>))
@@ -283,6 +288,42 @@ fn default_subject() -> String {
     "brian".to_string()
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposeMemoryWriteRequest {
+    #[serde(alias = "kind")]
+    pub memory_kind: MemoryWriteKind,
+    #[serde(default = "default_subject")]
+    pub subject: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub predicate: Option<String>,
+    #[serde(default)]
+    pub object: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f32>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub provenance_label: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<Value>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryWriteProposalResponse {
+    pub proposal_id: Uuid,
+    pub memory_kind: MemoryWriteKind,
+    pub status: MemoryWriteStatus,
+    pub record: Option<MemoryRecordRef>,
+}
+
 async fn post_message<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
@@ -434,6 +475,172 @@ where
         .await?;
     }
     Ok(Json(json!({ "status": "accepted" })))
+}
+
+async fn propose_memory_write<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<ProposeMemoryWriteRequest>,
+) -> Result<Json<MemoryWriteProposalResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let (proposal, timeout) = memory_write_proposal_from_request(session_id, &session, payload)?;
+    let sink: Arc<dyn crate::CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+        session_id,
+        Arc::clone(&state.store),
+        state.sender(session_id),
+    ));
+    sink.emit(
+        "write_proposal",
+        proposal.event_payload(MemoryWriteStatus::Pending, None),
+    )
+    .await?;
+
+    let approval = state
+        .approval_broker
+        .request_permission_detailed_for_backend(
+            session_id,
+            "memory",
+            memory_write_approval_prompt(&proposal, timeout),
+            timeout,
+            Arc::clone(&sink),
+        )
+        .await?;
+    let status = memory_write_status_from_approval(approval.status);
+    let record = if approval.status == ApprovalStatus::Approved {
+        Some(persist_memory_write(state.store.as_ref(), &proposal).await?)
+    } else {
+        None
+    };
+    sink.emit(
+        "write_proposal",
+        proposal.event_payload(status, record.as_ref()),
+    )
+    .await?;
+    Ok(Json(MemoryWriteProposalResponse {
+        proposal_id: proposal.proposal_id,
+        memory_kind: proposal.memory_kind,
+        status,
+        record,
+    }))
+}
+
+fn memory_write_proposal_from_request(
+    session_id: Uuid,
+    session: &crate::SessionRecord,
+    payload: ProposeMemoryWriteRequest,
+) -> Result<(MemoryWriteProposal, Duration)> {
+    let now = Utc::now();
+    let timeout_ms = payload.timeout_ms.unwrap_or(60_000).clamp(1, 60_000);
+    let timeout = Duration::from_millis(timeout_ms);
+    let scope = payload
+        .scope
+        .unwrap_or_else(|| session.mode_state.mode.default_scope().to_string());
+    let source = payload
+        .source
+        .unwrap_or_else(|| format!("session:{session_id}:memory-write"));
+    let provenance_label = payload
+        .provenance_label
+        .unwrap_or_else(|| "manual-memory-proposal".to_string());
+    let provenance = payload.provenance.unwrap_or_else(|| {
+        json!({
+            "label": provenance_label,
+            "source": source,
+            "sourceSession": session_id,
+            "mode": session.mode_state.mode,
+            "proposedAt": now,
+        })
+    });
+    let proposal = match payload.memory_kind {
+        MemoryWriteKind::ProfileFact => MemoryWriteProposal::profile_fact(
+            payload.subject,
+            required_memory_field("predicate", payload.predicate)?,
+            required_memory_field("object", payload.object)?,
+            payload.confidence.unwrap_or(0.8),
+            source,
+            provenance_label,
+            provenance,
+            now,
+        )?,
+        MemoryWriteKind::RecallChunk => MemoryWriteProposal::recall_chunk(
+            payload.subject,
+            scope,
+            required_memory_field("text", payload.text)?,
+            source,
+            provenance_label,
+            provenance,
+            now,
+        )?,
+    };
+    Ok((proposal, timeout))
+}
+
+fn required_memory_field(field: &str, value: Option<String>) -> Result<String> {
+    value.ok_or_else(|| ServerError::InvalidRequest(format!("memory {field} is required")))
+}
+
+fn memory_write_approval_prompt(
+    proposal: &MemoryWriteProposal,
+    timeout: Duration,
+) -> crate::ApprovalPrompt {
+    crate::ApprovalPrompt {
+        action: format!(
+            "memory.write {}: {}",
+            proposal.memory_kind.as_str(),
+            proposal.text
+        ),
+        scope: json!({
+            "proposal": proposal.approval_scope(),
+            "timeoutMs": timeout.as_millis(),
+        }),
+        options: vec![
+            crate::ApprovalOption {
+                option_id: "allow".to_string(),
+                name: "Save memory".to_string(),
+                kind: "allow_once".to_string(),
+            },
+            crate::ApprovalOption {
+                option_id: "reject".to_string(),
+                name: "Reject memory".to_string(),
+                kind: "reject_once".to_string(),
+            },
+        ],
+    }
+}
+
+async fn persist_memory_write<S>(
+    store: &S,
+    proposal: &MemoryWriteProposal,
+) -> Result<MemoryRecordRef>
+where
+    S: Store,
+{
+    match proposal.memory_kind {
+        MemoryWriteKind::ProfileFact => {
+            let fact = crate::memory::profile_fact_record(proposal)?;
+            store.upsert_profile_fact(fact).await?;
+        }
+        MemoryWriteKind::RecallChunk => {
+            let chunk = crate::memory::recall_chunk_record(proposal)?;
+            store.upsert_recall_chunk(chunk).await?;
+        }
+    }
+    Ok(proposal.record_ref())
+}
+
+fn memory_write_status_from_approval(status: ApprovalStatus) -> MemoryWriteStatus {
+    match status {
+        ApprovalStatus::Approved => MemoryWriteStatus::Approved,
+        ApprovalStatus::Denied => MemoryWriteStatus::Denied,
+        ApprovalStatus::TimedOut => MemoryWriteStatus::TimedOut,
+        ApprovalStatus::Cancelled => MemoryWriteStatus::Cancelled,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2538,6 +2745,293 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_write_proposal_approval_persists_profile_fact_and_replays() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        let session_id = session.id;
+        let post_app = app.clone();
+        let request = json!({
+            "memoryKind": "profile_fact",
+            "subject": "brian",
+            "predicate": "prefers",
+            "object": "approval-backed memory writes",
+            "confidence": 0.91,
+            "provenanceLabel": "user-confirmed",
+            "timeoutMs": 5000
+        });
+        let proposal = tokio::spawn(async move {
+            post_app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{session_id}/memory/proposals"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(request.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+
+        let pending = wait_for_event_payload(&store, session_id, "write_proposal").await;
+        assert_eq!(pending["kind"], json!("memory"));
+        assert_eq!(pending["memoryKind"], json!("profile_fact"));
+        assert_eq!(pending["status"], json!("pending"));
+        assert_eq!(pending["provenanceLabel"], json!("user-confirmed"));
+        let approval = wait_for_event_payload(&store, session_id, "approval").await;
+        assert_eq!(approval["backend"], json!("memory"));
+        assert_eq!(
+            approval["scope"]["proposal"]["proposalId"],
+            pending["proposalId"]
+        );
+        let approval_id = approval["approvalId"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        let approved = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"decision":"approve"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approved.status(), StatusCode::OK);
+        let response = proposal.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["status"], json!("approved"));
+        assert!(
+            body["record"]["uri"]
+                .as_str()
+                .unwrap()
+                .starts_with("memory://profile/brian/facts/")
+        );
+
+        let facts = store.profile_facts("brian").await.unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].predicate, "prefers");
+        assert_eq!(facts[0].object, "approval-backed memory writes");
+        assert_eq!(facts[0].provenance, "user-confirmed");
+
+        let events = store.events_after(session_id, None).await.unwrap();
+        let write_statuses = events
+            .iter()
+            .filter(|event| event.event_type == "write_proposal")
+            .map(|event| event.payload_json["status"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(write_statuses, vec!["pending", "approved"]);
+        assert!(events.iter().any(|event| {
+            event.event_type == "approval_resolved"
+                && event.payload_json["backend"] == json!("memory")
+                && event.payload_json["status"] == json!("approved")
+        }));
+        let pending_seq = events
+            .iter()
+            .find(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["status"] == json!("pending")
+            })
+            .unwrap()
+            .seq;
+        let replay = store
+            .events_after(session_id, Some(pending_seq - 1))
+            .await
+            .unwrap();
+        assert_eq!(replay[0].event_type, "write_proposal");
+        assert_eq!(replay[0].payload_json["status"], json!("pending"));
+    }
+
+    #[tokio::test]
+    async fn memory_write_proposal_denial_does_not_persist() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        let session_id = session.id;
+        let post_app = app.clone();
+        let request = json!({
+            "memoryKind": "profile_fact",
+            "subject": "brian",
+            "predicate": "likes",
+            "object": "denied memory",
+            "timeoutMs": 5000
+        });
+        let proposal = tokio::spawn(async move {
+            post_app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{session_id}/memory/proposals"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(request.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        let approval_id =
+            wait_for_event_payload(&store, session_id, "approval").await["approvalId"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap();
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"decision":"deny"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::OK);
+        let response = proposal.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["status"], json!("denied"));
+        assert_eq!(store.profile_facts("brian").await.unwrap().len(), 0);
+        let events = store.events_after(session_id, None).await.unwrap();
+        assert!(events.iter().any(|event| {
+            event.event_type == "write_proposal" && event.payload_json["status"] == json!("denied")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_type == "approval_resolved"
+                && event.payload_json["backend"] == json!("memory")
+                && event.payload_json["status"] == json!("denied")
+        }));
+    }
+
+    #[tokio::test]
+    async fn memory_write_proposal_timeout_defaults_to_deny() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}/memory/proposals", session.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "memoryKind": "recall_chunk",
+                            "scope": "global",
+                            "text": "this timed-out memory should not be saved",
+                            "timeoutMs": 1
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = response_json(res).await;
+        assert_eq!(body["status"], json!("timed_out"));
+        assert_eq!(
+            store
+                .recall_chunks("global", "timed-out memory", 5)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert!(events.iter().any(|event| {
+            event.event_type == "write_proposal"
+                && event.payload_json["status"] == json!("timed_out")
+        }));
+        assert!(events.iter().any(|event| {
+            event.event_type == "approval_resolved"
+                && event.payload_json["backend"] == json!("memory")
+                && event.payload_json["status"] == json!("timed_out")
+                && event.payload_json["optionId"] == json!("reject")
+        }));
+    }
+
+    #[tokio::test]
+    async fn approved_memory_writes_are_idempotent_by_dedupe_key() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        let session_id = session.id;
+        let mut record_ids = Vec::new();
+        for approval_index in 0..2 {
+            let post_app = app.clone();
+            let request = json!({
+                "memoryKind": "recall_chunk",
+                "scope": "global",
+                "text": "Stable durable memory chunk",
+                "source": format!("test-source-{approval_index}"),
+                "timeoutMs": 5000
+            });
+            let proposal = tokio::spawn(async move {
+                post_app
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri(format!("/sessions/{session_id}/memory/proposals"))
+                            .header("content-type", "application/json")
+                            .body(Body::from(request.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            });
+            let approval =
+                wait_for_nth_event_payload(&store, session_id, "approval", approval_index).await;
+            let approval_id = approval["approvalId"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap();
+            let approved = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"decision":"approve"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(approved.status(), StatusCode::OK);
+            let response = proposal.await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response_json(response).await;
+            assert_eq!(body["status"], json!("approved"));
+            record_ids.push(body["record"]["id"].as_str().unwrap().to_string());
+        }
+
+        assert_eq!(record_ids[0], record_ids[1]);
+        let chunks = store
+            .recall_chunks("global", "Stable durable memory", 10)
+            .await
+            .unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "Stable durable memory chunk");
+        let approved_proposals = store
+            .events_after(session_id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["status"] == json!("approved")
+            })
+            .count();
+        assert_eq!(approved_proposals, 2);
+    }
+
+    #[tokio::test]
     async fn serious_engineer_session_uses_project_scope_and_recalls_next_session() {
         let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
         let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
@@ -3755,6 +4249,28 @@ display(result);
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("event {event_type} was not persisted")
+    }
+
+    async fn wait_for_nth_event_payload(
+        store: &InMemoryStore,
+        session_id: Uuid,
+        event_type: &str,
+        index: usize,
+    ) -> Value {
+        for _ in 0..100 {
+            if let Some(event) = store
+                .events_after(session_id, None)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|event| event.event_type == event_type)
+                .nth(index)
+            {
+                return event.payload_json;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("event {event_type} #{index} was not persisted")
     }
 
     #[tokio::test]

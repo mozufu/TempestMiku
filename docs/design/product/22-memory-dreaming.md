@@ -171,6 +171,11 @@ The current knobs become our config (now we own every one — none is an externa
 - **Approval-gated** (write-approval on): Miku proposes a one-line memory/fact and asks, unless standing
   permission exists. Episodic append stays unblocked; durable **assertions** (facts/notes/skills) are
   what get gated. Redaction always runs before disk.
+- **First P2 server slice:** every turn receives a bounded `MemoryContext` prompt block with profile
+  facts, scoped recall chunks, provenance labels, and budget metadata. Durable profile facts and scoped
+  recall chunks are created through `write_proposal` events plus the shared `approval` / `approval_resolved`
+  path; approve writes idempotently by normalized content, while deny/timeout writes nothing and remains
+  replayable in `session_events`.
 
 ## 22.9 `memory.*` capability + `memory://` resources
 

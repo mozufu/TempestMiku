@@ -206,6 +206,8 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<Vec<SessionEvent>>;
     async fn add_profile_fact(&self, fact: ProfileFactRecord) -> Result<()>;
     async fn add_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<()>;
+    async fn upsert_profile_fact(&self, fact: ProfileFactRecord) -> Result<ProfileFactRecord>;
+    async fn upsert_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<RecallChunkRecord>;
     async fn profile_facts(&self, subject: &str) -> Result<Vec<ProfileFactRecord>>;
     async fn recall_chunks(
         &self,
@@ -350,15 +352,45 @@ impl Store for InMemoryStore {
         Ok(())
     }
 
+    async fn upsert_profile_fact(&self, fact: ProfileFactRecord) -> Result<ProfileFactRecord> {
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .profile_facts
+            .iter_mut()
+            .find(|existing| existing.id == fact.id)
+        {
+            *existing = fact.clone();
+            return Ok(existing.clone());
+        }
+        inner.profile_facts.push(fact.clone());
+        Ok(fact)
+    }
+
+    async fn upsert_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<RecallChunkRecord> {
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .recall_chunks
+            .iter_mut()
+            .find(|existing| existing.id == chunk.id)
+        {
+            *existing = chunk.clone();
+            return Ok(existing.clone());
+        }
+        inner.recall_chunks.push(chunk.clone());
+        Ok(chunk)
+    }
+
     async fn profile_facts(&self, subject: &str) -> Result<Vec<ProfileFactRecord>> {
-        Ok(self
+        let mut facts = self
             .inner
             .lock()
             .profile_facts
             .iter()
             .filter(|fact| fact.subject == subject && fact.valid_to.is_none())
             .cloned()
-            .collect())
+            .collect::<Vec<_>>();
+        facts.sort_by_key(|fact| std::cmp::Reverse(fact.valid_from));
+        Ok(facts)
     }
 
     async fn recall_chunks(
@@ -368,15 +400,17 @@ impl Store for InMemoryStore {
         limit: usize,
     ) -> Result<Vec<RecallChunkRecord>> {
         let query = query.to_lowercase();
-        Ok(self
+        let mut chunks = self
             .inner
             .lock()
             .recall_chunks
             .iter()
             .filter(|chunk| chunk.scope == scope && chunk.text.to_lowercase().contains(&query))
-            .take(limit)
             .cloned()
-            .collect())
+            .collect::<Vec<_>>();
+        chunks.sort_by_key(|chunk| std::cmp::Reverse(chunk.created_at));
+        chunks.truncate(limit);
+        Ok(chunks)
     }
 
     async fn upsert_project_item(&self, item: NewProjectItem) -> Result<ProjectItemRecord> {
@@ -645,9 +679,71 @@ impl Store for PostgresStore {
         Ok(())
     }
 
+    async fn upsert_profile_fact(&self, fact: ProfileFactRecord) -> Result<ProfileFactRecord> {
+        let row = self
+            .client
+            .query_one(
+                "insert into profile_facts (id, subject, predicate, object, confidence, provenance, valid_from, valid_to)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8)
+                 on conflict (id) do update
+                   set subject = excluded.subject,
+                       predicate = excluded.predicate,
+                       object = excluded.object,
+                       confidence = excluded.confidence,
+                       provenance = excluded.provenance,
+                       valid_from = excluded.valid_from,
+                       valid_to = excluded.valid_to
+                 returning id, subject, predicate, object, confidence, provenance, valid_from, valid_to",
+                &[&fact.id, &fact.subject, &fact.predicate, &fact.object, &fact.confidence, &fact.provenance, &fact.valid_from, &fact.valid_to],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        Ok(ProfileFactRecord {
+            id: row.get("id"),
+            subject: row.get("subject"),
+            predicate: row.get("predicate"),
+            object: row.get("object"),
+            confidence: row.get("confidence"),
+            provenance: row.get("provenance"),
+            valid_from: row.get("valid_from"),
+            valid_to: row.get("valid_to"),
+        })
+    }
+
+    async fn upsert_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<RecallChunkRecord> {
+        let row = self
+            .client
+            .query_one(
+                "insert into recall_chunks (id, scope, text, source, created_at)
+                 values ($1, $2, $3, $4, $5)
+                 on conflict (id) do update
+                   set scope = excluded.scope,
+                       text = excluded.text,
+                       source = excluded.source,
+                       created_at = excluded.created_at
+                 returning id, scope, text, source, created_at",
+                &[
+                    &chunk.id,
+                    &chunk.scope,
+                    &chunk.text,
+                    &chunk.source,
+                    &chunk.created_at,
+                ],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        Ok(RecallChunkRecord {
+            id: row.get("id"),
+            scope: row.get("scope"),
+            text: row.get("text"),
+            source: row.get("source"),
+            created_at: row.get("created_at"),
+        })
+    }
+
     async fn profile_facts(&self, subject: &str) -> Result<Vec<ProfileFactRecord>> {
         let rows = self.client
-            .query("select id, subject, predicate, object, confidence, provenance, valid_from, valid_to from profile_facts where subject = $1 and valid_to is null", &[&subject])
+            .query("select id, subject, predicate, object, confidence, provenance, valid_from, valid_to from profile_facts where subject = $1 and valid_to is null order by valid_from desc", &[&subject])
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
         Ok(rows

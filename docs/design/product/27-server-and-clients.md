@@ -137,8 +137,8 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   (§11); SSE all the way from the model provider through the loop to the client.
 - **Inbound (client→server):** **custom session API + SSE** is primary: `POST /sessions`,
   `POST /sessions/:id/messages`, `GET /sessions/:id/events`, `POST /sessions/:id/approvals/:approval_id`,
-  `POST /sessions/:id/promote`, mode lock / override endpoints, session-scoped resource endpoints (§09),
-  and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
+  `POST /sessions/:id/memory/proposals`, `POST /sessions/:id/promote`, mode lock / override endpoints,
+  session-scoped resource endpoints (§09), and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
 
@@ -163,6 +163,11 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 - **Enforced as `ApprovalPolicy`** (§08) for: destructive / external / spend actions, **memory-write**
   (§22 `memory.note`), **skill-write** (§26), **project promotion** when Miku proposes it, **drive-link**
   + auto-file (§24), and **MCP reload**.
+- **Memory writes:** `POST /sessions/:id/memory/proposals` emits `write_proposal` with
+  `kind: "memory"`, `memoryKind`, `proposalId`, `status`, `dedupeKey`, provenance, and the candidate
+  text/fact fields; the shared approval broker then emits `approval` and `approval_resolved`. Approved
+  writes upsert one durable record by dedupe key, while denied, cancelled, and timed-out proposals emit a
+  resolved `write_proposal` status without writing.
 - **OMP ACP bridge (P0a):** ACP `session/request_permission` and elicitation prompts are translated
   into the same `approval` event + POST resolution path; unsupported or timed-out prompts deny by
   default.

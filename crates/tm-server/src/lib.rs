@@ -26,7 +26,10 @@ pub use coding_backend::{
     DetailedApprovalOutcome, ResolveApprovalRequest, StoreCodingEventSink,
 };
 pub use error::{Result, ServerError};
-pub use memory::{MemoryContext, MemoryProvider, StoreMemoryProvider};
+pub use memory::{
+    MemoryContext, MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal,
+    MemoryWriteStatus, StoreMemoryProvider,
+};
 pub use native_deno::{NativeApprovalMode, NativeDenoBackend};
 pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
 pub use store::{

@@ -43,8 +43,10 @@ Current implementation has advanced past the original M0-only substrate. The wor
 implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP bridging, the native
 P0 Serious Engineer dogfood slice, the CLI native cutover proof for linked-repo edit/run/artifact
 workflows, native Deno HTTP approvals for the Serious Engineer backend, and the P1 project-manager
-remote-control surface. Normal Rust tests pass when local loopback networking is available; managed
-sandboxes may need elevated permissions for tests that bind `127.0.0.1`.
+remote-control surface. The first P2 memory server slice now has bounded recall injection,
+approval-gated profile/recall writes, memory resources, and gated Postgres coverage for the approval
+flow. Normal Rust tests pass when local loopback networking is available; managed sandboxes may need
+elevated permissions for tests that bind `127.0.0.1`.
 
 Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, `tm-agents`, and
 `tm-drive` crates; scheduler/dreaming; product approval surfaces for future memory/drive/skill writes;
@@ -71,9 +73,9 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Start the P2 personal-assistant baseline** — add the full persona overlay via SOUL + mode skill
-   bundles, profile/user recall, personal-assistant state capture, negative-state grounding, and
-   bounded proactive reminders while preserving manual approval gates for memory writes.
+1. **Continue the P2 personal-assistant baseline** — broaden the full persona overlay via SOUL + mode
+   skill bundles, profile/user recall, personal-assistant state capture, negative-state grounding, and
+   bounded proactive reminders while preserving the now-covered manual approval gates for memory writes.
 2. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
    artifacts, and HTTP-routed manual approvals.

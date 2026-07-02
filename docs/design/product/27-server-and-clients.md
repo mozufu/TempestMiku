@@ -71,16 +71,19 @@ the server **extends** it with product events the core trait doesn't carry:
 ### 27.1.1 Postgres test gate
 
 Normal `cargo test` stays external-service-free: server persistence tests use the in-memory store unless
-Postgres coverage is explicitly enabled. To run the gated persistence checks for event replay, memory
-rows, approval events, and promoted artifact/resource references, set:
+Postgres coverage is explicitly enabled. To run the gated persistence checks for event replay, real
+memory `write_proposal` approval flows, profile fact / recall chunk rows, idempotent writes, and
+promoted artifact/resource references, set:
 
 ```sh
 TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server
 ```
 
 `TM_TEST_DATABASE_URL` is preferred for tests; if it is absent, the tests fall back to
-`TM_DATABASE_URL`. Without `TM_POSTGRES_TESTS=1`, the Postgres test returns early and does not open a
-network or local database connection.
+`TM_DATABASE_URL`. Without `TM_POSTGRES_TESTS=1`, the gated Postgres tests return early and do not
+open a network or local database connection. The memory coverage exercises approve, deny,
+timeout/default-deny, durable-write idempotency, replay, and both P2 record types through the normal
+HTTP approval route.
 
 ## 27.2 Scheduler & proactivity
 

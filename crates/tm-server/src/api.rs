@@ -2366,7 +2366,7 @@ mod tests {
     use crate::{
         AgentChatRunner, ApprovalOption, ApprovalPrompt, ChatRunner, ChatTurn, CodingEventSink,
         CodingTurn, CodingTurnResult, EchoChatRunner, InMemoryStore, NativeApprovalMode,
-        NativeDenoBackend, StoreMemoryProvider,
+        NativeDenoBackend, PostgresStore, StoreMemoryProvider,
         auth::ForwardedAuthConfig,
         store::{ProfileFactRecord, RecallChunkRecord},
     };
@@ -2378,6 +2378,31 @@ mod tests {
         let chat = Arc::new(EchoChatRunner);
         let state = AppState::new(store.clone(), memory, chat, persona, auth);
         (app(state), store)
+    }
+
+    fn postgres_test_dsn() -> Option<String> {
+        (std::env::var("TM_POSTGRES_TESTS").ok().as_deref() == Some("1"))
+            .then(|| {
+                std::env::var("TM_TEST_DATABASE_URL")
+                    .or_else(|_| std::env::var("TM_DATABASE_URL"))
+                    .ok()
+            })
+            .flatten()
+    }
+
+    async fn postgres_test_app() -> Option<(Router, Arc<PostgresStore>)> {
+        let dsn = postgres_test_dsn()?;
+        let store = Arc::new(PostgresStore::connect(&dsn).await.unwrap());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let state = AppState::new(
+            store.clone(),
+            memory,
+            chat,
+            PersonaConfig::default(),
+            AuthConfig::NoAuth,
+        );
+        Some((app(state), store))
     }
 
     fn test_app_with_state(
@@ -2653,6 +2678,45 @@ mod tests {
                     .uri(format!("/sessions/{session_id}/messages"))
                     .header("content-type", "application/json")
                     .body(Body::from(json!({ "content": content }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    async fn post_memory_proposal(
+        app: &Router,
+        session_id: Uuid,
+        payload: Value,
+    ) -> axum::response::Response {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/memory/proposals"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn resolve_test_approval(
+        app: &Router,
+        session_id: Uuid,
+        approval_id: Uuid,
+        decision: &str,
+    ) {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "decision": decision }).to_string()))
                     .unwrap(),
             )
             .await
@@ -3258,6 +3322,248 @@ mod tests {
             })
             .count();
         assert_eq!(approved_proposals, 2);
+    }
+
+    #[tokio::test]
+    async fn gated_postgres_memory_approval_flow_persists_and_replays() {
+        let Some((app, store)) = postgres_test_app().await else {
+            return;
+        };
+
+        let run_id = Uuid::new_v4().simple().to_string();
+        let subject = format!("brian-pg-{run_id}");
+
+        let approved_session = create(&app).await;
+        let approved_session_id = approved_session.id;
+        let profile_object = format!("approval-backed postgres memory {run_id}");
+        let post_app = app.clone();
+        let request = json!({
+            "memoryKind": "profile_fact",
+            "subject": subject.clone(),
+            "predicate": "prefers",
+            "object": profile_object.clone(),
+            "confidence": 0.93,
+            "provenanceLabel": "postgres-approved",
+            "timeoutMs": 5000
+        });
+        let proposal = tokio::spawn(async move {
+            post_memory_proposal(&post_app, approved_session_id, request).await
+        });
+
+        let pending = wait_for_event_payload(&store, approved_session_id, "write_proposal").await;
+        assert_eq!(pending["kind"], json!("memory"));
+        assert_eq!(pending["memoryKind"], json!("profile_fact"));
+        assert_eq!(pending["status"], json!("pending"));
+        let approval = wait_for_event_payload(&store, approved_session_id, "approval").await;
+        assert_eq!(approval["backend"], json!("memory"));
+        assert_eq!(
+            approval["scope"]["proposal"]["proposalId"],
+            pending["proposalId"]
+        );
+        let approval_id = approval["approvalId"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        resolve_test_approval(&app, approved_session_id, approval_id, "approve").await;
+
+        let response = proposal.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["status"], json!("approved"));
+        let record_uri = body["record"]["uri"].as_str().unwrap().to_string();
+        assert!(
+            record_uri.starts_with(&format!("memory://profile/{subject}/facts/")),
+            "{record_uri}"
+        );
+        let facts = store.profile_facts(&subject).await.unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].predicate, "prefers");
+        assert_eq!(facts[0].object, profile_object);
+        assert_eq!(facts[0].provenance, "postgres-approved");
+
+        let record = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{}/resources/resolve?uri={record_uri}",
+                        approved_session_id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(record.status(), StatusCode::OK);
+        let record_json = response_json(record).await;
+        assert!(
+            record_json["content"]
+                .as_str()
+                .unwrap()
+                .contains(&profile_object)
+        );
+
+        let events = store.events_after(approved_session_id, None).await.unwrap();
+        let write_statuses = events
+            .iter()
+            .filter(|event| event.event_type == "write_proposal")
+            .map(|event| event.payload_json["status"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(write_statuses, vec!["pending", "approved"]);
+        assert!(events.iter().any(|event| {
+            event.event_type == "approval_resolved"
+                && event.payload_json["backend"] == json!("memory")
+                && event.payload_json["status"] == json!("approved")
+        }));
+        let pending_seq = events
+            .iter()
+            .find(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["status"] == json!("pending")
+            })
+            .unwrap()
+            .seq;
+        let replay = store
+            .events_after(approved_session_id, Some(pending_seq - 1))
+            .await
+            .unwrap();
+        assert_eq!(replay[0].event_type, "write_proposal");
+        assert_eq!(replay[0].payload_json["status"], json!("pending"));
+
+        let chunk_session = create(&app).await;
+        let chunk_session_id = chunk_session.id;
+        let scope = format!("postgres-p2-{run_id}");
+        let chunk_text = format!("Stable durable postgres memory chunk {run_id}");
+        let mut record_ids = Vec::new();
+        for approval_index in 0..2 {
+            let post_app = app.clone();
+            let request = json!({
+                "memoryKind": "recall_chunk",
+                "subject": subject.clone(),
+                "scope": scope.clone(),
+                "text": chunk_text.clone(),
+                "source": format!("postgres-test-source-{approval_index}"),
+                "provenanceLabel": "postgres-recall",
+                "timeoutMs": 5000
+            });
+            let proposal = tokio::spawn(async move {
+                post_memory_proposal(&post_app, chunk_session_id, request).await
+            });
+            let approval =
+                wait_for_nth_event_payload(&store, chunk_session_id, "approval", approval_index)
+                    .await;
+            let approval_id = approval["approvalId"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap();
+            resolve_test_approval(&app, chunk_session_id, approval_id, "approve").await;
+            let response = proposal.await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response_json(response).await;
+            assert_eq!(body["status"], json!("approved"));
+            record_ids.push(body["record"]["id"].as_str().unwrap().to_string());
+        }
+        assert_eq!(record_ids[0], record_ids[1]);
+        let chunks = store.recall_chunks(&scope, &run_id, 10).await.unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, chunk_text);
+        let approved_chunk_proposals = store
+            .events_after(chunk_session_id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["status"] == json!("approved")
+            })
+            .count();
+        assert_eq!(approved_chunk_proposals, 2);
+
+        let denied_session = create(&app).await;
+        let denied_session_id = denied_session.id;
+        let denied_subject = format!("brian-denied-pg-{run_id}");
+        let denied_object = format!("denied postgres memory {run_id}");
+        let post_app = app.clone();
+        let request = json!({
+            "memoryKind": "profile_fact",
+            "subject": denied_subject.clone(),
+            "predicate": "likes",
+            "object": denied_object.clone(),
+            "timeoutMs": 5000
+        });
+        let proposal = tokio::spawn(async move {
+            post_memory_proposal(&post_app, denied_session_id, request).await
+        });
+        let approval = wait_for_event_payload(&store, denied_session_id, "approval").await;
+        let approval_id = approval["approvalId"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        resolve_test_approval(&app, denied_session_id, approval_id, "deny").await;
+        let response = proposal.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["status"], json!("denied"));
+        assert!(body["record"].is_null());
+        assert_eq!(store.profile_facts(&denied_subject).await.unwrap().len(), 0);
+        let denied_events = store.events_after(denied_session_id, None).await.unwrap();
+        let denied_statuses = denied_events
+            .iter()
+            .filter(|event| event.event_type == "write_proposal")
+            .map(|event| event.payload_json["status"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(denied_statuses, vec!["pending", "denied"]);
+        assert!(denied_events.iter().any(|event| {
+            event.event_type == "approval_resolved"
+                && event.payload_json["backend"] == json!("memory")
+                && event.payload_json["status"] == json!("denied")
+        }));
+
+        let timeout_session = create(&app).await;
+        let timeout_session_id = timeout_session.id;
+        let timeout_scope = format!("postgres-timeout-{run_id}");
+        let timeout_text = format!("timed-out postgres memory should not persist {run_id}");
+        let response = post_memory_proposal(
+            &app,
+            timeout_session_id,
+            json!({
+                "memoryKind": "recall_chunk",
+                "subject": subject.clone(),
+                "scope": timeout_scope.clone(),
+                "text": timeout_text.clone(),
+                "timeoutMs": 1
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["status"], json!("timed_out"));
+        assert!(body["record"].is_null());
+        assert_eq!(
+            store
+                .recall_chunks(&timeout_scope, "timed-out postgres memory", 10)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+        let timeout_events = store.events_after(timeout_session_id, None).await.unwrap();
+        let timeout_statuses = timeout_events
+            .iter()
+            .filter(|event| event.event_type == "write_proposal")
+            .map(|event| event.payload_json["status"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(timeout_statuses, vec!["pending", "timed_out"]);
+        assert!(timeout_events.iter().any(|event| {
+            event.event_type == "approval_resolved"
+                && event.payload_json["backend"] == json!("memory")
+                && event.payload_json["status"] == json!("timed_out")
+                && event.payload_json["optionId"] == json!("reject")
+        }));
     }
 
     #[tokio::test]
@@ -4662,13 +4968,13 @@ display(result);
             .clone()
     }
 
-    async fn wait_for_event_payload(
-        store: &InMemoryStore,
-        session_id: Uuid,
-        event_type: &str,
-    ) -> Value {
+    async fn wait_for_event_payload<S>(store: &Arc<S>, session_id: Uuid, event_type: &str) -> Value
+    where
+        S: Store,
+    {
         for _ in 0..100 {
             if let Some(event) = store
+                .as_ref()
                 .events_after(session_id, None)
                 .await
                 .unwrap()
@@ -4682,14 +4988,18 @@ display(result);
         panic!("event {event_type} was not persisted")
     }
 
-    async fn wait_for_nth_event_payload(
-        store: &InMemoryStore,
+    async fn wait_for_nth_event_payload<S>(
+        store: &Arc<S>,
         session_id: Uuid,
         event_type: &str,
         index: usize,
-    ) -> Value {
+    ) -> Value
+    where
+        S: Store,
+    {
         for _ in 0..100 {
             if let Some(event) = store
+                .as_ref()
                 .events_after(session_id, None)
                 .await
                 .unwrap()

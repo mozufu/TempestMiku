@@ -1,10 +1,10 @@
-use std::{env, time::Duration};
+use std::{env, fs, path::Path, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::{Method, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tm_core::{ChatRequest, LlmClient, Message, ToolChoice};
 use tm_llm::OpenAiClient;
@@ -381,10 +381,21 @@ pub fn parse_sse_block(block: &str) -> Result<Option<E2eEvent>> {
     }))
 }
 
+pub const WORKFLOW_RECORD_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Copy)]
 pub enum WorkflowStep {
     PersonalAssistantGreeting,
     CodingModeProbe,
+}
+
+impl WorkflowStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowStep::PersonalAssistantGreeting => "personal_assistant_greeting",
+            WorkflowStep::CodingModeProbe => "coding_mode_probe",
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -397,22 +408,49 @@ pub trait E2eSpeaker: Send + Sync {
     async fn message(&self, step: WorkflowStep, context: &WorkflowContext) -> Result<String>;
 }
 
-#[derive(Debug, Default)]
-pub struct ScriptedSpeaker;
+#[derive(Debug, Default, Clone)]
+pub struct ScriptedSpeaker {
+    personal_message: Option<String>,
+    coding_message: Option<String>,
+}
+
+impl ScriptedSpeaker {
+    pub fn new(personal_message: Option<String>, coding_message: Option<String>) -> Self {
+        Self {
+            personal_message: normalize_message_override(personal_message),
+            coding_message: normalize_message_override(coding_message),
+        }
+    }
+
+    pub fn personal_message(&self) -> Option<&str> {
+        self.personal_message.as_deref()
+    }
+
+    pub fn coding_message(&self) -> Option<&str> {
+        self.coding_message.as_deref()
+    }
+}
 
 #[async_trait]
 impl E2eSpeaker for ScriptedSpeaker {
     async fn message(&self, step: WorkflowStep, _context: &WorkflowContext) -> Result<String> {
-        Ok(match step {
-            WorkflowStep::PersonalAssistantGreeting => {
-                "hello Miku, give me a short status check for this E2E hatch".to_string()
-            }
-            WorkflowStep::CodingModeProbe => {
-                "please fix this Rust code bug, capture the open loop, and state the decision"
-                    .to_string()
-            }
-        })
+        let message = match step {
+            WorkflowStep::PersonalAssistantGreeting => self
+                .personal_message
+                .as_deref()
+                .unwrap_or("hello Miku, give me a short status check for this E2E hatch"),
+            WorkflowStep::CodingModeProbe => self.coding_message.as_deref().unwrap_or(
+                "please fix this Rust code bug, capture the open loop, and state the decision",
+            ),
+        };
+        Ok(message.to_string())
     }
+}
+
+fn normalize_message_override(message: Option<String>) -> Option<String> {
+    message
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty())
 }
 
 pub struct LiveSpeaker {
@@ -498,7 +536,23 @@ pub struct WorkflowOptions {
     pub require_artifact: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationRound {
+    pub index: usize,
+    pub step: String,
+    pub user_message: String,
+    pub assistant_streamed_text: String,
+    pub assistant_final_text: String,
+    pub mode: String,
+    pub event_id_start: Option<i64>,
+    pub event_id_end: Option<i64>,
+    pub event_types: Vec<String>,
+    pub resource_uris: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkflowReport {
     pub session_id: String,
     pub personal_final: String,
@@ -506,6 +560,55 @@ pub struct WorkflowReport {
     pub memory_record_uri: String,
     pub artifact_uri: Option<String>,
     pub promoted_count: usize,
+    pub rounds: Vec<ConversationRound>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRecord {
+    pub schema_version: u32,
+    pub mode: String,
+    pub session_id: String,
+    pub personal_final: String,
+    pub coding_final: String,
+    pub memory_record_uri: String,
+    pub artifact_uri: Option<String>,
+    pub promoted_count: usize,
+    pub rounds: Vec<ConversationRound>,
+}
+
+impl WorkflowReport {
+    pub fn to_record(&self, mode: impl Into<String>) -> WorkflowRecord {
+        WorkflowRecord {
+            schema_version: WORKFLOW_RECORD_SCHEMA_VERSION,
+            mode: mode.into(),
+            session_id: self.session_id.clone(),
+            personal_final: self.personal_final.clone(),
+            coding_final: self.coding_final.clone(),
+            memory_record_uri: self.memory_record_uri.clone(),
+            artifact_uri: self.artifact_uri.clone(),
+            promoted_count: self.promoted_count,
+            rounds: self.rounds.clone(),
+        }
+    }
+}
+
+pub fn write_workflow_record(
+    path: impl AsRef<Path>,
+    mode: &str,
+    report: &WorkflowReport,
+) -> Result<()> {
+    let path = path.as_ref();
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating tm-e2e record directory {}", parent.display()))?;
+    }
+    let json = serde_json::to_vec_pretty(&report.to_record(mode))
+        .context("encoding tm-e2e workflow record")?;
+    fs::write(path, json).with_context(|| format!("writing tm-e2e record {}", path.display()))
 }
 
 pub async fn run_workflow(
@@ -534,10 +637,10 @@ pub async fn run_workflow(
     ensure!(created_mode.data["mode"] == json!("personal_assistant"));
     let mut last_event_id = max_event_id(0, &created_events);
 
+    let mut rounds = Vec::new();
     let context = WorkflowContext::default();
-    let personal_message = speaker
-        .message(WorkflowStep::PersonalAssistantGreeting, &context)
-        .await?;
+    let personal_step = WorkflowStep::PersonalAssistantGreeting;
+    let personal_message = speaker.message(personal_step, &context).await?;
     client.send_message(&session.id, &personal_message).await?;
     let personal_events = client
         .read_until_final(&session.id, Some(last_event_id))
@@ -550,6 +653,14 @@ pub async fn run_workflow(
     );
     let personal_final = final_text(&personal_events)?;
     ensure!(!personal_final.trim().is_empty());
+    rounds.push(conversation_round(
+        1,
+        personal_step,
+        &personal_message,
+        "personal_assistant",
+        &personal_events,
+        &personal_final,
+    )?);
     let replay_start = personal_events
         .iter()
         .find_map(|event| event.id)
@@ -574,9 +685,8 @@ pub async fn run_workflow(
     let context = WorkflowContext {
         personal_final: Some(personal_final.clone()),
     };
-    let coding_message = speaker
-        .message(WorkflowStep::CodingModeProbe, &context)
-        .await?;
+    let coding_step = WorkflowStep::CodingModeProbe;
+    let coding_message = speaker.message(coding_step, &context).await?;
     client.send_message(&session.id, &coding_message).await?;
     let coding_events = client
         .read_until_final(&session.id, Some(last_event_id))
@@ -585,10 +695,19 @@ pub async fn run_workflow(
         .iter()
         .find(|event| event.event_type == "mode" && event.data["mode"] == json!("serious_engineer"))
         .context("coding prompt did not route to Serious Engineer")?;
+    let coding_mode = mode.data["mode"].as_str().unwrap_or("serious_engineer");
     ensure!(mode.data["voice_cap"] == json!("off"));
     ensure!(mode.data["activeSkills"] == json!([]));
     let coding_final = final_text(&coding_events)?;
     ensure!(!coding_final.contains("喵"));
+    rounds.push(conversation_round(
+        2,
+        coding_step,
+        &coding_message,
+        coding_mode,
+        &coding_events,
+        &coding_final,
+    )?);
     let artifact_uri = coding_events
         .iter()
         .find(|event| event.event_type == "artifact")
@@ -756,7 +875,93 @@ pub async fn run_workflow(
         memory_record_uri,
         artifact_uri,
         promoted_count: promoted.len(),
+        rounds,
     })
+}
+
+fn conversation_round(
+    index: usize,
+    step: WorkflowStep,
+    user_message: &str,
+    fallback_mode: &str,
+    events: &[E2eEvent],
+    assistant_final_text: &str,
+) -> Result<ConversationRound> {
+    let assistant_streamed_text = events
+        .iter()
+        .filter(|event| event.event_type == "text")
+        .filter_map(|event| event.data["delta"].as_str())
+        .collect::<String>();
+    let event_id_start = events.iter().filter_map(|event| event.id).min();
+    let event_id_end = events.iter().filter_map(|event| event.id).max();
+    let mode = events
+        .iter()
+        .rev()
+        .find(|event| event.event_type == "mode")
+        .and_then(|event| event.data["mode"].as_str())
+        .unwrap_or(fallback_mode)
+        .to_string();
+    let mut event_types = Vec::new();
+    for event in events {
+        if !event_types.contains(&event.event_type) {
+            event_types.push(event.event_type.clone());
+        }
+    }
+    let mut resource_uris = extract_resource_uris(assistant_final_text);
+    for event in events {
+        let data = serde_json::to_string(&event.data)
+            .context("encoding SSE event data while extracting resources")?;
+        for uri in extract_resource_uris(&data) {
+            if !resource_uris.contains(&uri) {
+                resource_uris.push(uri);
+            }
+        }
+    }
+    Ok(ConversationRound {
+        index,
+        step: step.as_str().to_string(),
+        user_message: user_message.to_string(),
+        assistant_streamed_text,
+        assistant_final_text: assistant_final_text.to_string(),
+        mode,
+        event_id_start,
+        event_id_end,
+        event_types,
+        resource_uris,
+    })
+}
+
+fn extract_resource_uris(text: &str) -> Vec<String> {
+    const SCHEMES: &[&str] = &[
+        "artifact://",
+        "workspace://",
+        "linked://",
+        "project://",
+        "memory://",
+    ];
+
+    let mut uris = Vec::new();
+    for scheme in SCHEMES {
+        let mut offset = 0;
+        while let Some(relative_start) = text[offset..].find(scheme) {
+            let start = offset + relative_start;
+            let rest = &text[start..];
+            let end = rest
+                .char_indices()
+                .find_map(|(idx, ch)| resource_uri_delimiter(ch).then_some(idx))
+                .unwrap_or(rest.len());
+            let uri = rest[..end].trim_end_matches(['.', '。', ',', ';', ':']);
+            if !uri.is_empty() && !uris.iter().any(|seen| seen == uri) {
+                uris.push(uri.to_string());
+            }
+            offset = start + end.max(scheme.len());
+        }
+    }
+    uris
+}
+
+fn resource_uri_delimiter(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>' | ')' | ']' | '}' | '{' | ',')
 }
 
 fn final_text(events: &[E2eEvent]) -> Result<String> {
@@ -794,5 +999,78 @@ mod tests {
     #[test]
     fn ignores_keepalive_comments() {
         assert!(parse_sse_block(": keep-alive\n").unwrap().is_none());
+    }
+
+    #[test]
+    fn builds_conversation_round_from_sse_events() {
+        let events = vec![
+            E2eEvent {
+                id: Some(3),
+                event_type: "text".to_string(),
+                data: json!({ "delta": "hello " }),
+            },
+            E2eEvent {
+                id: Some(4),
+                event_type: "text".to_string(),
+                data: json!({ "delta": "artifact://0" }),
+            },
+            E2eEvent {
+                id: Some(5),
+                event_type: "artifact".to_string(),
+                data: json!({ "artifact": { "uri": "artifact://0" } }),
+            },
+            E2eEvent {
+                id: Some(6),
+                event_type: "final".to_string(),
+                data: json!({ "text": "hello artifact://0" }),
+            },
+        ];
+
+        let round = conversation_round(
+            1,
+            WorkflowStep::PersonalAssistantGreeting,
+            "status please",
+            "personal_assistant",
+            &events,
+            "hello artifact://0",
+        )
+        .unwrap();
+
+        assert_eq!(round.index, 1);
+        assert_eq!(round.step, "personal_assistant_greeting");
+        assert_eq!(round.user_message, "status please");
+        assert_eq!(round.assistant_streamed_text, "hello artifact://0");
+        assert_eq!(round.assistant_final_text, "hello artifact://0");
+        assert_eq!(round.mode, "personal_assistant");
+        assert_eq!(round.event_id_start, Some(3));
+        assert_eq!(round.event_id_end, Some(6));
+        assert_eq!(round.event_types, vec!["text", "artifact", "final"]);
+        assert_eq!(round.resource_uris, vec!["artifact://0"]);
+    }
+
+    #[tokio::test]
+    async fn scripted_speaker_uses_message_overrides() {
+        let speaker = ScriptedSpeaker::new(
+            Some("what tools are available?".to_string()),
+            Some("fix the rust test".to_string()),
+        );
+
+        assert_eq!(
+            speaker
+                .message(
+                    WorkflowStep::PersonalAssistantGreeting,
+                    &WorkflowContext::default()
+                )
+                .await
+                .unwrap(),
+            "what tools are available?"
+        );
+        assert_eq!(
+            speaker
+                .message(WorkflowStep::CodingModeProbe, &WorkflowContext::default())
+                .await
+                .unwrap(),
+            "fix the rust test"
+        );
     }
 }

@@ -2,7 +2,10 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use serde_json::{json, to_value};
-use tm_e2e::{E2eConfig, MikuClient, ScriptedSpeaker, WorkflowOptions, run_workflow};
+use tm_e2e::{
+    E2eConfig, MikuClient, ScriptedSpeaker, WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions,
+    run_workflow, write_workflow_record,
+};
 use tm_server::{
     AppState, AuthConfig, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
     EchoChatRunner, InMemoryStore, Mode, ServerError, StoreEvent, StoreMemoryProvider, app,
@@ -10,7 +13,7 @@ use tm_server::{
 
 #[tokio::test]
 async fn scripted_workflow_drives_miku_public_api() {
-    let (base_url, server, _temp) = start_server(AuthConfig::NoAuth).await;
+    let (base_url, server, temp) = start_server(AuthConfig::NoAuth).await;
     let client = MikuClient::new(E2eConfig {
         base_url,
         bearer_token: None,
@@ -18,9 +21,10 @@ async fn scripted_workflow_drives_miku_public_api() {
     })
     .unwrap();
 
+    let speaker = ScriptedSpeaker::default();
     let report = run_workflow(
         &client,
-        &ScriptedSpeaker,
+        &speaker,
         WorkflowOptions {
             require_artifact: true,
         },
@@ -33,6 +37,35 @@ async fn scripted_workflow_drives_miku_public_api() {
     assert!(report.memory_record_uri.starts_with("memory://profile/"));
     assert_eq!(report.artifact_uri.as_deref(), Some("artifact://0"));
     assert!(report.promoted_count >= 4);
+    assert_eq!(report.rounds.len(), 2);
+    assert_eq!(report.rounds[0].index, 1);
+    assert_eq!(report.rounds[0].mode, "personal_assistant");
+    assert!(
+        report.rounds[0]
+            .event_types
+            .iter()
+            .any(|kind| kind == "text")
+    );
+    assert_eq!(report.rounds[1].index, 2);
+    assert_eq!(report.rounds[1].mode, "serious_engineer");
+    assert!(
+        report.rounds[1]
+            .resource_uris
+            .iter()
+            .any(|uri| uri == "artifact://0")
+    );
+
+    let record_path = temp.path().join("workflow-record.json");
+    write_workflow_record(&record_path, "scripted", &report).unwrap();
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+    assert_eq!(
+        record["schemaVersion"],
+        json!(WORKFLOW_RECORD_SCHEMA_VERSION)
+    );
+    assert_eq!(record["mode"], json!("scripted"));
+    assert_eq!(record["sessionId"], json!(report.session_id));
+    assert_eq!(record["rounds"].as_array().unwrap().len(), 2);
 
     server.abort();
 }

@@ -1,11 +1,27 @@
 part of 'main.dart';
 
-// ─── Chat message model ────────────────────────────────────────────────────────
+// ─── Conversation round model ──────────────────────────────────────────────────
 
-class _Msg {
-  final bool isUser;
-  final String text;
-  const _Msg({required this.isUser, required this.text});
+class _ConversationRound {
+  _ConversationRound({
+    required this.index,
+    required this.userText,
+    this.assistantStreamedText = '',
+    this.assistantFinalText = '',
+    this.isStreaming = true,
+  });
+
+  final int index;
+  final String userText;
+  String assistantStreamedText;
+  String assistantFinalText;
+  bool isStreaming;
+
+  String get assistantText => assistantFinalText.isNotEmpty
+      ? assistantFinalText
+      : assistantStreamedText;
+
+  bool get isComplete => assistantFinalText.isNotEmpty && !isStreaming;
 }
 
 // ─── Home page ─────────────────────────────────────────────────────────────────
@@ -26,7 +42,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   final List<ApprovalPrompt> _approvals = [];
   final List<MemoryWriteProposal> _memoryProposals = [];
   final List<String> _nextActions = [];
-  final List<_Msg> _history = [];
+  final List<_ConversationRound> _rounds = [];
 
   Future<void>? _sessionFuture;
   StreamSubscription<MikuEvent>? _sub;
@@ -34,7 +50,6 @@ class _MikuHomePageState extends State<MikuHomePage>
   String? _lastEventId;
   String _modeId = 'personal_assistant';
   String _status = 'idle';
-  String _streamText = '';
   String _projectStatus = '';
   bool _isDark = true;
   bool _modeLocked = false;
@@ -115,12 +130,19 @@ class _MikuHomePageState extends State<MikuHomePage>
         case 'connection':
           _status = e.data['status'] as String? ?? _status;
         case 'text':
-          _streamText += e.data['delta'] as String? ?? '';
-          if (_streamText.isNotEmpty) _status = 'streaming';
+          final delta = e.data['delta'] as String? ?? '';
+          if (delta.isNotEmpty) {
+            final round = _ensureAssistantRound();
+            round.assistantStreamedText += delta;
+            round.isStreaming = true;
+            _status = 'streaming';
+          }
         case 'final':
           final text = e.data['text'] as String? ?? '';
-          _history.add(_Msg(isUser: false, text: text));
-          _streamText = '';
+          final round = _ensureAssistantRound();
+          round.assistantFinalText = text;
+          round.assistantStreamedText = '';
+          round.isStreaming = false;
           _status = 'connected';
           _loadProject();
         case 'mode':
@@ -168,6 +190,18 @@ class _MikuHomePageState extends State<MikuHomePage>
     _scrollToBottom();
   }
 
+  _ConversationRound _ensureAssistantRound() {
+    if (_rounds.isNotEmpty && !_rounds.last.isComplete) {
+      return _rounds.last;
+    }
+    final round = _ConversationRound(
+      index: _rounds.length + 1,
+      userText: '',
+    );
+    _rounds.add(round);
+    return round;
+  }
+
   void _upsertApproval(ApprovalPrompt approval) {
     if (approval.approvalId.isEmpty) return;
     _approvals.removeWhere((item) => item.approvalId == approval.approvalId);
@@ -209,9 +243,11 @@ class _MikuHomePageState extends State<MikuHomePage>
     if (text.isEmpty) return;
     await _ensureSession();
     setState(() {
-      _history.add(_Msg(isUser: true, text: text));
+      _rounds.add(_ConversationRound(
+        index: _rounds.length + 1,
+        userText: text,
+      ));
       _status = 'streaming';
-      _streamText = '';
     });
     _inputCtrl.clear();
     await widget.client.sendMessage(_sessionId!, text);
@@ -261,12 +297,14 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _promoteSession() async {
     await _ensureSession();
-    final last = _history.where((m) => !m.isUser).lastOrNull;
-    final resources = _extractResources(last?.text ?? '');
+    final last = _rounds
+        .where((round) => round.assistantFinalText.isNotEmpty)
+        .lastOrNull;
+    final resources = _extractResources(last?.assistantFinalText ?? '');
     try {
       final p = await widget.client.promoteSession(
         _sessionId!,
-        summary: last?.text,
+        summary: last?.assistantFinalText,
         resources: resources,
       );
       if (!mounted) return;
@@ -552,38 +590,28 @@ class _MikuHomePageState extends State<MikuHomePage>
       ),
     );
 
-    // History
-    for (final msg in _history) {
-      if (msg.isUser) {
+    for (final round in _rounds) {
+      items.add(_RoundLabel(tok: tok, index: round.index));
+      items.add(const SizedBox(height: 8));
+      if (round.userText.isNotEmpty) {
         items.add(
-          _UserBubble(tok: tok, text: msg.text, accent: tok.accentSoft),
+          _UserBubble(tok: tok, text: round.userText, accent: tok.accentSoft),
         );
-      } else {
-        final resources = _extractResources(msg.text);
-        items.add(_MikuBubble(
-          tok: tok,
-          text: msg.text,
-          accent: accent,
-          resources: resources,
-          onOpenResource: _openResource,
-        ));
+        items.add(const SizedBox(height: 10));
       }
-      items.add(const SizedBox(height: 14));
-    }
 
-    // Current stream
-    if (_status == 'streaming') {
-      if (_streamText.isNotEmpty) {
-        final resources = _extractResources(_streamText);
+      final assistantText = round.assistantText;
+      if (assistantText.isNotEmpty) {
+        final resources = _extractResources(assistantText);
         items.add(_MikuBubble(
           tok: tok,
-          text: _streamText,
+          text: assistantText,
           accent: accent,
           resources: resources,
           onOpenResource: _openResource,
-          isStreaming: true,
+          isStreaming: round.assistantFinalText.isEmpty && round.isStreaming,
         ));
-      } else {
+      } else if (round.isStreaming) {
         items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
       }
       items.add(const SizedBox(height: 14));

@@ -83,6 +83,32 @@ void main() {
     expect(find.text('Continue from latest session result'), findsOneWidget);
   });
 
+  testWidgets('records active conversation rounds in the thread',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'first status check');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.enterText(find.byType(EditableText), 'second status check');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('回合 1'), findsOneWidget);
+    expect(find.text('回合 2'), findsOneWidget);
+    expect(find.text('first status check'), findsOneWidget);
+    expect(find.text('second status check'), findsOneWidget);
+    expect(find.text('Miku heard: first status check'), findsOneWidget);
+    expect(find.text('Miku heard: second status check'), findsOneWidget);
+  });
+
   testWidgets('keeps mode controls in overflow advanced UI',
       (WidgetTester tester) async {
     await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));

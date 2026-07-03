@@ -166,6 +166,36 @@ class _SystemLine extends StatelessWidget {
   }
 }
 
+class _RoundLabel extends StatelessWidget {
+  const _RoundLabel({required this.tok, required this.index});
+
+  final _Tok tok;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text(
+          '回合 $index',
+          style: TextStyle(
+            color: tok.muted,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Container(
+            height: 0.5,
+            color: tok.border.withOpacity(0.7),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _UserBubble extends StatelessWidget {
   const _UserBubble({
     required this.tok,

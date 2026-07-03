@@ -22,6 +22,7 @@ Capture useful state without hoarding noise.
 Capture:
 
 - stable preferences
+- personal reminders
 - active projects and open loops
 - commitments and deadlines
 - decisions Brian has already made

@@ -141,6 +141,38 @@ fn personal_assistant_state_capture_captures_durable_state_categories() {
 }
 
 #[test]
+fn personal_assistant_state_capture_captures_bounded_reminders_as_recall() {
+    let proposals = personal_assistant_state_capture_proposals(
+        "brian",
+        "global",
+        Uuid::new_v4(),
+        "Remind me to review the P2 acceptance checklist by Friday.\n\
+             Don't let me forget to update ROADMAP after tests pass.",
+        Utc::now(),
+    )
+    .unwrap();
+
+    assert_eq!(proposals.len(), 2);
+    assert!(
+        proposals
+            .iter()
+            .all(|proposal| proposal.memory_kind == MemoryWriteKind::RecallChunk)
+    );
+    let recall_text = proposals
+        .iter()
+        .map(|proposal| proposal.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(recall_text.contains("Reminder: review the P2 acceptance checklist by Friday"));
+    assert!(recall_text.contains("Reminder: update ROADMAP after tests pass"));
+    assert!(
+        proposals
+            .iter()
+            .all(|proposal| proposal.provenance["capturedCategory"] == "personal_reminder")
+    );
+}
+
+#[test]
 fn personal_assistant_state_capture_does_not_capture_noise_or_sensitive_content() {
     for content in [
         "I'm overwhelmed and sad tonight.",

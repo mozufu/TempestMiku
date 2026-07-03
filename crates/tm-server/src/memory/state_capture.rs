@@ -87,6 +87,7 @@ pub fn personal_assistant_state_capture_proposals(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StateCaptureCategory {
     StablePreference,
+    PersonalReminder,
     ActiveProjectOpenLoop,
     CommitmentDeadline,
     Decision,
@@ -99,6 +100,7 @@ impl StateCaptureCategory {
     fn as_str(self) -> &'static str {
         match self {
             Self::StablePreference => "stable_preference",
+            Self::PersonalReminder => "personal_reminder",
             Self::ActiveProjectOpenLoop => "active_project_open_loop",
             Self::CommitmentDeadline => "commitment_deadline",
             Self::Decision => "decision",
@@ -111,6 +113,7 @@ impl StateCaptureCategory {
     fn label(self) -> &'static str {
         match self {
             Self::StablePreference => "Preference",
+            Self::PersonalReminder => "Reminder",
             Self::ActiveProjectOpenLoop => "Open loop",
             Self::CommitmentDeadline => "Commitment/deadline",
             Self::Decision => "Decision",
@@ -138,6 +141,12 @@ fn state_capture_candidate(unit: &str) -> Option<StateCaptureCandidate> {
     if let Some(body) = extract_preference_body(unit) {
         return Some(StateCaptureCandidate {
             category: StateCaptureCategory::StablePreference,
+            body,
+        });
+    }
+    if let Some(body) = extract_reminder_body(unit) {
+        return Some(StateCaptureCandidate {
+            category: StateCaptureCategory::PersonalReminder,
             body,
         });
     }
@@ -247,6 +256,27 @@ fn extract_preference_body(unit: &str) -> Option<String> {
     None
 }
 
+fn extract_reminder_body(unit: &str) -> Option<String> {
+    let lower = unit.to_lowercase();
+    for marker in [
+        "please remind me to ",
+        "remind me to ",
+        "reminder: ",
+        "personal reminder: ",
+        "don't let me forget to ",
+        "do not let me forget to ",
+        "don't let me forget ",
+        "do not let me forget ",
+        "i need to remember to ",
+    ] {
+        if let Some(index) = lower.find(marker) {
+            let start = index + marker.len();
+            return clean_state_capture_body(&unit[start..]);
+        }
+    }
+    None
+}
+
 fn should_skip_state_capture_input(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.is_empty()
@@ -274,6 +304,11 @@ fn has_durable_capture_signal(text: &str) -> bool {
         &lower,
         &[
             "remember",
+            "remind me",
+            "reminder:",
+            "personal reminder",
+            "don't let me forget",
+            "do not let me forget",
             "i prefer",
             "preference",
             "default is",

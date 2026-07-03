@@ -42,16 +42,17 @@ Current implementation has advanced past the original M0-only substrate. The wor
 `tm-host`, `tm-persona`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The
 implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP bridging, the native
 P0 Serious Engineer dogfood slice, the CLI native cutover proof for linked-repo edit/run/artifact
-workflows, native Deno HTTP approvals for the Serious Engineer backend, and the P1 project-manager
-remote-control surface. The first P2 memory server slice now has bounded recall injection,
-approval-gated profile/recall writes, memory resources, and gated Postgres coverage for the approval
-flow. Normal Rust tests pass when local loopback networking is available; managed sandboxes may need
-elevated permissions for tests that bind `127.0.0.1`.
+workflows, native Deno HTTP approvals for the Serious Engineer backend, the P1 project-manager
+remote-control surface, and the P2 personal-assistant baseline. P2 now covers SOUL + active skill
+bundles, bounded recall injection, approval-gated profile/recall/reminder writes, memory resources,
+negative-state grounding guardrails, and gated Postgres coverage for the approval flow. Normal Rust
+tests pass when local loopback networking is available; managed sandboxes may need elevated
+permissions for tests that bind `127.0.0.1`.
 
 Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, `tm-agents`, and
-`tm-drive` crates; scheduler/dreaming; product approval surfaces for future memory/drive/skill writes;
-Android OS packaging; generated SDK docs from the runtime registry; and production egress/secret
-hardening.
+`tm-drive` crates; scheduler/dreaming; product approval surfaces for future drive/skill writes and
+richer memory APIs; Android OS packaging; generated SDK docs from the runtime registry; and production
+egress/secret hardening.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -64,7 +65,7 @@ each milestone is done only when its acceptance checks pass.
 | 2.5 | **DONE — P0a OMP ACP bridge path** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | Tests cover ACP event normalization, diff/artifact events, generated approval mode, permission request round trips, approval route resolution, and replay from `Last-Event-ID`. Live `omp acp` dogfood remains backend-environment dependent. |
 | 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement `fs.*`, search, patch-only `code.edit`, `proc.run(cmd,args)` allowlist, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, patch edit and stale-tag rejection, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI Deno host ops, native Deno approve/deny/timeout through the HTTP approval route, serious-mode voice cap, and project summary/open-loop recall. |
 | 4 | **DONE — P1 project manager + remote control** | 4–7d | Added the project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Tests and smoke coverage prove reconnect replay from event id, router lock/unlock, project status and decisions across sessions, `POST /sessions/:id/promote` to `project://` resources with provenance, approval/resource workflows, and Flutter Web/PWA attach/send/watch/resume behavior. |
-| 5 | **P2 — personal assistant** | 5–8d | Add full persona overlay via SOUL + mode skill bundles, configurable Hermes asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminders. | Token-by-token Miku response over SSE; active mode profiles load SOUL + dedicated skills; profile/recall context injected; voice is characterful outside serious mode; memory writes are approval-gated; health-over-productivity and proactivity bounds hold. |
+| 5 | **DONE — P2 personal assistant baseline** | 5–8d | Added the companion baseline: full persona overlay via SOUL + mode skill bundles, configurable Hermes asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminder/open-loop capture through approval-backed memory writes. | Tests cover token/text streaming over SSE, active mode profiles loading SOUL + dedicated skills, profile/recall context injection, characterful non-serious voice caps, approval-gated profile/recall/reminder writes, `memory://` resources, negative-state no-write guardrails, and health-over-productivity/proactivity prompt bounds. |
 | 6 | **P3 — handoff + sub-agent actors** | 6–10d | Add `tm-agents` actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` resources, supervision defaults; implement Handoff brief template. | Fan-out N workers, only digest returns to parent context; siblings coordinate by messages; child crash isolated/restarted/degraded; handoff matches `oh-my-pi-handoff`. |
 | 7 | **P4 — dreaming + scheduler** | 6–10d | Expand `tm-memory` to Postgres/pgvector + FTS; async episodic writes; dream queue; extraction, reflection, summaries, skill proposal; add cron scheduler. | Session end enqueues dream; dream writes summary + at least one approval-gated skill proposal; weekly ship ledger runs under cron bounds. |
 | 8 | **P5 — drive + research workspace** | 5–9d | Add `tm-drive`, `drive.*`, local-first file metadata, transducers, virtual dirs, project memory scopes, drive organizer. | Dropped file auto-files by derived attributes after approval; project link mints `FsPolicy` + memory scope; offline local-first path works. |
@@ -73,13 +74,13 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Continue the P2 personal-assistant baseline** — broaden the full persona overlay via SOUL + mode
-   skill bundles, profile/user recall, personal-assistant state capture, negative-state grounding, and
-   bounded proactive reminders while preserving the now-covered manual approval gates for memory writes.
+1. **Start P3 handoff + sub-agent actors** — add the `tm-agents` actor lifecycle, mailbox, roster,
+   `agents.run/spawn/parallel/msg`, `agent://` resources, supervision defaults, and the Handoff brief
+   template while keeping only digests in the parent context.
 2. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
    artifacts, and HTTP-routed manual approvals.
-3. **Defer expansion crates until the P2 baseline and server/resource surface are stable** — `tm-agents`,
+3. **Defer expansion crates until the P3 actor surface is stable** — `tm-memory`,
    `tm-drive`, `tm-mcp`, scheduler/dreaming, and Android OS packaging should build on the settled
    server/resource surface.
 

@@ -164,8 +164,8 @@ The current knobs become our config (now we own every one — none is an externa
 
 ## 22.8 Memory discipline & write-approval (SOUL.md + `personal-assistant-state-capture`)
 
-- **Capture:** stable preferences; active projects / open loops; commitments + deadlines; decisions;
-  recurring blind spots; shipped artifacts; reusable workflows.
+- **Capture:** stable preferences; personal reminders; active projects / open loops; commitments +
+  deadlines; decisions; recurring blind spots; shipped artifacts; reusable workflows.
 - **Don't:** passing moods; one-off complaints; secrets; raw logs; large notes; sensitive PII unless
   asked; project-specific commands (→ `AGENTS.md`, not user memory).
 - **Negative-state prompts:** overwhelmed / exhausted / self-deprecating / spiraling / stuck language
@@ -176,7 +176,7 @@ The current knobs become our config (now we own every one — none is an externa
   what get gated. Redaction always runs before disk.
 - **P2.5 state capture:** when the Personal Assistant skill is active, the server runs the vendored
   `personal-assistant-state-capture` rules as conservative proposal logic. It extracts one-line profile
-  facts or scoped recall chunks for stable preferences, active projects/open loops,
+  facts or scoped recall chunks for stable preferences, personal reminders, active projects/open loops,
   commitments/deadlines, decisions, shipped artifacts, reusable workflows, and recurring blind spots;
   it emits only `write_proposal` + shared `approval` events, never direct durable writes. Transient
   moods, secrets, raw logs, large notes, obvious sensitive PII, one-off complaints, and project-specific

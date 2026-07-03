@@ -441,6 +441,107 @@ async fn personal_assistant_state_capture_proposes_memory_through_approval_flow(
 }
 
 #[tokio::test]
+async fn personal_assistant_reminder_capture_persists_approved_recall_chunk() {
+    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let session_id = session.id;
+
+    post_user_message(
+        &app,
+        session_id,
+        "Remind me to review the P2 acceptance checklist by Friday.",
+    )
+    .await;
+
+    let pending = wait_for_event_payload(&store, session_id, "write_proposal").await;
+    assert_eq!(pending["kind"], json!("memory"));
+    assert_eq!(pending["memoryKind"], json!("recall_chunk"));
+    assert_eq!(pending["status"], json!("pending"));
+    assert_eq!(
+        pending["provenanceLabel"],
+        json!("personal-assistant-state-capture")
+    );
+    assert_eq!(
+        pending["provenance"]["capturedCategory"],
+        json!("personal_reminder")
+    );
+    assert_eq!(
+        pending["text"],
+        json!("Reminder: review the P2 acceptance checklist by Friday")
+    );
+    assert!(
+        store
+            .recall_chunks("global", "P2 acceptance checklist", 5)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let approval = wait_for_event_payload(&store, session_id, "approval").await;
+    assert_eq!(approval["backend"], json!("memory"));
+    let approval_id = approval["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    resolve_test_approval(&app, session_id, approval_id, "approve").await;
+
+    let approved =
+        wait_for_write_proposal_status(&store, session_id, MemoryWriteStatus::Approved).await;
+    assert_eq!(approved["record"]["kind"], json!("recall_chunk"));
+    let record_uri = approved["record"]["uri"].as_str().unwrap();
+    assert!(record_uri.starts_with("memory://scopes/global/chunks/"));
+    let chunks = store
+        .recall_chunks("global", "P2 acceptance checklist", 5)
+        .await
+        .unwrap();
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(
+        chunks[0].text,
+        "Reminder: review the P2 acceptance checklist by Friday"
+    );
+
+    let root_json = get_session_resource_json(&app, session_id, "resolve", "memory://root").await;
+    assert!(
+        root_json["content"]
+            .as_str()
+            .unwrap()
+            .contains("P2 acceptance checklist")
+    );
+}
+
+#[tokio::test]
+async fn denied_personal_assistant_reminder_capture_does_not_persist() {
+    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let session_id = session.id;
+
+    post_user_message(&app, session_id, "Reminder: send the P2 notes by Friday.").await;
+
+    let pending = wait_for_event_payload(&store, session_id, "write_proposal").await;
+    assert_eq!(pending["memoryKind"], json!("recall_chunk"));
+    assert_eq!(pending["status"], json!("pending"));
+    let approval = wait_for_event_payload(&store, session_id, "approval").await;
+    let approval_id = approval["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    resolve_test_approval(&app, session_id, approval_id, "deny").await;
+
+    let denied =
+        wait_for_write_proposal_status(&store, session_id, MemoryWriteStatus::Denied).await;
+    assert_eq!(denied["record"], json!(null));
+    assert!(
+        store
+            .recall_chunks("global", "P2 notes", 5)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn personal_assistant_state_capture_does_not_propose_sensitive_or_transient_memory() {
     let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;

@@ -87,6 +87,10 @@ HTTP approval route.
 
 ## 27.2 Scheduler & proactivity
 
+P2 implements bounded proactivity without a scheduler: Personal Assistant turns can propose reminder
+and open-loop recall chunks through the existing `write_proposal` + approval path. Approved entries are
+memory records visible through `memory://`; they are not background jobs and never push on their own.
+
 A **scheduler** (cron lineage) starts sessions on a schedule: the **weekly ship ledger**
 (`weekly-ship-ledger` skill, §29), deadline nudges, post-session **dreaming** (§22.5), and the drive
 **organizer** (§24.3).

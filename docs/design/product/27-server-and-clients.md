@@ -178,6 +178,11 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
   text/fact fields; the shared approval broker then emits `approval` and `approval_resolved`. Approved
   writes upsert one durable record by dedupe key, while denied, cancelled, and timed-out proposals emit a
   resolved `write_proposal` status without writing.
+- **Personal-assistant state capture:** normal Personal Assistant turns may enqueue the same memory
+  write flow in the background when `personal-assistant-state-capture` finds stable state (§22.8).
+  Message POSTs do not block on approval; clients see pending `write_proposal` / `approval` events and
+  resolve them through the same approval route. Skipped transient, sensitive, or raw-log content emits no
+  memory approval event.
 - **OMP ACP bridge (P0a):** ACP `session/request_permission` and elicitation prompts are translated
   into the same `approval` event + POST resolution path; unsupported or timed-out prompts deny by
   default.

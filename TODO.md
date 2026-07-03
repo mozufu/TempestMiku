@@ -128,19 +128,19 @@ Acceptance:
 
 ## P2.5 Personal-assistant state capture
 
-- [ ] Implement the `personal-assistant-state-capture` behavior as proposal logic, not direct writes.
-- [ ] Capture stable preferences, active projects/open loops, commitments/deadlines, decisions,
+- [x] Implement the `personal-assistant-state-capture` behavior as proposal logic, not direct writes.
+- [x] Capture stable preferences, active projects/open loops, commitments/deadlines, decisions,
       recurring blind spots, shipped artifacts, and reusable workflows.
-- [ ] Explicitly avoid passing moods, one-off complaints, secrets, raw logs, large notes, and sensitive
+- [x] Explicitly avoid passing moods, one-off complaints, secrets, raw logs, large notes, and sensitive
       PII unless the user asks.
-- [ ] Keep project-specific commands in project docs or project memory, not global user memory.
-- [ ] Add tests for "capture" and "do not capture" examples.
+- [x] Keep project-specific commands in project docs or project memory, not global user memory.
+- [x] Add tests for "capture" and "do not capture" examples.
 
 Acceptance:
 
-- [ ] Stable user/project signal produces one-line memory proposals.
-- [ ] Sensitive or transient content does not produce durable proposals by default.
-- [ ] Proposed memories are concise enough to approve from the client.
+- [x] Stable user/project signal produces one-line memory proposals.
+- [x] Sensitive or transient content does not produce durable proposals by default.
+- [x] Proposed memories are concise enough to approve from the client.
 
 ## P2.6 Negative-State Grounding
 

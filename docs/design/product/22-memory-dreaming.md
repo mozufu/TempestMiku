@@ -174,7 +174,14 @@ The current knobs become our config (now we own every one — none is an externa
 - **Approval-gated** (write-approval on): Miku proposes a one-line memory/fact and asks, unless standing
   permission exists. Episodic append stays unblocked; durable **assertions** (facts/notes/skills) are
   what get gated. Redaction always runs before disk.
-- **First P2 server slice:** every turn receives a bounded `MemoryContext` prompt block with profile
+- **P2.5 state capture:** when the Personal Assistant skill is active, the server runs the vendored
+  `personal-assistant-state-capture` rules as conservative proposal logic. It extracts one-line profile
+  facts or scoped recall chunks for stable preferences, active projects/open loops,
+  commitments/deadlines, decisions, shipped artifacts, reusable workflows, and recurring blind spots;
+  it emits only `write_proposal` + shared `approval` events, never direct durable writes. Transient
+  moods, secrets, raw logs, large notes, obvious sensitive PII, one-off complaints, and project-specific
+  commands are skipped before proposal creation.
+- **P2 server slices:** every turn receives a bounded `MemoryContext` prompt block with profile
   facts, scoped recall chunks, provenance labels, and budget metadata. Durable profile facts and scoped
   recall chunks are created through `write_proposal` events plus the shared `approval` / `approval_resolved`
   path; approve writes idempotently by normalized content, while deny/timeout writes nothing and remains

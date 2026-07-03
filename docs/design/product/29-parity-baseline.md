@@ -47,6 +47,10 @@ Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
 - **Adds the P2 memory resource gateway:** `memory://root`, `memory://user-model`, and approved
   profile fact / scoped recall record URIs resolve through the same preview/list/read path as artifacts
   and linked resources, with unknown or ungranted memory paths denied (§22.9 / §27.5).
+- **Adds P2.5 state capture:** `skills/personal-assistant-state-capture` is enforced server-side as
+  approval-backed memory proposal logic for stable preferences, open loops, commitments/deadlines,
+  decisions, shipped artifacts, and workflows; transient moods, secrets, raw logs, one-off complaints,
+  large notes, and obvious sensitive PII are skipped before proposal creation (§22.8 / §27.6).
 - **Keeps:** SOUL identity + 5 modes (§21); the **memory behavior** — hybrid recall, user profile +
   ToM, async write, ~1600-tok context, write-approval (§22, now self-built); the 7 skills (§26.2);
   manual approvals + proactivity bounds (§21.3); cron-driven reviews (§27.2); model-role system (§27.3).

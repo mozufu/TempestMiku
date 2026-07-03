@@ -476,6 +476,14 @@ where
         )
         .await?;
     }
+    spawn_personal_assistant_state_capture(
+        state.clone(),
+        session_id,
+        session.mode_state.mode,
+        payload.subject,
+        scope,
+        payload.content,
+    );
     Ok(Json(json!({ "status": "accepted" })))
 }
 
@@ -493,6 +501,22 @@ where
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     let (proposal, timeout) = memory_write_proposal_from_request(session_id, &session, payload)?;
+    Ok(Json(
+        run_memory_write_proposal(&state, session_id, proposal, timeout).await?,
+    ))
+}
+
+async fn run_memory_write_proposal<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    proposal: MemoryWriteProposal,
+    timeout: Duration,
+) -> Result<MemoryWriteProposalResponse>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
     let sink: Arc<dyn crate::CodingEventSink> = Arc::new(StoreCodingEventSink::new(
         session_id,
         Arc::clone(&state.store),
@@ -525,12 +549,53 @@ where
         proposal.event_payload(status, record.as_ref()),
     )
     .await?;
-    Ok(Json(MemoryWriteProposalResponse {
+    Ok(MemoryWriteProposalResponse {
         proposal_id: proposal.proposal_id,
         memory_kind: proposal.memory_kind,
         status,
         record,
-    }))
+    })
+}
+
+fn spawn_personal_assistant_state_capture<S, M, C>(
+    state: AppState<S, M, C>,
+    session_id: Uuid,
+    mode: Mode,
+    subject: String,
+    scope: String,
+    user_content: String,
+) where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    if mode != Mode::PersonalAssistant {
+        return;
+    }
+    let proposals = match crate::memory::personal_assistant_state_capture_proposals(
+        &subject,
+        &scope,
+        session_id,
+        &user_content,
+        Utc::now(),
+    ) {
+        Ok(proposals) => proposals,
+        Err(err) => {
+            tracing::warn!(%err, %session_id, "state capture proposal extraction failed");
+            return;
+        }
+    };
+    for proposal in proposals {
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(err) =
+                run_memory_write_proposal(&state, session_id, proposal, Duration::from_secs(60))
+                    .await
+            {
+                tracing::warn!(%err, %session_id, "state capture memory proposal failed");
+            }
+        });
+    }
 }
 
 fn memory_write_proposal_from_request(
@@ -3325,6 +3390,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn personal_assistant_state_capture_proposes_memory_through_approval_flow() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+        let session_id = session.id;
+
+        post_user_message(
+            &app,
+            session_id,
+            "Remember that I prefer approval-backed state capture summaries.",
+        )
+        .await;
+
+        let pending = wait_for_event_payload(&store, session_id, "write_proposal").await;
+        assert_eq!(pending["kind"], json!("memory"));
+        assert_eq!(pending["memoryKind"], json!("profile_fact"));
+        assert_eq!(pending["status"], json!("pending"));
+        assert_eq!(
+            pending["provenanceLabel"],
+            json!("personal-assistant-state-capture")
+        );
+        assert_eq!(pending["predicate"], json!("prefers"));
+        assert_eq!(
+            pending["object"],
+            json!("approval-backed state capture summaries")
+        );
+        assert!(store.profile_facts("brian").await.unwrap().is_empty());
+
+        let approval = wait_for_event_payload(&store, session_id, "approval").await;
+        assert_eq!(approval["backend"], json!("memory"));
+        assert_eq!(
+            approval["scope"]["proposal"]["proposalId"],
+            pending["proposalId"]
+        );
+        let approval_id = approval["approvalId"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        resolve_test_approval(&app, session_id, approval_id, "approve").await;
+
+        let approved =
+            wait_for_write_proposal_status(&store, session_id, MemoryWriteStatus::Approved).await;
+        assert_eq!(approved["record"]["kind"], json!("profile_fact"));
+        assert!(
+            approved["record"]["uri"]
+                .as_str()
+                .unwrap()
+                .starts_with("memory://profile/brian/facts/")
+        );
+        let facts = store.profile_facts("brian").await.unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].predicate, "prefers");
+        assert_eq!(facts[0].object, "approval-backed state capture summaries");
+        assert_eq!(facts[0].provenance, "personal-assistant-state-capture");
+    }
+
+    #[tokio::test]
+    async fn personal_assistant_state_capture_does_not_propose_sensitive_or_transient_memory() {
+        let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+        let session = create(&app).await;
+
+        post_user_message(&app, session.id, "Please remember my password is hunter2.").await;
+        post_user_message(
+            &app,
+            session.id,
+            "Just venting: that meeting was annoying and I am grumpy.",
+        )
+        .await;
+
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|event| event.event_type != "write_proposal"),
+            "sensitive/transient personal-assistant prompts should not emit memory proposals"
+        );
+        assert!(
+            events.iter().all(|event| event.event_type != "approval"
+                || event.payload_json["backend"] != json!("memory")),
+            "skipped capture should not request memory approval"
+        );
+        assert!(store.profile_facts("brian").await.unwrap().is_empty());
+        assert!(
+            store
+                .recall_chunks("global", "password", 5)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn gated_postgres_memory_approval_flow_persists_and_replays() {
         let Some((app, store)) = postgres_test_app().await else {
             return;
@@ -5012,6 +5169,36 @@ display(result);
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("event {event_type} #{index} was not persisted")
+    }
+
+    async fn wait_for_write_proposal_status<S>(
+        store: &Arc<S>,
+        session_id: Uuid,
+        status: MemoryWriteStatus,
+    ) -> Value
+    where
+        S: Store,
+    {
+        for _ in 0..100 {
+            if let Some(event) = store
+                .as_ref()
+                .events_after(session_id, None)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|event| {
+                    event.event_type == "write_proposal"
+                        && event.payload_json["status"] == json!(status)
+                })
+            {
+                return event.payload_json;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "write_proposal status {} was not persisted",
+            status.as_str()
+        )
     }
 
     #[tokio::test]

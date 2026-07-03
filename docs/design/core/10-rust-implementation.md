@@ -175,7 +175,8 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
 The M0 stub path still exists, but only as a protocol-test and explicit `--stub-sandbox` fallback.
 The default CLI path now wires the streaming `Agent` to `DenoSandbox`, backed by the same
 `Sandbox` / `Session` traits. The runtime installs the first-pass JS/TS SDK prelude (`print`,
-`display`, `tools`, `resources`, `artifacts`, `fs`, `code`, `proc`, plus allowlisted `http.get`),
+`display`, `tools`, `resources`, `artifacts`, `fs`, `code`, `proc`, plus default-deny allowlisted
+`http.get`),
 uses `tm-artifacts` for spill/readback, and calls host capabilities through `tm-host` grants,
 resource handlers, and approval policy.
 

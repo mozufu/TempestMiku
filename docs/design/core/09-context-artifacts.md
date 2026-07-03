@@ -53,7 +53,7 @@ do **not** implement scheme-specific handlers. Flutter/Web/Android ask the serve
 preview a URI, and the server applies the same capability gates, selector paging, MIME detection, and
 failure semantics as `resources.read`.
 
-Implemented P1 API shape (§27.5):
+Implemented P1/P2 API shape (§27.5, §22.9):
 
 | endpoint | purpose |
 |---|---|
@@ -90,7 +90,7 @@ Internal schemes (v1):
 | `artifact://<id>` | session-local tool output (monotonic int) | artifact store §25 | `tm-artifacts` |
 | `agent://<id>` | sub-agent output artifact | agents §23 / §25 | `tm-agents` |
 | `history://<id>` | read-only sub-agent transcript | agents §23 | `tm-agents` |
-| `memory://…` | memory store (root / `MEMORY.md` / user-model / episodic …) §22.9 | memory §22 | `tm-memory` |
+| `memory://…` | P2 memory gateway: `root`, `user-model`, approved profile facts, and scoped recall chunks (§22.9). Richer `MEMORY.md`, episodic query, project memory, and dream views remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
 | `skill://<name>` | skill source / `SKILL.md` (procedural playbook) §26 / §07 | skills §22 / §26 | `tm-memory` |
 | `drive://<path>` | user document by canonical path §24 | drive §24 | `tm-drive` |
 | `cron://[<id>]` | scheduler job table: list jobs / a job's def + run history §27.2 | scheduler §27 | `tm-server` |

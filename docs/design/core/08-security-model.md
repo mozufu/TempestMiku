@@ -12,8 +12,10 @@
 
 - **No ambient authority.** The isolate has zero I/O except the ops we register. Every op runs a
   capability check against the session's `Capabilities` before doing anything.
-- **Network egress allowlist.** Default-deny; only configured domains; per-domain byte/req caps;
-  egress logged.
+- **Network egress allowlist.** Current M1/P0 `http.get` is a default-deny deterministic allowlist
+  helper, not ambient `fetch()` and not the production egress policy. Production live egress remains
+  deferred until it has configured destinations, per-domain byte/request caps, redirect policy,
+  auditing, and secret-broker integration.
 - **Filesystem jail.** All `fs.*` resolved against a workspace root; path traversal rejected.
 - **Resource limits** (§6.3) enforced by the isolate + host.
 - **Approval gates.** Capabilities flagged `sensitive` (send email, write to prod, spend money)

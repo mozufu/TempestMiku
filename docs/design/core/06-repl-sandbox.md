@@ -84,7 +84,7 @@ const tools = {
 const fs = {
   read: (path: SdkPath, opts?: FsReadOptions) =>
     tools.call("fs.read", { path, ...opts }),
-  write: (path: SdkPath, data: string | Uint8Array | ArrayBuffer, opts?: FsWriteOptions) =>
+  write: (path: SdkPath, data: string, opts?: FsWriteOptions) =>
     tools.call("fs.write", { path, data, ...opts }),
   ls: (path?: SdkPath, opts?: FsListOptions) =>
     tools.call("fs.ls", { path, ...opts }),
@@ -95,7 +95,7 @@ const fs = {
 const code = {
   search: (query: CodeSearchQuery) => tools.call("code.search", query),
   edit: (patch: PatchEdit, opts?: CodeEditOptions) =>
-    tools.call("code.edit", { patch, ...opts }),
+    tools.call("code.edit", { ...patch, ...opts }),
 };
 
 const proc = {
@@ -105,19 +105,22 @@ const proc = {
 
 const resources = {
   read: (uri: ResourceUri, selector?: ResourceSelector) =>
-    tools.call("resources.read", { uri, selector }),
-  preview: (uri: ResourceUri) => tools.call("resources.preview", { uri }),
-  list: (uri?: ResourceUri) => tools.call("resources.list", { uri }),
+    Deno.core.ops.op_tm_resource_read(uri, selector ?? ""),
+  preview: (uri: ResourceUri) => Deno.core.ops.op_tm_resource_preview(uri),
+  list: (uri?: ResourceUri) => Deno.core.ops.op_tm_resource_list(uri ?? ""),
 };
+
+const artifactUri = (ref: ArtifactUri | ArtifactRef) =>
+  typeof ref === "string" ? ref : ref.uri;
 
 const artifacts = {
   put: (data: ArtifactInput, opts?: ArtifactPutOptions) =>
-    tools.call("artifacts.put", { data, ...opts }),
+    Deno.core.ops.op_tm_artifact_put(data, opts ?? null),
   get: (ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions) =>
-    tools.call("artifacts.get", { ref, ...opts }),
+    resources.read(artifactUri(ref), opts?.selector),
   slice: (ref: ArtifactUri | ArtifactRef, selector: ResourceSelector) =>
-    tools.call("artifacts.slice", { ref, selector }),
-  list: () => tools.call("artifacts.list"),
+    resources.read(artifactUri(ref), selector),
+  list: () => Deno.core.ops.op_tm_artifact_list(),
 };
 
 // M1 has a deterministic default-deny helper; broader network egress remains deferred.
@@ -136,7 +139,9 @@ bridge — register a handler, emit a typed stub — so the op layer never grows
 rebuild (§3 principle 9). The first real JS/TS pass exposes `fs.*`, `code.search`, JSON-hunk
 `code.edit`, argv-vector `proc.run`, and the default-deny/allowlisted `http.get` helper. `secrets`,
 `memory`, `skills`, and `agents` are set to `undefined` until their backing crates and policies
-exist. If a future namespace exists but a method is not ready, it throws `NotImplementedError`.
+exist. The P2 `memory://` route is a resource handler reached through `resources.read`, not a
+`memory.*` namespace. If a future namespace exists but a method is not ready, it throws
+`NotImplementedError`.
 
 For an **out-of-process** backend (Python), the same SDK is implemented over **JSON-RPC** on a
 pipe/socket: the in-sandbox `host.*` makes a blocking RPC, the Rust host services it

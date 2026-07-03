@@ -95,7 +95,7 @@ impl HttpGetFn {
                 namespace: "http".to_string(),
                 summary: "Fetch a deterministic allowlisted HTTP response".to_string(),
                 description: Some(
-                    "M1/P0 exposes http.get as a default-deny, deterministic allowlist helper. It is not ambient network egress; production egress policy remains deferred."
+                    "M1/P0 exposes http.get as a default-deny deterministic allowlist helper. It is not ambient network egress, not fetch(), and not a production egress policy; production egress hardening remains deferred."
                         .to_string(),
                 ),
                 signature: "http.get(url: string): Promise<string>".to_string(),
@@ -116,12 +116,15 @@ impl HttpGetFn {
                     title: Some("Fetch allowlisted fixture".to_string()),
                     code: "const body = await http.get('https://local.test/ok');\ndisplay(body);"
                         .to_string(),
-                    notes: Some("Non-allowlisted URLs fail closed with CapabilityDeniedError.".to_string()),
+                    notes: Some(
+                        "Non-allowlisted URLs fail closed with CapabilityDeniedError; this helper does not grant open network egress."
+                            .to_string(),
+                    ),
                 }],
                 errors: vec![
                     ToolErrorDoc {
                         name: "CapabilityDeniedError".to_string(),
-                        when: "The URL is not in the session allowlist or http.get is not granted."
+                        when: "The URL is not in the session deterministic allowlist or http.get is not granted."
                             .to_string(),
                         retryable: false,
                     },
@@ -134,7 +137,7 @@ impl HttpGetFn {
                 grants: vec![GrantDoc {
                     kind: "network".to_string(),
                     description:
-                        "Deterministic allowlisted HTTP fixture access; no open egress.".to_string(),
+                        "Deterministic allowlisted HTTP fixture access only; no open egress.".to_string(),
                 }],
                 sensitive: true,
                 approval: "none".to_string(),
@@ -175,7 +178,7 @@ fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
             "resources",
             "Read a registered resource URI",
             "resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>",
-            "Read an artifact, linked file, or future resource URI through the scheme-dispatched resource registry. Scheme-specific grants still apply.",
+            "Read a URI through the scheme-dispatched resource registry. Current handlers cover artifact:// in every Deno session and can cover linked:// plus the P2 memory:// surface when the host registers those handlers. Scheme-specific grants such as resources.read:artifact, resources.read:linked, and resources.read:memory still apply.",
             json!({
                 "type": "object",
                 "required": ["uri"],
@@ -192,17 +195,27 @@ fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
                 notes: Some("Unknown schemes and missing scheme grants fail closed with CapabilityDeniedError.".to_string()),
             }],
             resource_errors("resources.read"),
-            vec![GrantDoc {
-                kind: "workspace".to_string(),
-                description: "Scheme-specific grants such as resources.read:artifact or resources.read:linked.".to_string(),
-            }],
+            vec![
+                GrantDoc {
+                    kind: "artifact".to_string(),
+                    description: "Read access to artifact:// session artifacts through resources.read:artifact.".to_string(),
+                },
+                GrantDoc {
+                    kind: "linked-folder".to_string(),
+                    description: "Read access to linked:// resources when a linked-folder handler is registered and resources.read:linked is granted.".to_string(),
+                },
+                GrantDoc {
+                    kind: "memory".to_string(),
+                    description: "Read access to the P2 memory:// resource gateway when a memory handler is registered and resources.read:memory is granted.".to_string(),
+                },
+            ],
         ),
         core_doc(
             "resources.preview",
             "resources",
             "Preview a registered resource URI",
             "resources.preview(uri: ResourceUri): Promise<ResourceContent>",
-            "Return a ResourceContent envelope with preview metadata for a registered resource URI.",
+            "Return a ResourceContent envelope with preview metadata for a registered resource URI. Uses the same scheme-specific resource grants as resources.read.",
             json!({
                 "type": "object",
                 "required": ["uri"],
@@ -218,17 +231,27 @@ fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
                 notes: None,
             }],
             resource_errors("resources.preview"),
-            vec![GrantDoc {
-                kind: "workspace".to_string(),
-                description: "Scheme-specific grants such as resources.read:artifact or resources.read:linked.".to_string(),
-            }],
+            vec![
+                GrantDoc {
+                    kind: "artifact".to_string(),
+                    description: "Preview access to artifact:// session artifacts through resources.read:artifact.".to_string(),
+                },
+                GrantDoc {
+                    kind: "linked-folder".to_string(),
+                    description: "Preview access to linked:// resources when resources.read:linked is granted.".to_string(),
+                },
+                GrantDoc {
+                    kind: "memory".to_string(),
+                    description: "Preview access to memory:// resources when resources.read:memory is granted.".to_string(),
+                },
+            ],
         ),
         core_doc(
             "resources.list",
             "resources",
             "List registered resource schemes or entries",
             "resources.list(uri?: ResourceUri): Promise<ResourceEntry[]>",
-            "List registered resource schemes, or entries beneath a URI when that scheme supports listing.",
+            "List registered resource schemes, or entries beneath a URI when that scheme supports listing. Listing a specific URI uses that scheme's resource grant.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -243,10 +266,20 @@ fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
                 notes: None,
             }],
             resource_errors("resources.list"),
-            vec![GrantDoc {
-                kind: "workspace".to_string(),
-                description: "Listing a specific URI uses that scheme's resource grant.".to_string(),
-            }],
+            vec![
+                GrantDoc {
+                    kind: "artifact".to_string(),
+                    description: "List artifact:// entries through resources.read:artifact.".to_string(),
+                },
+                GrantDoc {
+                    kind: "linked-folder".to_string(),
+                    description: "List linked:// entries when resources.read:linked is granted.".to_string(),
+                },
+                GrantDoc {
+                    kind: "memory".to_string(),
+                    description: "List memory:// entries when resources.read:memory is granted.".to_string(),
+                },
+            ],
         ),
         core_doc(
             "artifacts.put",
@@ -1442,7 +1475,9 @@ mod tests {
                 "const artifactDocs = await tools.docs('artifacts.put');\n\
                  const resourceDocs = await tools.docs('resources.read');\n\
                  const found = await tools.search('artifact', { namespace: 'artifacts', limit: 10 });\n\
-                 ({ artifactSignature: artifactDocs.signature, resourceSignature: resourceDocs.signature, artifactResultRequired: artifactDocs.resultSchema.required[0], resourceContentType: resourceDocs.resultSchema.properties.content.type, foundNames: found.map(item => item.name), putGranted: found.find(item => item.name === 'artifacts.put').granted })",
+                 const resourceFound = await tools.search('read', { namespace: 'resources', limit: 10 });\n\
+                 const schemes = await resources.list();\n\
+                 ({ artifactSignature: artifactDocs.signature, resourceSignature: resourceDocs.signature, resourceDescription: resourceDocs.description, resourceGrantKinds: resourceDocs.grants.map(grant => grant.kind), resourceGrantDescriptions: resourceDocs.grants.map(grant => grant.description), resourceErrors: resourceDocs.errors.map(err => err.name), artifactResultRequired: artifactDocs.resultSchema.required[0], resourceContentType: resourceDocs.resultSchema.properties.content.type, foundNames: found.map(item => item.name), resourceFoundNames: resourceFound.map(item => item.name), resourceReadGranted: resourceFound.find(item => item.name === 'resources.read').granted, putGranted: found.find(item => item.name === 'artifacts.put').granted, schemeNames: schemes.map(item => item.name) })",
                 CellBudget::default(),
             )
             .await
@@ -1469,6 +1504,49 @@ mod tests {
             sdk_types.contains(result["resourceSignature"].as_str().unwrap()),
             "docs/sdk/tm-runtime.d.ts is missing the resources.read signature"
         );
+        assert!(
+            sdk_types.contains("type MemoryResourceUri"),
+            "docs/sdk/tm-runtime.d.ts should declare the P2 memory:// resource surface"
+        );
+        let resource_description = result["resourceDescription"].as_str().unwrap();
+        for needle in [
+            "artifact://",
+            "linked://",
+            "memory://",
+            "resources.read:memory",
+        ] {
+            assert!(
+                resource_description.contains(needle),
+                "resources.read docs should mention {needle}: {resource_description}"
+            );
+        }
+        for grant_kind in ["artifact", "linked-folder", "memory"] {
+            assert!(
+                result["resourceGrantKinds"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|kind| kind.as_str() == Some(grant_kind)),
+                "resources.read docs should include a {grant_kind} grant"
+            );
+        }
+        assert!(
+            result["resourceGrantDescriptions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|description| description
+                    .as_str()
+                    .is_some_and(|text| text.contains("resources.read:memory"))),
+            "resources.read docs should name the memory grant"
+        );
+        assert!(
+            result["resourceErrors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name.as_str() == Some("CapabilityDeniedError"))
+        );
         assert_eq!(
             result["artifactResultRequired"],
             Value::String("uri".into())
@@ -1478,6 +1556,21 @@ mod tests {
             Value::String("string".into())
         );
         assert_eq!(result["putGranted"], Value::Bool(true));
+        assert_eq!(result["resourceReadGranted"], Value::Bool(true));
+        assert!(
+            result["resourceFoundNames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name.as_str() == Some("resources.read"))
+        );
+        assert!(
+            result["schemeNames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name.as_str() == Some("artifact"))
+        );
         assert!(
             result["foundNames"]
                 .as_array()
@@ -1580,7 +1673,7 @@ mod tests {
                 "const found = await tools.search('http', { namespace: 'http' });\n\
                  const docs = await tools.docs('http.get');\n\
                  const unknown = await tools.call('http.post', {}).catch(err => ({ name: err.name, capability: err.capability, retryable: err.retryable }));\n\
-                 ({ found: found.map(item => ({ name: item.name, granted: item.granted, sensitive: item.sensitive })), signature: docs.signature, description: docs.description, grantKind: docs.grants[0].kind, deniedName: unknown.name, deniedCapability: unknown.capability, deniedRetryable: unknown.retryable })",
+                 ({ found: found.map(item => ({ name: item.name, granted: item.granted, sensitive: item.sensitive })), signature: docs.signature, description: docs.description, grantKind: docs.grants[0].kind, grantDescription: docs.grants[0].description, errorWhen: docs.errors[0].when, exampleNotes: docs.examples[0].notes, deniedName: unknown.name, deniedCapability: unknown.capability, deniedRetryable: unknown.retryable })",
                 CellBudget::default(),
             )
             .await
@@ -1597,13 +1690,42 @@ mod tests {
             sdk_types.contains(result["signature"].as_str().unwrap()),
             "docs/sdk/tm-runtime.d.ts is missing the http.get signature"
         );
+        let http_description = result["description"].as_str().unwrap();
+        for needle in [
+            "default-deny deterministic allowlist helper",
+            "not ambient network egress",
+            "not fetch()",
+            "not a production egress policy",
+            "production egress hardening remains deferred",
+        ] {
+            assert!(
+                http_description.contains(needle),
+                "http.get docs should mention {needle}: {http_description}"
+            );
+        }
         assert!(
-            result["description"]
-                .as_str()
-                .unwrap()
-                .contains("production egress policy remains deferred")
+            sdk_types.contains("production egress hardening remains deferred"),
+            "docs/sdk/tm-runtime.d.ts should preserve deferred egress wording"
         );
         assert_eq!(result["grantKind"], Value::String("network".into()));
+        assert!(
+            result["grantDescription"]
+                .as_str()
+                .unwrap()
+                .contains("no open egress")
+        );
+        assert!(
+            result["errorWhen"]
+                .as_str()
+                .unwrap()
+                .contains("deterministic allowlist")
+        );
+        assert!(
+            result["exampleNotes"]
+                .as_str()
+                .unwrap()
+                .contains("does not grant open network egress")
+        );
         assert_eq!(
             result["deniedName"],
             Value::String("CapabilityDeniedError".into())

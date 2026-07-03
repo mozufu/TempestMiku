@@ -137,9 +137,13 @@ The first serious-engineer runtime exposes the authoritative SDK surface in §7.
 is intentionally narrower than the full translation map:
 
 - **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `code`,
-  `proc`, and the current M1 default-deny/allowlisted `http.get` helper.
+  `proc`, and the current M1/P0 default-deny deterministic allowlisted `http.get` helper. The
+  `resources` namespace includes the P2 `memory://` gateway where the server registers the handler
+  and grants `resources.read:memory`.
 - **Reserved but unavailable:** `secrets`, `memory`, `skills`, and `agents` are explicitly set to
-  `undefined` so optional chaining and feature checks do not throw `ReferenceError`.
+  `undefined` so optional chaining and feature checks do not throw `ReferenceError`. The `memory`
+  global staying undefined is intentional; present P2 memory reads are resource reads, not
+  `memory.*` calls.
 - **Deferred:** `code.ast` and `code.lsp` remain in the translation map but are not first-pass runtime
   namespaces. A future namespace may exist while a method is incomplete; that method throws
   `NotImplementedError`.

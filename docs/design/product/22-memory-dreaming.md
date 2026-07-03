@@ -205,7 +205,9 @@ P2 surface is deliberately small and fail-closed: `memory://root` returns the cu
 summary for Brian and the active session scope; `memory://user-model` returns the active profile/facts
 view; approved write proposals expose exact record views at `memory://profile/<subject>/facts/<id>` and
 `memory://scopes/<scope>/chunks/<id>`. The server grants these reads through `resources.read:memory`,
-and unknown memory paths or missing grants are denied. Broader resources such as `…/MEMORY.md`,
+and unknown memory paths or missing grants are denied. The JS/TS SDK types these as resource URIs;
+the global `memory` namespace remains `undefined` until an explicit `memory.*` API ships. Broader
+resources such as `…/MEMORY.md`,
 `…/episodic?q=…`, and `…/projects/<name>/…` remain later `tm-memory` work. Skills are addressed
 first-class as `skill://<name>` (→ `SKILL.md`), promoted out of the `memory://…/skills/` path (§9.3).
 

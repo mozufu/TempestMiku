@@ -14,21 +14,24 @@ First-pass globals:
   returns signature, machine-readable schemas, examples, errors, grants, and approval policy for a
   capability without adding another chat-native tool. New capabilities register behind `tools.call`;
   the op layer stays small.
-- `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2).
+- `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2),
+  including the present `artifact://` path and the P2 server-side `memory://` gateway when the
+  `resources.read:memory` grant and handler are present.
 - `artifacts.put/get/slice/list(...)` — session artifact store; large outputs return `artifact://`
   handles.
 - `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
 - `code.search/edit(...)` — regex search plus JSON-hunk surgical edits in the first pass.
 - `proc.run(cmd, args, opts?)` — allowlisted argv-vector process execution; never a shell string.
-- `http.get(url)` — current M1 deterministic allowlist helper; production network egress policy is
-  still deferred.
+- `http.get(url)` — current M1/P0 default-deny deterministic allowlist helper; it is not ambient
+  network egress, not `fetch()`, and not a production egress policy.
 
 Reserved first-pass globals:
 
 - `secrets`, `memory`, `skills`, and `agents` are explicitly set to `undefined`. This makes feature
-  checks safe while keeping secrets, memory, skills, and sub-agents closed until their backing crates
-  and policies exist. If a future namespace exists but a method is incomplete, that method throws
-  `NotImplementedError`.
+  checks safe while keeping secrets, `memory.*`, skills, and sub-agents closed until their backing
+  crates and policies exist. This does **not** close the P2 `memory://` resource route; memory reads
+  go through `resources.read(...)` and the `resources.read:memory` grant. If a future namespace
+  exists but a method is incomplete, that method throws `NotImplementedError`.
 
 Never exposed:
 
@@ -39,14 +42,17 @@ Never exposed:
 ### 7.1 Authoritative TypeScript surface
 
 The checked-in SDK type artifact lives at `docs/sdk/tm-runtime.d.ts`. It is the source file clients
-and tests should reference; the excerpt below describes the same surface at design-doc level.
+and tests should reference; the excerpt below is an abbreviated design-doc view, not a second source
+of truth.
 
 ```ts
 /**
  * TempestMiku JS/TS runtime prelude.
  *
- * No ambient filesystem, process, network, secret, shell, or host access.
- * Every external effect goes through capability-checked SDK namespaces.
+ * P0/P2 surface: no ambient filesystem, process, network, secret, shell, or
+ * host access. Every external effect goes through capability-checked SDK
+ * namespaces. P2 memory is exposed as memory:// resources behind
+ * resources.read:memory, not as a memory.* namespace.
  */
 
 export {};
@@ -78,20 +84,28 @@ type MimeType = string;
 type CapabilityName = string;
 type ArtifactUri = `artifact://${string}`;
 
+type MemoryResourceUri =
+  | "memory://root"
+  | "memory://user-model"
+  | `memory://profile/${string}/facts/${string}`
+  | `memory://scopes/${string}/chunks/${string}`;
+
+type ProjectResourceUri = `project://${string}`;
+
 type ResourceUri =
   | `artifact://${string}`
   | `agent://${string}`
   | `history://${string}`
-  | `memory://${string}`
+  | MemoryResourceUri
   | `skill://${string}`
   | `drive://${string}`
   | `cron://${string}`
   | `workspace://session/${string}`
   | `linked://${string}/${string}`
-  | `project://${string}/${string}`;
+  | ProjectResourceUri;
 
 type SdkPath =
-  | `workspace:${string}`
+  | `${string}:`
   | `${string}:${string}`
   | `linked://${string}/${string}`;
 
@@ -113,8 +127,8 @@ interface HostError extends Error {
   capability?: string;
   path?: string;
   uri?: string;
-  retryable?: boolean;
-  details?: JsonValue;
+  retryable: boolean;
+  details: JsonValue;
 }
 
 type DisplayValue =
@@ -123,11 +137,8 @@ type DisplayValue =
   | boolean
   | null
   | JsonValue
-  | Uint8Array
-  | ArrayBuffer
   | DisplayMarkdown
   | DisplayTable
-  | DisplayImage
   | ArtifactRef
   | ResourceContent;
 
@@ -152,14 +163,6 @@ interface DisplayTable {
   title?: string;
 }
 
-interface DisplayImage {
-  kind: "image";
-  data: Uint8Array | ArrayBuffer | ArtifactUri;
-  mime: "image/png" | "image/jpeg" | "image/webp" | "image/gif" | string;
-  alt?: string;
-  title?: string;
-}
-
 interface ToolsNamespace {
   search(query: string, opts?: ToolSearchOptions): Promise<ToolSummary[]>;
   docs(name: CapabilityName): Promise<ToolDocs>;
@@ -175,7 +178,7 @@ interface ToolSummary {
   name: CapabilityName;
   namespace: string;
   summary: string;
-  sensitive?: boolean;
+  sensitive: boolean;
   granted: boolean;
 }
 
@@ -184,16 +187,16 @@ interface ToolDocs {
   namespace: string;
   summary: string;
   description?: string;
-  signature?: string;
+  signature: string;
   argsSchema: JsonObject;
   resultSchema?: JsonObject;
-  examples?: ToolExample[];
-  errors?: ToolErrorDoc[];
-  grants?: GrantDoc[];
-  sensitive?: boolean;
-  approval?: "none" | "on-write" | "on-external" | "always" | "policy";
-  since?: string;
-  stability?: "stable" | "experimental" | "reserved" | "deprecated";
+  examples: ToolExample[];
+  errors: ToolErrorDoc[];
+  grants: GrantDoc[];
+  sensitive: boolean;
+  approval: "none" | "on-write" | "on-external" | "always" | "policy";
+  since: string;
+  stability: "stable" | "experimental" | "reserved" | "deprecated";
 }
 
 interface ToolExample {
@@ -205,7 +208,7 @@ interface ToolExample {
 interface ToolErrorDoc {
   name: HostError["name"];
   when: string;
-  retryable?: boolean;
+  retryable: boolean;
 }
 
 interface GrantDoc {
@@ -215,7 +218,7 @@ interface GrantDoc {
 
 interface ResourcesNamespace {
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
-  preview(uri: ResourceUri): Promise<ResourcePreview>;
+  preview(uri: ResourceUri): Promise<ResourceContent>;
   list(uri?: ResourceUri): Promise<ResourceEntry[]>;
 }
 
@@ -224,33 +227,20 @@ interface ResourceContent {
   kind: ResourceKind;
   mime: MimeType;
   title?: string;
-  sizeBytes?: number;
+  sizeBytes: number;
   selector?: ResourceSelector;
-  hasMore?: boolean;
-  content?: string;
-  bytes?: Uint8Array;
-  preview?: string;
-  artifact?: ArtifactRef;
-}
-
-interface ResourcePreview {
-  uri: ResourceUri;
-  kind: ResourceKind;
-  mime: MimeType;
-  title?: string;
-  sizeBytes?: number;
-  preview?: string;
-  hasMore?: boolean;
+  hasMore: boolean;
+  content: string;
+  preview: string;
 }
 
 interface ResourceEntry {
   uri: ResourceUri;
   name: string;
-  kind: ResourceKind | "directory";
-  mime?: MimeType;
+  kind: ResourceKind | "directory" | "scheme";
+  title?: string;
   sizeBytes?: number;
   modifiedAt?: string;
-  preview?: string;
 }
 
 type ResourceKind =
@@ -261,16 +251,22 @@ type ResourceKind =
   | "image"
   | "binary"
   | "directory"
-  | "log";
+  | "log"
+  | "memory_root"
+  | "memory_user_model"
+  | "memory_profile_fact"
+  | "memory_recall_chunk"
+  | "project_view"
+  | (string & {});
 
 interface ArtifactsNamespace {
   put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef;
   get(ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions): Promise<ResourceContent>;
   slice(ref: ArtifactUri | ArtifactRef, selector: ResourceSelector): Promise<ResourceContent>;
-  list(): ArtifactInfo[];
+  list(): ArtifactRef[];
 }
 
-type ArtifactInput = string | Uint8Array | ArrayBuffer | JsonValue;
+type ArtifactInput = string | JsonValue;
 
 interface ArtifactPutOptions {
   title?: string;
@@ -290,23 +286,12 @@ interface ArtifactRef {
   mime: MimeType;
   title?: string;
   sizeBytes: number;
-  preview?: string;
-}
-
-interface ArtifactInfo {
-  uri: ArtifactUri;
-  id: string;
-  kind: ResourceKind;
-  mime: MimeType;
-  title?: string;
-  sizeBytes: number;
-  createdAt: string;
-  preview?: string;
+  preview: string;
 }
 
 interface FsNamespace {
   read(path: SdkPath, opts?: FsReadOptions): Promise<ResourceContent>;
-  write(path: SdkPath, data: string | Uint8Array | ArrayBuffer, opts?: FsWriteOptions): Promise<FsWriteResult>;
+  write(path: SdkPath, data: string, opts?: FsWriteOptions): Promise<FsWriteResult>;
   ls(path?: SdkPath, opts?: FsListOptions): Promise<FsEntry[]>;
   find(patterns: string | string[], opts?: FsFindOptions): Promise<FsEntry[]>;
 }
@@ -324,7 +309,7 @@ interface FsWriteOptions {
 
 interface FsWriteResult {
   path: SdkPath;
-  uri?: ResourceUri;
+  uri: ResourceUri;
   bytesWritten: number;
   created: boolean;
   overwritten: boolean;
@@ -345,7 +330,7 @@ interface FsFindOptions {
 
 interface FsEntry {
   path: SdkPath;
-  uri?: ResourceUri;
+  uri: ResourceUri;
   name: string;
   kind: "file" | "directory" | "symlink" | "other";
   sizeBytes?: number;
@@ -368,13 +353,13 @@ interface CodeSearchQuery {
 
 interface CodeSearchResult {
   path: SdkPath;
-  uri?: ResourceUri;
+  uri: ResourceUri;
   line: number;
-  column?: number;
+  column: number;
   text: string;
-  before?: string[];
-  after?: string[];
-  tag?: string;
+  before: string[];
+  after: string[];
+  tag: string;
 }
 
 interface PatchEdit {
@@ -426,9 +411,9 @@ interface CodeEditOptions {
 interface CodeEditResult {
   path: SdkPath;
   changed: boolean;
-  diff?: string;
+  diff: string;
   newTag?: string;
-  diagnostics?: Diagnostic[];
+  diagnostics: Diagnostic[];
 }
 
 interface Diagnostic {
@@ -447,19 +432,18 @@ interface ProcNamespace {
 interface ProcRunOptions {
   cwd?: SdkPath;
   timeoutMs?: number;
-  /** Reserved in P0; non-empty overrides are rejected. */
+  /** Reserved in P0; non-empty env overrides are rejected. */
   env?: Record<string, string>;
-  /** Reserved in P0; stdin is rejected. */
-  stdin?: string | Uint8Array;
+  /** Reserved in P0; non-empty stdin is rejected. */
+  stdin?: string;
   outputBytes?: number;
 }
 
 interface ProcOutput {
   cmd: string;
   args: string[];
-  cwd?: SdkPath;
+  cwd: SdkPath;
   exitCode: number;
-  signal?: string;
   stdout: string;
   stderr: string;
   timedOut: boolean;
@@ -469,6 +453,12 @@ interface ProcOutput {
 }
 
 interface HttpNamespace {
+  /**
+   * Experimental M1/P0 default-deny deterministic allowlist helper. This is
+   * not ambient network egress, not fetch(), and not a production egress
+   * policy. Non-allowlisted URLs fail closed with CapabilityDeniedError;
+   * production egress hardening remains deferred.
+   */
   get(url: string): Promise<string>;
 }
 ```
@@ -507,6 +497,8 @@ It includes host-dispatched capabilities plus docs-only entries for core `resour
   `proc.run("cargo", ["test"], { cwd: "tempestmiku:" })`.
 - Missing grants fail closed with `CapabilityDeniedError`. Unknown capabilities fail closed through
   `tools.call`. Future namespaces that exist but have incomplete methods throw `NotImplementedError`.
+- P2 memory reads use `resources.read("memory://...")` through `resources.read:memory`; the global
+  `memory` namespace remains `undefined` until a later `memory.*` API is explicitly shipped.
 
 ### 7.4 Deferred namespace placement
 
@@ -515,10 +507,10 @@ approval, and audit boundaries. The root roadmap is canonical (§28), but the SD
 
 | Namespace / surface | Target milestone | SDK rule |
 |---|---|---|
-| `memory.*` | P2/P4 split | P2 may expose the minimum profile/user recall and personal-assistant state-capture calls; P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
+| `memory.*` | P2/P4 split | P2 exposes memory reads as `memory://` resources through `resources.read:memory`; the `memory` global remains `undefined`. A future explicit `memory.*` namespace may expose minimum profile/user recall and state-capture calls, while P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
 | `agents.*` | P3 | Add only with `tm-agents`, actor lifecycle, mailbox/roster, supervision, and `agent://` resource handling. |
 | `skills.*` | P4/P7 split | P4 may create approval-gated skill proposals; P7 owns safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
 | `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, and drive organizer flows. |
-| `http.*` hardening | P5 or P7 | Keep current `http.get` as deterministic allowlisted helper; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |
+| `http.*` hardening | P5 or P7 | Keep current `http.get` as a default-deny deterministic allowlisted helper with no open egress; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |
 | `secrets.use` | P7 | Requires opaque egress-scoped handles from a secret broker; secret values must never materialize in JS heap, artifacts, or model context. |
 | `code.ast` / `code.lsp` | P1.5/P2 tech slice | Native cutover makes this possible, but add only for a concrete structured-edit user; do not block the P2 companion baseline. |

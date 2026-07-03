@@ -1,8 +1,10 @@
 /**
  * TempestMiku JS/TS runtime prelude.
  *
- * P0 surface: no ambient filesystem, process, network, secret, shell, or host
- * access. Every external effect goes through capability-checked SDK namespaces.
+ * P0/P2 surface: no ambient filesystem, process, network, secret, shell, or
+ * host access. Every external effect goes through capability-checked SDK
+ * namespaces. P2 memory is exposed as memory:// resources behind
+ * resources.read:memory, not as a memory.* namespace.
  */
 
 export {};
@@ -34,17 +36,25 @@ type MimeType = string;
 type CapabilityName = string;
 type ArtifactUri = `artifact://${string}`;
 
+type MemoryResourceUri =
+  | "memory://root"
+  | "memory://user-model"
+  | `memory://profile/${string}/facts/${string}`
+  | `memory://scopes/${string}/chunks/${string}`;
+
+type ProjectResourceUri = `project://${string}`;
+
 type ResourceUri =
   | `artifact://${string}`
   | `agent://${string}`
   | `history://${string}`
-  | `memory://${string}`
+  | MemoryResourceUri
   | `skill://${string}`
   | `drive://${string}`
   | `cron://${string}`
   | `workspace://session/${string}`
   | `linked://${string}/${string}`
-  | `project://${string}/${string}`;
+  | ProjectResourceUri;
 
 type SdkPath =
   | `${string}:`
@@ -159,7 +169,15 @@ interface GrantDoc {
 }
 
 interface ResourcesNamespace {
-  /** resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent> */
+  /**
+   * resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>
+   *
+   * Scheme-dispatched resource read. Current registered schemes include
+   * artifact:// and, in the server resource gateway, linked://,
+   * workspace://session, project://, and the P2 memory:// surface. Each scheme
+   * has its own grant such as resources.read:artifact, resources.read:linked,
+   * or resources.read:memory; missing grants and unknown schemes fail closed.
+   */
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
   /** resources.preview(uri: ResourceUri): Promise<ResourceContent> */
   preview(uri: ResourceUri): Promise<ResourceContent>;
@@ -196,7 +214,13 @@ type ResourceKind =
   | "image"
   | "binary"
   | "directory"
-  | "log";
+  | "log"
+  | "memory_root"
+  | "memory_user_model"
+  | "memory_profile_fact"
+  | "memory_recall_chunk"
+  | "project_view"
+  | (string & {});
 
 interface ArtifactsNamespace {
   /** artifacts.put(data: ArtifactInput, opts?: ArtifactPutOptions): ArtifactRef */
@@ -406,8 +430,10 @@ interface HttpNamespace {
   /**
    * http.get(url: string): Promise<string>
    *
-   * Experimental M1/P0 deterministic allowlist helper; not general network
-   * egress. Non-allowlisted URLs fail closed with CapabilityDeniedError.
+   * Experimental M1/P0 default-deny deterministic allowlist helper. This is
+   * not ambient network egress, not fetch(), and not a production egress
+   * policy. Non-allowlisted URLs fail closed with CapabilityDeniedError;
+   * production egress hardening remains deferred.
    */
   get(url: string): Promise<string>;
 }

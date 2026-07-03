@@ -2768,6 +2768,29 @@ mod tests {
             .unwrap()
     }
 
+    async fn get_session_resource_json(
+        app: &Router,
+        session_id: Uuid,
+        endpoint: &str,
+        uri: &str,
+    ) -> Value {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{session_id}/resources/{endpoint}?uri={uri}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{endpoint} {uri}");
+        response_json(response).await
+    }
+
     async fn resolve_test_approval(
         app: &Router,
         session_id: Uuid,
@@ -3488,7 +3511,7 @@ mod tests {
         };
 
         let run_id = Uuid::new_v4().simple().to_string();
-        let subject = format!("brian-pg-{run_id}");
+        let subject = "brian".to_string();
 
         let approved_session = create(&app).await;
         let approved_session_id = approved_session.id;
@@ -3530,37 +3553,70 @@ mod tests {
         assert_eq!(body["status"], json!("approved"));
         let record_uri = body["record"]["uri"].as_str().unwrap().to_string();
         assert!(
-            record_uri.starts_with(&format!("memory://profile/{subject}/facts/")),
+            record_uri.starts_with("memory://profile/brian/facts/"),
             "{record_uri}"
         );
-        let facts = store.profile_facts(&subject).await.unwrap();
-        assert_eq!(facts.len(), 1);
-        assert_eq!(facts[0].predicate, "prefers");
-        assert_eq!(facts[0].object, profile_object);
-        assert_eq!(facts[0].provenance, "postgres-approved");
-
-        let record = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/sessions/{}/resources/resolve?uri={record_uri}",
-                        approved_session_id
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+        let profile_record_id = body["record"]["id"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        let fact = store
+            .profile_fact(&subject, profile_record_id)
             .await
             .unwrap();
-        assert_eq!(record.status(), StatusCode::OK);
-        let record_json = response_json(record).await;
+        assert_eq!(fact.predicate, "prefers");
+        assert_eq!(fact.object, profile_object);
+        assert_eq!(fact.provenance, "postgres-approved");
+        let raw_fact_count: i64 = store
+            .client()
+            .query_one(
+                "select count(*) from profile_facts where id = $1 and subject = $2 and object = $3 and valid_to is null",
+                &[&profile_record_id, &subject, &profile_object],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(raw_fact_count, 1);
+
+        let root_json =
+            get_session_resource_json(&app, approved_session_id, "resolve", "memory://root").await;
+        assert_eq!(root_json["uri"], json!("memory://root"));
+        assert!(
+            root_json["content"]
+                .as_str()
+                .unwrap()
+                .contains(&profile_object)
+        );
+        let user_model_json =
+            get_session_resource_json(&app, approved_session_id, "resolve", "memory://user-model")
+                .await;
+        assert_eq!(user_model_json["uri"], json!("memory://user-model"));
+        assert!(
+            user_model_json["content"]
+                .as_str()
+                .unwrap()
+                .contains(&profile_object)
+        );
+        let record_json =
+            get_session_resource_json(&app, approved_session_id, "resolve", &record_uri).await;
+        assert_eq!(record_json["uri"], json!(record_uri));
         assert!(
             record_json["content"]
                 .as_str()
                 .unwrap()
                 .contains(&profile_object)
         );
+        for uri in ["memory://root", "memory://user-model", record_uri.as_str()] {
+            let preview_json =
+                get_session_resource_json(&app, approved_session_id, "preview", uri).await;
+            assert_eq!(preview_json["uri"], json!(uri));
+            assert_eq!(preview_json["content"], json!(""));
+            assert!(
+                preview_json["preview"].as_str().unwrap().len()
+                    <= SESSION_RESOURCE_PREVIEW_BYTES + 64
+            );
+        }
 
         let events = store.events_after(approved_session_id, None).await.unwrap();
         let write_statuses = events
@@ -3588,12 +3644,19 @@ mod tests {
             .unwrap();
         assert_eq!(replay[0].event_type, "write_proposal");
         assert_eq!(replay[0].payload_json["status"], json!("pending"));
+        let replay_write_statuses = replay
+            .iter()
+            .filter(|event| event.event_type == "write_proposal")
+            .map(|event| event.payload_json["status"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(replay_write_statuses, vec!["pending", "approved"]);
 
         let chunk_session = create(&app).await;
         let chunk_session_id = chunk_session.id;
         let scope = format!("postgres-p2-{run_id}");
         let chunk_text = format!("Stable durable postgres memory chunk {run_id}");
         let mut record_ids = Vec::new();
+        let mut record_uris = Vec::new();
         for approval_index in 0..2 {
             let post_app = app.clone();
             let request = json!({
@@ -3622,11 +3685,42 @@ mod tests {
             let body = response_json(response).await;
             assert_eq!(body["status"], json!("approved"));
             record_ids.push(body["record"]["id"].as_str().unwrap().to_string());
+            record_uris.push(body["record"]["uri"].as_str().unwrap().to_string());
         }
         assert_eq!(record_ids[0], record_ids[1]);
+        assert_eq!(record_uris[0], record_uris[1]);
         let chunks = store.recall_chunks(&scope, &run_id, 10).await.unwrap();
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].text, chunk_text);
+        let chunk_record_id = record_ids[0].parse::<Uuid>().unwrap();
+        let raw_chunk_count: i64 = store
+            .client()
+            .query_one(
+                "select count(*) from recall_chunks where id = $1 and scope = $2 and text = $3",
+                &[&chunk_record_id, &scope, &chunk_text],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(raw_chunk_count, 1);
+        let chunk_record_json =
+            get_session_resource_json(&app, chunk_session_id, "resolve", record_uris[0].as_str())
+                .await;
+        assert_eq!(chunk_record_json["uri"], json!(record_uris[0]));
+        assert!(
+            chunk_record_json["content"]
+                .as_str()
+                .unwrap()
+                .contains(&chunk_text)
+        );
+        let chunk_preview_json =
+            get_session_resource_json(&app, chunk_session_id, "preview", record_uris[0].as_str())
+                .await;
+        assert_eq!(chunk_preview_json["content"], json!(""));
+        assert!(
+            chunk_preview_json["preview"].as_str().unwrap().len()
+                <= SESSION_RESOURCE_PREVIEW_BYTES + 64
+        );
         let approved_chunk_proposals = store
             .events_after(chunk_session_id, None)
             .await
@@ -3667,6 +3761,16 @@ mod tests {
         assert_eq!(body["status"], json!("denied"));
         assert!(body["record"].is_null());
         assert_eq!(store.profile_facts(&denied_subject).await.unwrap().len(), 0);
+        let raw_denied_count: i64 = store
+            .client()
+            .query_one(
+                "select count(*) from profile_facts where subject = $1 and object = $2",
+                &[&denied_subject, &denied_object],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(raw_denied_count, 0);
         let denied_events = store.events_after(denied_session_id, None).await.unwrap();
         let denied_statuses = denied_events
             .iter()
@@ -3708,6 +3812,16 @@ mod tests {
                 .len(),
             0
         );
+        let raw_timeout_count: i64 = store
+            .client()
+            .query_one(
+                "select count(*) from recall_chunks where scope = $1 and text = $2",
+                &[&timeout_scope, &timeout_text],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(raw_timeout_count, 0);
         let timeout_events = store.events_after(timeout_session_id, None).await.unwrap();
         let timeout_statuses = timeout_events
             .iter()

@@ -4,12 +4,8 @@ part of 'main.dart';
 
 class _Msg {
   final bool isUser;
-  final String text; // prefix '\x00mode:' signals a mode-change event
-  final String modeId;
-  const _Msg({required this.isUser, required this.text, required this.modeId});
-
-  bool get isModeChange => text.startsWith('\x00mode:');
-  String get modeChangeId => text.substring(6);
+  final String text;
+  const _Msg({required this.isUser, required this.text});
 }
 
 // ─── Home page ─────────────────────────────────────────────────────────────────
@@ -66,7 +62,7 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   _Mode get _mode => _findMode(_modeId);
   _Tok get _tok => _isDark ? _Tok.dark : _Tok.light;
-  Color get _accent => _modeAccent(_mode.temp, _tok);
+  Color get _accent => _tok.accentSoft;
 
   // ── Session ────────────────────────────────────────────────────────────────
 
@@ -123,19 +119,15 @@ class _MikuHomePageState extends State<MikuHomePage>
           if (_streamText.isNotEmpty) _status = 'streaming';
         case 'final':
           final text = e.data['text'] as String? ?? '';
-          _history.add(_Msg(isUser: false, text: text, modeId: _modeId));
+          _history.add(_Msg(isUser: false, text: text));
           _streamText = '';
           _status = 'connected';
           _loadProject();
         case 'mode':
           final newId = e.data['mode'] as String? ?? _modeId;
-          _modeLocked =
-              e.data['lockSource'] != null || e.data['lock_source'] != null;
-          if (newId != _modeId) {
-            _history.add(
-                _Msg(isUser: false, text: '\x00mode:$newId', modeId: newId));
-            _modeId = newId;
-          }
+          _modeLocked = (e.data['locked'] as bool?) ??
+              (e.data['lockSource'] != null || e.data['lock_source'] != null);
+          _modeId = newId;
         case 'approval':
           final approval = ApprovalPrompt(
             approvalId: e.data['approvalId'] as String? ?? '',
@@ -217,7 +209,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     if (text.isEmpty) return;
     await _ensureSession();
     setState(() {
-      _history.add(_Msg(isUser: true, text: text, modeId: _modeId));
+      _history.add(_Msg(isUser: true, text: text));
       _status = 'streaming';
       _streamText = '';
     });
@@ -269,7 +261,7 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _promoteSession() async {
     await _ensureSession();
-    final last = _history.where((m) => !m.isUser && !m.isModeChange).lastOrNull;
+    final last = _history.where((m) => !m.isUser).lastOrNull;
     final resources = _extractResources(last?.text ?? '');
     try {
       final p = await widget.client.promoteSession(
@@ -322,34 +314,40 @@ class _MikuHomePageState extends State<MikuHomePage>
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: tok.surface,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) => _ModeSheet(
-        modes: _kModes,
-        currentId: _modeId,
-        locked: _modeLocked,
-        tok: tok,
-        accent: accent,
-        onPick: (id) {
-          setState(() => _modeId = id);
-          Navigator.pop(context);
-          if (_modeLocked && _sessionId != null) {
-            widget.client.lockMode(_sessionId!, id);
-          }
-        },
-        onLockToggle: () {
-          final wasLocked = _modeLocked;
-          setState(() => _modeLocked = !_modeLocked);
-          Navigator.pop(context);
-          if (_sessionId != null) {
-            if (!wasLocked) {
-              widget.client.lockMode(_sessionId!, _modeId);
-            } else {
-              widget.client.unlockMode(_sessionId!);
+      builder: (sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
+        ),
+        child: _ModeSheet(
+          modes: _kModes,
+          currentId: _modeId,
+          locked: _modeLocked,
+          tok: tok,
+          accent: accent,
+          onPick: (id) {
+            setState(() => _modeId = id);
+            Navigator.pop(context);
+            if (_modeLocked && _sessionId != null) {
+              widget.client.lockMode(_sessionId!, id);
             }
-          }
-        },
+          },
+          onLockToggle: () {
+            final wasLocked = _modeLocked;
+            setState(() => _modeLocked = !_modeLocked);
+            Navigator.pop(context);
+            if (_sessionId != null) {
+              if (!wasLocked) {
+                widget.client.lockMode(_sessionId!, _modeId);
+              } else {
+                widget.client.unlockMode(_sessionId!);
+              }
+            }
+          },
+        ),
       ),
     );
   }
@@ -412,6 +410,12 @@ class _MikuHomePageState extends State<MikuHomePage>
           Navigator.pop(context);
           setState(() => _isDark = !_isDark);
         },
+        onModeSettings: () {
+          Navigator.pop(context);
+          Timer(const Duration(milliseconds: 320), () {
+            if (mounted) _showModeSheet();
+          });
+        },
       ),
     );
   }
@@ -433,9 +437,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           child: Column(
             children: [
               _buildHeader(tok, mode, accent),
-              _buildModeRail(tok, mode, accent),
-              const SizedBox(height: 6),
-              Expanded(child: _buildThread(tok, mode, accent)),
+              Expanded(child: _buildThread(tok, accent)),
               _buildComposer(tok, accent),
               SafeArea(
                 top: false,
@@ -499,23 +501,32 @@ class _MikuHomePageState extends State<MikuHomePage>
               ),
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-            decoration: BoxDecoration(
-              color: accent.withOpacity(0.12),
-              border: Border.all(color: accent.withOpacity(0.45)),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              _modeLocked ? '${mode.short} · locked' : mode.short,
-              style: TextStyle(
-                color: accent,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
+          if (_modeLocked) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: accent.withOpacity(0.12),
+                border: Border.all(color: accent.withOpacity(0.45)),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lock, color: accent, size: 11),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${mode.short}鎖定',
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          const SizedBox(width: 8),
+            const SizedBox(width: 8),
+          ],
           _ConnectionBadge(status: _status, tok: tok),
           const SizedBox(width: 8),
           _TokIconBtn(
@@ -528,66 +539,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     );
   }
 
-  Widget _buildModeRail(_Tok tok, _Mode mode, Color accent) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: tok.surface,
-          border: Border.all(color: tok.border),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          children: _kModes.map((m) {
-            final isActive = m.id == _modeId;
-            final mAccent = _modeAccent(m.temp, tok);
-            return Expanded(
-              child: GestureDetector(
-                onTap: () {
-                  setState(() => _modeId = m.id);
-                  if (_modeLocked && _sessionId != null) {
-                    widget.client.lockMode(_sessionId!, m.id);
-                  }
-                },
-                onLongPress: _showModeSheet,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(vertical: 7),
-                  decoration: BoxDecoration(
-                    color: isActive ? mAccent : Colors.transparent,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        m.icon,
-                        size: 18,
-                        color: isActive ? _textOn(mAccent) : tok.muted,
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        m.short,
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: isActive ? _textOn(mAccent) : tok.muted,
-                          letterSpacing: -0.2,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildThread(_Tok tok, _Mode mode, Color accent) {
+  Widget _buildThread(_Tok tok, Color accent) {
     final items = <Widget>[];
 
     // Connection system line
@@ -602,22 +554,16 @@ class _MikuHomePageState extends State<MikuHomePage>
 
     // History
     for (final msg in _history) {
-      if (msg.isModeChange) {
-        final m = _findMode(msg.modeChangeId);
-        items.add(_ModeChangeEvent(tok: tok, modeZh: m.zh));
-      } else if (msg.isUser) {
+      if (msg.isUser) {
         items.add(
           _UserBubble(tok: tok, text: msg.text, accent: tok.accentSoft),
         );
       } else {
-        final m = _findMode(msg.modeId);
-        final ma = _modeAccent(m.temp, tok);
         final resources = _extractResources(msg.text);
         items.add(_MikuBubble(
           tok: tok,
           text: msg.text,
-          mode: m,
-          accent: ma,
+          accent: accent,
           resources: resources,
           onOpenResource: _openResource,
         ));
@@ -632,7 +578,6 @@ class _MikuHomePageState extends State<MikuHomePage>
         items.add(_MikuBubble(
           tok: tok,
           text: _streamText,
-          mode: mode,
           accent: accent,
           resources: resources,
           onOpenResource: _openResource,

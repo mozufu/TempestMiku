@@ -123,7 +123,8 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 
 - **Flutter client (single codebase).** P1 has shipped a **project-manager dogfooding** client on top of the
   P0 coding loop, targeting Web/PWA first: message input, streamed token rendering, final response,
-  default mode badge, approval prompts, artifact/resource links, and project/open-loop views. The web
+  approval prompts, artifact/resource links, and project/open-loop views. Mode/skill-bundle state is
+  observable through debug/advanced controls, not a default badge in the normal chat surface. The web
   target is usable from a phone-sized browser because remote control of the computer-hosted agent is a
   first-class workflow.
 - **Mobile remote control (P1).** Phone/browser control uses the same server API as every client: SSE

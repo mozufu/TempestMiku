@@ -24,14 +24,15 @@ void main() {
     );
   });
 
-  testWidgets('shows remote control stream, final, mode, and project state',
+  testWidgets(
+      'shows remote control stream, final, hidden mode state, and project state',
       (WidgetTester tester) async {
     await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('TempestMiku'), findsWidgets);
-    expect(find.text('助理'), findsWidgets);
+    expect(find.text('助理'), findsNothing);
     expect(find.text('濃'), findsNothing);
     expect(find.text('中'), findsNothing);
     expect(find.text('關'), findsNothing);
@@ -43,7 +44,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.textContaining('認真工程師'), findsWidgets);
+    expect(find.textContaining('認真工程師'), findsNothing);
     expect(find.text('濃'), findsNothing);
     expect(find.text('中'), findsNothing);
     expect(find.text('關'), findsNothing);
@@ -80,6 +81,40 @@ void main() {
 
     expect(find.text('project://tempestmiku · 2 promoted'), findsOneWidget);
     expect(find.text('Continue from latest session result'), findsOneWidget);
+  });
+
+  testWidgets('keeps mode controls in overflow advanced UI',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('個人助理'), findsNothing);
+    expect(find.text('助理鎖定'), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('進階：模式與鎖定'), findsOneWidget);
+    await tester.tap(find.text('進階：模式與鎖定'));
+    await tester.pump(const Duration(milliseconds: 320));
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('選擇模式'), findsOneWidget);
+    expect(find.text('個人助理'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('鎖定目前模式'),
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pump();
+    await tester.tap(find.text('鎖定目前模式'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('助理鎖定'), findsOneWidget);
   });
 
   testWidgets('renders and resolves memory write proposals',

@@ -166,41 +166,6 @@ class _SystemLine extends StatelessWidget {
   }
 }
 
-class _ModeChangeEvent extends StatelessWidget {
-  const _ModeChangeEvent({
-    required this.tok,
-    required this.modeZh,
-  });
-
-  final _Tok tok;
-  final String modeZh;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: tok.surface.withOpacity(0.6),
-            border: Border.all(color: tok.border.withOpacity(0.7)),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Text(
-            '切到$modeZh',
-            style: TextStyle(
-              color: tok.muted,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _UserBubble extends StatelessWidget {
   const _UserBubble({
     required this.tok,
@@ -246,7 +211,6 @@ class _MikuBubble extends StatelessWidget {
   const _MikuBubble({
     required this.tok,
     required this.text,
-    required this.mode,
     required this.accent,
     required this.resources,
     required this.onOpenResource,
@@ -255,7 +219,6 @@ class _MikuBubble extends StatelessWidget {
 
   final _Tok tok;
   final String text;
-  final _Mode mode;
   final Color accent;
   final List<String> resources;
   final void Function(String) onOpenResource;
@@ -290,23 +253,6 @@ class _MikuBubble extends StatelessWidget {
                       fontSize: 14,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.3,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: tok.border),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      mode.zh,
-                      style: TextStyle(
-                        color: tok.muted,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                      ),
                     ),
                   ),
                   if (isStreaming) ...[

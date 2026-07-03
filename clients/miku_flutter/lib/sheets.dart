@@ -545,17 +545,18 @@ class _OverflowSheet extends StatelessWidget {
     required this.onRefresh,
     required this.onPromote,
     required this.onThemeToggle,
+    required this.onModeSettings,
   });
 
   final _Tok tok;
   final String projectStatus;
   final List<String> nextActions;
   final bool isDark;
-  final VoidCallback onRefresh, onPromote, onThemeToggle;
+  final VoidCallback onRefresh, onPromote, onThemeToggle, onModeSettings;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 9, 16, 18),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -641,6 +642,13 @@ class _OverflowSheet extends StatelessWidget {
             icon: Icons.upload_file,
             label: '推廣 Session',
             onTap: onPromote,
+          ),
+          const SizedBox(height: 8),
+          _ActionRow(
+            tok: tok,
+            icon: Icons.tune,
+            label: '進階：模式與鎖定',
+            onTap: onModeSettings,
           ),
         ],
       ),

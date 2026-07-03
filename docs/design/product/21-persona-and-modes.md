@@ -76,7 +76,7 @@ Standing behavior from SOUL.md — enforced regardless of mode:
   Negative-state prompts are not memory-write candidates unless Brian explicitly asks to remember a
   stable preference, strategy, or boundary.
 
-## 21.4 Routing: model-suggested, user-final, visible
+## 21.4 Routing: model-suggested, user-final, observable
 
 - **Model runs the router.** The model selects the smallest sufficient mode and calls
   `mode.suggest(target, reason)`; default behavior applies it and sets the voice cap.
@@ -85,7 +85,9 @@ Standing behavior from SOUL.md — enforced regardless of mode:
   router-owned Serious Engineer session. User locks and manual Serious Engineer overrides suppress
   that fallback until Brian clears or changes the mode.
 - **User is final.** Brian can **lock** a mode or **override** anytime.
-- **Visible.** Each switch emits `ModeChanged` (§10.2); clients render a **mode badge** (§27).
+- **Observable, not primary UI.** Each switch emits `ModeChanged` (§10.2) for replay, audit, and
+  optional debug/advanced controls. Default chat surfaces should not make Brian manage or care about
+  the mode label; mode is a skill/capability bundle behind the interaction.
 
 ```mermaid
 sequenceDiagram
@@ -95,7 +97,7 @@ sequenceDiagram
     participant C as Clients
     B->>M: "this migration scares me, can you do it?"
     M->>R: mode.suggest("serious_engineer", "irreversible op")
-    R-->>C: ModeChanged(Serious Engineer)  %% badge only; voice cap is internal
+    R-->>C: ModeChanged(Serious Engineer)  %% debug/advanced only; voice cap is internal
     R-->>M: fs.*/code.*/proc.* in registry; 喵 off
     Note over M: identity unchanged; precise, asks before destructive
 ```

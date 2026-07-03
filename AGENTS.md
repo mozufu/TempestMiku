@@ -69,6 +69,7 @@ Do not start yet unless explicitly requested:
 
 ## Testing and verification
 
+- Use the project dev shell for repo toolchains: run commands as `nix develop --command <cmd>` when a tool may be provided by Nix, especially Flutter/Dart/client commands or anything missing from the ambient PATH. Prefer this non-interactive form over entering a long-running `nix develop` shell.
 - Baseline command: `cargo test`.
 - Add narrow tests for the behavior you change before relying on the full suite.
 - For streaming changes, use scripted streams; do not require network.

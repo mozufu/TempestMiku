@@ -3875,6 +3875,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "tm-e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tm-artifacts",
+ "tm-core",
+ "tm-llm",
+ "tm-server",
+ "tokio",
+]
+
+[[package]]
 name = "tm-host"
 version = "0.1.0"
 dependencies = [

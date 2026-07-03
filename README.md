@@ -17,3 +17,4 @@ proactivity.
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
 - [Commit message spec](docs/commit-messages.md)
+- [LLM-to-Miku E2E hatch](apps/tm-e2e/README.md)

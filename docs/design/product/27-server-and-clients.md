@@ -221,7 +221,19 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 - **Client diversity** — both clients are thin views of one stream; a missing client feature never
   blocks the server.
 
-## 27.9 Mechanism provenance
+## 27.9 Local E2E hatch
+
+`apps/tm-e2e` is a local/dev harness that lets a scripted or opt-in live LLM actor speak to Miku
+through the same public session API as the Web/PWA client. It creates sessions, sends messages,
+reads SSE with `Last-Event-ID`, resolves approvals, verifies memory resources, promotes project
+state, and reads resource views without adding a privileged debug endpoint or a second execution path.
+
+Normal `cargo test` uses the scripted mode and an in-process `tm-server` fixture, so it stays
+network-free. Live actor runs require `TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native Deno
+engineering coverage remains in the focused server tests for `fs.*`, `code.*`, `proc.*`, artifacts,
+and approval approve/deny/timeout behavior.
+
+## 27.10 Mechanism provenance
 
 | We adopt | From | For |
 |---|---|---|

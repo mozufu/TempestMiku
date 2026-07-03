@@ -155,6 +155,15 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   @override
+  Future<void> overrideMode(String sessionId, String mode) async {
+    await _request(
+      'POST',
+      '/sessions/$sessionId/mode/override',
+      body: {'mode': mode, 'reason': 'flutter override'},
+    );
+  }
+
+  @override
   Future<ProjectOverview> projectOverview(String sessionId) async {
     final json = await _request('GET', '/sessions/$sessionId/project');
     return ProjectOverview(

@@ -30,6 +30,69 @@ class _TokIconBtn extends StatelessWidget {
   }
 }
 
+class _ModeDropMenuButton extends StatelessWidget {
+  const _ModeDropMenuButton({
+    required this.tok,
+    required this.mode,
+    required this.accent,
+    required this.locked,
+    required this.onTap,
+  });
+
+  final _Tok tok;
+  final _Mode mode;
+  final Color accent;
+  final bool locked;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = locked ? accent.withOpacity(0.58) : tok.border;
+    final bg = locked ? accent.withOpacity(0.12) : tok.surface.withOpacity(0.6);
+    final label = locked ? '${mode.short}鎖定' : mode.short;
+    return Tooltip(
+      message: locked ? '模式已鎖定，點擊管理' : '切換模式',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 32,
+          constraints: const BoxConstraints(minWidth: 58, maxWidth: 92),
+          padding: const EdgeInsets.symmetric(horizontal: 9),
+          decoration: BoxDecoration(
+            color: bg,
+            border: Border.all(color: borderColor),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                locked ? Icons.lock : mode.icon,
+                color: locked ? accent : tok.muted,
+                size: 13,
+              ),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: locked ? accent : tok.muted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.arrow_drop_down, color: tok.muted, size: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ConnectionBadge extends StatefulWidget {
   const _ConnectionBadge({required this.status, required this.tok});
 

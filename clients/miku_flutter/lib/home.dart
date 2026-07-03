@@ -6,16 +6,13 @@ class _ConversationRound {
   _ConversationRound({
     required this.index,
     required this.userText,
-    this.assistantStreamedText = '',
-    this.assistantFinalText = '',
-    this.isStreaming = true,
   });
 
   final int index;
   final String userText;
-  String assistantStreamedText;
-  String assistantFinalText;
-  bool isStreaming;
+  String assistantStreamedText = '';
+  String assistantFinalText = '';
+  bool isStreaming = true;
 
   String get assistantText => assistantFinalText.isNotEmpty
       ? assistantFinalText
@@ -344,11 +341,50 @@ class _MikuHomePageState extends State<MikuHomePage>
     }
   }
 
+  Future<void> _applyModePick(String id) async {
+    await _ensureSession();
+    final sessionId = _sessionId;
+    if (sessionId == null) return;
+    final previousId = _modeId;
+    setState(() => _modeId = id);
+    try {
+      if (_modeLocked) {
+        await widget.client.lockMode(sessionId, id);
+      } else {
+        await widget.client.overrideMode(sessionId, id);
+      }
+    } catch (err) {
+      if (!mounted) return;
+      setState(() => _modeId = previousId);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Mode change failed: $err')));
+    }
+  }
+
+  Future<void> _toggleModeLock() async {
+    await _ensureSession();
+    final sessionId = _sessionId;
+    if (sessionId == null) return;
+    final wasLocked = _modeLocked;
+    setState(() => _modeLocked = !wasLocked);
+    try {
+      if (wasLocked) {
+        await widget.client.unlockMode(sessionId);
+      } else {
+        await widget.client.lockMode(sessionId, _modeId);
+      }
+    } catch (err) {
+      if (!mounted) return;
+      setState(() => _modeLocked = wasLocked);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Mode lock failed: $err')));
+    }
+  }
+
   // ── Bottom sheets ──────────────────────────────────────────────────────────
 
   void _showModeSheet() {
     final tok = _tok;
-    final accent = _accent;
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: tok.surface,
@@ -365,25 +401,13 @@ class _MikuHomePageState extends State<MikuHomePage>
           currentId: _modeId,
           locked: _modeLocked,
           tok: tok,
-          accent: accent,
           onPick: (id) {
-            setState(() => _modeId = id);
-            Navigator.pop(context);
-            if (_modeLocked && _sessionId != null) {
-              widget.client.lockMode(_sessionId!, id);
-            }
+            Navigator.pop(sheetContext);
+            unawaited(_applyModePick(id));
           },
           onLockToggle: () {
-            final wasLocked = _modeLocked;
-            setState(() => _modeLocked = !_modeLocked);
-            Navigator.pop(context);
-            if (_sessionId != null) {
-              if (!wasLocked) {
-                widget.client.lockMode(_sessionId!, _modeId);
-              } else {
-                widget.client.unlockMode(_sessionId!);
-              }
-            }
+            Navigator.pop(sheetContext);
+            unawaited(_toggleModeLock());
           },
         ),
       ),
@@ -539,32 +563,14 @@ class _MikuHomePageState extends State<MikuHomePage>
               ),
             ),
           ),
-          if (_modeLocked) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-              decoration: BoxDecoration(
-                color: accent.withOpacity(0.12),
-                border: Border.all(color: accent.withOpacity(0.45)),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.lock, color: accent, size: 11),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${mode.short}鎖定',
-                    style: TextStyle(
-                      color: accent,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
+          _ModeDropMenuButton(
+            tok: tok,
+            mode: mode,
+            accent: accent,
+            locked: _modeLocked,
+            onTap: _showModeSheet,
+          ),
+          const SizedBox(width: 8),
           _ConnectionBadge(status: _status, tok: tok),
           const SizedBox(width: 8),
           _TokIconBtn(

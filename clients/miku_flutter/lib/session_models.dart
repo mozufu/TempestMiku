@@ -252,6 +252,8 @@ abstract class MikuSessionClient {
 
   Future<void> unlockMode(String sessionId);
 
+  Future<void> overrideMode(String sessionId, String mode);
+
   Future<ProjectOverview> projectOverview(String sessionId);
 
   Future<ResourcePreview> previewResource(String sessionId, String uri);

@@ -8,7 +8,6 @@ class _ModeSheet extends StatelessWidget {
     required this.currentId,
     required this.locked,
     required this.tok,
-    required this.accent,
     required this.onPick,
     required this.onLockToggle,
   });
@@ -17,12 +16,13 @@ class _ModeSheet extends StatelessWidget {
   final String currentId;
   final bool locked;
   final _Tok tok;
-  final Color accent;
   final void Function(String) onPick;
   final VoidCallback onLockToggle;
 
   @override
   Widget build(BuildContext context) {
+    final current = _findMode(currentId);
+    final currentAccent = _modeAccent(current.temp, tok);
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(15, 9, 15, 18),
       child: Column(
@@ -44,7 +44,7 @@ class _ModeSheet extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '選擇模式',
+                      '模式 / 鎖定',
                       style: TextStyle(
                         color: tok.text,
                         fontSize: 17,
@@ -54,7 +54,7 @@ class _ModeSheet extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Miku 會自動建議，你可隨時鎖定',
+                      '選模式會手動覆寫；鎖定後不自動切換',
                       style: TextStyle(
                         color: tok.muted,
                         fontSize: 12,
@@ -72,6 +72,57 @@ class _ModeSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 13),
+          GestureDetector(
+            onTap: onLockToggle,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+              decoration: BoxDecoration(
+                color: locked ? currentAccent.withOpacity(0.1) : tok.bg,
+                border: Border.all(
+                  color: locked ? currentAccent.withOpacity(0.62) : tok.border,
+                ),
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    locked ? Icons.lock : Icons.lock_open,
+                    color: locked ? currentAccent : tok.muted,
+                    size: 19,
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          locked
+                              ? '解除${current.short}鎖定'
+                              : '鎖定${current.short}',
+                          style: TextStyle(
+                            color: tok.text,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          locked ? '恢復 Miku 自動路由' : '保持目前模式，直到你解除',
+                          style: TextStyle(
+                            color: tok.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _Toggle(on: locked, accent: currentAccent, tok: tok),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           ...modes.map((m) {
             final isActive = m.id == currentId;
             final mAccent = _modeAccent(m.temp, tok);
@@ -146,53 +197,6 @@ class _ModeSheet extends StatelessWidget {
               ),
             );
           }),
-          const SizedBox(height: 5),
-          GestureDetector(
-            onTap: onLockToggle,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
-              decoration: BoxDecoration(
-                color: tok.bg,
-                border: Border.all(color: tok.border),
-                borderRadius: BorderRadius.circular(13),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    locked ? Icons.lock : Icons.lock_open,
-                    color: tok.muted,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '鎖定目前模式',
-                          style: TextStyle(
-                            color: tok.text,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 1),
-                        Text(
-                          '鎖定後 Miku 不會自動切換',
-                          style: TextStyle(
-                            color: tok.muted,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _Toggle(on: locked, accent: accent, tok: tok),
-                ],
-              ),
-            ),
-          ),
         ],
       ),
     );

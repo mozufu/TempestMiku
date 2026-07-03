@@ -10,6 +10,9 @@ class ScriptedMikuClient implements MikuSessionClient {
   final Map<String, String> _approvalProposals = {};
   final Map<String, Map<String, Object?>> _proposals = {};
   final List<String> resolvedApprovals = [];
+  final List<String> lockedModes = [];
+  final List<String> overriddenModes = [];
+  int unlockCount = 0;
   int _nextId = 0;
   int _nextEventId = 1;
 
@@ -174,6 +177,7 @@ class ScriptedMikuClient implements MikuSessionClient {
 
   @override
   Future<void> lockMode(String sessionId, String mode) async {
+    lockedModes.add(mode);
     _controllers[sessionId]?.add(
       MikuEvent(
         type: 'mode',
@@ -189,6 +193,7 @@ class ScriptedMikuClient implements MikuSessionClient {
 
   @override
   Future<void> unlockMode(String sessionId) async {
+    unlockCount++;
     _controllers[sessionId]?.add(
       const MikuEvent(
         type: 'mode',
@@ -196,6 +201,22 @@ class ScriptedMikuClient implements MikuSessionClient {
           'mode': 'personal_assistant',
           'label': 'Personal Assistant',
           'activeSkills': ['miku-voice', 'personal-assistant-state-capture'],
+        },
+      ),
+    );
+  }
+
+  @override
+  Future<void> overrideMode(String sessionId, String mode) async {
+    overriddenModes.add(mode);
+    _controllers[sessionId]?.add(
+      MikuEvent(
+        type: 'mode',
+        data: {
+          'mode': mode,
+          'label': _label(mode),
+          'activeSkills': _activeSkills(mode),
+          'override_source': 'user',
         },
       ),
     );

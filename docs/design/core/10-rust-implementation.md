@@ -10,7 +10,7 @@ tempest-miku/
 │   ├── tm-sandbox/     # Sandbox/Session traits + backends (stub, deno_core; more planned)
 │   ├── tm-host/        # host capability registry, linked folders, approvals, resource handlers (§9.2)
 │   ├── tm-artifacts/   # content-addressed artifact store
-│   ├── tm-persona/     # mode labels, default scopes, voice caps, persona asset status
+│   ├── tm-persona/     # runtime mode catalog, default scopes, voice caps, persona asset status
 │   └── tm-server/      # axum sessions, SSE replay, approvals, project views, coding backends
 └── apps/
     └── tm-cli/         # binary: wiring, config, REPL/chat entrypoint

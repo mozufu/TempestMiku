@@ -7,8 +7,7 @@ async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
 
     post_user_message(&app, session.id, "please fix this Rust code bug").await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
-    assert_eq!(latest.mode_state.voice_cap(), "off");
+    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
 
     post_user_message(
         &app,
@@ -17,8 +16,7 @@ async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
     )
     .await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::PersonalAssistant);
-    assert_eq!(latest.mode_state.voice_cap(), "medium");
+    assert_eq!(latest.mode_state.mode, ModeId::from("personal_assistant"));
     assert_eq!(latest.mode_state.lock_source, None);
     assert_eq!(latest.mode_state.override_source, None);
     assert!(
@@ -27,7 +25,7 @@ async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
             .router_reason
             .as_deref()
             .unwrap_or_default()
-            .contains("default personal-assistant")
+            .contains("default runtime mode")
     );
 
     let events = store.events_after(session.id, None).await.unwrap();
@@ -47,24 +45,19 @@ async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
 
 #[test]
 fn router_triggers_negative_state_grounding_for_negative_language() {
+    let catalog = PersonaConfig::default().load_assets().modes;
     for (content, trigger) in [
-        (
-            "everything is too much and I am overwhelmed",
-            "overwhelmed language",
-        ),
-        ("I'm exhausted and have no energy", "exhausted language"),
-        (
-            "I'm useless and nothing I do counts",
-            "self-deprecating language",
-        ),
-        ("I am spiraling tonight", "spiraling language"),
+        ("everything is too much and I am overwhelmed", "overwhelmed"),
+        ("I'm exhausted and have no energy", "exhausted"),
+        ("I'm useless and nothing I do counts", "useless"),
+        ("I am spiraling tonight", "spiraling"),
         (
             "I'm stuck on this Rust bug and can't make progress",
-            "stuck language",
+            "stuck",
         ),
     ] {
-        let (mode, reason) = route_mode_for_prompt(content);
-        assert_eq!(mode, Mode::NegativeStateGrounding, "{content}");
+        let (mode, reason) = route_mode_for_prompt(&catalog, content);
+        assert_eq!(mode, ModeId::from("negative_state_grounding"), "{content}");
         assert!(
             reason.contains(trigger),
             "expected {trigger:?} in reason {reason:?}"
@@ -85,11 +78,17 @@ async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
     .await;
 
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::NegativeStateGrounding);
-    assert_eq!(latest.mode_state.mode.capability_class(), "conversation");
-    assert_eq!(latest.mode_state.voice_cap(), "high");
     assert_eq!(
-        latest.mode_state.mode.active_skill_names(),
+        latest.mode_state.mode,
+        ModeId::from("negative_state_grounding")
+    );
+    let profile = PersonaConfig::default()
+        .load_assets()
+        .profile_or_unknown(&latest.mode_state.mode);
+    assert_eq!(profile.capability_class, "conversation");
+    assert_eq!(profile.voice_cap, "high");
+    assert_eq!(
+        profile.active_skills,
         ["miku-voice", "negative-state-grounding"]
     );
     let events = store.events_after(session.id, None).await.unwrap();
@@ -141,7 +140,7 @@ async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route()
     )
     .await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
     assert_eq!(latest.mode_state.lock_source.as_deref(), Some("user"));
 
     let unlock = app
@@ -165,7 +164,7 @@ async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route()
     )
     .await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::PersonalAssistant);
+    assert_eq!(latest.mode_state.mode, ModeId::from("personal_assistant"));
     assert_eq!(latest.mode_state.lock_source, None);
     assert!(
         latest
@@ -173,7 +172,7 @@ async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route()
             .router_reason
             .as_deref()
             .unwrap_or_default()
-            .contains("default personal-assistant")
+            .contains("default runtime mode")
     );
 }
 
@@ -223,7 +222,7 @@ async fn user_override_can_switch_to_serious_engineer_through_lock() {
     assert_eq!(override_json["voiceCap"], json!("off"));
 
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
     assert_eq!(latest.mode_state.lock_source, None);
     assert_eq!(latest.mode_state.override_source.as_deref(), Some("user"));
 
@@ -234,7 +233,7 @@ async fn user_override_can_switch_to_serious_engineer_through_lock() {
     )
     .await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
+    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
     assert_eq!(latest.mode_state.override_source.as_deref(), Some("user"));
 }
 
@@ -273,7 +272,7 @@ async fn router_lock_unlock_and_replay_mode_events() {
         mode_events[1].payload_json["router_reason"]
             .as_str()
             .unwrap()
-            .contains("coding")
+            .contains("serious_engineer")
     );
 
     let replay = store.events_after(session.id, Some(1)).await.unwrap();
@@ -317,7 +316,7 @@ async fn router_lock_unlock_and_replay_mode_events() {
         .unwrap();
     assert_eq!(locked_message.status(), StatusCode::OK);
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::PersonalAssistant);
+    assert_eq!(latest.mode_state.mode, ModeId::from("personal_assistant"));
 
     let unlock = app
         .clone()
@@ -347,6 +346,12 @@ async fn router_lock_unlock_and_replay_mode_events() {
         .unwrap();
     assert_eq!(reroute.status(), StatusCode::OK);
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, Mode::SeriousEngineer);
-    assert_eq!(latest.mode_state.mode.voice_cap(), "off");
+    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
+    assert_eq!(
+        PersonaConfig::default()
+            .load_assets()
+            .profile_or_unknown(&latest.mode_state.mode)
+            .voice_cap,
+        "off"
+    );
 }

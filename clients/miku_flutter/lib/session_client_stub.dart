@@ -22,6 +22,65 @@ class ScriptedMikuClient implements MikuSessionClient {
   String? _currentId;
 
   @override
+  Future<ModeCatalog> modeCatalog() async {
+    return const ModeCatalog(
+      defaultMode: 'personal_assistant',
+      modes: [
+        ModeProfile(
+          id: 'personal_assistant',
+          label: 'Personal Assistant',
+          voiceCap: 'medium',
+          defaultScope: 'global',
+          capabilityClass: 'conversation',
+          activeSkills: ['miku-voice', 'personal-assistant-state-capture'],
+          capabilities: ['memory.recall', 'memory.propose'],
+          description: 'Planning, reminders, writing, and open loops.',
+        ),
+        ModeProfile(
+          id: 'ambiguity_grill',
+          label: 'Ambiguity Grill',
+          voiceCap: 'high',
+          defaultScope: 'global',
+          capabilityClass: 'conversation',
+          activeSkills: ['miku-voice', 'ambiguity-grill'],
+          capabilities: [],
+          description: 'Sharp clarification before planning.',
+        ),
+        ModeProfile(
+          id: 'negative_state_grounding',
+          label: 'Negative-State Grounding',
+          voiceCap: 'high',
+          defaultScope: 'global',
+          capabilityClass: 'conversation',
+          activeSkills: ['miku-voice', 'negative-state-grounding'],
+          capabilities: [],
+          description: 'Stabilize overwhelm before action.',
+        ),
+        ModeProfile(
+          id: 'serious_engineer',
+          label: 'Serious Engineer',
+          voiceCap: 'off',
+          defaultScope: 'project:tempestmiku',
+          capabilityClass: 'engineering',
+          activeSkills: [],
+          capabilities: ['fs.*', 'code.*', 'proc.*', 'backend.coding'],
+          description: 'Code, production, irreversible, or external work.',
+        ),
+        ModeProfile(
+          id: 'handoff',
+          label: 'Handoff',
+          voiceCap: 'off',
+          defaultScope: 'project:tempestmiku',
+          capabilityClass: 'handoff',
+          activeSkills: ['oh-my-pi-handoff'],
+          capabilities: ['agents.*', 'backend.coding'],
+          description: 'Delegate implementation-heavy coding work.',
+        ),
+      ],
+    );
+  }
+
+  @override
   Future<MikuSession> createOrReuseSession() async {
     final currentId = _currentId;
     if (currentId != null && _sessions.containsKey(currentId)) {

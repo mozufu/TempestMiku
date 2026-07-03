@@ -41,12 +41,14 @@ class _MikuHomePageState extends State<MikuHomePage>
   final List<MemoryWriteProposal> _memoryProposals = [];
   final List<String> _nextActions = [];
   final List<_ConversationRound> _rounds = [];
+  final List<_Mode> _modes = [];
 
   Future<void>? _sessionFuture;
   StreamSubscription<MikuEvent>? _sub;
   String? _sessionId;
   String? _lastEventId;
-  String _modeId = 'personal_assistant';
+  String _modeId = '';
+  String _defaultModeId = '';
   String _status = 'idle';
   String _projectStatus = '';
   bool _isDark = true;
@@ -73,7 +75,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     super.dispose();
   }
 
-  _Mode get _mode => _findMode(_modeId);
+  _Mode get _mode => _findMode(_modeId, _modes);
   _Tok get _tok => _isDark ? _Tok.dark : _Tok.light;
   Color get _accent => _tok.accentSoft;
 
@@ -87,6 +89,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   Future<void> _connectSession() async {
     if (mounted) setState(() => _status = 'connecting');
     try {
+      await _loadModes();
       final s = await widget.client.createOrReuseSession();
       LoadedSession? loaded;
       try {
@@ -118,9 +121,10 @@ class _MikuHomePageState extends State<MikuHomePage>
     _sub = null;
     if (!mounted) return;
     setState(() {
+      _mergeSessionMode(session);
       _sessionId = session.id;
       _lastEventId = session.lastEventId;
-      _modeId = session.mode.isEmpty ? 'personal_assistant' : session.mode;
+      _modeId = session.mode.isEmpty ? _defaultModeId : session.mode;
       _modeLocked = session.locked;
       _status = 'connected';
       _approvals.clear();
@@ -141,6 +145,42 @@ class _MikuHomePageState extends State<MikuHomePage>
     await _loadProject();
     if (mounted) setState(() {});
     _scrollToBottom();
+  }
+
+  Future<void> _loadModes() async {
+    final catalog = await widget.client.modeCatalog();
+    if (!mounted) return;
+    setState(() {
+      _defaultModeId = catalog.defaultMode;
+      _modes
+        ..clear()
+        ..addAll(catalog.modes.map(_Mode.fromProfile));
+      if (_modes.isEmpty) {
+        _modes.add(_Mode.fallback(_defaultModeId));
+      }
+    });
+  }
+
+  void _mergeSessionMode(MikuSession session) {
+    if (session.mode.isEmpty || _modes.any((mode) => mode.id == session.mode)) {
+      return;
+    }
+    _modes.add(
+      _Mode.fromProfile(
+        ModeProfile(
+          id: session.mode,
+          label: session.label.isEmpty ? session.mode : session.label,
+          voiceCap: session.voiceCap.isEmpty ? 'medium' : session.voiceCap,
+          defaultScope: session.defaultScope,
+          capabilityClass: session.defaultScope.startsWith('project:')
+              ? 'engineering'
+              : 'conversation',
+          activeSkills: session.activeSkills,
+          capabilities: const [],
+          description: 'Runtime mode profile from session.',
+        ),
+      ),
+    );
   }
 
   List<_ConversationRound> _roundsFromMessages(List<SessionMessage> messages) {
@@ -213,6 +253,22 @@ class _MikuHomePageState extends State<MikuHomePage>
         _loadProject();
       case 'mode':
         final newId = e.data['mode'] as String? ?? _modeId;
+        _mergeSessionMode(
+          MikuSession(
+            id: _sessionId ?? '',
+            mode: newId,
+            label: e.data['label'] as String? ?? newId,
+            voiceCap: (e.data['voice_cap'] as String?) ??
+                (e.data['voiceCap'] as String?) ??
+                'medium',
+            defaultScope: (e.data['defaultScope'] as String?) ??
+                (e.data['default_scope'] as String?) ??
+                'global',
+            activeSkills: ((e.data['activeSkills'] as List?) ?? const [])
+                .map((skill) => skill.toString())
+                .toList(),
+          ),
+        );
         _modeLocked = (e.data['locked'] as bool?) ??
             (e.data['lockSource'] != null || e.data['lock_source'] != null);
         _modeId = newId;
@@ -511,6 +567,9 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   void _showModeSheet() {
     final tok = _tok;
+    if (_modes.isEmpty) {
+      unawaited(_loadModes());
+    }
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: tok.surface,
@@ -523,7 +582,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
         ),
         child: _ModeSheet(
-          modes: _kModes,
+          modes: _modes.isEmpty ? [_mode] : List<_Mode>.from(_modes),
           currentId: _modeId,
           locked: _modeLocked,
           tok: tok,

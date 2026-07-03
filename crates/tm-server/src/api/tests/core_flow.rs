@@ -63,6 +63,59 @@ async fn session_creation_message_append_event_append_and_replay_work() {
 }
 
 #[tokio::test]
+async fn modes_catalog_is_loaded_from_runtime_persona_assets() {
+    let temp = tempfile::tempdir().unwrap();
+    write_persona_fixture(temp.path());
+    let custom = serde_json::json!({
+        "defaultMode": "custom_runtime_mode",
+        "modes": [
+            {
+                "mode": "custom_runtime_mode",
+                "label": "Custom Runtime Mode",
+                "description": "Runtime-only mode from the persona catalog.",
+                "voiceCap": "medium",
+                "voiceGuidance": "medium: custom runtime mode.",
+                "defaultScope": "global",
+                "activeSkills": ["miku-voice"],
+                "capabilityClass": "conversation",
+                "addendum": "Active mode: Custom Runtime Mode.",
+                "route": {
+                    "isDefault": true,
+                    "priority": 0,
+                    "triggers": []
+                }
+            }
+        ]
+    });
+    std::fs::write(
+        temp.path().join("modes.json"),
+        serde_json::to_string_pretty(&custom).unwrap(),
+    )
+    .unwrap();
+
+    let (app, _) = test_app(PersonaConfig::from_path(temp.path()), AuthConfig::NoAuth);
+    let catalog = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/modes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog = response_json(catalog).await;
+    assert_eq!(catalog["defaultMode"], json!("custom_runtime_mode"));
+    assert_eq!(catalog["modes"][0]["mode"], json!("custom_runtime_mode"));
+
+    let session = create(&app).await;
+    assert_eq!(session.mode, ModeId::from("custom_runtime_mode"));
+    assert_eq!(session.label, "Custom Runtime Mode");
+}
+
+#[tokio::test]
 async fn sessions_history_lists_recent_sessions_and_hydrates_transcript() {
     let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
     let first = create(&app).await;
@@ -263,7 +316,7 @@ async fn chat_turn_prompt_uses_active_persona_bundle() {
 
     let turns = turns.lock();
     assert_eq!(turns.len(), 3);
-    assert_eq!(turns[0].mode, Mode::PersonalAssistant);
+    assert_eq!(turns[0].mode, ModeId::from("personal_assistant"));
     assert!(turns[0].system_prompt.contains("Fixture SOUL"));
     assert!(turns[0].system_prompt.contains("skill://miku-voice"));
     assert!(
@@ -272,7 +325,7 @@ async fn chat_turn_prompt_uses_active_persona_bundle() {
             .contains("skill://personal-assistant-state-capture")
     );
 
-    assert_eq!(turns[1].mode, Mode::AmbiguityGrill);
+    assert_eq!(turns[1].mode, ModeId::from("ambiguity_grill"));
     assert!(turns[1].system_prompt.contains("skill://ambiguity-grill"));
     assert!(
         !turns[1]
@@ -280,7 +333,7 @@ async fn chat_turn_prompt_uses_active_persona_bundle() {
             .contains("skill://negative-state-grounding")
     );
 
-    assert_eq!(turns[2].mode, Mode::NegativeStateGrounding);
+    assert_eq!(turns[2].mode, ModeId::from("negative_state_grounding"));
     assert!(
         turns[2]
             .system_prompt
@@ -331,7 +384,7 @@ async fn coding_turn_prompt_uses_active_persona_bundle() {
 
     let turns = turns.lock();
     assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0].mode, Mode::SeriousEngineer);
+    assert_eq!(turns[0].mode, ModeId::from("serious_engineer"));
     assert!(turns[0].system_prompt.contains("Fixture SOUL"));
     assert!(
         turns[0]
@@ -340,7 +393,7 @@ async fn coding_turn_prompt_uses_active_persona_bundle() {
     );
     assert!(!turns[0].system_prompt.contains("skill://miku-voice"));
 
-    assert_eq!(turns[1].mode, Mode::Handoff);
+    assert_eq!(turns[1].mode, ModeId::from("handoff"));
     assert!(turns[1].system_prompt.contains("skill://oh-my-pi-handoff"));
     assert_eq!(turns[1].scope, "project:tempestmiku");
 }

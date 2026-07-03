@@ -64,11 +64,11 @@ impl Store for PostgresStore {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             status: "open".to_string(),
-            mode: new.mode,
+            mode: new.mode.clone(),
             mode_state: ModeState::new(new.mode, Utc::now()),
             persona_status: new.persona_status,
         };
-        let mode = serde_json::to_value(session.mode)
+        let mode = serde_json::to_value(session.mode.clone())
             .map_err(|err| ServerError::Store(err.to_string()))?;
         let mode_state = serde_json::to_value(&session.mode_state)
             .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -162,7 +162,7 @@ impl Store for PostgresStore {
         mode_state: ModeState,
     ) -> Result<SessionRecord> {
         self.get_session(session_id).await?;
-        let mode = serde_json::to_value(mode_state.mode)
+        let mode = serde_json::to_value(mode_state.mode.clone())
             .map_err(|err| ServerError::Store(err.to_string()))?;
         let mode_state_json =
             serde_json::to_value(&mode_state).map_err(|err| ServerError::Store(err.to_string()))?;
@@ -511,13 +511,14 @@ fn row_to_project_item(row: tokio_postgres::Row) -> Result<ProjectItemRecord> {
 
 fn row_to_session_record(row: &tokio_postgres::Row) -> Result<SessionRecord> {
     let mode: Value = row.get("mode");
-    let mode = serde_json::from_value(mode).map_err(|err| ServerError::Store(err.to_string()))?;
+    let mode: tm_persona::ModeId =
+        serde_json::from_value(mode).map_err(|err| ServerError::Store(err.to_string()))?;
     let mode_state: Option<Value> = row.get("mode_state_json");
     let mode_state = match mode_state {
         Some(value) => {
             serde_json::from_value(value).map_err(|err| ServerError::Store(err.to_string()))?
         }
-        None => ModeState::new(mode, row.get("updated_at")),
+        None => ModeState::new(mode.clone(), row.get("updated_at")),
     };
     let persona_status: Value = row.get("persona_status");
     Ok(SessionRecord {

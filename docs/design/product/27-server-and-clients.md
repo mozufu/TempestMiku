@@ -124,9 +124,9 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 - **Flutter client (single codebase).** P1 has shipped a **project-manager dogfooding** client on top of the
   P0 coding loop, targeting Web/PWA first: message input, streamed token rendering, final response,
   approval prompts, artifact/resource links, and project/open-loop views. Mode/skill-bundle state is
-  observable through debug/advanced controls, not a default badge in the normal chat surface. The web
-  target is usable from a phone-sized browser because remote control of the computer-hosted agent is a
-  first-class workflow.
+  read from the runtime `GET /modes` catalog and observable through debug/advanced controls, not a
+  default badge in the normal chat surface. The web target is usable from a phone-sized browser
+  because remote control of the computer-hosted agent is a first-class workflow.
 - **Mobile remote control (P1).** Phone/browser control uses the same server API as every client: SSE
   for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
@@ -147,8 +147,8 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   (§11); SSE all the way from the model provider through the loop to the client.
 - **Inbound (client→server):** **custom session API + SSE** is primary: `POST /sessions`,
   `POST /sessions/:id/messages`, `GET /sessions/:id/events`, `POST /sessions/:id/approvals/:approval_id`,
-  `POST /sessions/:id/memory/proposals`, `POST /sessions/:id/promote`, mode lock / override endpoints,
-  session-scoped resource endpoints (§09), and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
+  `POST /sessions/:id/memory/proposals`, `POST /sessions/:id/promote`, `GET /modes`, mode lock /
+  override endpoints, session-scoped resource endpoints (§09), and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
 

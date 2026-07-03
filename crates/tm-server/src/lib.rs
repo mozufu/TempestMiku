@@ -38,5 +38,5 @@ pub use store::{
     StoreEvent,
 };
 pub use tm_persona::{
-    Mode, ModeProfile, PersonaAssets, PersonaConfig, PersonaPrompt, PersonaStatus,
+    ModeCatalog, ModeId, ModeProfile, PersonaAssets, PersonaConfig, PersonaPrompt, PersonaStatus,
 };

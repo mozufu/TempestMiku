@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fmt, fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +18,7 @@ pub const KNOWN_SKILLS: &[&str] = &[
 
 const BUNDLED_PERSONA_SOURCE: &str = "bundled:tm-persona/default-persona";
 const BUNDLED_SOUL: &str = include_str!("../assets/SOUL.md");
+const BUNDLED_MODES: &str = include_str!("../assets/modes.json");
 const BUNDLED_SKILLS: &[(&str, &str)] = &[
     (
         "miku-voice",
@@ -45,128 +50,156 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
     ),
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    #[default]
-    PersonalAssistant,
-    AmbiguityGrill,
-    NegativeStateGrounding,
-    SeriousEngineer,
-    Handoff,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ModeId(String);
+
+pub type Mode = ModeId;
+
+impl ModeId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-impl Mode {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::PersonalAssistant => "Personal Assistant",
-            Self::AmbiguityGrill => "Ambiguity Grill",
-            Self::NegativeStateGrounding => "Negative-State Grounding",
-            Self::SeriousEngineer => "Serious Engineer",
-            Self::Handoff => "Handoff",
-        }
+impl fmt::Display for ModeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
+}
 
-    pub fn voice_cap(self) -> &'static str {
-        match self {
-            Self::PersonalAssistant => "medium",
-            Self::AmbiguityGrill | Self::NegativeStateGrounding => "high",
-            Self::SeriousEngineer | Self::Handoff => "off",
-        }
+impl From<&str> for ModeId {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
     }
+}
 
-    pub fn voice_cap_guidance(self) -> &'static str {
-        match self {
-            Self::PersonalAssistant => {
-                "medium: keep Miku warm and present, with only occasional voice flourishes."
-            }
-            Self::AmbiguityGrill => "high: teasing and sharp is allowed; roast the fog, not Brian.",
-            Self::NegativeStateGrounding => {
-                "high: warmer and softer is allowed; grounding beats productivity."
-            }
-            Self::SeriousEngineer => {
-                "off: keep identity but remove cute flourishes; precision, tests, approvals, and rollback matter most."
-            }
-            Self::Handoff => "off: keep the brief precise, self-contained, and evidence-first.",
-        }
-    }
-
-    pub fn default_scope(self) -> &'static str {
-        match self {
-            Self::PersonalAssistant | Self::AmbiguityGrill | Self::NegativeStateGrounding => {
-                "global"
-            }
-            Self::SeriousEngineer | Self::Handoff => "project:tempestmiku",
-        }
-    }
-
-    pub fn system_addendum(self) -> &'static str {
-        match self {
-            Self::PersonalAssistant => {
-                "Active mode: Personal Assistant. Use conversational planning and light memory; do not unlock engineering host capabilities."
-            }
-            Self::AmbiguityGrill => {
-                "Active mode: Ambiguity Grill (mode 2). Ask 3-7 sharp clarifying questions before planning; keep capability scope conversational."
-            }
-            Self::NegativeStateGrounding => {
-                "Active mode: Negative-State Grounding (mode 3). This is a conversation-only posture, not a new capability set. Stabilize first, preserve the health-over-productivity rule, and offer at most one next action that takes 10 minutes or less. Do not propose memory writes from negative-state prompts unless Brian explicitly asks to remember a stable preference."
-            }
-            Self::SeriousEngineer => {
-                "Active mode: Serious Engineer (mode 4). Use fs.*, code.*, and proc.* through the SDK for linked-repo work. Voice cap: off — preserve Tempest Miku identity, but keep technical replies precise and avoid voice flourishes unless the context is explicitly light. Never use shell strings; use proc.run(cmd, args). Destructive, external, or out-of-grant actions require approval or fail closed."
-            }
-            Self::Handoff => {
-                "Active mode: Handoff (mode 5). Delegate implementation-heavy coding work through the configured coding backend. Voice cap: off — preserve Tempest Miku identity, but keep the handoff precise and evidence-first."
-            }
-        }
-    }
-
-    pub fn active_skill_names(self) -> &'static [&'static str] {
-        match self {
-            Self::PersonalAssistant => &["miku-voice", "personal-assistant-state-capture"],
-            Self::AmbiguityGrill => &["miku-voice", "ambiguity-grill"],
-            Self::NegativeStateGrounding => &["miku-voice", "negative-state-grounding"],
-            Self::SeriousEngineer => &[],
-            Self::Handoff => &["oh-my-pi-handoff"],
-        }
-    }
-
-    pub fn capability_class(self) -> &'static str {
-        match self {
-            Self::PersonalAssistant | Self::AmbiguityGrill | Self::NegativeStateGrounding => {
-                "conversation"
-            }
-            Self::SeriousEngineer => "engineering",
-            Self::Handoff => "handoff",
-        }
-    }
-
-    pub fn profile(self) -> ModeProfile {
-        ModeProfile {
-            mode: self,
-            label: self.label().to_string(),
-            voice_cap: self.voice_cap().to_string(),
-            default_scope: self.default_scope().to_string(),
-            active_skills: self
-                .active_skill_names()
-                .iter()
-                .map(|skill| (*skill).to_string())
-                .collect(),
-            capability_class: self.capability_class().to_string(),
-            addendum: self.system_addendum().to_string(),
-        }
+impl From<String> for ModeId {
+    fn from(value: String) -> Self {
+        Self(value)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModeCatalog {
+    pub default_mode: ModeId,
+    pub modes: Vec<ModeProfile>,
+}
+
+impl ModeCatalog {
+    pub fn profile(&self, mode: &ModeId) -> Option<&ModeProfile> {
+        self.modes.iter().find(|profile| &profile.mode == mode)
+    }
+
+    pub fn default_profile(&self) -> &ModeProfile {
+        self.profile(&self.default_mode)
+            .or_else(|| self.modes.first())
+            .expect("mode catalog must contain at least one mode")
+    }
+
+    pub fn default_mode(&self) -> ModeId {
+        self.default_profile().mode.clone()
+    }
+
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.modes.is_empty() {
+            return Err("mode catalog must contain at least one mode".to_string());
+        }
+        if self.profile(&self.default_mode).is_none() {
+            return Err(format!(
+                "default mode {} is not present in mode catalog",
+                self.default_mode
+            ));
+        }
+        for profile in &self.modes {
+            if profile.mode.as_str().trim().is_empty() {
+                return Err("mode id must not be empty".to_string());
+            }
+            if profile.label.trim().is_empty() {
+                return Err(format!("mode {} label must not be empty", profile.mode));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeRoute {
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub triggers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModeProfile {
-    pub mode: Mode,
+    pub mode: ModeId,
     pub label: String,
     pub voice_cap: String,
+    #[serde(default)]
+    pub voice_guidance: String,
     pub default_scope: String,
+    #[serde(default)]
     pub active_skills: Vec<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     pub capability_class: String,
     pub addendum: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub route: ModeRoute,
+}
+
+impl ModeProfile {
+    pub fn unknown(mode: ModeId) -> Self {
+        Self {
+            label: mode.as_str().to_string(),
+            mode,
+            voice_cap: "medium".to_string(),
+            voice_guidance: "medium: runtime mode profile was unavailable.".to_string(),
+            default_scope: "global".to_string(),
+            active_skills: Vec::new(),
+            capabilities: Vec::new(),
+            capability_class: "conversation".to_string(),
+            addendum: "Active mode profile unavailable. Preserve Tempest Miku identity and fail closed for capabilities.".to_string(),
+            description: "Runtime mode profile unavailable.".to_string(),
+            route: ModeRoute::default(),
+        }
+    }
+
+    pub fn has_capability(&self, capability: &str) -> bool {
+        self.capabilities
+            .iter()
+            .any(|declared| capability_matches(declared, capability))
+    }
+
+    pub fn captures_personal_state(&self) -> bool {
+        self.active_skills
+            .iter()
+            .any(|skill| skill == "personal-assistant-state-capture")
+    }
+}
+
+fn capability_matches(declared: &str, capability: &str) -> bool {
+    if declared == capability {
+        return true;
+    }
+    let Some(prefix) = declared.strip_suffix(".*") else {
+        return false;
+    };
+    capability
+        .strip_prefix(prefix)
+        .is_some_and(|rest| rest.starts_with('.'))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +214,20 @@ pub struct PersonaAssets {
     pub status: PersonaStatus,
     pub soul: Option<String>,
     pub skills: BTreeMap<String, String>,
+    pub modes: ModeCatalog,
     pub warnings: Vec<String>,
+}
+
+impl PersonaAssets {
+    pub fn mode_profile(&self, mode: &ModeId) -> Option<&ModeProfile> {
+        self.modes.profile(mode)
+    }
+
+    pub fn profile_or_unknown(&self, mode: &ModeId) -> ModeProfile {
+        self.mode_profile(mode)
+            .cloned()
+            .unwrap_or_else(|| ModeProfile::unknown(mode.clone()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +254,10 @@ impl PersonaConfig {
         self.load_assets().status
     }
 
+    pub fn default_mode(&self) -> ModeId {
+        self.load_assets().modes.default_mode()
+    }
+
     pub fn load_assets(&self) -> PersonaAssets {
         let Some(root) = &self.asset_path else {
             return bundled_assets();
@@ -224,6 +274,7 @@ impl PersonaConfig {
                 },
                 soul: Some(BUNDLED_SOUL.to_string()),
                 skills: bundled_skill_map(),
+                modes: bundled_mode_catalog(),
                 warnings: vec![warning],
             };
         }
@@ -240,18 +291,8 @@ impl PersonaConfig {
             }
         };
 
-        let mut skills = bundled_skill_map();
-        for skill in KNOWN_SKILLS {
-            let path = root.join("skills").join(skill).join("SKILL.md");
-            match fs::read_to_string(&path) {
-                Ok(contents) => {
-                    skills.insert((*skill).to_string(), contents);
-                }
-                Err(err) => warnings.push(format!(
-                    "missing or unreadable skill {skill}: {err}; using bundled default"
-                )),
-            }
-        }
+        let modes = load_configured_modes(root, &mut warnings);
+        let skills = load_configured_skills(root, &mut warnings);
 
         let status = if warnings.is_empty() {
             PersonaStatus::Loaded { path: root.clone() }
@@ -265,18 +306,28 @@ impl PersonaConfig {
             status,
             soul,
             skills,
+            modes,
             warnings,
         }
     }
 
     pub fn build_system_prompt(
         &self,
-        mode: Mode,
+        mode: &ModeId,
         base_system_prompt: &str,
         capability_notes: &str,
     ) -> PersonaPrompt {
         let assets = self.load_assets();
-        let profile = mode.profile();
+        let mut warnings = assets.warnings.clone();
+        let profile = match assets.mode_profile(mode) {
+            Some(profile) => profile.clone(),
+            None => {
+                warnings.push(format!(
+                    "mode profile {mode} unavailable; using unknown runtime fallback"
+                ));
+                ModeProfile::unknown(mode.clone())
+            }
+        };
         let mut prompt = String::new();
 
         push_section(&mut prompt, "Core runtime", base_system_prompt);
@@ -290,14 +341,21 @@ impl PersonaConfig {
         } else {
             profile.active_skills.join(", ")
         };
+        let capabilities = if profile.capabilities.is_empty() {
+            "none".to_string()
+        } else {
+            profile.capabilities.join(", ")
+        };
         let mode_profile = format!(
-            "{}\n\nLabel: {}\nVoice cap: {}\nVoice guidance: {}\nDefault scope: {}\nCapability class: {}\nActive skills: {}",
+            "{}\n\nMode id: {}\nLabel: {}\nVoice cap: {}\nVoice guidance: {}\nDefault scope: {}\nCapability class: {}\nDeclared capabilities: {}\nActive skills: {}",
             profile.addendum,
+            profile.mode,
             profile.label,
             profile.voice_cap,
-            mode.voice_cap_guidance(),
+            profile.voice_guidance,
             profile.default_scope,
             profile.capability_class,
+            capabilities,
             active_skills
         );
         push_section(&mut prompt, "Active mode profile", &mode_profile);
@@ -308,7 +366,7 @@ impl PersonaConfig {
                 None => push_section(
                     &mut prompt,
                     &format!("missing skill://{skill}"),
-                    "This active skill is unavailable from persona assets. Use the built-in mode profile as the fallback.",
+                    "This active skill is unavailable from persona assets. Use the active mode profile as the fallback.",
                 ),
             }
         }
@@ -317,21 +375,81 @@ impl PersonaConfig {
             push_section(&mut prompt, "Runtime capabilities", capability_notes);
         }
 
-        if !assets.warnings.is_empty() {
-            push_section(
-                &mut prompt,
-                "Persona asset warnings",
-                &assets.warnings.join("\n"),
-            );
+        if !warnings.is_empty() {
+            push_section(&mut prompt, "Persona asset warnings", &warnings.join("\n"));
         }
 
         PersonaPrompt {
             system_prompt: prompt,
             profile,
             status: assets.status,
-            warnings: assets.warnings,
+            warnings,
         }
     }
+}
+
+fn load_configured_modes(root: &Path, warnings: &mut Vec<String>) -> ModeCatalog {
+    let mode_path = root.join("modes.json");
+    match fs::read_to_string(&mode_path) {
+        Ok(contents) => match parse_mode_catalog(&contents) {
+            Ok(catalog) => catalog,
+            Err(err) => {
+                warnings.push(format!(
+                    "unreadable mode catalog {}: {err}; using bundled defaults",
+                    mode_path.display()
+                ));
+                bundled_mode_catalog()
+            }
+        },
+        Err(err) => {
+            warnings.push(format!(
+                "missing or unreadable modes.json: {err}; using bundled defaults"
+            ));
+            bundled_mode_catalog()
+        }
+    }
+}
+
+fn load_configured_skills(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<String, String> {
+    let mut skills = bundled_skill_map();
+    let skills_path = root.join("skills");
+    let entries = match fs::read_dir(&skills_path) {
+        Ok(entries) => entries,
+        Err(err) => {
+            warnings.push(format!(
+                "missing or unreadable skills directory: {err}; using bundled defaults"
+            ));
+            return skills;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                warnings.push(format!("unreadable skill directory entry: {err}"));
+                continue;
+            }
+        };
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(skill_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let skill_path = path.join("SKILL.md");
+        match fs::read_to_string(&skill_path) {
+            Ok(contents) => {
+                skills.insert(skill_name.to_string(), contents);
+            }
+            Err(err) => warnings.push(format!(
+                "missing or unreadable skill {skill_name}: {err}; using bundled default if available"
+            )),
+        }
+    }
+
+    skills
 }
 
 fn bundled_assets() -> PersonaAssets {
@@ -341,6 +459,7 @@ fn bundled_assets() -> PersonaAssets {
         },
         soul: Some(BUNDLED_SOUL.to_string()),
         skills: bundled_skill_map(),
+        modes: bundled_mode_catalog(),
         warnings: Vec::new(),
     }
 }
@@ -350,6 +469,16 @@ fn bundled_skill_map() -> BTreeMap<String, String> {
         .iter()
         .map(|(name, contents)| ((*name).to_string(), (*contents).to_string()))
         .collect()
+}
+
+fn bundled_mode_catalog() -> ModeCatalog {
+    parse_mode_catalog(BUNDLED_MODES).expect("bundled modes.json is valid")
+}
+
+fn parse_mode_catalog(contents: &str) -> std::result::Result<ModeCatalog, String> {
+    let catalog: ModeCatalog = serde_json::from_str(contents).map_err(|err| err.to_string())?;
+    catalog.validate()?;
+    Ok(catalog)
 }
 
 fn push_section(target: &mut String, title: &str, content: &str) {
@@ -370,30 +499,40 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{KNOWN_SKILLS, Mode, PersonaConfig, PersonaStatus};
+    use super::{KNOWN_SKILLS, ModeId, PersonaConfig, PersonaStatus};
 
     #[test]
-    fn handoff_label_is_handoff() {
-        assert_eq!(Mode::Handoff.label(), "Handoff");
+    fn bundled_mode_catalog_has_default_and_handoff_profile() {
+        let assets = PersonaConfig::default().load_assets();
+        assert_eq!(assets.modes.default_mode().as_str(), "personal_assistant");
+        let handoff = assets
+            .modes
+            .profile(&ModeId::from("handoff"))
+            .expect("handoff profile");
+        assert_eq!(handoff.label, "Handoff");
+        assert_eq!(handoff.voice_cap, "off");
+        assert_eq!(handoff.default_scope, "project:tempestmiku");
+        assert_eq!(handoff.active_skills, ["oh-my-pi-handoff"]);
+        assert!(handoff.has_capability("backend.coding"));
     }
 
     #[test]
-    fn router_modes_have_labels_and_scopes() {
-        assert_eq!(Mode::AmbiguityGrill.label(), "Ambiguity Grill");
-        assert_eq!(Mode::NegativeStateGrounding.default_scope(), "global");
-        assert!(Mode::AmbiguityGrill.system_addendum().contains("mode 2"));
-        assert_eq!(
-            Mode::AmbiguityGrill.active_skill_names(),
-            ["miku-voice", "ambiguity-grill"]
-        );
-    }
+    fn bundled_router_modes_have_labels_and_scopes() {
+        let assets = PersonaConfig::default().load_assets();
+        let grill = assets
+            .modes
+            .profile(&ModeId::from("ambiguity_grill"))
+            .expect("ambiguity grill profile");
+        assert_eq!(grill.label, "Ambiguity Grill");
+        assert!(grill.addendum.contains("mode 2"));
+        assert_eq!(grill.active_skills, ["miku-voice", "ambiguity-grill"]);
 
-    #[test]
-    fn handoff_voice_cap_is_off() {
-        assert_eq!(Mode::Handoff.voice_cap(), "off");
-        assert_eq!(Mode::Handoff.default_scope(), "project:tempestmiku");
-        assert!(Mode::Handoff.system_addendum().contains("mode 5"));
-        assert_eq!(Mode::Handoff.active_skill_names(), ["oh-my-pi-handoff"]);
+        let grounding = assets
+            .modes
+            .profile(&ModeId::from("negative_state_grounding"))
+            .expect("negative-state profile");
+        assert_eq!(grounding.default_scope, "global");
+        assert_eq!(grounding.capability_class, "conversation");
     }
 
     #[test]
@@ -413,12 +552,18 @@ mod tests {
                 "bundled persona assets are missing {skill}"
             );
         }
+        assert!(
+            assets
+                .modes
+                .profile(&ModeId::from("serious_engineer"))
+                .is_some()
+        );
     }
 
     #[test]
-    fn loads_fixture_soul_and_known_skills() {
+    fn loads_fixture_soul_modes_and_skills() {
         let root = temp_persona_root();
-        write_fixture(&root, true, KNOWN_SKILLS);
+        write_fixture(&root, true, &["custom-skill"], Some(custom_modes_json()));
 
         let assets = PersonaConfig::from_path(&root).load_assets();
         assert_eq!(assets.status, PersonaStatus::Loaded { path: root.clone() });
@@ -426,25 +571,31 @@ mod tests {
         assert!(
             assets
                 .skills
-                .get("miku-voice")
+                .get("custom-skill")
                 .unwrap()
-                .contains("miku-voice fixture")
+                .contains("custom-skill fixture")
         );
+        let custom = assets
+            .modes
+            .profile(&ModeId::from("custom_runtime_mode"))
+            .expect("custom runtime mode");
+        assert_eq!(custom.label, "Custom Runtime Mode");
+        assert_eq!(custom.active_skills, ["custom-skill"]);
 
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn degrades_when_soul_or_active_skills_are_missing() {
+    fn degrades_when_soul_modes_or_skills_are_missing() {
         let root = temp_persona_root();
-        write_fixture(&root, false, &["ambiguity-grill"]);
+        write_fixture(&root, false, &["ambiguity-grill"], None);
 
         let assets = PersonaConfig::from_path(&root).load_assets();
         let PersonaStatus::Degraded { warning } = assets.status else {
-            panic!("missing SOUL.md and skills should degrade");
+            panic!("missing SOUL.md and modes should degrade");
         };
         assert!(warning.contains("SOUL.md"));
-        assert!(warning.contains("miku-voice"));
+        assert!(warning.contains("modes.json"));
         assert!(assets.soul.unwrap().contains("Tempest Miku"));
         assert!(
             assets
@@ -455,7 +606,7 @@ mod tests {
         );
 
         let prompt = PersonaConfig::from_path(&root).build_system_prompt(
-            Mode::AmbiguityGrill,
+            &ModeId::from("ambiguity_grill"),
             "base prompt",
             "capability notes",
         );
@@ -469,16 +620,28 @@ mod tests {
 
     #[test]
     fn mode_profiles_map_expected_skills_voice_and_scope() {
-        let assistant = Mode::PersonalAssistant.profile();
+        let assets = PersonaConfig::default().load_assets();
+        let assistant = assets
+            .modes
+            .profile(&ModeId::from("personal_assistant"))
+            .expect("assistant profile");
         assert_eq!(
             assistant.active_skills,
             vec!["miku-voice", "personal-assistant-state-capture"]
         );
         assert_eq!(assistant.voice_cap, "medium");
         assert_eq!(assistant.default_scope, "global");
+        assert!(assistant.captures_personal_state());
 
-        let serious = Mode::SeriousEngineer.profile();
+        let serious = assets
+            .modes
+            .profile(&ModeId::from("serious_engineer"))
+            .expect("serious profile");
         assert!(serious.active_skills.is_empty());
+        assert!(serious.has_capability("fs.read"));
+        assert!(serious.has_capability("code.edit"));
+        assert!(serious.has_capability("proc.run"));
+        assert!(serious.has_capability("backend.coding"));
         assert_eq!(serious.capability_class, "engineering");
         assert_eq!(serious.voice_cap, "off");
         assert_eq!(serious.default_scope, "project:tempestmiku");
@@ -487,7 +650,7 @@ mod tests {
     #[test]
     fn negative_state_grounding_prompt_is_health_first_conversational_posture() {
         let prompt = PersonaConfig::default().build_system_prompt(
-            Mode::NegativeStateGrounding,
+            &ModeId::from("negative_state_grounding"),
             "base prompt",
             "",
         );
@@ -521,10 +684,13 @@ mod tests {
         std::env::temp_dir().join(format!("tm-persona-test-{}-{nanos}", std::process::id()))
     }
 
-    fn write_fixture(root: &Path, include_soul: bool, skills: &[&str]) {
+    fn write_fixture(root: &Path, include_soul: bool, skills: &[&str], modes_json: Option<String>) {
         fs::create_dir_all(root.join("skills")).unwrap();
         if include_soul {
             fs::write(root.join("SOUL.md"), "# Fixture SOUL\nidentity constant").unwrap();
+        }
+        if let Some(modes_json) = modes_json {
+            fs::write(root.join("modes.json"), modes_json).unwrap();
         }
         for skill in skills {
             let dir = root.join("skills").join(skill);
@@ -535,5 +701,31 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    fn custom_modes_json() -> String {
+        serde_json::json!({
+            "defaultMode": "custom_runtime_mode",
+            "modes": [
+                {
+                    "mode": "custom_runtime_mode",
+                    "label": "Custom Runtime Mode",
+                    "description": "Loaded only from runtime persona assets.",
+                    "voiceCap": "medium",
+                    "voiceGuidance": "medium: custom runtime mode.",
+                    "defaultScope": "global",
+                    "activeSkills": ["custom-skill"],
+                    "capabilities": ["memory.recall"],
+                    "capabilityClass": "conversation",
+                    "addendum": "Active mode: custom runtime mode.",
+                    "route": {
+                        "isDefault": true,
+                        "priority": 0,
+                        "triggers": []
+                    }
+                }
+            ]
+        })
+        .to_string()
     }
 }

@@ -32,7 +32,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('TempestMiku'), findsWidgets);
-    expect(find.text('助理'), findsOneWidget);
+    expect(find.text('Personal'), findsOneWidget);
     expect(find.text('個人助理'), findsNothing);
     expect(find.text('燒烤'), findsNothing);
     expect(find.text('著陸'), findsNothing);
@@ -47,7 +47,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.textContaining('認真工程師'), findsNothing);
-    expect(find.text('工程'), findsOneWidget);
+    expect(find.text('Serious'), findsOneWidget);
     expect(find.text('燒烤'), findsNothing);
     expect(find.text('著陸'), findsNothing);
     expect(find.text('交棒'), findsNothing);
@@ -171,36 +171,36 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('個人助理'), findsNothing);
-    expect(find.text('助理鎖定'), findsNothing);
-    expect(find.text('助理'), findsOneWidget);
+    expect(find.text('Personal鎖定'), findsNothing);
+    expect(find.text('Personal'), findsOneWidget);
 
-    await tester.tap(find.text('助理'));
+    await tester.tap(find.text('Personal'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('模式 / 鎖定'), findsOneWidget);
-    expect(find.text('個人助理'), findsOneWidget);
-    expect(find.text('鎖定助理'), findsOneWidget);
+    expect(find.text('Personal Assistant'), findsOneWidget);
+    expect(find.text('鎖定Personal'), findsOneWidget);
 
-    await tester.tap(find.text('認真工程師'));
+    await tester.tap(find.text('Serious Engineer'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(client.overriddenModes, contains('serious_engineer'));
-    expect(find.text('工程'), findsOneWidget);
+    expect(find.text('Serious'), findsOneWidget);
     expect(find.text('認真工程師'), findsNothing);
 
-    await tester.tap(find.text('工程'));
+    await tester.tap(find.text('Serious'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('鎖定工程'), findsOneWidget);
-    await tester.tap(find.text('鎖定工程'));
+    expect(find.text('鎖定Serious'), findsOneWidget);
+    await tester.tap(find.text('鎖定Serious'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(client.lockedModes, contains('serious_engineer'));
-    expect(find.text('工程鎖定'), findsOneWidget);
+    expect(find.text('Serious鎖定'), findsOneWidget);
   });
 
   testWidgets('renders and resolves memory write proposals',

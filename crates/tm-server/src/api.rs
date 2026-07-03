@@ -32,10 +32,11 @@ use tm_host::{
 
 use crate::{
     ApprovalBroker, ApprovalStatus, AuthConfig, ChatRunner, ChatTurn, CodingBackend, CodingTurn,
-    MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, Mode,
-    NewProjectItem, NewSession, PersistingEventSink, PersonaConfig, ProjectItemKind,
-    ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent, Store,
-    StoreCodingEventSink, StoreEvent, store::ModeState, store::RecallChunkRecord,
+    MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus,
+    ModeCatalog, ModeId, ModeProfile, NewProjectItem, NewSession, PersistingEventSink,
+    PersonaConfig, ProjectItemKind, ProjectItemRecord, ResolveApprovalRequest, Result, ServerError,
+    SessionEvent, Store, StoreCodingEventSink, StoreEvent, store::ModeState,
+    store::RecallChunkRecord,
 };
 
 const SESSION_RESOURCE_PREVIEW_BYTES: usize = 512;
@@ -51,7 +52,7 @@ mod sessions;
 mod tests;
 
 use modes::{
-    active_skills, build_turn_prompt, commit_mode_state, mode_changed_payload,
+    active_skills, build_turn_prompt, commit_mode_state, mode_changed_payload, mode_profile,
     route_mode_for_prompt,
 };
 use projects::{build_project_overview, project_id_from_scope, record_project_observations};
@@ -149,6 +150,7 @@ where
 {
     Router::<AppState<S, M, C>>::new()
         .route("/health", get(health))
+        .route("/modes", get(modes::list_modes::<S, M, C>))
         .route(
             "/sessions",
             get(sessions::list_sessions::<S, M, C>).post(sessions::create_session::<S, M, C>),

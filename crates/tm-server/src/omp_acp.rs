@@ -672,7 +672,7 @@ mod tests {
                 session_id,
                 user_prompt: "prompt".to_string(),
                 system_prompt: "system prompt".to_string(),
-                mode: tm_persona::Mode::Handoff,
+                mode: tm_persona::ModeId::from("handoff"),
                 scope: "project:tempestmiku".to_string(),
             },
             sink: sink.clone(),

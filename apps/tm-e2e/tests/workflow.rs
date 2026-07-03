@@ -8,7 +8,7 @@ use tm_e2e::{
 };
 use tm_server::{
     AppState, AuthConfig, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
-    EchoChatRunner, InMemoryStore, Mode, ServerError, StoreEvent, StoreMemoryProvider, app,
+    EchoChatRunner, InMemoryStore, ModeId, ServerError, StoreEvent, StoreMemoryProvider, app,
 };
 
 #[tokio::test]
@@ -133,7 +133,7 @@ impl CodingBackend for ArtifactBackend {
         turn: CodingTurn,
         sink: Arc<dyn CodingEventSink>,
     ) -> tm_server::Result<CodingTurnResult> {
-        assert_eq!(turn.mode, Mode::SeriousEngineer);
+        assert_eq!(turn.mode, ModeId::from("serious_engineer"));
         let store = tm_artifacts::ArtifactStore::open(&self.root, turn.session_id.to_string())
             .map_err(|err| ServerError::Store(err.to_string()))?;
         let artifact = store

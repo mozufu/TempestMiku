@@ -8,3 +8,4 @@ description = "TempestMiku shared persona, mode, and voice-cap literals."
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true

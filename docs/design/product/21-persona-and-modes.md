@@ -1,9 +1,11 @@
 # 21. Persona, modes & routing
 
-Canonical: **`SOUL.md`** (identity + router + boundaries) plus the curated **`skills/`** bundle
-from the Hermes deployment. This doc translates them into the runtime's persona layer. **SOUL.md is
-authoritative; on any conflict, SOUL.md wins.** Runtime `Mode` ids stay stable, but a mode now means
-a Hermes-style operating bundle, not only a hardcoded prompt string.
+Canonical: **`SOUL.md`** (identity + router + boundaries), the runtime **`modes.json`** catalog,
+and the curated **`skills/`** bundle from the Hermes deployment. This doc translates them into the
+runtime's persona layer. **SOUL.md is authoritative for identity and boundaries; `modes.json` is
+authoritative for which modes exist at runtime and which skills they activate.** Runtime mode ids
+are strings loaded from the catalog, not Rust enum variants. A mode means a Hermes-style operating
+bundle, not a hardcoded prompt string.
 
 ## 21.1 Three layers: identity constant, voice floats, modes activate bundles
 
@@ -16,8 +18,9 @@ coding product:
   legal / irreversible / external). The API uses the English values. Chinese voice labels and
   examples belong inside the mode/voice skills, not in the client UI. Rule: **the more serious, the
   fewer 喵.** Cuteness yields to precision, by design.
-- **Mode profile** (runtime) — *what operating bundle is active now*: task framing, active skill
-  names, capability class, default scope, and voice cap. Switchable.
+- **Mode profile** (`modes.json`) — *what operating bundle is active now*: task framing, route
+  triggers, declared runtime capabilities, active skill names, grouping class, default scope, and
+  voice cap. Switchable.
 - **Skills** (`skills/*/SKILL.md`) — *procedural payloads* loaded by the active mode. They are
   readable assets, not new chat-native tools.
 
@@ -29,21 +32,22 @@ system prompt = [ SOUL identity (constant) ]
               + [ memory: recall context + summary (§22) ]
 ```
 
-Rust vendors the default `SOUL.md` and 7 known skills under `crates/tm-persona/assets/`. A
-configured persona asset path may override those files; missing or unreadable configured assets
-degrade with warnings but fall back to the bundled defaults so the default Miku identity stays
-available.
+Rust vendors the default `SOUL.md`, `modes.json`, and bundled skills under
+`crates/tm-persona/assets/`. A configured persona asset path may override those files; missing or
+unreadable configured assets degrade with warnings but fall back to the bundled defaults so the
+default Miku identity and mode catalog stay available.
 
 A mode profile sets task framing and selects skills; it **never** replaces identity. Tone still comes
 from the voice overlay, capped by seriousness, so serious work can turn cuteness down without
-changing who Miku is. V1 does **not** require separate `modes/*.md` files: `SOUL.md` carries the
-router semantics, and Rust maps stable `Mode` ids to known Hermes skills.
+changing who Miku is. V1 does **not** require Rust to know a fixed list of modes: `modes.json`
+defines runtime mode ids, route triggers, profiles, declared capabilities, grouping classes, and active skill names.
+Skills are loaded when the active runtime profile references them.
 
 ## 21.2 The mode router (SOUL.md §Mode Router)
 
 Pick the smallest sufficient mode.
 
-| # | Mode | Trigger | Capabilities | Voice | Active skills |
+| # | Bundled runtime mode | Trigger | Declared capabilities | Voice | Active skills |
 |---|---|---|---|---|---|
 | 1 | **Personal Assistant** (default) | planning, reminders, writing, open loops, decision cleanup | conversation + light `memory.*` / `drive.*`, TODO | `medium` | `miku-voice`, `personal-assistant-state-capture` |
 | 2 | **Ambiguity Grill / 燒烤我** | vague / contradictory / "grill me" / "燒烤我" / hiding the real problem | conversation; 3–7 sharp Qs → plan | `high` | `miku-voice`, `ambiguity-grill` |
@@ -52,8 +56,10 @@ Pick the smallest sufficient mode.
 | 5 | **Handoff** | delegate impl-heavy work to a coding agent (Oh-my-pi / A2A) | `agents.*` (§23) + brief generation | `off` | `oh-my-pi-handoff` |
 
 Modes 2/3 are conversational *postures* (no new capabilities); 4/5 unlock the technical surface.
-All five run under the **one** character. Capabilities are config, not code (§10.4): a mode =
-stable id + profile + active skills + capability subset + default scope + voice cap.
+All bundled modes run under the **one** character. Capabilities are config, not code (§10.4): a mode
+= runtime id + profile + route triggers + declared capabilities + active skills + default scope +
+voice cap. The optional `capabilityClass` is only grouping/display metadata; dispatch decisions use
+declared capabilities such as `backend.coding`, `fs.*`, `code.*`, `proc.*`, or future `agents.*`.
 
 > This session itself was modes 2 → 5: Brian opened with "燒烤" (Ambiguity Grill), and the output is
 > a Handoff brief. The router is the product's core interaction loop, not a feature.
@@ -78,16 +84,19 @@ Standing behavior from SOUL.md — enforced regardless of mode:
 
 ## 21.4 Routing: model-suggested, user-final, observable
 
-- **Model runs the router.** The model selects the smallest sufficient mode and calls
-  `mode.suggest(target, reason)`; default behavior applies it and sets the voice cap.
+- **Runtime catalog feeds the router.** The bundled server still has a small heuristic router, but it
+  reads route triggers from `modes.json`; future model-suggested routing should call
+  `mode.suggest(target, reason)` against the same catalog. Adding/removing a mode should not require
+  a Rust enum change.
 - **Personal Assistant is the fallback.** Prompts that do not match Handoff, Ambiguity Grill,
   Negative-State Grounding, or Serious Engineer route back to Personal Assistant, including from a
   router-owned Serious Engineer session. User locks and manual Serious Engineer overrides suppress
   that fallback until Brian clears or changes the mode.
 - **User is final.** Brian can **lock** a mode or **override** anytime.
 - **Observable, not primary UI.** Each switch emits `ModeChanged` (§10.2) for replay, audit, and
-  optional debug/advanced controls. Default chat surfaces should not make Brian manage or care about
-  the mode label; mode is a skill/capability bundle behind the interaction.
+  optional debug/advanced controls. Clients read `GET /modes` to render runtime mode controls;
+  default chat surfaces should not make Brian manage or care about the mode label. Mode is a
+  skill/capability bundle behind the interaction.
 
 ```mermaid
 sequenceDiagram

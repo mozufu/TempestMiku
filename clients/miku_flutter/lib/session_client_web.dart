@@ -12,6 +12,12 @@ class WebMikuSessionClient implements MikuSessionClient {
   static const _lastEventIdKey = 'tempestmiku.lastEventId';
 
   @override
+  Future<ModeCatalog> modeCatalog() async {
+    final json = await _request('GET', '/modes');
+    return ModeCatalog.fromJson(json);
+  }
+
+  @override
   Future<MikuSession> createOrReuseSession() async {
     final storedId = window.localStorage[_sessionIdKey];
     if (storedId != null && storedId.isNotEmpty) {

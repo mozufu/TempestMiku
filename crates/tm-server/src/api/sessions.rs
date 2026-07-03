@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Default, Deserialize)]
 pub struct CreateSessionRequest {
     #[serde(default)]
-    pub mode: Mode,
+    pub mode: Option<ModeId>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -17,7 +17,7 @@ pub struct ListSessionsQuery {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateSessionResponse {
     pub id: Uuid,
-    pub mode: Mode,
+    pub mode: ModeId,
     pub mode_state: ModeState,
     pub persona_status: crate::PersonaStatus,
     pub label: String,
@@ -40,7 +40,7 @@ pub struct SessionSummaryResponse {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub status: String,
-    pub mode: Mode,
+    pub mode: ModeId,
     pub label: String,
     pub voice_cap: String,
     #[serde(rename = "activeSkills")]
@@ -55,7 +55,7 @@ pub struct SessionSummaryResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SessionMessagesResponse {
     pub id: Uuid,
-    pub mode: Mode,
+    pub mode: ModeId,
     pub mode_state: ModeState,
     pub persona_status: crate::PersonaStatus,
     pub label: String,
@@ -105,7 +105,7 @@ where
         .list_sessions(limit)
         .await?
         .into_iter()
-        .map(session_summary_response)
+        .map(|summary| session_summary_response(&state.persona, summary))
         .collect();
     Ok(Json(ListSessionsResponse { sessions }))
 }
@@ -121,27 +121,34 @@ where
     C: ChatRunner,
 {
     state.auth.authorize(&headers)?;
-    let mode = payload
-        .map(|Json(payload)| payload.mode)
-        .unwrap_or_default();
-    let persona_status = state.persona.load_status();
+    let assets = state.persona.load_assets();
+    let mode = match payload.and_then(|Json(payload)| payload.mode) {
+        Some(mode) => modes::validate_mode(&state.persona, mode)?,
+        None => assets.modes.default_mode(),
+    };
+    let persona_status = assets.status.clone();
     let session = state
         .store
         .create_session(NewSession {
-            mode,
+            mode: mode.clone(),
             persona_status: persona_status.clone(),
         })
         .await?;
+    let profile = mode_profile(&state.persona, &session.mode_state.mode);
     let mode_event = state
         .store
         .append_event(
             session.id,
             "mode",
-            mode_changed_payload(None, &session.mode_state, persona_status.clone())?,
+            mode_changed_payload(None, &session.mode_state, persona_status.clone(), &profile)?,
         )
         .await?;
     let _ = state.sender(session.id).send(mode_event);
-    Ok(Json(session_response(session, persona_status)))
+    Ok(Json(session_response(
+        &state.persona,
+        session,
+        persona_status,
+    )))
 }
 
 pub(super) async fn get_session<S, M, C>(
@@ -157,7 +164,11 @@ where
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     let persona_status = session.persona_status.clone();
-    Ok(Json(session_response(session, persona_status)))
+    Ok(Json(session_response(
+        &state.persona,
+        session,
+        persona_status,
+    )))
 }
 
 pub(super) async fn get_session_messages<S, M, C>(
@@ -188,15 +199,16 @@ where
     let events = state.store.events_after(session_id, None).await?;
     let last_event_id = events.last().map(|event| event.seq);
     let pending_events = pending_events(&events);
+    let profile = mode_profile(&state.persona, &session.mode);
     Ok(Json(SessionMessagesResponse {
         id: session.id,
-        mode: session.mode,
+        mode: session.mode.clone(),
         mode_state: session.mode_state.clone(),
         persona_status,
-        label: session.mode.label().to_string(),
-        voice_cap: session.mode.voice_cap().to_string(),
-        default_scope: session.mode.default_scope().to_string(),
-        active_skills: active_skills(session.mode),
+        label: profile.label,
+        voice_cap: profile.voice_cap,
+        default_scope: profile.default_scope,
+        active_skills: active_skills(&state.persona, &session.mode),
         messages,
         last_event_id,
         pending_events,
@@ -204,35 +216,41 @@ where
 }
 
 fn session_response(
+    persona: &PersonaConfig,
     session: crate::SessionRecord,
     persona_status: crate::PersonaStatus,
 ) -> CreateSessionResponse {
+    let profile = mode_profile(persona, &session.mode);
     CreateSessionResponse {
         id: session.id,
-        mode: session.mode,
+        mode: session.mode.clone(),
         mode_state: session.mode_state.clone(),
         persona_status,
-        label: session.mode.label().to_string(),
-        voice_cap: session.mode.voice_cap().to_string(),
-        default_scope: session.mode.default_scope().to_string(),
-        active_skills: active_skills(session.mode),
+        label: profile.label,
+        voice_cap: profile.voice_cap,
+        default_scope: profile.default_scope,
+        active_skills: profile.active_skills,
     }
 }
 
-fn session_summary_response(summary: crate::SessionSummaryRecord) -> SessionSummaryResponse {
+fn session_summary_response(
+    persona: &PersonaConfig,
+    summary: crate::SessionSummaryRecord,
+) -> SessionSummaryResponse {
     let title = compact_session_text(summary.summary.as_deref())
         .or_else(|| compact_session_text(summary.title.as_deref()))
         .unwrap_or_else(|| "New session".to_string());
     let preview = compact_session_text(summary.preview.as_deref()).unwrap_or_default();
+    let profile = mode_profile(persona, &summary.session.mode);
     SessionSummaryResponse {
         id: summary.session.id,
         created_at: summary.session.created_at,
         updated_at: summary.session.updated_at,
         status: summary.session.status,
         mode: summary.session.mode,
-        label: summary.session.mode.label().to_string(),
-        voice_cap: summary.session.mode.voice_cap().to_string(),
-        active_skills: active_skills(summary.session.mode),
+        label: profile.label,
+        voice_cap: profile.voice_cap,
+        active_skills: profile.active_skills,
         title,
         preview,
         message_count: summary.message_count,
@@ -385,27 +403,31 @@ where
 {
     state.auth.authorize(&headers)?;
     let mut session = state.store.get_session(session_id).await?;
-    let (suggested, reason) = route_mode_for_prompt(&payload.content);
-    let preserves_serious_override = session.mode_state.mode == Mode::SeriousEngineer
+    let assets = state.persona.load_assets();
+    let (suggested, reason) = route_mode_for_prompt(&assets.modes, &payload.content);
+    let current_profile = assets.profile_or_unknown(&session.mode_state.mode);
+    let suggested_profile = assets.profile_or_unknown(&suggested);
+    let preserves_coding_override = current_profile.has_capability("backend.coding")
         && session.mode_state.override_source.is_some()
-        && suggested == Mode::PersonalAssistant;
+        && suggested_profile.route.is_default;
     if session.mode_state.lock_source.is_none()
         && suggested != session.mode_state.mode
-        && !preserves_serious_override
+        && !preserves_coding_override
     {
         let mut next = session.mode_state.clone();
-        next.mode = suggested;
+        next.mode = suggested.clone();
         next.router_reason = Some(reason);
         next.override_source = None;
         next.updated_at = Utc::now();
         let (updated, _) = commit_mode_state(&state, session.clone(), next).await?;
         session = updated;
     }
+    let turn_profile = mode_profile(&state.persona, &session.mode_state.mode);
     let scope = payload
         .scope
         .clone()
-        .unwrap_or_else(|| session.mode_state.mode.default_scope().to_string());
-    let persona_prompt = build_turn_prompt(&state, session.mode_state.mode);
+        .unwrap_or_else(|| turn_profile.default_scope.clone());
+    let persona_prompt = build_turn_prompt(&state, &session.mode_state.mode);
     state
         .store
         .append_message(session_id, "user", &payload.content)
@@ -423,10 +445,7 @@ where
             memory.render_prompt_block()
         )
     };
-    let response = if matches!(
-        session.mode_state.mode,
-        Mode::SeriousEngineer | Mode::Handoff
-    ) {
+    let response = if turn_profile.has_capability("backend.coding") {
         if let Some(backend) = &state.coding_backend {
             let sink = Arc::new(StoreCodingEventSink::new(
                 session_id,
@@ -439,7 +458,7 @@ where
                         session_id,
                         user_prompt,
                         system_prompt: persona_prompt.system_prompt.clone(),
-                        mode: session.mode_state.mode,
+                        mode: session.mode_state.mode.clone(),
                         scope: scope.clone(),
                     },
                     sink,
@@ -459,7 +478,7 @@ where
                         session_id,
                         user_prompt,
                         system_prompt: persona_prompt.system_prompt.clone(),
-                        mode: session.mode_state.mode,
+                        mode: session.mode_state.mode.clone(),
                         scope: scope.clone(),
                     },
                     sink.clone(),
@@ -481,7 +500,7 @@ where
                     session_id,
                     user_prompt,
                     system_prompt: persona_prompt.system_prompt,
-                    mode: session.mode_state.mode,
+                    mode: session.mode_state.mode.clone(),
                     scope: scope.clone(),
                 },
                 sink.clone(),
@@ -495,11 +514,7 @@ where
         .store
         .append_message(session_id, "assistant", &response)
         .await?;
-    if matches!(
-        session.mode_state.mode,
-        Mode::SeriousEngineer | Mode::Handoff
-    ) && !response.trim().is_empty()
-    {
+    if turn_profile.has_capability("backend.coding") && !response.trim().is_empty() {
         state
             .store
             .add_recall_chunk(RecallChunkRecord {
@@ -525,7 +540,7 @@ where
     spawn_personal_assistant_state_capture(
         state.clone(),
         session_id,
-        session.mode_state.mode,
+        turn_profile,
         payload.subject,
         scope,
         payload.content,
@@ -546,7 +561,8 @@ where
 {
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let (proposal, timeout) = memory_write_proposal_from_request(session_id, &session, payload)?;
+    let (proposal, timeout) =
+        memory_write_proposal_from_request(&state.persona, session_id, &session, payload)?;
     Ok(Json(
         run_memory_write_proposal(&state, session_id, proposal, timeout).await?,
     ))
@@ -606,7 +622,7 @@ where
 fn spawn_personal_assistant_state_capture<S, M, C>(
     state: AppState<S, M, C>,
     session_id: Uuid,
-    mode: Mode,
+    mode_profile: ModeProfile,
     subject: String,
     scope: String,
     user_content: String,
@@ -615,7 +631,7 @@ fn spawn_personal_assistant_state_capture<S, M, C>(
     M: MemoryProvider,
     C: ChatRunner,
 {
-    if mode != Mode::PersonalAssistant {
+    if !mode_profile.captures_personal_state() {
         return;
     }
     let proposals = match crate::memory::personal_assistant_state_capture_proposals(
@@ -645,6 +661,7 @@ fn spawn_personal_assistant_state_capture<S, M, C>(
 }
 
 fn memory_write_proposal_from_request(
+    persona: &PersonaConfig,
     session_id: Uuid,
     session: &crate::SessionRecord,
     payload: ProposeMemoryWriteRequest,
@@ -654,7 +671,7 @@ fn memory_write_proposal_from_request(
     let timeout = Duration::from_millis(timeout_ms);
     let scope = payload
         .scope
-        .unwrap_or_else(|| session.mode_state.mode.default_scope().to_string());
+        .unwrap_or_else(|| mode_profile(persona, &session.mode_state.mode).default_scope);
     let source = payload
         .source
         .unwrap_or_else(|| format!("session:{session_id}:memory-write"));

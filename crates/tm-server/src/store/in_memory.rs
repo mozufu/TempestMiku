@@ -37,7 +37,7 @@ impl Store for InMemoryStore {
             created_at: now,
             updated_at: now,
             status: "open".to_string(),
-            mode: new.mode,
+            mode: new.mode.clone(),
             mode_state: ModeState::new(new.mode, now),
             persona_status: new.persona_status,
         };
@@ -123,7 +123,7 @@ impl Store for InMemoryStore {
             .sessions
             .get_mut(&session_id)
             .ok_or_else(|| ServerError::NotFound(format!("session {session_id}")))?;
-        session.mode = mode_state.mode;
+        session.mode = mode_state.mode.clone();
         session.mode_state = mode_state;
         session.updated_at = Utc::now();
         Ok(session.clone())

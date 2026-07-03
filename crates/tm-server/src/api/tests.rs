@@ -137,7 +137,7 @@ impl CodingBackend for ScriptedBackend {
     ) -> Result<CodingTurnResult> {
         match &self.kind {
             ScriptedBackendKind::Events => {
-                assert_eq!(turn.mode, Mode::SeriousEngineer);
+                assert_eq!(turn.mode, ModeId::from("serious_engineer"));
                 assert_eq!(turn.scope, "project:tempestmiku");
                 sink.emit("text", json!({ "event": "text", "delta": "working" }))
                     .await?;
@@ -403,6 +403,11 @@ fn write_persona_fixture(root: &std::path::Path) {
     std::fs::write(
         root.join("SOUL.md"),
         "# Fixture SOUL\nIdentity constant and Mode Router fixture.",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("modes.json"),
+        serde_json::to_string_pretty(&PersonaConfig::default().load_assets().modes).unwrap(),
     )
     .unwrap();
     for skill in KNOWN_SKILLS {

@@ -21,7 +21,7 @@ class _ModeSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final current = _findMode(currentId);
+    final current = _findMode(currentId, modes);
     final currentAccent = _modeAccent(current.temp, tok);
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(15, 9, 15, 18),
@@ -158,7 +158,7 @@ class _ModeSheet extends StatelessWidget {
                             Row(
                               children: [
                                 Text(
-                                  m.zh,
+                                  m.label,
                                   style: TextStyle(
                                     color: tok.text,
                                     fontSize: 14,

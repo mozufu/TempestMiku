@@ -84,6 +84,90 @@ class LoadedSession {
   final List<MikuEvent> pendingEvents;
 }
 
+class ModeCatalog {
+  const ModeCatalog({
+    required this.defaultMode,
+    required this.modes,
+  });
+
+  final String defaultMode;
+  final List<ModeProfile> modes;
+
+  ModeProfile? find(String id) {
+    for (final mode in modes) {
+      if (mode.id == id) return mode;
+    }
+    return null;
+  }
+
+  static ModeCatalog fromJson(Map<String, Object?> json) {
+    final modes = ((json['modes'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((item) => ModeProfile.fromJson(item.cast<String, Object?>()))
+        .where((mode) => mode.id.isNotEmpty)
+        .toList();
+    final defaultMode = _stringValue(json['defaultMode']);
+    return ModeCatalog(
+      defaultMode: defaultMode.isEmpty && modes.isNotEmpty
+          ? modes.first.id
+          : defaultMode,
+      modes: modes,
+    );
+  }
+}
+
+class ModeProfile {
+  const ModeProfile({
+    required this.id,
+    required this.label,
+    required this.voiceCap,
+    required this.defaultScope,
+    required this.capabilityClass,
+    required this.activeSkills,
+    required this.capabilities,
+    this.description = '',
+  });
+
+  final String id;
+  final String label;
+  final String voiceCap;
+  final String defaultScope;
+  final String capabilityClass;
+  final List<String> activeSkills;
+  final List<String> capabilities;
+  final String description;
+
+  bool hasCapability(String capability) {
+    return capabilities.any((declared) {
+      if (declared == capability) return true;
+      if (!declared.endsWith('.*')) return false;
+      final prefix = declared.substring(0, declared.length - 2);
+      return capability.startsWith('$prefix.');
+    });
+  }
+
+  static ModeProfile fromJson(Map<String, Object?> json) {
+    return ModeProfile(
+      id: _stringValue(json['mode']),
+      label: _stringValue(json['label']),
+      voiceCap: _stringValue(json['voiceCap']),
+      defaultScope: _stringValue(json['defaultScope']).isEmpty
+          ? 'global'
+          : _stringValue(json['defaultScope']),
+      capabilityClass: _stringValue(json['capabilityClass']).isEmpty
+          ? 'conversation'
+          : _stringValue(json['capabilityClass']),
+      activeSkills: ((json['activeSkills'] as List?) ?? const [])
+          .map((skill) => skill.toString())
+          .toList(),
+      capabilities: ((json['capabilities'] as List?) ?? const [])
+          .map((capability) => capability.toString())
+          .toList(),
+      description: _stringValue(json['description']),
+    );
+  }
+}
+
 class ApprovalPrompt {
   const ApprovalPrompt({
     required this.approvalId,
@@ -281,6 +365,8 @@ class ProjectPromotion {
 }
 
 abstract class MikuSessionClient {
+  Future<ModeCatalog> modeCatalog();
+
   Future<MikuSession> createOrReuseSession();
 
   Future<MikuSession> createSession();

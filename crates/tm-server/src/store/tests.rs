@@ -1,6 +1,6 @@
 use chrono::Utc;
 use serde_json::json;
-use tm_persona::{Mode, PersonaStatus};
+use tm_persona::{ModeId, PersonaStatus};
 use uuid::Uuid;
 
 use super::*;
@@ -23,7 +23,7 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
     let store = PostgresStore::connect(&dsn).await.unwrap();
     let session = store
         .create_session(NewSession {
-            mode: Mode::PersonalAssistant,
+            mode: ModeId::from("personal_assistant"),
             persona_status: PersonaStatus::Degraded {
                 warning: "test".to_string(),
             },
@@ -32,29 +32,31 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
         .unwrap();
 
     let mut mode_state = session.mode_state.clone();
-    mode_state.mode = Mode::SeriousEngineer;
+    mode_state.mode = ModeId::from("serious_engineer");
     mode_state.router_reason = Some("postgres replay test".to_string());
     mode_state.updated_at = Utc::now();
     let updated = store
         .set_mode_state(session.id, mode_state.clone())
         .await
         .unwrap();
-    assert_eq!(updated.mode_state.mode, Mode::SeriousEngineer);
+    assert_eq!(updated.mode_state.mode, ModeId::from("serious_engineer"));
 
     store
         .append_event(
             session.id,
             "mode",
             serde_json::to_value(StoreEvent::ModeChanged {
-                from: Some(Mode::PersonalAssistant),
-                mode: Mode::SeriousEngineer,
-                label: Mode::SeriousEngineer.label().to_string(),
-                voice_cap: Mode::SeriousEngineer.voice_cap().to_string(),
-                active_skills: Mode::SeriousEngineer
-                    .active_skill_names()
-                    .iter()
-                    .map(|skill| (*skill).to_string())
-                    .collect(),
+                from: Some(ModeId::from("personal_assistant")),
+                mode: ModeId::from("serious_engineer"),
+                label: "Serious Engineer".to_string(),
+                voice_cap: "off".to_string(),
+                capabilities: vec![
+                    "fs.*".to_string(),
+                    "code.*".to_string(),
+                    "proc.*".to_string(),
+                    "backend.coding".to_string(),
+                ],
+                active_skills: Vec::new(),
                 router_reason: mode_state.router_reason,
                 lock_source: None,
                 override_source: None,

@@ -33,9 +33,9 @@ where
 {
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query
-        .project_id
-        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    let project_id = query.project_id.unwrap_or_else(|| {
+        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
+    });
     Ok(Json(
         build_project_overview(&state, session_id, project_id).await?,
     ))
@@ -54,9 +54,9 @@ where
 {
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query
-        .project_id
-        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    let project_id = query.project_id.unwrap_or_else(|| {
+        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
+    });
     Ok(Json(
         state
             .store
@@ -78,9 +78,9 @@ where
 {
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query
-        .project_id
-        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    let project_id = query.project_id.unwrap_or_else(|| {
+        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
+    });
     Ok(Json(
         state
             .store
@@ -102,9 +102,9 @@ where
 {
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query
-        .project_id
-        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    let project_id = query.project_id.unwrap_or_else(|| {
+        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
+    });
     Ok(Json(
         state
             .store
@@ -365,10 +365,9 @@ where
 {
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = payload
-        .project_id
-        .clone()
-        .unwrap_or_else(|| project_id_from_scope(session.mode_state.mode.default_scope()));
+    let project_id = payload.project_id.clone().unwrap_or_else(|| {
+        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
+    });
     if payload.initiated_by == "miku" {
         let timeout = Duration::from_millis(payload.timeout_ms.unwrap_or(60_000));
         let sink = Arc::new(StoreCodingEventSink::new(

@@ -1,69 +1,96 @@
 part of 'main.dart';
 
-// ─── Mode definitions ─────────────────────────────────────────────────────────
+// ─── Runtime mode view model ──────────────────────────────────────────────────
 
 class _Mode {
-  final String id, zh, short, temp, tip;
-  final double intensity; // 0–100
+  final String id, label, short, temp, tip, voiceCap, capabilityClass;
+  final List<String> activeSkills;
+  final double intensity; // 0-100
   final IconData icon;
+
   const _Mode({
     required this.id,
-    required this.zh,
+    required this.label,
     required this.short,
     required this.temp,
     required this.tip,
+    required this.voiceCap,
+    required this.capabilityClass,
+    required this.activeSkills,
     required this.intensity,
     required this.icon,
   });
+
+  factory _Mode.fromProfile(ModeProfile profile) {
+    final temp = _modeTemp(profile);
+    return _Mode(
+      id: profile.id,
+      label: profile.label.isEmpty ? profile.id : profile.label,
+      short:
+          _shortModeLabel(profile.label.isEmpty ? profile.id : profile.label),
+      temp: temp,
+      tip: profile.description.isEmpty
+          ? '${profile.capabilityClass} · ${profile.voiceCap}'
+          : profile.description,
+      voiceCap: profile.voiceCap,
+      capabilityClass: profile.capabilityClass,
+      activeSkills: profile.activeSkills,
+      intensity: _modeIntensity(profile),
+      icon: _modeIcon(profile),
+    );
+  }
+
+  factory _Mode.fallback(String id) {
+    final profile = ModeProfile(
+      id: id.isEmpty ? 'runtime_mode' : id,
+      label: id.isEmpty ? 'Runtime Mode' : id.replaceAll('_', ' '),
+      voiceCap: 'medium',
+      defaultScope: 'global',
+      capabilityClass: 'conversation',
+      activeSkills: const [],
+      capabilities: const [],
+      description: 'Runtime mode profile unavailable.',
+    );
+    return _Mode.fromProfile(profile);
+  }
 }
 
-const _kModes = <_Mode>[
-  _Mode(
-    id: 'personal_assistant',
-    zh: '個人助理',
-    short: '助理',
-    temp: 'warm',
-    intensity: 46,
-    tip: '規劃 · 提醒 · 寫作 · 開放迴圈',
-    icon: Icons.chat_bubble_outline,
-  ),
-  _Mode(
-    id: 'ambiguity_grill',
-    zh: '燒烤我',
-    short: '燒烤',
-    temp: 'hot',
-    intensity: 8,
-    tip: '模糊 / 矛盾 → 3–7 個尖銳提問',
-    icon: Icons.bolt,
-  ),
-  _Mode(
-    id: 'negative_state_grounding',
-    zh: '著陸',
-    short: '著陸',
-    temp: 'soft',
-    intensity: 24,
-    tip: '情緒過載 → 一個 ≤10 分鐘行動',
-    icon: Icons.anchor,
-  ),
-  _Mode(
-    id: 'serious_engineer',
-    zh: '認真工程師',
-    short: '工程',
-    temp: 'cool',
-    intensity: 76,
-    tip: '程式 / 金錢 / 不可逆 / 正式環境',
-    icon: Icons.terminal,
-  ),
-  _Mode(
-    id: 'handoff',
-    zh: '交棒',
-    short: '交棒',
-    temp: 'cool',
-    intensity: 88,
-    tip: '委派編碼 agent + 任務簡報',
-    icon: Icons.swap_horiz,
-  ),
-];
+_Mode _findMode(String id, List<_Mode> modes) =>
+    modes.firstWhere((m) => m.id == id, orElse: () => _Mode.fallback(id));
 
-_Mode _findMode(String id) =>
-    _kModes.firstWhere((m) => m.id == id, orElse: () => _kModes.first);
+String _shortModeLabel(String label) {
+  final words = label.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+  if (words.isEmpty) return 'Mode';
+  final first = words.first;
+  return first.length <= 8 ? first : '${first.substring(0, 8)}...';
+}
+
+String _modeTemp(ModeProfile profile) {
+  if (profile.hasCapability('backend.coding') ||
+      profile.hasCapability('agents.spawn')) {
+    return 'cool';
+  }
+  if (profile.voiceCap == 'high') return 'hot';
+  if (profile.id.contains('ground') || profile.id.contains('negative')) {
+    return 'soft';
+  }
+  return 'warm';
+}
+
+double _modeIntensity(ModeProfile profile) {
+  if (profile.hasCapability('agents.spawn')) return 88;
+  if (profile.hasCapability('backend.coding')) return 76;
+  if (profile.voiceCap == 'high') return 34;
+  if (profile.voiceCap == 'off') return 14;
+  return 46;
+}
+
+IconData _modeIcon(ModeProfile profile) {
+  if (profile.hasCapability('agents.spawn')) return Icons.swap_horiz;
+  if (profile.hasCapability('backend.coding')) return Icons.terminal;
+  if (profile.id.contains('ground') || profile.id.contains('negative')) {
+    return Icons.anchor;
+  }
+  if (profile.voiceCap == 'high') return Icons.bolt;
+  return Icons.chat_bubble_outline;
+}

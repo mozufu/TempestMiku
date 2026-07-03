@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use serde_json::json;
 use tm_core::{Agent, AgentConfig, EventSink, LlmClient, Sandbox};
-use tm_persona::Mode;
+use tm_persona::ModeId;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use uuid::Uuid;
 
@@ -16,7 +16,7 @@ use crate::{Result, ServerError, SessionEvent, Store, StoreEvent};
 pub struct ChatTurn {
     pub session_id: Uuid,
     pub user_prompt: String,
-    pub mode: Mode,
+    pub mode: ModeId,
     pub scope: String,
     pub system_prompt: String,
 }

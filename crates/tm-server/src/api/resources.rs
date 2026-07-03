@@ -258,7 +258,7 @@ where
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
         default_subject(),
-        session.mode_state.mode.default_scope(),
+        mode_profile(&state.persona, &session.mode_state.mode).default_scope,
     )));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
     registry
@@ -282,7 +282,7 @@ where
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
         default_subject(),
-        session.mode_state.mode.default_scope(),
+        mode_profile(&state.persona, &session.mode_state.mode).default_scope,
     )));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
     registry.preview(uri, &ctx).await.map_err(map_host_error)
@@ -303,7 +303,7 @@ where
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
         default_subject(),
-        session.mode_state.mode.default_scope(),
+        mode_profile(&state.persona, &session.mode_state.mode).default_scope,
     )));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)

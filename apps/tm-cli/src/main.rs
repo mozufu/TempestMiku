@@ -22,7 +22,7 @@ use tm_host::{
     P0HostConfig,
 };
 use tm_llm::OpenAiClient;
-use tm_persona::{Mode, PersonaConfig};
+use tm_persona::{ModeId, PersonaConfig};
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions, StubSandbox};
 
 #[tokio::main(flavor = "current_thread")]
@@ -262,7 +262,7 @@ fn serious_engineer_prompt(_host_config: &P0HostConfig, linked_folders: &LinkedF
     }
     PersonaConfig::default()
         .build_system_prompt(
-            Mode::SeriousEngineer,
+            &ModeId::from("serious_engineer"),
             tm_core::DEFAULT_SYSTEM_PROMPT,
             &capability_notes,
         )

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tm_persona::{Mode, PersonaStatus};
+use tm_persona::{ModeId, PersonaStatus};
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
@@ -13,21 +13,21 @@ pub struct SessionRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub status: String,
-    pub mode: Mode,
+    pub mode: ModeId,
     pub mode_state: ModeState,
     pub persona_status: PersonaStatus,
 }
 
 #[derive(Debug, Clone)]
 pub struct NewSession {
-    pub mode: Mode,
+    pub mode: ModeId,
     pub persona_status: PersonaStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModeState {
-    pub mode: Mode,
+    pub mode: ModeId,
     pub router_reason: Option<String>,
     pub lock_source: Option<String>,
     pub override_source: Option<String>,
@@ -35,7 +35,7 @@ pub struct ModeState {
 }
 
 impl ModeState {
-    pub fn new(mode: Mode, updated_at: DateTime<Utc>) -> Self {
+    pub fn new(mode: ModeId, updated_at: DateTime<Utc>) -> Self {
         Self {
             mode,
             router_reason: None,
@@ -43,14 +43,6 @@ impl ModeState {
             override_source: None,
             updated_at,
         }
-    }
-
-    pub fn label(&self) -> &'static str {
-        self.mode.label()
-    }
-
-    pub fn voice_cap(&self) -> &'static str {
-        self.mode.voice_cap()
     }
 }
 
@@ -239,10 +231,11 @@ pub enum StoreEvent {
         delta: String,
     },
     ModeChanged {
-        from: Option<Mode>,
-        mode: Mode,
+        from: Option<ModeId>,
+        mode: ModeId,
         label: String,
         voice_cap: String,
+        capabilities: Vec<String>,
         #[serde(rename = "activeSkills")]
         active_skills: Vec<String>,
         router_reason: Option<String>,

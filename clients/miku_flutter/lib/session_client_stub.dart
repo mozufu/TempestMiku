@@ -6,6 +6,10 @@ MikuSessionClient createClient() => ScriptedMikuClient();
 
 class ScriptedMikuClient implements MikuSessionClient {
   final Map<String, StreamController<MikuEvent>> _controllers = {};
+  final Map<String, MikuSession> _sessions = {};
+  final Map<String, DateTime> _updatedAt = {};
+  final Map<String, List<SessionMessage>> _messages = {};
+  final Map<String, List<MikuEvent>> _pendingEvents = {};
   final Map<String, String> _approvalSessions = {};
   final Map<String, String> _approvalProposals = {};
   final Map<String, Map<String, Object?>> _proposals = {};
@@ -15,20 +19,71 @@ class ScriptedMikuClient implements MikuSessionClient {
   int unlockCount = 0;
   int _nextId = 0;
   int _nextEventId = 1;
+  String? _currentId;
 
   @override
-  Future<MikuSession> createOrReuseSession() => createSession();
+  Future<MikuSession> createOrReuseSession() async {
+    final currentId = _currentId;
+    if (currentId != null && _sessions.containsKey(currentId)) {
+      return _sessions[currentId]!;
+    }
+    return createSession();
+  }
 
   @override
   Future<MikuSession> createSession() async {
     final id = 'scripted-${_nextId++}';
+    final now = DateTime.now();
+    final session = _sessionForMode(id, 'personal_assistant');
+    _sessions[id] = session;
+    _updatedAt[id] = now;
+    _messages[id] = [];
+    _pendingEvents[id] = [];
     _controllers[id] = StreamController<MikuEvent>.broadcast();
-    return MikuSession(
-      id: id,
-      mode: 'personal_assistant',
-      label: 'Personal Assistant',
-      voiceCap: 'medium',
-      activeSkills: const ['miku-voice', 'personal-assistant-state-capture'],
+    _currentId = id;
+    return session;
+  }
+
+  @override
+  Future<List<SessionSummary>> listSessions({int limit = 30}) async {
+    final ids = _sessions.keys.toList()
+      ..sort((a, b) => (_updatedAt[b] ?? DateTime.fromMillisecondsSinceEpoch(0))
+          .compareTo(_updatedAt[a] ?? DateTime.fromMillisecondsSinceEpoch(0)));
+    return ids.take(limit).map((id) {
+      final session = _sessions[id]!;
+      final messages = _messages[id] ?? const [];
+      final firstUser = messages
+          .where((message) => message.role == 'user')
+          .map((message) => message.content)
+          .firstOrNull;
+      final summary = messages.reversed
+          .where((message) => message.role == 'assistant')
+          .map((message) => message.content)
+          .firstOrNull;
+      final preview = messages.isEmpty ? '' : messages.last.content;
+      return SessionSummary(
+        id: id,
+        title: _sessionTitle(summary, firstUser),
+        preview: preview,
+        mode: session.mode,
+        label: session.label,
+        updatedAt: (_updatedAt[id] ?? DateTime.now()).toIso8601String(),
+        status: 'open',
+        messageCount: messages.length,
+        lastEventId: session.lastEventId,
+      );
+    }).toList();
+  }
+
+  @override
+  Future<LoadedSession> loadSession(String sessionId) async {
+    final session = _sessions[sessionId] ?? await createSession();
+    _currentId = session.id;
+    return LoadedSession(
+      session: session,
+      messages: List<SessionMessage>.from(_messages[session.id] ?? const []),
+      pendingEvents:
+          List<MikuEvent>.from(_pendingEvents[session.id] ?? const []),
     );
   }
 
@@ -46,7 +101,9 @@ class ScriptedMikuClient implements MikuSessionClient {
   Future<void> sendMessage(String sessionId, String content) async {
     final controller = _controllers[sessionId];
     if (controller == null) return;
+    _appendMessage(sessionId, 'user', content);
     if (content.toLowerCase().contains('code')) {
+      _sessions[sessionId] = _sessionForMode(sessionId, 'serious_engineer');
       controller.add(
         MikuEvent(
           type: 'mode',
@@ -67,6 +124,7 @@ class ScriptedMikuClient implements MikuSessionClient {
     controller.add(MikuEvent(type: 'final', id: _eventId(), data: {
       'text': text,
     }));
+    _appendMessage(sessionId, 'assistant', text);
     if (content.toLowerCase().contains('remember')) {
       final proposalId = 'proposal-${_nextEventId++}';
       final approvalId = 'approval-${_nextEventId++}';
@@ -90,41 +148,41 @@ class ScriptedMikuClient implements MikuSessionClient {
       _approvalSessions[approvalId] = sessionId;
       _approvalProposals[approvalId] = proposalId;
       _proposals[proposalId] = proposal;
-      controller.add(
-        MikuEvent(
-          type: 'write_proposal',
-          id: _eventId(),
-          data: proposal,
-        ),
+      final proposalEvent = MikuEvent(
+        type: 'write_proposal',
+        id: _eventId(),
+        data: proposal,
       );
-      controller.add(
-        MikuEvent(
-          type: 'approval',
-          id: _eventId(),
-          data: {
-            'approvalId': approvalId,
-            'backend': 'memory',
-            'action': 'memory.write profile_fact',
-            'scope': {
-              'proposal': proposal,
-              'timeoutMs': 60000,
-            },
-            'options': const [
-              {
-                'optionId': 'allow',
-                'name': 'Save memory',
-                'kind': 'allow_once',
-              },
-              {
-                'optionId': 'reject',
-                'name': 'Reject memory',
-                'kind': 'reject_once',
-              },
-            ],
+      controller.add(proposalEvent);
+      _pendingEvents.putIfAbsent(sessionId, () => []).add(proposalEvent);
+      final approvalEvent = MikuEvent(
+        type: 'approval',
+        id: _eventId(),
+        data: {
+          'approvalId': approvalId,
+          'backend': 'memory',
+          'action': 'memory.write profile_fact',
+          'scope': {
+            'proposal': proposal,
             'timeoutMs': 60000,
           },
-        ),
+          'options': const [
+            {
+              'optionId': 'allow',
+              'name': 'Save memory',
+              'kind': 'allow_once',
+            },
+            {
+              'optionId': 'reject',
+              'name': 'Reject memory',
+              'kind': 'reject_once',
+            },
+          ],
+          'timeoutMs': 60000,
+        },
       );
+      controller.add(approvalEvent);
+      _pendingEvents.putIfAbsent(sessionId, () => []).add(approvalEvent);
     }
   }
 
@@ -140,6 +198,11 @@ class ScriptedMikuClient implements MikuSessionClient {
     if (controller == null || _approvalSessions[approvalId] != sessionId) {
       return;
     }
+    final proposalId = _approvalProposals[approvalId];
+    _pendingEvents[sessionId]?.removeWhere((event) =>
+        (event.type == 'approval' && event.data['approvalId'] == approvalId) ||
+        (event.type == 'write_proposal' &&
+            event.data['proposalId'] == proposalId));
     final approved = decision == 'approve';
     controller.add(
       MikuEvent(
@@ -154,7 +217,6 @@ class ScriptedMikuClient implements MikuSessionClient {
         },
       ),
     );
-    final proposalId = _approvalProposals[approvalId];
     final proposal = _proposals[proposalId];
     if (proposal == null) return;
     controller.add(
@@ -178,6 +240,7 @@ class ScriptedMikuClient implements MikuSessionClient {
   @override
   Future<void> lockMode(String sessionId, String mode) async {
     lockedModes.add(mode);
+    _sessions[sessionId] = _sessionForMode(sessionId, mode, locked: true);
     _controllers[sessionId]?.add(
       MikuEvent(
         type: 'mode',
@@ -191,9 +254,20 @@ class ScriptedMikuClient implements MikuSessionClient {
     );
   }
 
+  String _sessionTitle(String? summary, String? firstUser) {
+    final summaryText = summary?.trim();
+    if (summaryText != null && summaryText.isNotEmpty) return summaryText;
+    final firstUserText = firstUser?.trim();
+    if (firstUserText != null && firstUserText.isNotEmpty) {
+      return firstUserText;
+    }
+    return 'New session';
+  }
+
   @override
   Future<void> unlockMode(String sessionId) async {
     unlockCount++;
+    _sessions[sessionId] = _sessionForMode(sessionId, 'personal_assistant');
     _controllers[sessionId]?.add(
       const MikuEvent(
         type: 'mode',
@@ -209,6 +283,7 @@ class ScriptedMikuClient implements MikuSessionClient {
   @override
   Future<void> overrideMode(String sessionId, String mode) async {
     overriddenModes.add(mode);
+    _sessions[sessionId] = _sessionForMode(sessionId, mode);
     _controllers[sessionId]?.add(
       MikuEvent(
         type: 'mode',
@@ -278,6 +353,61 @@ class ScriptedMikuClient implements MikuSessionClient {
       'handoff' => const ['oh-my-pi-handoff'],
       _ => const ['miku-voice', 'personal-assistant-state-capture'],
     };
+  }
+
+  MikuSession _sessionForMode(
+    String id,
+    String mode, {
+    bool locked = false,
+  }) {
+    final lastEventId = _nextEventId > 1 ? '${_nextEventId - 1}' : null;
+    return MikuSession(
+      id: id,
+      mode: mode,
+      label: _label(mode),
+      voiceCap: _voiceCap(mode),
+      defaultScope: mode == 'serious_engineer' || mode == 'handoff'
+          ? 'project:tempestmiku'
+          : 'global',
+      activeSkills: _activeSkills(mode),
+      locked: locked,
+      lastEventId: lastEventId,
+    );
+  }
+
+  String _voiceCap(String mode) {
+    if (mode == 'serious_engineer' || mode == 'handoff') return 'off';
+    if (mode == 'ambiguity_grill' || mode == 'negative_state_grounding') {
+      return 'high';
+    }
+    return 'medium';
+  }
+
+  void _appendMessage(String sessionId, String role, String content) {
+    final now = DateTime.now();
+    final messages = _messages.putIfAbsent(sessionId, () => []);
+    messages.add(
+      SessionMessage(
+        seq: messages.length + 1,
+        role: role,
+        content: content,
+        createdAt: now.toIso8601String(),
+      ),
+    );
+    _updatedAt[sessionId] = now;
+    final session = _sessions[sessionId];
+    if (session != null) {
+      _sessions[sessionId] = MikuSession(
+        id: session.id,
+        mode: session.mode,
+        label: session.label,
+        voiceCap: session.voiceCap,
+        defaultScope: session.defaultScope,
+        activeSkills: session.activeSkills,
+        locked: session.locked,
+        lastEventId: '${_nextEventId - 1}',
+      );
+    }
   }
 
   String _eventId() => '${_nextEventId++}';

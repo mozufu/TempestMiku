@@ -63,6 +63,154 @@ async fn session_creation_message_append_event_append_and_replay_work() {
 }
 
 #[tokio::test]
+async fn sessions_history_lists_recent_sessions_and_hydrates_transcript() {
+    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let first = create(&app).await;
+    post_user_message(&app, first.id, "first session asks for status").await;
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let second = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    post_user_message(&app, second.id, "second session asks for code").await;
+    store
+        .upsert_project_item(NewProjectItem {
+            project_id: "tempestmiku".to_string(),
+            kind: ProjectItemKind::Summary,
+            text: "Condensed code-session summary".to_string(),
+            target_uri: format!("project://tempestmiku/summary/{}", second.id),
+            source_session_id: second.id,
+            source_event_seq: None,
+            source_uri: None,
+            dedupe_key: format!("test-summary:{}", second.id),
+            provenance_json: json!({"source": "test"}),
+        })
+        .await
+        .unwrap();
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/sessions?limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = response_json(listed).await;
+    let sessions = listed["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0]["id"], second.id.to_string());
+    assert_eq!(sessions[0]["title"], "Condensed code-session summary");
+    assert_eq!(sessions[0]["messageCount"], 2);
+    assert!(sessions[0]["lastEventId"].as_i64().unwrap() >= 3);
+    assert_eq!(sessions[1]["id"], first.id.to_string());
+    assert_eq!(
+        sessions[1]["title"],
+        "Miku heard: first session asks for status"
+    );
+
+    store
+        .append_event(
+            first.id,
+            "write_proposal",
+            json!({
+                "kind": "memory",
+                "proposalId": "proposal-history",
+                "status": "pending",
+                "text": "Remember history restore."
+            }),
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            first.id,
+            "approval",
+            json!({
+                "approvalId": "approval-history",
+                "backend": "memory",
+                "action": "memory.write profile_fact",
+                "scope": {}
+            }),
+        )
+        .await
+        .unwrap();
+
+    let transcript = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/sessions/{}/messages", first.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(transcript.status(), StatusCode::OK);
+    let transcript = response_json(transcript).await;
+    assert_eq!(transcript["id"], first.id.to_string());
+    assert_eq!(transcript["messages"][0]["role"], "user");
+    assert_eq!(
+        transcript["messages"][0]["content"],
+        "first session asks for status"
+    );
+    assert_eq!(transcript["messages"][1]["role"], "assistant");
+    assert!(
+        transcript["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Miku heard: first session asks for status")
+    );
+    assert!(transcript["lastEventId"].as_i64().unwrap() >= 5);
+    let pending = transcript["pendingEvents"].as_array().unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|event| event["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["write_proposal", "approval"]
+    );
+
+    store
+        .append_event(
+            first.id,
+            "approval_resolved",
+            json!({
+                "approvalId": "approval-history",
+                "status": "approved"
+            }),
+        )
+        .await
+        .unwrap();
+    store
+        .append_event(
+            first.id,
+            "write_proposal",
+            json!({
+                "kind": "memory",
+                "proposalId": "proposal-history",
+                "status": "approved"
+            }),
+        )
+        .await
+        .unwrap();
+    let resolved = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/sessions/{}/messages", first.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let resolved = response_json(resolved).await;
+    assert!(resolved["pendingEvents"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn missing_persona_path_boots_degraded_with_warning() {
     let (app, _) = test_app(
         PersonaConfig::from_path("/definitely/missing/tempestmiku/persona"),

@@ -10,7 +10,7 @@ use crate::{Result, ServerError};
 
 use super::{
     MessageRecord, ModeState, NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind,
-    ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord, Store,
+    ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -55,6 +55,64 @@ impl Store for InMemoryStore {
             .ok_or_else(|| ServerError::NotFound(format!("session {session_id}")))
     }
 
+    async fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummaryRecord>> {
+        let inner = self.inner.lock();
+        let mut summaries = inner
+            .sessions
+            .values()
+            .map(|session| {
+                let messages = inner.messages.get(&session.id).cloned().unwrap_or_default();
+                let title = messages
+                    .iter()
+                    .find(|message| message.role == "user")
+                    .map(|message| message.content.clone());
+                let project_summary = inner
+                    .project_items
+                    .iter()
+                    .filter(|item| {
+                        item.source_session_id == session.id
+                            && item.kind == ProjectItemKind::Summary
+                    })
+                    .max_by_key(|item| item.created_at)
+                    .map(|item| item.text.clone());
+                let latest_assistant = messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == "assistant")
+                    .map(|message| message.content.clone());
+                let summary = project_summary.or(latest_assistant);
+                let preview = messages.last().map(|message| message.content.clone());
+                let last_event_id = inner
+                    .events
+                    .get(&session.id)
+                    .and_then(|events| events.last())
+                    .map(|event| event.seq);
+                SessionSummaryRecord {
+                    session: session.clone(),
+                    summary,
+                    title,
+                    preview,
+                    message_count: messages.len() as i64,
+                    last_event_id,
+                }
+            })
+            .collect::<Vec<_>>();
+        summaries.sort_by_key(|summary| std::cmp::Reverse(summary.session.updated_at));
+        summaries.truncate(limit);
+        Ok(summaries)
+    }
+
+    async fn session_messages(&self, session_id: Uuid) -> Result<Vec<MessageRecord>> {
+        self.get_session(session_id).await?;
+        Ok(self
+            .inner
+            .lock()
+            .messages
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     async fn set_mode_state(
         &self,
         session_id: Uuid,
@@ -89,6 +147,9 @@ impl Store for InMemoryStore {
             created_at: Utc::now(),
         };
         messages.push(message.clone());
+        if let Some(session) = inner.sessions.get_mut(&session_id) {
+            session.updated_at = message.created_at;
+        }
         Ok(message)
     }
 
@@ -110,6 +171,9 @@ impl Store for InMemoryStore {
             created_at: Utc::now(),
         };
         events.push(event.clone());
+        if let Some(session) = inner.sessions.get_mut(&session_id) {
+            session.updated_at = event.created_at;
+        }
         Ok(event)
     }
 

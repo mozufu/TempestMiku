@@ -60,8 +60,8 @@ use sessions::default_subject;
 
 pub use modes::{ModeRequest, ModeResponse};
 pub use sessions::{
-    CreateSessionRequest, CreateSessionResponse, MemoryWriteProposalResponse, PostMessageRequest,
-    ProposeMemoryWriteRequest,
+    CreateSessionRequest, CreateSessionResponse, ListSessionsResponse, MemoryWriteProposalResponse,
+    PostMessageRequest, ProposeMemoryWriteRequest, SessionMessagesResponse,
 };
 
 pub struct AppState<S, M, C> {
@@ -149,7 +149,10 @@ where
 {
     Router::<AppState<S, M, C>>::new()
         .route("/health", get(health))
-        .route("/sessions", post(sessions::create_session::<S, M, C>))
+        .route(
+            "/sessions",
+            get(sessions::list_sessions::<S, M, C>).post(sessions::create_session::<S, M, C>),
+        )
         .route("/sessions/:id", get(sessions::get_session::<S, M, C>))
         .route(
             "/sessions/:id/events",
@@ -157,7 +160,7 @@ where
         )
         .route(
             "/sessions/:id/messages",
-            post(sessions::post_message::<S, M, C>),
+            get(sessions::get_session_messages::<S, M, C>).post(sessions::post_message::<S, M, C>),
         )
         .route(
             "/sessions/:id/memory/proposals",

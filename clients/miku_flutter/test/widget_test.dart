@@ -112,6 +112,57 @@ void main() {
     expect(find.text('Miku heard: second status check'), findsOneWidget);
   });
 
+  testWidgets('opens session history, creates a new session, and restores one',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'first history check');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.byIcon(Icons.history));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Sessions'), findsOneWidget);
+    expect(find.text('Miku heard: first history check'), findsWidgets);
+
+    final newSessionButton = find.ancestor(
+      of: find.byIcon(Icons.add).last,
+      matching: find.byType(GestureDetector),
+    );
+    await tester.tap(newSessionButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(await client.listSessions(), hasLength(2));
+    expect(find.text('Miku heard: first history check'), findsNothing);
+
+    await tester.enterText(find.byType(EditableText), 'second history check');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('second history check'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.history));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Miku heard: first history check'), findsWidgets);
+    expect(find.text('Miku heard: second history check'), findsWidgets);
+
+    await tester.tap(find.text('Miku heard: first history check').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('first history check'), findsOneWidget);
+    expect(find.text('Miku heard: first history check'), findsOneWidget);
+    expect(find.text('second history check'), findsNothing);
+  });
+
   testWidgets('shows selector from mode dropdown and exposes lock',
       (WidgetTester tester) async {
     final client = ScriptedMikuClient();

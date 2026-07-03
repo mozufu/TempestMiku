@@ -34,7 +34,8 @@ pub use native_deno::{NativeApprovalMode, NativeDenoBackend};
 pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
 pub use store::{
     InMemoryStore, MessageRecord, ModeState, NewProjectItem, NewSession, PostgresStore,
-    ProjectItemKind, ProjectItemRecord, SessionEvent, SessionRecord, Store, StoreEvent,
+    ProjectItemKind, ProjectItemRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store,
+    StoreEvent,
 };
 pub use tm_persona::{
     Mode, ModeProfile, PersonaAssets, PersonaConfig, PersonaPrompt, PersonaStatus,

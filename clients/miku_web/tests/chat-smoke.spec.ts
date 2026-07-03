@@ -34,4 +34,17 @@ test('session API streams text, finalizes, and replay resumes by Last-Event-ID',
   });
   expect(replayByQuery.ok()).toBeTruthy();
   expect(await replayByQuery.text()).toContain('event: mode');
+
+  const history = await request.get('/sessions?limit=5');
+  expect(history.ok()).toBeTruthy();
+  const historyJson = await history.json();
+  expect(historyJson.sessions[0].id).toBe(session.id);
+  expect(historyJson.sessions[0].title).toBe('Miku heard: please fix code hello artifact://0');
+
+  const transcript = await request.get(`/sessions/${session.id}/messages`);
+  expect(transcript.ok()).toBeTruthy();
+  const transcriptJson = await transcript.json();
+  expect(transcriptJson.messages).toHaveLength(2);
+  expect(transcriptJson.messages[0].role).toBe('user');
+  expect(transcriptJson.lastEventId).toBeGreaterThanOrEqual(3);
 });

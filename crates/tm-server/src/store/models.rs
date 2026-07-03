@@ -72,6 +72,16 @@ pub struct MessageRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummaryRecord {
+    pub session: SessionRecord,
+    pub summary: Option<String>,
+    pub title: Option<String>,
+    pub preview: Option<String>,
+    pub message_count: i64,
+    pub last_event_id: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProfileFactRecord {
     pub id: Uuid,
@@ -176,7 +186,9 @@ pub struct NewProjectItem {
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
     async fn create_session(&self, new: NewSession) -> Result<SessionRecord>;
+    async fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummaryRecord>>;
     async fn get_session(&self, session_id: Uuid) -> Result<SessionRecord>;
+    async fn session_messages(&self, session_id: Uuid) -> Result<Vec<MessageRecord>>;
     async fn set_mode_state(
         &self,
         session_id: Uuid,

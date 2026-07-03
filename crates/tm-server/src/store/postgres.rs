@@ -8,7 +8,7 @@ use crate::{Result, ServerError};
 
 use super::{
     MessageRecord, ModeState, NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind,
-    ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord, Store,
+    ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store,
 };
 
 pub struct PostgresStore {
@@ -42,7 +42,9 @@ impl PostgresStore {
                  create table if not exists project_items(id uuid primary key, project_id text not null, kind text not null, text text not null, target_uri text not null, source_session_id uuid not null references sessions(id) on delete cascade, source_event_seq bigint, source_uri text, dedupe_key text not null, provenance_json jsonb not null, created_at timestamptz not null, unique(project_id, kind, dedupe_key));
                  create index if not exists profile_facts_subject_idx on profile_facts(subject);
                  create index if not exists recall_chunks_scope_created_idx on recall_chunks(scope, created_at desc);
-                 create index if not exists project_items_project_kind_idx on project_items(project_id, kind, created_at desc);",
+                 create index if not exists project_items_project_kind_idx on project_items(project_id, kind, created_at desc);
+                 create index if not exists project_items_source_session_kind_idx on project_items(source_session_id, kind, created_at desc);
+                 create index if not exists sessions_updated_at_idx on sessions(updated_at desc);",
             )
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -82,33 +84,76 @@ impl Store for PostgresStore {
         Ok(session)
     }
 
+    async fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummaryRecord>> {
+        let rows = self.client
+            .query(
+                "select s.id,
+                        s.created_at,
+                        s.updated_at,
+                        s.status,
+                        s.mode,
+                        s.mode_state_json,
+                        s.persona_status,
+                        coalesce(m.message_count, 0)::bigint as message_count,
+                        coalesce(p.summary, m.assistant_summary) as summary,
+                        m.title,
+                        m.preview,
+                        e.last_event_id
+                   from sessions s
+                   left join lateral (
+                        select
+                          (select count(*)::bigint from messages where session_id = s.id) as message_count,
+                          (select content from messages where session_id = s.id and role = 'user' order by seq asc limit 1) as title,
+                          (select content from messages where session_id = s.id and role = 'assistant' order by seq desc limit 1) as assistant_summary,
+                          (select content from messages where session_id = s.id order by seq desc limit 1) as preview
+                   ) m on true
+                   left join lateral (
+                        select text as summary
+                          from project_items
+                         where source_session_id = s.id
+                           and kind = 'summary'
+                         order by created_at desc
+                         limit 1
+                   ) p on true
+                   left join lateral (
+                        select max(seq) as last_event_id from session_events where session_id = s.id
+                   ) e on true
+                  order by s.updated_at desc
+                  limit $1",
+                &[&(limit as i64)],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(SessionSummaryRecord {
+                    session: row_to_session_record(&row)?,
+                    summary: row.get("summary"),
+                    title: row.get("title"),
+                    preview: row.get("preview"),
+                    message_count: row.get("message_count"),
+                    last_event_id: row.get("last_event_id"),
+                })
+            })
+            .collect()
+    }
+
     async fn get_session(&self, session_id: Uuid) -> Result<SessionRecord> {
         let row = self.client
             .query_opt("select id, created_at, updated_at, status, mode, mode_state_json, persona_status from sessions where id = $1", &[&session_id])
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?
             .ok_or_else(|| ServerError::NotFound(format!("session {session_id}")))?;
-        let mode: Value = row.get("mode");
-        let mode =
-            serde_json::from_value(mode).map_err(|err| ServerError::Store(err.to_string()))?;
-        let mode_state: Option<Value> = row.get("mode_state_json");
-        let mode_state = match mode_state {
-            Some(value) => {
-                serde_json::from_value(value).map_err(|err| ServerError::Store(err.to_string()))?
-            }
-            None => ModeState::new(mode, row.get("updated_at")),
-        };
-        let persona_status: Value = row.get("persona_status");
-        Ok(SessionRecord {
-            id: row.get("id"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-            status: row.get("status"),
-            mode,
-            mode_state,
-            persona_status: serde_json::from_value(persona_status)
-                .map_err(|err| ServerError::Store(err.to_string()))?,
-        })
+        row_to_session_record(&row)
+    }
+
+    async fn session_messages(&self, session_id: Uuid) -> Result<Vec<MessageRecord>> {
+        self.get_session(session_id).await?;
+        let rows = self.client
+            .query("select session_id, seq, role, content, created_at from messages where session_id = $1 order by seq asc", &[&session_id])
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        Ok(rows.into_iter().map(row_to_message_record).collect())
     }
 
     async fn set_mode_state(
@@ -142,7 +187,17 @@ impl Store for PostgresStore {
         let row = self
             .client
             .query_one(
-                "with lock as (select pg_advisory_xact_lock(hashtext($1))), next_seq as (select coalesce(max(seq) + 1, 1) as seq from messages, lock where session_id = $2) insert into messages (session_id, seq, role, content, created_at) select $2, next_seq.seq, $3, $4, now() from next_seq returning seq, created_at",
+                "with lock as (select pg_advisory_xact_lock(hashtext($1))),
+                      next_seq as (select coalesce(max(seq) + 1, 1) as seq from messages, lock where session_id = $2),
+                      inserted as (
+                        insert into messages (session_id, seq, role, content, created_at)
+                        select $2, next_seq.seq, $3, $4, now() from next_seq
+                        returning seq, created_at
+                      ),
+                      touch as (
+                        update sessions set updated_at = (select created_at from inserted) where id = $2
+                      )
+                 select seq, created_at from inserted",
                 &[&session_key, &session_id, &role, &content],
             )
             .await
@@ -167,7 +222,17 @@ impl Store for PostgresStore {
         let row = self
             .client
             .query_one(
-                "with lock as (select pg_advisory_xact_lock(hashtext($1))), next_seq as (select coalesce(max(seq) + 1, 1) as seq from session_events, lock where session_id = $2) insert into session_events (session_id, seq, event_type, payload_json, created_at) select $2, next_seq.seq, $3, $4, now() from next_seq returning seq, created_at",
+                "with lock as (select pg_advisory_xact_lock(hashtext($1))),
+                      next_seq as (select coalesce(max(seq) + 1, 1) as seq from session_events, lock where session_id = $2),
+                      inserted as (
+                        insert into session_events (session_id, seq, event_type, payload_json, created_at)
+                        select $2, next_seq.seq, $3, $4, now() from next_seq
+                        returning seq, created_at
+                      ),
+                      touch as (
+                        update sessions set updated_at = (select created_at from inserted) where id = $2
+                      )
+                 select seq, created_at from inserted",
                 &[&session_key, &session_id, &event_type, &payload_json],
             )
             .await
@@ -442,4 +507,37 @@ fn row_to_project_item(row: tokio_postgres::Row) -> Result<ProjectItemRecord> {
         provenance_json: row.get("provenance_json"),
         created_at: row.get("created_at"),
     })
+}
+
+fn row_to_session_record(row: &tokio_postgres::Row) -> Result<SessionRecord> {
+    let mode: Value = row.get("mode");
+    let mode = serde_json::from_value(mode).map_err(|err| ServerError::Store(err.to_string()))?;
+    let mode_state: Option<Value> = row.get("mode_state_json");
+    let mode_state = match mode_state {
+        Some(value) => {
+            serde_json::from_value(value).map_err(|err| ServerError::Store(err.to_string()))?
+        }
+        None => ModeState::new(mode, row.get("updated_at")),
+    };
+    let persona_status: Value = row.get("persona_status");
+    Ok(SessionRecord {
+        id: row.get("id"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        status: row.get("status"),
+        mode,
+        mode_state,
+        persona_status: serde_json::from_value(persona_status)
+            .map_err(|err| ServerError::Store(err.to_string()))?,
+    })
+}
+
+fn row_to_message_record(row: tokio_postgres::Row) -> MessageRecord {
+    MessageRecord {
+        session_id: row.get("session_id"),
+        seq: row.get("seq"),
+        role: row.get("role"),
+        content: row.get("content"),
+        created_at: row.get("created_at"),
+    }
 }

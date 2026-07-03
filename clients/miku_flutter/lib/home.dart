@@ -6,13 +6,14 @@ class _ConversationRound {
   _ConversationRound({
     required this.index,
     required this.userText,
+    this.isStreaming = true,
   });
 
   final int index;
   final String userText;
   String assistantStreamedText = '';
   String assistantFinalText = '';
-  bool isStreaming = true;
+  bool isStreaming;
 
   String get assistantText => assistantFinalText.isNotEmpty
       ? assistantFinalText
@@ -87,20 +88,17 @@ class _MikuHomePageState extends State<MikuHomePage>
     if (mounted) setState(() => _status = 'connecting');
     try {
       final s = await widget.client.createOrReuseSession();
-      if (!mounted) return;
-      await _sub?.cancel();
-      _sessionId = s.id;
-      _lastEventId = s.lastEventId;
-      _modeId = s.mode;
-      _modeLocked = s.locked;
-      _status = 'connected';
-      _sub = widget.client
-          .events(s.id, lastEventId: _lastEventId)
-          .listen(_onEvent, onError: (_) {
-        if (mounted) setState(() => _status = 'reconnecting');
-      });
-      await _loadProject();
-      if (mounted) setState(() {});
+      LoadedSession? loaded;
+      try {
+        loaded = await widget.client.loadSession(s.id);
+      } catch (_) {
+        loaded = null;
+      }
+      await _attachSession(
+        loaded?.session ?? s,
+        messages: loaded?.messages ?? const [],
+        pendingEvents: loaded?.pendingEvents ?? const [],
+      );
     } catch (err) {
       _sessionFuture = null;
       if (!mounted) return;
@@ -111,7 +109,76 @@ class _MikuHomePageState extends State<MikuHomePage>
     }
   }
 
+  Future<void> _attachSession(
+    MikuSession session, {
+    List<SessionMessage> messages = const [],
+    List<MikuEvent> pendingEvents = const [],
+  }) async {
+    final previousSub = _sub;
+    _sub = null;
+    if (!mounted) return;
+    setState(() {
+      _sessionId = session.id;
+      _lastEventId = session.lastEventId;
+      _modeId = session.mode.isEmpty ? 'personal_assistant' : session.mode;
+      _modeLocked = session.locked;
+      _status = 'connected';
+      _approvals.clear();
+      _memoryProposals.clear();
+      _rounds
+        ..clear()
+        ..addAll(_roundsFromMessages(messages));
+      for (final event in pendingEvents) {
+        _applyEvent(event);
+      }
+    });
+    await previousSub?.cancel();
+    _sub = widget.client
+        .events(session.id, lastEventId: _lastEventId)
+        .listen(_onEvent, onError: (_) {
+      if (mounted) setState(() => _status = 'reconnecting');
+    });
+    await _loadProject();
+    if (mounted) setState(() {});
+    _scrollToBottom();
+  }
+
+  List<_ConversationRound> _roundsFromMessages(List<SessionMessage> messages) {
+    final rounds = <_ConversationRound>[];
+    for (final message in messages) {
+      if (message.role == 'user') {
+        rounds.add(
+          _ConversationRound(
+            index: rounds.length + 1,
+            userText: message.content,
+            isStreaming: false,
+          ),
+        );
+        continue;
+      }
+      if (message.role != 'assistant') continue;
+      final round = rounds.isNotEmpty && rounds.last.assistantFinalText.isEmpty
+          ? rounds.last
+          : _ConversationRound(
+              index: rounds.length + 1,
+              userText: '',
+              isStreaming: false,
+            );
+      if (!rounds.contains(round)) rounds.add(round);
+      round.assistantFinalText = message.content;
+      round.assistantStreamedText = '';
+      round.isStreaming = false;
+    }
+    return rounds;
+  }
+
   void _onEvent(MikuEvent e) {
+    _rememberEventCursor(e);
+    setState(() => _applyEvent(e));
+    _scrollToBottom();
+  }
+
+  void _rememberEventCursor(MikuEvent e) {
     final eventId = e.id;
     if (eventId != null &&
         eventId.isNotEmpty &&
@@ -122,69 +189,68 @@ class _MikuHomePageState extends State<MikuHomePage>
         widget.client.rememberLastEventId(sessionId, eventId);
       }
     }
-    setState(() {
-      switch (e.type) {
-        case 'connection':
-          _status = e.data['status'] as String? ?? _status;
-        case 'text':
-          final delta = e.data['delta'] as String? ?? '';
-          if (delta.isNotEmpty) {
-            final round = _ensureAssistantRound();
-            round.assistantStreamedText += delta;
-            round.isStreaming = true;
-            _status = 'streaming';
-          }
-        case 'final':
-          final text = e.data['text'] as String? ?? '';
+  }
+
+  void _applyEvent(MikuEvent e) {
+    switch (e.type) {
+      case 'connection':
+        _status = e.data['status'] as String? ?? _status;
+      case 'text':
+        final delta = e.data['delta'] as String? ?? '';
+        if (delta.isNotEmpty) {
           final round = _ensureAssistantRound();
-          round.assistantFinalText = text;
-          round.assistantStreamedText = '';
-          round.isStreaming = false;
-          _status = 'connected';
-          _loadProject();
-        case 'mode':
-          final newId = e.data['mode'] as String? ?? _modeId;
-          _modeLocked = (e.data['locked'] as bool?) ??
-              (e.data['lockSource'] != null || e.data['lock_source'] != null);
-          _modeId = newId;
-        case 'approval':
-          final approval = ApprovalPrompt(
-            approvalId: e.data['approvalId'] as String? ?? '',
-            action: e.data['action'] as String? ?? 'Approval requested',
-            scope:
-                (e.data['scope'] as Map?)?.cast<String, Object?>() ?? const {},
-            backend: e.data['backend'] as String? ?? '',
-            options: ((e.data['options'] as List?) ?? const [])
-                .whereType<Map>()
-                .map(
-                  (option) => ApprovalOption(
-                    optionId: (option['optionId'] as String?) ??
-                        (option['option_id'] as String?) ??
-                        '',
-                    name: (option['name'] as String?) ?? '',
-                    kind: (option['kind'] as String?) ?? '',
-                  ),
-                )
-                .where((option) => option.optionId.isNotEmpty)
-                .toList(),
-            timeoutMs: (e.data['timeoutMs'] as num?)?.toInt() ??
-                (e.data['timeout_ms'] as num?)?.toInt(),
-          );
-          _upsertApproval(approval);
-          final proposal = MemoryWriteProposal.fromApproval(approval);
-          if (proposal != null) {
-            _upsertMemoryProposal(proposal, onlyIfMissing: true);
-          }
-        case 'approval_resolved':
-          _approvals.removeWhere((a) => a.approvalId == e.data['approvalId']);
-        case 'write_proposal':
-          final proposal = MemoryWriteProposal.fromEvent(e.data);
-          if (proposal != null) {
-            _upsertMemoryProposal(proposal);
-          }
-      }
-    });
-    _scrollToBottom();
+          round.assistantStreamedText += delta;
+          round.isStreaming = true;
+          _status = 'streaming';
+        }
+      case 'final':
+        final text = e.data['text'] as String? ?? '';
+        final round = _ensureAssistantRound();
+        round.assistantFinalText = text;
+        round.assistantStreamedText = '';
+        round.isStreaming = false;
+        _status = 'connected';
+        _loadProject();
+      case 'mode':
+        final newId = e.data['mode'] as String? ?? _modeId;
+        _modeLocked = (e.data['locked'] as bool?) ??
+            (e.data['lockSource'] != null || e.data['lock_source'] != null);
+        _modeId = newId;
+      case 'approval':
+        final approval = ApprovalPrompt(
+          approvalId: e.data['approvalId'] as String? ?? '',
+          action: e.data['action'] as String? ?? 'Approval requested',
+          scope: (e.data['scope'] as Map?)?.cast<String, Object?>() ?? const {},
+          backend: e.data['backend'] as String? ?? '',
+          options: ((e.data['options'] as List?) ?? const [])
+              .whereType<Map>()
+              .map(
+                (option) => ApprovalOption(
+                  optionId: (option['optionId'] as String?) ??
+                      (option['option_id'] as String?) ??
+                      '',
+                  name: (option['name'] as String?) ?? '',
+                  kind: (option['kind'] as String?) ?? '',
+                ),
+              )
+              .where((option) => option.optionId.isNotEmpty)
+              .toList(),
+          timeoutMs: (e.data['timeoutMs'] as num?)?.toInt() ??
+              (e.data['timeout_ms'] as num?)?.toInt(),
+        );
+        _upsertApproval(approval);
+        final proposal = MemoryWriteProposal.fromApproval(approval);
+        if (proposal != null) {
+          _upsertMemoryProposal(proposal, onlyIfMissing: true);
+        }
+      case 'approval_resolved':
+        _approvals.removeWhere((a) => a.approvalId == e.data['approvalId']);
+      case 'write_proposal':
+        final proposal = MemoryWriteProposal.fromEvent(e.data);
+        if (proposal != null) {
+          _upsertMemoryProposal(proposal);
+        }
+    }
   }
 
   _ConversationRound _ensureAssistantRound() {
@@ -381,7 +447,67 @@ class _MikuHomePageState extends State<MikuHomePage>
     }
   }
 
+  Future<void> _loadHistoricalSession(String sessionId) async {
+    if (mounted) setState(() => _status = 'connecting');
+    try {
+      final loaded = await widget.client.loadSession(sessionId);
+      await _attachSession(
+        loaded.session,
+        messages: loaded.messages,
+        pendingEvents: loaded.pendingEvents,
+      );
+    } catch (err) {
+      if (!mounted) return;
+      setState(() => _status = 'offline');
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('History load failed: $err')));
+    }
+  }
+
+  Future<void> _startNewSession() async {
+    if (mounted) setState(() => _status = 'connecting');
+    try {
+      final session = await widget.client.createSession();
+      await _attachSession(session);
+    } catch (err) {
+      if (!mounted) return;
+      setState(() => _status = 'offline');
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('New session failed: $err')));
+    }
+  }
+
   // ── Bottom sheets ──────────────────────────────────────────────────────────
+
+  void _showHistorySheet() {
+    final tok = _tok;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: tok.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(sheetContext).size.height * 0.86,
+        ),
+        child: _SessionHistorySheet(
+          tok: tok,
+          currentSessionId: _sessionId,
+          loadSessions: () => widget.client.listSessions(),
+          onSelect: (id) {
+            Navigator.pop(sheetContext);
+            unawaited(_loadHistoricalSession(id));
+          },
+          onNewSession: () {
+            Navigator.pop(sheetContext);
+            unawaited(_startNewSession());
+          },
+        ),
+      ),
+    );
+  }
 
   void _showModeSheet() {
     final tok = _tok;
@@ -572,6 +698,12 @@ class _MikuHomePageState extends State<MikuHomePage>
           ),
           const SizedBox(width: 8),
           _ConnectionBadge(status: _status, tok: tok),
+          const SizedBox(width: 8),
+          _TokIconBtn(
+            tok: tok,
+            icon: Icons.history,
+            onTap: _showHistorySheet,
+          ),
           const SizedBox(width: 8),
           _TokIconBtn(
             tok: tok,

@@ -40,6 +40,41 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   @override
+  Future<List<SessionSummary>> listSessions({int limit = 30}) async {
+    final query = Uri(queryParameters: {'limit': '$limit'}).query;
+    final json = await _request('GET', '/sessions?$query');
+    return ((json['sessions'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((item) => _summaryFromJson(item.cast<String, Object?>()))
+        .toList();
+  }
+
+  @override
+  Future<LoadedSession> loadSession(String sessionId) async {
+    final json = await _request('GET', '/sessions/$sessionId/messages');
+    final lastEventId = _nullableString(
+      json['lastEventId'] ?? json['last_event_id'],
+    );
+    final session = _sessionFromJson(json, lastEventId: lastEventId);
+    _rememberSession(session);
+    final messages = ((json['messages'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((item) => _messageFromJson(item.cast<String, Object?>()))
+        .toList();
+    final pendingEvents = ((json['pendingEvents'] as List?) ??
+            (json['pending_events'] as List?) ??
+            const [])
+        .whereType<Map>()
+        .map((item) => _eventFromJson(item.cast<String, Object?>()))
+        .toList();
+    return LoadedSession(
+      session: session,
+      messages: messages,
+      pendingEvents: pendingEvents,
+    );
+  }
+
+  @override
   Stream<MikuEvent> events(String sessionId, {String? lastEventId}) {
     final controller = StreamController<MikuEvent>();
     final resumeId = lastEventId ?? window.localStorage[_lastEventIdKey];
@@ -268,10 +303,58 @@ class WebMikuSessionClient implements MikuSessionClient {
     );
   }
 
+  SessionSummary _summaryFromJson(Map<String, Object?> json) {
+    return SessionSummary(
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? 'New session',
+      preview: json['preview'] as String? ?? '',
+      mode: json['mode'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      updatedAt: (json['updatedAt'] as String?) ??
+          (json['updated_at'] as String?) ??
+          '',
+      status: json['status'] as String? ?? '',
+      messageCount: (json['messageCount'] as int?) ??
+          (json['message_count'] as int?) ??
+          0,
+      lastEventId: _nullableString(
+        json['lastEventId'] ?? json['last_event_id'],
+      ),
+    );
+  }
+
+  SessionMessage _messageFromJson(Map<String, Object?> json) {
+    return SessionMessage(
+      seq: (json['seq'] as num?)?.toInt() ?? 0,
+      role: json['role'] as String? ?? '',
+      content: json['content'] as String? ?? '',
+      createdAt: (json['createdAt'] as String?) ??
+          (json['created_at'] as String?) ??
+          '',
+    );
+  }
+
+  MikuEvent _eventFromJson(Map<String, Object?> json) {
+    final data = (json['data'] as Map?)?.cast<String, Object?>() ??
+        const <String, Object?>{};
+    return MikuEvent(
+      type: json['type'] as String? ?? '',
+      id: _nullableString(json['id']),
+      data: data,
+    );
+  }
+
+  String? _nullableString(Object? value) {
+    final text = value?.toString() ?? '';
+    return text.isEmpty ? null : text;
+  }
+
   void _rememberSession(MikuSession session) {
     window.localStorage[_sessionIdKey] = session.id;
     if (session.lastEventId != null && session.lastEventId!.isNotEmpty) {
       window.localStorage[_lastEventIdKey] = session.lastEventId!;
+    } else {
+      window.localStorage.remove(_lastEventIdKey);
     }
   }
 }

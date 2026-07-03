@@ -8,6 +8,7 @@ mod tests;
 pub use in_memory::InMemoryStore;
 pub use models::{
     MessageRecord, ModeState, NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind,
-    ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord, Store, StoreEvent,
+    ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store,
+    StoreEvent,
 };
 pub use postgres::PostgresStore;

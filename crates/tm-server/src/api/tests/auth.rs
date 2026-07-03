@@ -31,6 +31,26 @@ async fn bearer_and_forwarded_auth_are_enforced() {
         .await
         .unwrap();
     assert_eq!(allowed.status(), StatusCode::OK);
+    let session = response_json(allowed).await;
+    let session_id = session["id"].as_str().unwrap();
+
+    for uri in [
+        "/sessions".to_string(),
+        format!("/sessions/{session_id}/messages"),
+    ] {
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    }
 
     let (forwarded, _) = test_app(
         PersonaConfig::default(),

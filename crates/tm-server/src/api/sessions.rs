@@ -1,9 +1,17 @@
 use super::*;
+use chrono::{DateTime, Utc};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct CreateSessionRequest {
     #[serde(default)]
     pub mode: Mode,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionsQuery {
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -17,6 +25,89 @@ pub struct CreateSessionResponse {
     pub default_scope: String,
     #[serde(rename = "activeSkills")]
     pub active_skills: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionsResponse {
+    pub sessions: Vec<SessionSummaryResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionSummaryResponse {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub status: String,
+    pub mode: Mode,
+    pub label: String,
+    pub voice_cap: String,
+    #[serde(rename = "activeSkills")]
+    pub active_skills: Vec<String>,
+    pub title: String,
+    pub preview: String,
+    pub message_count: i64,
+    pub last_event_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMessagesResponse {
+    pub id: Uuid,
+    pub mode: Mode,
+    pub mode_state: ModeState,
+    pub persona_status: crate::PersonaStatus,
+    pub label: String,
+    pub voice_cap: String,
+    pub default_scope: String,
+    #[serde(rename = "activeSkills")]
+    pub active_skills: Vec<String>,
+    pub messages: Vec<SessionMessageResponse>,
+    pub last_event_id: Option<i64>,
+    pub pending_events: Vec<SessionPendingEventResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMessageResponse {
+    pub seq: i64,
+    pub role: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPendingEventResponse {
+    pub id: String,
+    pub seq: i64,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub data: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+pub(super) async fn list_sessions<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ListSessionsQuery>,
+) -> Result<Json<ListSessionsResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let limit = query.limit.unwrap_or(30).clamp(1, 100);
+    let sessions = state
+        .store
+        .list_sessions(limit)
+        .await?
+        .into_iter()
+        .map(session_summary_response)
+        .collect();
+    Ok(Json(ListSessionsResponse { sessions }))
 }
 
 pub(super) async fn create_session<S, M, C>(
@@ -69,6 +160,49 @@ where
     Ok(Json(session_response(session, persona_status)))
 }
 
+pub(super) async fn get_session_messages<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<SessionMessagesResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let session = state.store.get_session(session_id).await?;
+    let persona_status = session.persona_status.clone();
+    let messages = state
+        .store
+        .session_messages(session_id)
+        .await?
+        .into_iter()
+        .map(|message| SessionMessageResponse {
+            seq: message.seq,
+            role: message.role,
+            content: message.content,
+            created_at: message.created_at,
+        })
+        .collect();
+    let events = state.store.events_after(session_id, None).await?;
+    let last_event_id = events.last().map(|event| event.seq);
+    let pending_events = pending_events(&events);
+    Ok(Json(SessionMessagesResponse {
+        id: session.id,
+        mode: session.mode,
+        mode_state: session.mode_state.clone(),
+        persona_status,
+        label: session.mode.label().to_string(),
+        voice_cap: session.mode.voice_cap().to_string(),
+        default_scope: session.mode.default_scope().to_string(),
+        active_skills: active_skills(session.mode),
+        messages,
+        last_event_id,
+        pending_events,
+    }))
+}
+
 fn session_response(
     session: crate::SessionRecord,
     persona_status: crate::PersonaStatus,
@@ -83,6 +217,110 @@ fn session_response(
         default_scope: session.mode.default_scope().to_string(),
         active_skills: active_skills(session.mode),
     }
+}
+
+fn session_summary_response(summary: crate::SessionSummaryRecord) -> SessionSummaryResponse {
+    let title = compact_session_text(summary.summary.as_deref())
+        .or_else(|| compact_session_text(summary.title.as_deref()))
+        .unwrap_or_else(|| "New session".to_string());
+    let preview = compact_session_text(summary.preview.as_deref()).unwrap_or_default();
+    SessionSummaryResponse {
+        id: summary.session.id,
+        created_at: summary.session.created_at,
+        updated_at: summary.session.updated_at,
+        status: summary.session.status,
+        mode: summary.session.mode,
+        label: summary.session.mode.label().to_string(),
+        voice_cap: summary.session.mode.voice_cap().to_string(),
+        active_skills: active_skills(summary.session.mode),
+        title,
+        preview,
+        message_count: summary.message_count,
+        last_event_id: summary.last_event_id,
+    }
+}
+
+fn compact_session_text(value: Option<&str>) -> Option<String> {
+    let text = value?.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    const MAX_CHARS: usize = 140;
+    let mut compact = text.chars().take(MAX_CHARS).collect::<String>();
+    if text.chars().count() > MAX_CHARS {
+        compact.push_str("...");
+    }
+    Some(compact)
+}
+
+fn pending_events(events: &[SessionEvent]) -> Vec<SessionPendingEventResponse> {
+    let mut approvals = BTreeMap::<String, SessionEvent>::new();
+    let mut proposals = BTreeMap::<String, SessionEvent>::new();
+
+    for event in events {
+        match event.event_type.as_str() {
+            "approval" => {
+                if let Some(id) = event_id_value(&event.payload_json, "approvalId") {
+                    approvals.insert(id, event.clone());
+                }
+            }
+            "approval_resolved" => {
+                if let Some(id) = event_id_value(&event.payload_json, "approvalId") {
+                    approvals.remove(&id);
+                }
+            }
+            "write_proposal" => {
+                if let Some(id) = event_id_value(&event.payload_json, "proposalId") {
+                    let status = event_id_value(&event.payload_json, "status")
+                        .unwrap_or_else(|| "pending".to_string());
+                    if status == "pending" {
+                        proposals.insert(id, event.clone());
+                    } else {
+                        proposals.remove(&id);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut pending = approvals
+        .into_values()
+        .chain(proposals.into_values())
+        .collect::<Vec<_>>();
+    pending.sort_by_key(|event| event.seq);
+    pending
+        .into_iter()
+        .map(|event| SessionPendingEventResponse {
+            id: event.seq.to_string(),
+            seq: event.seq,
+            event_type: event.event_type,
+            data: event.payload_json,
+            created_at: event.created_at,
+        })
+        .collect()
+}
+
+fn event_id_value(payload: &Value, camel_key: &str) -> Option<String> {
+    let snake_key = camel_to_snake(camel_key);
+    payload
+        .get(camel_key)
+        .or_else(|| payload.get(&snake_key))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn camel_to_snake(value: &str) -> String {
+    let mut snake = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_uppercase() {
+            snake.push('_');
+            snake.push(ch.to_ascii_lowercase());
+        } else {
+            snake.push(ch);
+        }
+    }
+    snake
 }
 
 #[derive(Debug, Deserialize)]

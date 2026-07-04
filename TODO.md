@@ -126,8 +126,9 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       catalog with docs, schemas, examples, grants, and denial behavior.
       **Resolved:** All four HostFns registered with full docs/schemas/examples/grants. `agents.run`
       body is live (calls `ChatActorExecutor`); spawn/parallel/msg are capability-gated stubs.
-- [ ] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
+- [x] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
       as `undefined` or fail closed.
+      **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.
 - [ ] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
 - [ ] Fan-out to multiple workers returns only bounded digests to the parent context.
 - [ ] Sibling agents can coordinate through explicit messages.

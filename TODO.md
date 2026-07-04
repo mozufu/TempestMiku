@@ -227,7 +227,10 @@ Acceptance:
 - [x] Implement `agents.run(role, task, opts)` — spawn one actor, await its digest result.
       **Resolved:** `AgentsRunFn` calls `ChatActorExecutor::run_to_digest`, tracks lifecycle in
       `MailboxRegistry`, returns bounded `AgentDigest` JSON to the caller.
-- [ ] Implement `agents.spawn(role, task) -> handle` — non-blocking; coordinate via handle/messages.
+- [x] Implement `agents.spawn(role, task) -> handle` — non-blocking; coordinate via handle/messages.
+      **Resolved:** Background `std::thread::spawn` with dedicated `current_thread` runtime; actor tracked
+      as `Running` immediately, roster updated to `Terminated` on completion. Tests: spawn denied,
+      not-impl without executor, invalid args, handle returned + background completion.
 - [ ] Implement `agents.parallel([{role, task}, …])` — one-wave fan-out with bounded pool and ordered
       digest results.
 - [ ] Implement `agents.msg(handle, text, opts?)` — send to a spawned actor (request/reply or

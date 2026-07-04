@@ -226,7 +226,6 @@ impl HostFn for AgentsRunFn {
 
 pub struct AgentsSpawnFn {
     docs: ToolDocs,
-    #[allow(dead_code)]
     roster: Arc<MailboxRegistry>,
 }
 
@@ -281,9 +280,74 @@ impl HostFn for AgentsSpawnFn {
         &self.docs
     }
 
-    async fn call(&self, _args: Value, ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_SPAWN);
-        Err(HostError::NotImplemented("agents.spawn — P3.2".to_string()))
+
+        let role = args["role"]
+            .as_str()
+            .ok_or_else(|| HostError::InvalidArgs("role must be a string".to_string()))?
+            .to_string();
+        let task = args["task"]
+            .as_str()
+            .ok_or_else(|| HostError::InvalidArgs("task must be a string".to_string()))?
+            .to_string();
+
+        let executor = self
+            .roster
+            .executor()
+            .ok_or_else(|| HostError::NotImplemented("agents.spawn — executor not configured".to_string()))?;
+
+        let actor_id = self.roster.next_actor_id(&role);
+        let budget = ActorBudget::default();
+
+        let record = ActorRecord {
+            id: actor_id.clone(),
+            parent: None,
+            status: ActorStatus::Running,
+            mode: Some(role.clone()),
+            budget: budget.clone(),
+            spawned_at: Utc::now(),
+            completed_at: None,
+            cancelled: false,
+            failure_reason: None,
+        };
+        self.roster.track(record).await;
+
+        let spec = ActorSpec {
+            id: actor_id.clone(),
+            role,
+            task,
+            mode: None,
+            grants: CapabilityGrants::default(),
+            budget,
+            parent: None,
+            depth: 0,
+        };
+
+        // Background thread: actor runs in its own current_thread runtime so it
+        // survives past the parent cell's await and doesn't block the caller.
+        let roster = Arc::clone(&self.roster);
+        let actor_id_bg = actor_id.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("spawn worker runtime");
+            tracing::debug!(actor_id = %actor_id_bg, "spawned actor started");
+            match rt.block_on(executor.run_to_digest(spec)) {
+                Ok(_digest) => {
+                    rt.block_on(roster.mark_complete(&actor_id_bg));
+                    tracing::debug!(actor_id = %actor_id_bg, "spawned actor completed");
+                }
+                Err(err) => {
+                    let reason = map_actor_error(&err);
+                    tracing::warn!(actor_id = %actor_id_bg, error = %err, "spawned actor failed");
+                    rt.block_on(roster.mark_failed(&actor_id_bg, reason));
+                }
+            }
+        });
+
+        Ok(json!({ "id": actor_id.as_str() }))
     }
 }
 
@@ -476,6 +540,69 @@ mod tests {
         let ctx = ctx_without_agents();
         let err = f.call(json!({"role": "r", "task": "t"}), &ctx).await.unwrap_err();
         assert!(matches!(err, HostError::CapabilityDenied(ref s) if s == caps::AGENTS_SPAWN));
+    }
+
+    #[tokio::test]
+    async fn agents_spawn_executor_not_configured_returns_not_implemented() {
+        let f = AgentsSpawnFn::new(make_roster());
+        let ctx = ctx_with(caps::AGENTS_SPAWN);
+        let err = f.call(json!({"role": "r", "task": "t"}), &ctx).await.unwrap_err();
+        assert!(matches!(err, HostError::NotImplemented(_)));
+    }
+
+    #[tokio::test]
+    async fn agents_spawn_invalid_args_returns_invalid_args_error() {
+        let roster = make_roster();
+        let f = AgentsSpawnFn::new(roster);
+        let ctx = ctx_with(caps::AGENTS_SPAWN);
+        let err = f.call(json!({"role": 42, "task": "t"}), &ctx).await.unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)));
+    }
+
+    #[tokio::test]
+    async fn agents_spawn_returns_handle_actor_runs_in_background() {
+        use crate::actor::{ActorDigest, ActorId, ActorSpec, ActorStatus};
+        use crate::executor::{ActorError, ActorExecutor};
+
+        struct EchoExecutor;
+        #[async_trait::async_trait]
+        impl ActorExecutor for EchoExecutor {
+            async fn run_to_digest(
+                &self,
+                spec: ActorSpec,
+            ) -> std::result::Result<ActorDigest, ActorError> {
+                Ok(ActorDigest {
+                    actor_id: spec.id,
+                    summary: format!("echo: {}", spec.task),
+                    artifact_uri: None,
+                    history_uri: None,
+                })
+            }
+        }
+
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(EchoExecutor));
+        let f = AgentsSpawnFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_SPAWN);
+
+        let result = f
+            .call(json!({"role": "worker", "task": "do the thing"}), &ctx)
+            .await
+            .unwrap();
+
+        let id_str = result["id"].as_str().expect("id field");
+        let actor_id = ActorId::new(id_str).expect("valid actor id");
+
+        // Actor is immediately tracked as Running
+        let rec = roster.get(&actor_id).await.unwrap();
+        assert_eq!(rec.status, ActorStatus::Running);
+
+        // Wait for background thread to complete (EchoExecutor is trivially fast)
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let rec = roster.get(&actor_id).await.unwrap();
+        assert_eq!(rec.status, ActorStatus::Terminated);
+        assert!(rec.completed_at.is_some());
     }
 
     #[tokio::test]

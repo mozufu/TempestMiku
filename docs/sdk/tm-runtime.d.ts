@@ -529,10 +529,19 @@ interface AgentsNamespace {
   /**
    * agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>
    *
-   * Send a plain-prose message to a spawned actor. Fire-and-forget by default;
-   * set opts.await = true for request/reply. A null/void reply means the actor
-   * is unreachable — do not retry-loop. Requires agents.msg grant.
-   * Implementation deferred to P3.2.
+   * Send a plain-prose message to a spawned actor.
+   *
+   * Fire-and-forget (default): records the message in the session log and returns
+   * undefined immediately — the actor is not interrupted.
+   *
+   * Request/reply (opts.await = true): runs a one-shot seeded continuation from
+   * the target actor's last digest summary + the new text, and returns the reply string.
+   * Each await call is stateless: repeated calls re-seed from the original summary, not
+   * from the previous reply.
+   *
+   * A null/void reply means the actor is unreachable — do not retry-loop (§23.9).
+   * Messages must be plain prose — never control-payload blobs. Pass large payloads by
+   * reference (artifact://, memory://). Requires agents.msg grant.
    */
   msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>;
 }

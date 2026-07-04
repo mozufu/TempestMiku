@@ -125,9 +125,9 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
 
 - [x] `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` are registered in the host
       catalog with docs, schemas, examples, grants, and denial behavior.
-      **Resolved:** All four HostFns registered with full docs/schemas/examples/grants. `agents.run`,
-      `agents.spawn`, and `agents.parallel` are live with `ChatActorExecutor`; `agents.msg` is
-      capability-gated and returns `NotImplemented` until mailbox request/reply lands.
+      **Resolved:** All four HostFns registered with full docs/schemas/examples/grants. All four are
+      live with `ChatActorExecutor`. `agents.msg` ships one-shot (P3.2): F&F logs the message; await
+      runs a seeded continuation. Live sibling coordination deferred to P3-plus.
 - [x] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
       as `undefined` or fail closed.
       **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.
@@ -239,9 +239,18 @@ Acceptance:
       `tokio::spawn` per actor (all run concurrently); awaits handles in submission order so results[i]
       matches tasks[i]; first actor failure returns error, remaining detached tasks update roster via Arc.
       Tests: denied, not-impl, empty array, invalid args, 3-actor ordered digests.
-- [ ] Implement `agents.msg(handle, text, opts?)` — send to a spawned actor (request/reply or
+- [x] Implement `agents.msg(handle, text, opts?)` — send to a spawned actor (request/reply or
       fire-and-forget).
-- [ ] Update `docs/sdk/tm-runtime.d.ts` and `tools.docs` together; never one without the other.
+      **Resolved (P3.2 one-shot model):** Fire-and-forget records `ActorMessage` in bounded log and
+      returns `null`. Request/reply (`opts.await = true`) runs a one-shot seeded continuation from
+      the target's `last_summary` + new text via the injected executor; each call is stateless (re-seeds
+      from the original summary). Unknown handle → `null` (unreachable receipt, §23.9). Continuation
+      actors are ephemeral (not rostered) to prevent unbounded roster growth. `ActorRecord` gains
+      `last_summary`; `MailboxRegistry` gains `record_message`, `messages`, `mark_complete_with_summary`.
+      Live resident mailbox (MPSC queues, inbox draining, `send`/`wait`/`inbox`/`broadcast`) is P3-plus.
+- [x] Update `docs/sdk/tm-runtime.d.ts` and `tools.docs` together; never one without the other.
+      **Resolved:** `tm-runtime.d.ts` `msg` doc-comment updated to document MVP one-shot semantics;
+      `AgentsMsgFn` `ToolDocs` description updated; `23-agents-orchestration.md` callout added.
 - [x] Add tests for: granted, denied, unknown method, invalid args, timeout, output-spill, and
       unreachable-handle paths.
       **Resolved:** `agents_run_denied_without_grant`, `agents_run_executor_not_configured_returns_not_implemented`,

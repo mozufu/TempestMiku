@@ -40,14 +40,20 @@ pub enum Receipt {
     Failed,
 }
 
+/// Maximum number of messages retained in the in-memory log.
+/// Older messages are dropped (oldest-first) once this limit is exceeded.
+const MAX_MESSAGES: usize = 1000;
+
 /// Concurrent roster of live actors, plus the injected executor for `agents.run` (P3.1).
 ///
-/// The mailbox channel layer (bounded MPSC queues, `CancelToken`) is deferred to P3.2
-/// when `agents.spawn` and `agents.msg` have concrete callers.
+/// P3.2 additions: bounded in-memory message log (`messages`) and `mark_complete_with_summary`
+/// so `agents.msg` request/reply can seed a continuation from the target actor's last output.
+/// The true per-actor MPSC channel layer (bounded queues, `CancelToken`) is deferred to P3-plus.
 pub struct MailboxRegistry {
     actors: RwLock<HashMap<ActorId, ActorRecord>>,
     executor: std::sync::OnceLock<Arc<dyn ActorExecutor>>,
     next_seq: AtomicU64,
+    messages: RwLock<Vec<ActorMessage>>,
 }
 
 impl MailboxRegistry {
@@ -56,6 +62,7 @@ impl MailboxRegistry {
             actors: RwLock::new(HashMap::new()),
             executor: std::sync::OnceLock::new(),
             next_seq: AtomicU64::new(0),
+            messages: RwLock::new(Vec::new()),
         }
     }
 
@@ -115,6 +122,34 @@ impl MailboxRegistry {
         }
     }
 
+    /// Mark an actor as successfully terminated and store its digest summary.
+    ///
+    /// The stored summary seeds seeded continuations in `agents.msg` request/reply.
+    pub async fn mark_complete_with_summary(&self, id: &ActorId, summary: String) {
+        if let Some(rec) = self.actors.write().await.get_mut(id) {
+            rec.status = ActorStatus::Terminated;
+            rec.completed_at = Some(Utc::now());
+            rec.last_summary = Some(summary);
+        }
+    }
+
+    /// Append a message to the bounded in-memory log.
+    ///
+    /// Oldest messages are dropped once the log exceeds [`MAX_MESSAGES`].
+    pub async fn record_message(&self, msg: ActorMessage) {
+        let mut msgs = self.messages.write().await;
+        if msgs.len() >= MAX_MESSAGES {
+            let excess = msgs.len() - MAX_MESSAGES + 1;
+            msgs.drain(0..excess);
+        }
+        msgs.push(msg);
+    }
+
+    /// Snapshot of all messages in the log (oldest-first).
+    pub async fn messages(&self) -> Vec<ActorMessage> {
+        self.messages.read().await.clone()
+    }
+
     /// Mark an actor as terminated due to a failure.
     pub async fn mark_failed(&self, id: &ActorId, reason: FailureReason) {
         if let Some(rec) = self.actors.write().await.get_mut(id) {
@@ -142,7 +177,7 @@ impl std::fmt::Debug for MailboxRegistry {
         f.debug_struct("MailboxRegistry")
             .field("executor_set", &self.executor.get().is_some())
             .field("next_seq", &self.next_seq.load(Ordering::Relaxed))
-            .finish_non_exhaustive()
+            .finish_non_exhaustive() // actors + messages excluded (async lock)
     }
 }
 
@@ -162,6 +197,7 @@ mod tests {
             completed_at: None,
             cancelled: false,
             failure_reason: None,
+            last_summary: None,
         }
     }
 

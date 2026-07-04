@@ -93,6 +93,13 @@ P3 ships the first concrete slice only:
 | `agents.parallel([{role, task}, …])` | fan-out, bounded pool, **one wave**, ordered results |
 | `agents.msg(handle, text, opts?)` | send to a spawned actor (request / reply or fire-and-forget) |
 
+> **MVP `agents.msg` is one-shot (P3.2).** Fire-and-forget logs the message and returns `null`.
+> Request/reply (`opts.await = true`) runs a fresh one-shot continuation seeded from the target
+> actor's stored digest summary + the new text — it is **stateless**: repeated calls re-seed from
+> the original summary, not from the previous reply. There are no live resident actors, no inbox
+> draining, and no MPSC queues in P3. Live sibling coordination (`send`/`wait`/`inbox`/`broadcast`)
+> remains P3-plus.
+
 The §23 full surface stays P3-plus until the MVP gate passes:
 
 | P3-plus call | Effect |

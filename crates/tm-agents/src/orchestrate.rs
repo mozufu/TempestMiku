@@ -10,7 +10,7 @@ use tm_host::{
 
 use crate::actor::{ActorBudget, ActorId, ActorRecord, ActorSpec, ActorStatus};
 use crate::executor::ActorError;
-use crate::mailbox::MailboxRegistry;
+use crate::mailbox::{ActorMessage, MailboxRegistry};
 use crate::supervise::FailureReason;
 
 /// Capability names for the P3 MVP `agents.*` calls (§23.3, ROADMAP authority).
@@ -186,6 +186,7 @@ impl HostFn for AgentsRunFn {
             completed_at: None,
             cancelled: false,
             failure_reason: None,
+            last_summary: None,
         };
         self.roster.track(record).await;
 
@@ -204,7 +205,9 @@ impl HostFn for AgentsRunFn {
 
         match executor.run_to_digest(spec).await {
             Ok(digest) => {
-                self.roster.mark_complete(&actor_id).await;
+                self.roster
+                    .mark_complete_with_summary(&actor_id, digest.summary.clone())
+                    .await;
                 tracing::debug!(actor_id = %actor_id, "actor completed");
                 Ok(json!({
                     "actorId": digest.actor_id.as_str(),
@@ -312,6 +315,7 @@ impl HostFn for AgentsSpawnFn {
             completed_at: None,
             cancelled: false,
             failure_reason: None,
+            last_summary: None,
         };
         self.roster.track(record).await;
 
@@ -337,8 +341,8 @@ impl HostFn for AgentsSpawnFn {
                 .expect("spawn worker runtime");
             tracing::debug!(actor_id = %actor_id_bg, "spawned actor started");
             match rt.block_on(executor.run_to_digest(spec)) {
-                Ok(_digest) => {
-                    rt.block_on(roster.mark_complete(&actor_id_bg));
+                Ok(digest) => {
+                    rt.block_on(roster.mark_complete_with_summary(&actor_id_bg, digest.summary));
                     tracing::debug!(actor_id = %actor_id_bg, "spawned actor completed");
                 }
                 Err(err) => {
@@ -469,6 +473,7 @@ impl HostFn for AgentsParallelFn {
                     completed_at: None,
                     cancelled: false,
                     failure_reason: None,
+                    last_summary: None,
                 })
                 .await;
             actor_specs.push((
@@ -495,7 +500,9 @@ impl HostFn for AgentsParallelFn {
                 tokio::spawn(async move {
                     match executor.run_to_digest(spec).await {
                         Ok(digest) => {
-                            roster.mark_complete(&actor_id).await;
+                            roster
+                                .mark_complete_with_summary(&actor_id, digest.summary.clone())
+                                .await;
                             tracing::debug!(actor_id = %actor_id, "parallel actor completed");
                             Ok(json!({
                                 "actorId": digest.actor_id.as_str(),
@@ -537,7 +544,6 @@ impl HostFn for AgentsParallelFn {
 
 pub struct AgentsMsgFn {
     docs: ToolDocs,
-    #[allow(dead_code)]
     roster: Arc<MailboxRegistry>,
 }
 
@@ -550,11 +556,16 @@ impl AgentsMsgFn {
                 namespace: "agents".to_string(),
                 summary: "Send a plain-prose message to a spawned actor".to_string(),
                 description: Some(
-                    "Sends a plain-prose message to a spawned actor handle. Fire-and-forget by \
-                     default; set opts.await = true for request/reply. Messages are plain prose — \
-                     never control-payload blobs. Pass large payloads by reference \
-                     (artifact://, memory://). A null reply means unreachable — do not retry-loop. \
-                     Requires agents.msg grant. Implementation deferred to P3.2."
+                    "Sends a plain-prose message to a spawned actor handle. \
+                     Fire-and-forget (default): records the message and returns null immediately. \
+                     Request/reply (opts.await = true): runs a one-shot seeded continuation from \
+                     the target's last digest summary + the new text, and returns the reply string. \
+                     Each opts.await call is stateless — repeated calls re-seed from the original \
+                     summary, not the previous reply. \
+                     A null reply means the actor is unreachable — do not retry-loop (§23.9). \
+                     Messages are plain prose — never control-payload blobs. \
+                     Pass large payloads by reference (artifact://, memory://). \
+                     Requires agents.msg grant."
                         .to_string(),
                 ),
                 signature: "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>"
@@ -601,9 +612,101 @@ impl HostFn for AgentsMsgFn {
         &self.docs
     }
 
-    async fn call(&self, _args: Value, ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_MSG);
-        Err(HostError::NotImplemented("agents.msg — P3.2".to_string()))
+
+        // ── Parse arguments ───────────────────────────────────────────────────
+        let id_str = args["handle"]["id"]
+            .as_str()
+            .ok_or_else(|| HostError::InvalidArgs("handle.id must be a string".to_string()))?;
+        let target_id = ActorId::new(id_str)
+            .map_err(|e| HostError::InvalidArgs(format!("handle.id invalid: {e}")))?;
+
+        let text = args["text"]
+            .as_str()
+            .ok_or_else(|| HostError::InvalidArgs("text must be a string".to_string()))?
+            .to_string();
+
+        let do_await = args["opts"]["await"].as_bool().unwrap_or(false);
+
+        // ── Resolve target ────────────────────────────────────────────────────
+        // Not found → unreachable receipt (§23.9): return null, do not error.
+        let target_record = match self.roster.get(&target_id).await {
+            Some(rec) => rec,
+            None => return Ok(Value::Null),
+        };
+
+        // Synthetic "Root" id for top-level orchestrator sends (§23.3).
+        // Real caller-id threading through InvocationCtx is deferred to P3-plus.
+        let from_id = ActorId::new("Root").expect("Root is always valid");
+
+        // ── Fire-and-forget ───────────────────────────────────────────────────
+        if !do_await {
+            self.roster
+                .record_message(ActorMessage {
+                    from: from_id,
+                    to: target_id,
+                    text,
+                    reply_to: None,
+                    sent_at: Utc::now(),
+                })
+                .await;
+            return Ok(Value::Null);
+        }
+
+        // ── Request/reply ─────────────────────────────────────────────────────
+        // Requires executor — mirrors the pattern in agents.run / agents.spawn.
+        let executor = self.roster.executor().ok_or_else(|| {
+            HostError::NotImplemented("agents.msg await — executor not configured".to_string())
+        })?;
+
+        // Record the outgoing message before running the continuation.
+        self.roster
+            .record_message(ActorMessage {
+                from: from_id,
+                to: target_id.clone(),
+                text: text.clone(),
+                reply_to: None,
+                sent_at: Utc::now(),
+            })
+            .await;
+
+        // Seed the continuation from the target's stored summary (one-shot model).
+        // Each await call is stateless: re-seeds from the original summary, not prior replies.
+        let prior_context = target_record
+            .last_summary
+            .as_deref()
+            .unwrap_or("(no prior context)");
+        let continuation_role = target_record
+            .mode
+            .as_deref()
+            .unwrap_or("worker")
+            .to_string();
+        let seeded_task = format!(
+            "Prior context: {prior_context}\n\nNew message: {text}"
+        );
+
+        let continuation_id = self.roster.next_actor_id(&continuation_role);
+        let budget = ActorBudget::default();
+        let spec = ActorSpec {
+            id: continuation_id.clone(),
+            role: continuation_role,
+            task: seeded_task,
+            mode: None,
+            grants: CapabilityGrants::default(),
+            budget,
+            parent: Some(target_id),
+            depth: 0,
+        };
+
+        // Continuation actors are ephemeral — NOT tracked in the roster.
+        // Tracking them would let repeated top-level msgs grow the roster unboundedly.
+        let digest = executor
+            .run_to_digest(spec)
+            .await
+            .map_err(|e| HostError::HostCall(e.to_string()))?;
+
+        Ok(Value::String(digest.summary))
     }
 }
 
@@ -822,6 +925,171 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, HostError::CapabilityDenied(ref s) if s == caps::AGENTS_MSG));
+    }
+
+    #[tokio::test]
+    async fn agents_msg_invalid_args() {
+        let f = AgentsMsgFn::new(make_roster());
+        let ctx = ctx_with(caps::AGENTS_MSG);
+
+        // Non-string text
+        let err = f
+            .call(json!({"handle": {"id": "Worker"}, "text": 42}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)), "expected InvalidArgs, got {err:?}");
+
+        // Missing handle.id
+        let err = f
+            .call(json!({"handle": {}, "text": "hello"}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)), "expected InvalidArgs, got {err:?}");
+
+        // handle.id is not valid CamelCase (lowercase start)
+        let err = f
+            .call(json!({"handle": {"id": "worker"}, "text": "hello"}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)), "expected InvalidArgs, got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn agents_msg_unknown_handle_returns_null() {
+        let f = AgentsMsgFn::new(make_roster());
+        let ctx = ctx_with(caps::AGENTS_MSG);
+        // "Nope" is CamelCase but not in roster
+        let result = f
+            .call(json!({"handle": {"id": "Nope"}, "text": "hi"}), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(result, Value::Null);
+    }
+
+    #[tokio::test]
+    async fn agents_msg_fire_and_forget_records_and_returns_null() {
+        use crate::actor::{ActorBudget, ActorId, ActorRecord, ActorStatus};
+        let roster = make_roster();
+        // Pre-populate a tracked actor
+        roster
+            .track(ActorRecord {
+                id: ActorId::new("Worker").unwrap(),
+                parent: None,
+                status: ActorStatus::Running,
+                mode: Some("worker".to_string()),
+                budget: ActorBudget::default(),
+                spawned_at: chrono::Utc::now(),
+                completed_at: None,
+                cancelled: false,
+                failure_reason: None,
+                last_summary: None,
+            })
+            .await;
+
+        let f = AgentsMsgFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_MSG);
+
+        let result = f
+            .call(json!({"handle": {"id": "Worker"}, "text": "status?"}), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(result, Value::Null);
+
+        let messages = roster.messages().await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].from.as_str(), "Root");
+        assert_eq!(messages[0].to.as_str(), "Worker");
+        assert_eq!(messages[0].text, "status?");
+    }
+
+    #[tokio::test]
+    async fn agents_msg_await_returns_reply() {
+        use crate::actor::{ActorBudget, ActorDigest, ActorId, ActorRecord, ActorSpec, ActorStatus};
+        use crate::executor::{ActorError, ActorExecutor};
+
+        struct EchoExecutor;
+        #[async_trait::async_trait]
+        impl ActorExecutor for EchoExecutor {
+            async fn run_to_digest(
+                &self,
+                spec: ActorSpec,
+            ) -> std::result::Result<ActorDigest, ActorError> {
+                Ok(ActorDigest {
+                    actor_id: spec.id,
+                    summary: format!("echo: {}", spec.task),
+                    artifact_uri: None,
+                    history_uri: None,
+                })
+            }
+        }
+
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(EchoExecutor));
+
+        // Track a completed actor with a stored summary
+        let target_id = ActorId::new("ResearchWorker").unwrap();
+        roster
+            .track(ActorRecord {
+                id: target_id.clone(),
+                parent: None,
+                status: ActorStatus::Terminated,
+                mode: Some("researcher".to_string()),
+                budget: ActorBudget::default(),
+                spawned_at: chrono::Utc::now(),
+                completed_at: Some(chrono::Utc::now()),
+                cancelled: false,
+                failure_reason: None,
+                last_summary: Some("I found the answer.".to_string()),
+            })
+            .await;
+
+        let f = AgentsMsgFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_MSG);
+
+        let result = f
+            .call(
+                json!({"handle": {"id": "ResearchWorker"}, "text": "elaborate please", "opts": {"await": true}}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        // EchoExecutor echoes the seeded task; result should contain both prior context and the new text
+        let reply = result.as_str().expect("reply should be a string");
+        assert!(reply.contains("I found the answer."), "reply should contain prior context");
+        assert!(reply.contains("elaborate please"), "reply should contain new message");
+    }
+
+    #[tokio::test]
+    async fn agents_msg_await_without_executor_returns_not_implemented() {
+        use crate::actor::{ActorBudget, ActorId, ActorRecord, ActorStatus};
+        let roster = make_roster(); // no executor set
+        roster
+            .track(ActorRecord {
+                id: ActorId::new("Worker").unwrap(),
+                parent: None,
+                status: ActorStatus::Terminated,
+                mode: None,
+                budget: ActorBudget::default(),
+                spawned_at: chrono::Utc::now(),
+                completed_at: Some(chrono::Utc::now()),
+                cancelled: false,
+                failure_reason: None,
+                last_summary: None,
+            })
+            .await;
+
+        let f = AgentsMsgFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_MSG);
+
+        let err = f
+            .call(
+                json!({"handle": {"id": "Worker"}, "text": "hi", "opts": {"await": true}}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::NotImplemented(_)), "expected NotImplemented, got {err:?}");
     }
 
     #[test]

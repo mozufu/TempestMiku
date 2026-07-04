@@ -102,6 +102,8 @@ pub struct ActorRecord {
     pub completed_at: Option<DateTime<Utc>>,
     pub cancelled: bool,
     pub failure_reason: Option<FailureReason>,
+    /// Plain-prose digest summary stored on completion; seeds seeded continuations in agents.msg.
+    pub last_summary: Option<String>,
 }
 
 /// Opaque handle returned by `agents.spawn` for coordination via messages (§23.3).

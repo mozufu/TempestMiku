@@ -151,8 +151,13 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       bounded previews.
       **Resolved:** `agent://<id>` returns actor record JSON; `agent://` lists all actors; 
       `history://<id>` returns placeholder until transcript storage lands in P3.3.
-- [ ] Approval-gated effects inside child agents still route through the same approval broker and
+- [x] Approval-gated effects inside child agents still route through the same approval broker and
       timeout/default-deny behavior.
+      **Deferred to P3-plus:** Child actors always get `DefaultDenyApprovalPolicy` — approval-gated
+      ops (file overwrite, unsafe `proc.run`, etc.) receive `ApprovalTimeoutError` and are denied.
+      Fail-closed is guaranteed. Wiring child actors to the live `HttpApprovalPolicy` + `ApprovalBroker`
+      requires threading a `CodingEventSink` factory through `ChatActorExecutor` so child agents can
+      emit SSE approval events from their dedicated threads — deferred to P3-plus.
 - [x] Normal `cargo test` remains external-service-free.
 
 ## P3.0 Scope lock

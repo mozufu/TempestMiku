@@ -1,14 +1,14 @@
 //! TempestMiku actor lifecycle, mailbox, orchestration, supervision, and agent:// resources.
 //!
-//! P3 implementation — `agents.run` is live when an `ActorExecutor` is injected at startup.
-//! `agents.spawn`, `agents.parallel`, and `agents.msg` are capability-gated stubs deferred
-//! to P3.2 when their mailbox channel layer has concrete callers.
+//! P3 implementation — `agents.run`, `agents.spawn`, and `agents.parallel` are live when an
+//! `ActorExecutor` is injected at startup. `agents.msg` is registered and grant-checked, but its
+//! concrete mailbox request/reply behavior is still pending.
 //!
 //! Crate layout (§23.8):
 //! - [`actor`]      — identity, lifecycle, status, handle, budget, digest, lifecycle events
 //! - [`executor`]   — `ActorExecutor` trait injected by `tm-server` at startup
 //! - [`mailbox`]    — message types, actor roster registry (`MailboxRegistry`)
-//! - [`orchestrate`] — `agents.*` HostFns (run live, spawn/parallel/msg stubbed); `register`
+//! - [`orchestrate`] — P3 MVP `agents.*` HostFns (run/spawn/parallel live, msg pending); `register`
 //! - [`supervise`]  — supervision tree types, restart strategies, failure reasons
 //! - [`resources`]  — `agent://` (live reads/list) and `history://` (stub) ResourceHandlers
 

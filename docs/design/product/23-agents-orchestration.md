@@ -39,8 +39,8 @@ character + mode, budget, and capability grant. Cast as an actor:
 | **Hidden local state** | its **own context window** (§22 working memory) + a granted **memory scope** (§22 store); no shared mutable state |
 | **Behavior** | current **mode** (§21) + **role** + capability grant; resolved per message (late binding) |
 | **Designate next behavior** | mode switch / scope update between messages (persona self-edit, §21) |
-| **Create** | `agents.spawn` / `agents.run` |
-| **Send** | `agents.msg` / broadcast (§23.2) |
+| **Create** | P3 MVP: `agents.spawn` / `agents.run` |
+| **Send** | P3 MVP: `agents.msg`; P3-plus: broadcast (§23.2) |
 
 Encapsulation is hard: one actor **never** reaches into another's context or transcript. `history://<id>`
 is **read-only** observation, not state access; coordination is by message, not by shared memory.
@@ -48,7 +48,8 @@ is **read-only** observation, not state access; coordination is by message, not 
 ## 23.2 Messaging substrate — the only inter-agent coupling
 
 Async message passing is the sole way actors affect one another (Hewitt; Kay). No shared state, ever. The
-reference implementation is the harness `irc` model, adopted verbatim:
+reference implementation is the harness `irc` model. P3 MVP exposes the minimum handle-based
+message send through `agents.msg`; the rest of this table is the P3-plus/full mailbox surface:
 
 | Primitive | Semantics |
 |---|---|
@@ -83,18 +84,29 @@ flowchart LR
 The `agents.*` calls are convenience constructors over spawn + message + await; the model writes ordinary
 control flow (`for`, fan-out, `try`/`catch`) around them.
 
-| Call | Effect |
+P3 ships the first concrete slice only:
+
+| P3 MVP call | Effect |
 |---|---|
 | `agents.run(role, task, opts)` | spawn one actor, await its result |
 | `agents.spawn(role, task) -> handle` | non-blocking; coordinate via the handle / messages |
 | `agents.parallel([{role, task}, …])` | fan-out, bounded pool, **one wave**, ordered results |
-| `agents.pipeline(items, …stages)` | staged map, **barrier between stages** |
 | `agents.msg(handle, text, opts?)` | send to a spawned actor (request / reply or fire-and-forget) |
+
+The §23 full surface stays P3-plus until the MVP gate passes:
+
+| P3-plus call | Effect |
+|---|---|
+| `agents.pipeline(items, …stages)` | staged map, **barrier between stages** |
 | `agents.broadcast(text)` | message all live children |
+| `agents.send(to, text, opts?)` | lower-level send to one actor id |
+| `agents.wait(from?, timeout)` | block for a message |
+| `agents.inbox()` | drain pending messages without blocking |
+| `agents.list()` | roster: peers, status, unread, last activity |
 
 Handles **wire the DAG by reference** — an upstream result feeds a downstream prompt, so the large transcript
-is never re-inlined. `parallel` = one wave; `pipeline` = waves with a barrier. The graph must be **acyclic**:
-an actor never waits on its own descendant.
+is never re-inlined. P3 MVP `parallel` = one wave; P3-plus `pipeline` = waves with a barrier. The graph
+must be **acyclic**: an actor never waits on its own descendant.
 
 ```mermaid
 flowchart TD
@@ -144,19 +156,22 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 
 ## 23.7 `agents.*` capability + `agent://` resources
 
-- **Calls:** the §23.3 table (run / spawn / parallel / pipeline / msg / broadcast) + the §23.2 messaging
-  primitives (send / wait / inbox / list).
-- **Resources:** `agent://<id>` (output artifact, §25); `history://<id>` (read-only transcript); roster via
-  `list()`.
+- **P3 MVP calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
+- **P3-plus calls:** `agents.pipeline`, `agents.broadcast`, and the lower-level mailbox primitives
+  `agents.send`, `agents.wait`, `agents.inbox`, and `agents.list`.
+- **Resources:** `agent://<id>` (output artifact, §25); `history://<id>` (read-only transcript).
+  Roster listing through `agents.list()` is P3-plus.
 
 ## 23.8 Crate layout (`tm-agents`, §28)
 
 - `actor` — identity, lifecycle (spawn / run / park / terminate), behavior binding (mode + grant); each a
   recursive runtime session (§05/§06).
-- `mailbox` — async queue, addressing, delivery + receipts, broadcast, wait / inbox.
-- `orchestrate` — `agents.*` constructors (run / parallel / pipeline), DAG handles wired by reference.
+- `mailbox` — async queue, addressing, delivery + receipts; P3-plus adds broadcast, wait / inbox.
+- `orchestrate` — P3 MVP `agents.*` constructors (run / spawn / parallel / msg); P3-plus adds
+  pipeline and lower-level mailbox helpers.
 - `supervise` — supervision tree, restart strategies, budgets, depth cap, cost rollup.
-- `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry; roster via `list()`.
+- `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry;
+  P3 MVP roster/resource discovery goes through the resource gateway, while `agents.list()` is P3-plus.
 
 ## 23.9 Failure modes & degradation
 

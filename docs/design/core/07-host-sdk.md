@@ -26,16 +26,20 @@ First-pass globals:
 - `proc.run(cmd, args, opts?)` — allowlisted argv-vector process execution; never a shell string.
 - `http.get(url)` — current M1/P0 default-deny deterministic allowlist helper; it is not ambient
   network egress, not `fetch()`, and not a production egress policy.
+- `agents.run/spawn/parallel/msg(...)` — P3 MVP sub-agent orchestration, defined only in sessions
+  holding an `agents.*` grant. Ungranted sessions keep `agents` as `undefined`; P3-plus owns
+  `pipeline`, `broadcast`, `send`, `wait`, `inbox`, and `list`.
 
 Reserved first-pass globals:
 
-- `secrets`, `memory`, `skills`, and `agents` are explicitly set to `undefined`. This makes feature
-  checks safe while keeping secrets, `memory.*`, skills, and sub-agents closed until their backing
-  crates and policies exist. This does **not** close the P2 `memory://` resource route; memory reads
-  go through `resources.read(...)` and the `resources.read:memory` grant. If a future namespace
-  exists but a method is incomplete, that method throws `NotImplementedError`. Likewise,
-  `skill://...` is not a `ResourceUri` today even though composed prompts may use it as a section
-  label for injected skill markdown.
+- `secrets`, `memory`, and `skills` are explicitly set to `undefined`. This makes feature checks
+  safe while keeping secrets, `memory.*`, and skills closed until their backing crates and policies
+  exist. This does **not** close the P2 `memory://` resource route; memory reads go through
+  `resources.read(...)` and the `resources.read:memory` grant. `agents` starts as `undefined` too,
+  then the P3 sandbox prelude replaces it with `AgentsNamespace` only when the session has an
+  `agents.*` grant. If a namespace exists but a method is incomplete, that method throws
+  `NotImplementedError`. Likewise, `skill://...` is not a `ResourceUri` today even though composed
+  prompts may use it as a section label for injected skill markdown.
 
 Never exposed:
 
@@ -60,6 +64,11 @@ of truth.
  * markdown may be labeled skill://... inside composed prompts, but that
  * label is not a resources.read/list/preview surface until the P4/P7 skill
  * lifecycle work registers a handler and grants.
+ *
+ * P3 agents surface: `agents` is defined only in sessions holding the required
+ * agents.* grant. In ungranted sessions it remains `undefined`. The P3 MVP
+ * surface is run, spawn, parallel, and msg; pipeline, broadcast, send, wait,
+ * inbox, and list are P3-plus.
  */
 
 export {};
@@ -79,7 +88,7 @@ declare global {
   var secrets: undefined;
   var memory: undefined;
   var skills: undefined;
-  var agents: undefined;
+  const agents: AgentsNamespace | undefined;
 }
 
 type JsonPrimitive = string | number | boolean | null;
@@ -548,7 +557,7 @@ approval, and audit boundaries. The root roadmap is canonical (§28), but the SD
 | Namespace / surface | Target milestone | SDK rule |
 |---|---|---|
 | `memory.*` | P2/P4 split | P2 exposes memory reads as `memory://` resources through `resources.read:memory`; the `memory` global remains `undefined`. A future explicit `memory.*` namespace may expose minimum profile/user recall and state-capture calls, while P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
-| `agents.*` | P3 | Add only with `tm-agents`, actor lifecycle, mailbox/roster, supervision, and `agent://` resource handling. |
+| `agents.*` | P3 | P3 MVP exposes only `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` with `tm-agents`, actor lifecycle, mailbox/roster, supervision defaults, and `agent://` resource handling. The §23 full surface (`pipeline`, `broadcast`, `send`, `wait`, `inbox`, `list`) is P3-plus. |
 | `skills.*` / `skill://` reads | P4/P7 split | P2 may compose bundled skill markdown under `skill://...` prompt labels only. `skills` remains `undefined`, and `resources.read/preview/list("skill://...")` must fail closed until P4/P7 defines approval-gated proposals plus safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
 | `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, and drive organizer flows. |
 | `http.*` hardening | P5 or P7 | Keep current `http.get` as a default-deny deterministic allowlisted helper with no open egress; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |

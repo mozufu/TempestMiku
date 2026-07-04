@@ -87,10 +87,10 @@ reintroduce hardcoded mode prompts, hidden capability grants, or chat-native too
 - [x] Keep read-only `skill://<name>` resource reads deferred before P4/P7; for now `skill://` is
       prompt-composition-only and unregistered resource reads fail closed.
 - [x] Reconcile the P3 MVP SDK subset with §23. **Decision:** ROADMAP is canonical; P3 MVP =
-      `agents.run / spawn / parallel / msg`. The §23 full surface (`pipeline`, `broadcast`, `wait`,
-      `inbox`, `list`) is documented as **P3 stretch / in-P3-plus** in P3.2 below. Implementing MVP
-      first satisfies the "concrete users first" scope-lock rule; the stretch items extend only after
-      the MVP acceptance gate passes.
+      `agents.run / spawn / parallel / msg`. The §23 full surface (`pipeline`, `broadcast`, `send`,
+      `wait`, `inbox`, `list`) is documented as **P3 stretch / in-P3-plus** in P3.2 below.
+      Implementing MVP first satisfies the "concrete users first" scope-lock rule; the stretch items
+      extend only after the MVP acceptance gate passes.
 
 Acceptance:
 
@@ -115,7 +115,8 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
 
 - Handoff remains a catalog mode, not a hardcoded side path.
 - `oh-my-pi-handoff` remains the procedural brief skill for handoff behavior.
-- `agents.*` lands as a capability-gated SDK namespace, discoverable through the host catalog.
+- `agents.run/spawn/parallel/msg` land as the first capability-gated SDK namespace, discoverable
+  through the host catalog.
 - Agent output returns as digests, artifacts, and `agent://` / `history://` resources, not raw
   transcript dumps into parent context.
 - Actor orchestration extends the existing loop; it does not fork a second product runtime.
@@ -124,8 +125,9 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
 
 - [x] `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` are registered in the host
       catalog with docs, schemas, examples, grants, and denial behavior.
-      **Resolved:** All four HostFns registered with full docs/schemas/examples/grants. `agents.run`
-      body is live (calls `ChatActorExecutor`); spawn/parallel/msg are capability-gated stubs.
+      **Resolved:** All four HostFns registered with full docs/schemas/examples/grants. `agents.run`,
+      `agents.spawn`, and `agents.parallel` are live with `ChatActorExecutor`; `agents.msg` is
+      capability-gated and returns `NotImplemented` until mailbox request/reply lands.
 - [x] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
       as `undefined` or fail closed.
       **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.

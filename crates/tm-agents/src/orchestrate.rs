@@ -28,7 +28,8 @@ pub mod caps {
 ///
 /// Called from `tm-server/src/main.rs` at startup. `agents.run` executes when the registry
 /// holds an injected executor (set via `MailboxRegistry::set_executor` after this call).
-/// `agents.spawn`, `agents.parallel`, and `agents.msg` return `NotImplemented` until P3.2.
+/// `agents.spawn` and `agents.parallel` also execute with the injected executor; `agents.msg`
+/// is registered and grant-checked, but returns `NotImplemented` until mailbox request/reply lands.
 pub fn register(
     host_registry: &mut HostRegistry,
     resource_registry: &mut ResourceRegistry,
@@ -239,7 +240,8 @@ impl AgentsSpawnFn {
                 summary: "Spawn a long-running child actor and return a handle".to_string(),
                 description: Some(
                     "Non-blocking spawn; returns a handle for later coordination via agents.msg. \
-                     Requires agents.spawn grant. Implementation deferred to P3.2."
+                     The actor runs in the background and is tracked through the agent:// roster. \
+                     Requires agents.spawn grant."
                         .to_string(),
                 ),
                 signature: "agents.spawn(role: string, task: string): Promise<AgentHandle>"
@@ -369,7 +371,7 @@ impl AgentsParallelFn {
                 description: Some(
                     "One-wave fan-out: spawns N actors concurrently (bounded pool), awaits all, \
                      and returns ordered digest results. Only digests return to the parent context. \
-                     Requires agents.parallel grant. Implementation deferred to P3.2."
+                     Requires agents.parallel grant."
                         .to_string(),
                 ),
                 signature: "agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>".to_string(),

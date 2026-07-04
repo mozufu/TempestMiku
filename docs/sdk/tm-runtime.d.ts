@@ -512,7 +512,8 @@ interface AgentsNamespace {
    * agents.spawn(role: string, task: string): Promise<AgentHandle>
    *
    * Non-blocking spawn; returns a handle for later coordination via agents.msg.
-   * Requires agents.spawn grant. Implementation deferred to P3.2.
+   * Requires agents.spawn grant. The actor runs in the background and is
+   * tracked through the agent:// roster.
    */
   spawn(role: string, task: string): Promise<AgentHandle>;
 
@@ -521,7 +522,7 @@ interface AgentsNamespace {
    *
    * One-wave fan-out: spawns N actors concurrently (bounded pool), awaits all,
    * and returns ordered digest results. Only digests return to the parent context.
-   * Requires agents.parallel grant. Implementation deferred to P3.2.
+   * Requires agents.parallel grant.
    */
   parallel(tasks: AgentTask[]): Promise<AgentDigest[]>;
 

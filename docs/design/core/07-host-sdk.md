@@ -164,8 +164,22 @@ interface DisplayTable {
 }
 
 interface ToolsNamespace {
+  /**
+   * tools.search(query: string, opts?: ToolSearchOptions): Promise<ToolSummary[]>
+   *
+   * Search the runtime capability catalog without loading the whole SDK into
+   * the model context. Results include host-dispatched capabilities plus
+   * docs-only entries for core direct namespace methods.
+   */
   search(query: string, opts?: ToolSearchOptions): Promise<ToolSummary[]>;
+  /** tools.docs(name: CapabilityName): Promise<ToolDocs> */
   docs(name: CapabilityName): Promise<ToolDocs>;
+  /**
+   * tools.call<T = unknown>(name: CapabilityName, args?: JsonValue): Promise<T>
+   *
+   * Dispatch a capability-gated host call by name. Prefer the typed namespace
+   * wrappers when one exists; unknown or ungranted capabilities fail closed.
+   */
   call<T = unknown>(name: CapabilityName, args?: JsonValue): Promise<T>;
 }
 
@@ -212,7 +226,16 @@ interface ToolErrorDoc {
 }
 
 interface GrantDoc {
-  kind: "workspace" | "linked-folder" | "network" | "process" | "secret" | "memory" | "artifact";
+  kind:
+    | "catalog"
+    | "capability"
+    | "workspace"
+    | "linked-folder"
+    | "network"
+    | "process"
+    | "secret"
+    | "memory"
+    | "artifact";
   description: string;
 }
 
@@ -463,6 +486,13 @@ interface HttpNamespace {
 }
 ```
 
+Parity is enforced in the sandbox tests: the runtime-exposed direct namespace methods (`tools.*`,
+`resources.*`, `artifacts.*`, `fs.*`, `code.*`, `proc.run`, and `http.get`) are enumerated from the
+installed prelude, each `tools.docs(name).signature` must appear in `docs/sdk/tm-runtime.d.ts`, and
+each docs entry must carry schemas, examples, fail-closed errors, grants, approval, since, and
+stability metadata. Until generation exists, update the checked-in `.d.ts` snapshot and catalog docs
+together.
+
 ### 7.2 Progressive disclosure flow
 
 ```mermaid
@@ -482,9 +512,9 @@ sequenceDiagram
 ```
 
 The catalog never sits in the system prompt; tokens are spent only on what the run actually touches.
-It includes host-dispatched capabilities plus docs-only entries for core `resources.*` and
-`artifacts.*` primitives; those core entries document the direct namespace methods and do not imply
-`tools.call(...)` routing.
+It includes host-dispatched capabilities plus docs-only entries for core `tools.*`, `resources.*`,
+and `artifacts.*` primitives; those core entries document the direct namespace methods and do not
+imply `tools.call(...)` routing.
 
 ### 7.3 Semantics
 

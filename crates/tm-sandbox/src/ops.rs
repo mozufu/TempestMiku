@@ -113,6 +113,102 @@ impl HostFn for HttpGetFn {
 fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
     [
         core_doc(
+            "tools.search",
+            "tools",
+            "Search the runtime capability catalog",
+            "tools.search(query: string, opts?: ToolSearchOptions): Promise<ToolSummary[]>",
+            "Search the runtime capability catalog without loading the whole SDK into the model context. Results include host-dispatched capabilities plus docs-only entries for core direct namespace methods.",
+            json!({
+                "type": "object",
+                "required": ["query"],
+                "additionalProperties": false,
+                "properties": {
+                    "query": { "type": "string" },
+                    "namespace": { "type": "string", "description": "Optional namespace filter such as fs, code, resources, artifacts, proc, http, or tools." },
+                    "limit": { "type": "integer", "minimum": 1, "default": 20 }
+                }
+            }),
+            Some(json!({ "type": "array", "items": tool_summary_schema() })),
+            vec![ToolExample {
+                title: Some("Find edit capabilities".to_string()),
+                code: "const found = await tools.search('edit', { namespace: 'code' });\ndisplay(found, { kind: 'json' });".to_string(),
+                notes: Some("Search returns summaries only; call tools.docs(name) for the full SDK contract.".to_string()),
+            }],
+            vec![tool_error(
+                "InvalidArgsError",
+                "The query or search options cannot be serialized into the catalog search request.",
+                false,
+            )],
+            vec![GrantDoc {
+                kind: "catalog".to_string(),
+                description: "Catalog search is available inside the sandbox; result grants describe each returned capability.".to_string(),
+            }],
+        ),
+        core_doc(
+            "tools.docs",
+            "tools",
+            "Read docs for one runtime capability",
+            "tools.docs(name: CapabilityName): Promise<ToolDocs>",
+            "Return the full SDK contract for one catalog entry: signature, schemas, examples, fail-closed errors, grants, approval policy, since, and stability.",
+            json!({
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Capability or direct namespace method name such as fs.read, resources.read, or tools.search." }
+                }
+            }),
+            Some(tool_docs_schema()),
+            vec![ToolExample {
+                title: Some("Read docs for fs.read".to_string()),
+                code: "const docs = await tools.docs('fs.read');\ndisplay(docs.signature);".to_string(),
+                notes: Some("Unknown names fail closed with NotFoundError.".to_string()),
+            }],
+            vec![
+                tool_error("NotFoundError", "The requested catalog entry does not exist.", false),
+                tool_error(
+                    "InvalidArgsError",
+                    "The capability name cannot be serialized into the docs request.",
+                    false,
+                ),
+            ],
+            vec![GrantDoc {
+                kind: "catalog".to_string(),
+                description: "Catalog docs lookup is available inside the sandbox; the returned docs describe any target grants.".to_string(),
+            }],
+        ),
+        core_doc(
+            "tools.call",
+            "tools",
+            "Dispatch a capability-gated host call",
+            "tools.call<T = unknown>(name: CapabilityName, args?: JsonValue): Promise<T>",
+            "Dispatch a capability-gated host call by name. Prefer typed namespace wrappers when one exists. Unknown or ungranted capabilities fail closed before the host function runs.",
+            json!({
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" },
+                    "args": { "description": "JSON-compatible arguments for the named capability." }
+                }
+            }),
+            None,
+            vec![ToolExample {
+                title: Some("Call a capability directly".to_string()),
+                code: "const doc = await tools.call('fs.read', { path: 'tempestmiku:README.md' });".to_string(),
+                notes: Some("The typed fs.read(...) wrapper is preferred when available.".to_string()),
+            }],
+            vec![
+                tool_error("CapabilityDeniedError", "The named capability is unknown or not granted.", false),
+                tool_error("InvalidArgsError", "The args do not match the named capability schema.", false),
+                tool_error("HostCallError", "The host capability fails after policy checks.", false),
+            ],
+            vec![GrantDoc {
+                kind: "capability".to_string(),
+                description: "Requires the grant for the named capability; tools.call itself does not bypass capability checks.".to_string(),
+            }],
+        ),
+        core_doc(
             "resources.read",
             "resources",
             "Read a registered resource URI",
@@ -440,8 +536,46 @@ fn artifact_ref_schema() -> Value {
     })
 }
 
+fn tool_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "namespace", "summary", "sensitive", "granted"],
+        "properties": {
+            "name": { "type": "string" },
+            "namespace": { "type": "string" },
+            "summary": { "type": "string" },
+            "sensitive": { "type": "boolean" },
+            "granted": { "type": "boolean" }
+        }
+    })
+}
+
+fn tool_docs_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "namespace", "summary", "signature", "argsSchema", "examples", "errors", "grants", "sensitive", "approval", "since", "stability"],
+        "properties": {
+            "name": { "type": "string" },
+            "namespace": { "type": "string" },
+            "summary": { "type": "string" },
+            "description": { "type": ["string", "null"] },
+            "signature": { "type": "string" },
+            "argsSchema": { "type": "object" },
+            "resultSchema": { "type": ["object", "null"] },
+            "examples": { "type": "array" },
+            "errors": { "type": "array" },
+            "grants": { "type": "array" },
+            "sensitive": { "type": "boolean" },
+            "approval": { "type": "string" },
+            "since": { "type": "string" },
+            "stability": { "type": "string" }
+        }
+    })
+}
+
 fn core_doc_granted(name: &str, ctx: &InvocationCtx) -> bool {
     match name {
+        "tools.search" | "tools.docs" | "tools.call" => true,
         "artifacts.put" | "artifacts.list" | "resources.list" => true,
         "artifacts.get" | "artifacts.slice" => ctx.grants.permits("resources.read:artifact"),
         "resources.read" | "resources.preview" => ctx

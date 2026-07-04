@@ -116,8 +116,22 @@ interface DisplayTable {
 }
 
 interface ToolsNamespace {
+  /**
+   * tools.search(query: string, opts?: ToolSearchOptions): Promise<ToolSummary[]>
+   *
+   * Search the runtime capability catalog without loading the whole SDK into
+   * the model context. Results include host-dispatched capabilities plus
+   * docs-only entries for core direct namespace methods.
+   */
   search(query: string, opts?: ToolSearchOptions): Promise<ToolSummary[]>;
+  /** tools.docs(name: CapabilityName): Promise<ToolDocs> */
   docs(name: CapabilityName): Promise<ToolDocs>;
+  /**
+   * tools.call<T = unknown>(name: CapabilityName, args?: JsonValue): Promise<T>
+   *
+   * Dispatch a capability-gated host call by name. Prefer the typed namespace
+   * wrappers when one exists; unknown or ungranted capabilities fail closed.
+   */
   call<T = unknown>(name: CapabilityName, args?: JsonValue): Promise<T>;
 }
 
@@ -164,7 +178,16 @@ interface ToolErrorDoc {
 }
 
 interface GrantDoc {
-  kind: "workspace" | "linked-folder" | "network" | "process" | "secret" | "memory" | "artifact";
+  kind:
+    | "catalog"
+    | "capability"
+    | "workspace"
+    | "linked-folder"
+    | "network"
+    | "process"
+    | "secret"
+    | "memory"
+    | "artifact";
   description: string;
 }
 

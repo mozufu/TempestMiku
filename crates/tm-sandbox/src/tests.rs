@@ -23,6 +23,27 @@ fn p0_sandbox(root: &std::path::Path, artifact_root: &std::path::Path) -> DenoSa
     })
 }
 
+const SDK_CATALOG_NAMESPACE_METHODS: &[(&str, &str)] = &[
+    ("tools.search", "tools"),
+    ("tools.docs", "tools"),
+    ("tools.call", "tools"),
+    ("resources.read", "resources"),
+    ("resources.preview", "resources"),
+    ("resources.list", "resources"),
+    ("artifacts.put", "artifacts"),
+    ("artifacts.get", "artifacts"),
+    ("artifacts.slice", "artifacts"),
+    ("artifacts.list", "artifacts"),
+    ("fs.read", "fs"),
+    ("fs.write", "fs"),
+    ("fs.ls", "fs"),
+    ("fs.find", "fs"),
+    ("code.search", "code"),
+    ("code.edit", "code"),
+    ("proc.run", "proc"),
+    ("http.get", "http"),
+];
+
 #[tokio::test]
 async fn stub_echoes_code_and_persists_cell_count() {
     let sandbox = StubSandbox;
@@ -211,6 +232,140 @@ async fn deno_spills_large_output_to_artifact() {
         .await
         .unwrap();
     assert_eq!(listed.result, Some(Value::Number(100.into())));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn deno_tools_docs_match_sdk_declarations_for_exposed_namespace_methods() {
+    let sdk_types = include_str!("../../../docs/sdk/tm-runtime.d.ts");
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("README.md"), "TempestMiku\n").unwrap();
+    let sandbox = p0_sandbox(root.path(), artifacts.path());
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let expected_names: Vec<&str> = SDK_CATALOG_NAMESPACE_METHODS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    let js_expected = serde_json::to_string(&expected_names).unwrap();
+    let out = session
+        .eval(
+            &format!(
+                r#"
+                (async () => {{
+                const expected = {js_expected}
+                const namespaces = ["tools", "resources", "artifacts", "fs", "code", "proc", "http"]
+                const runtimeMethods = namespaces.flatMap((namespace) =>
+                  Object.keys(globalThis[namespace] ?? {{}}).map((method) => `${{namespace}}.${{method}}`)
+                ).sort()
+                const docs = {{}}
+                for (const name of expected) {{
+                  const doc = await tools.docs(name)
+                  const found = await tools.search(name, {{ namespace: doc.namespace, limit: 50 }})
+                  docs[name] = {{
+                    namespace: doc.namespace,
+                    signature: doc.signature,
+                    description: doc.description,
+                    argsSchemaType: doc.argsSchema?.type,
+                    resultSchemaPresent: doc.resultSchema != null,
+                    examples: doc.examples.length,
+                    errors: doc.errors.length,
+                    grants: doc.grants.length,
+                    approval: doc.approval,
+                    since: doc.since,
+                    stability: doc.stability,
+                    searchHit: found.some((item) => item.name === name)
+                  }}
+                }}
+                return {{ runtimeMethods, docs }}
+                }})()
+                "#
+            ),
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    assert!(out.error.is_none(), "parity eval failed: {:?}", out.error);
+    let result = out.result.unwrap();
+    let runtime_methods: Vec<String> = result["runtimeMethods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect();
+    let mut expected_sorted: Vec<String> =
+        expected_names.iter().map(|name| name.to_string()).collect();
+    expected_sorted.sort();
+    assert_eq!(
+        runtime_methods, expected_sorted,
+        "update SDK_CATALOG_NAMESPACE_METHODS when a direct namespace method is exposed"
+    );
+
+    for (name, namespace) in SDK_CATALOG_NAMESPACE_METHODS {
+        let docs = &result["docs"][*name];
+        assert_eq!(
+            docs["namespace"],
+            Value::String((*namespace).to_string()),
+            "{name} should report its SDK namespace"
+        );
+        let signature = docs["signature"].as_str().unwrap();
+        assert!(
+            sdk_types.contains(signature),
+            "docs/sdk/tm-runtime.d.ts is missing the tools.docs signature for {name}: {signature}"
+        );
+        assert_eq!(
+            docs["argsSchemaType"],
+            Value::String("object".into()),
+            "{name} should document an object args schema"
+        );
+        assert!(
+            docs["description"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()),
+            "{name} should include a description"
+        );
+        assert!(
+            docs["resultSchemaPresent"].as_bool().unwrap() || *name == "tools.call",
+            "{name} should document a result schema unless the generic tools.call result is target-dependent"
+        );
+        assert!(
+            docs["examples"].as_u64().unwrap() > 0,
+            "{name} should include at least one example"
+        );
+        assert!(
+            docs["errors"].as_u64().unwrap() > 0,
+            "{name} should document fail-closed errors"
+        );
+        assert!(
+            docs["grants"].as_u64().unwrap() > 0,
+            "{name} should document grant behavior"
+        );
+        assert!(
+            docs["approval"].as_str().is_some_and(|approval| matches!(
+                approval,
+                "none" | "on-write" | "on-external" | "always" | "policy"
+            )),
+            "{name} should use a declared approval policy"
+        );
+        assert!(
+            docs["since"]
+                .as_str()
+                .is_some_and(|since| !since.is_empty()),
+            "{name} should include since metadata"
+        );
+        assert!(
+            docs["stability"].as_str().is_some_and(|stability| matches!(
+                stability,
+                "stable" | "experimental" | "reserved" | "deprecated"
+            )),
+            "{name} should use a declared stability value"
+        );
+        assert_eq!(
+            docs["searchHit"],
+            Value::Bool(true),
+            "{name} should be discoverable through tools.search"
+        );
+    }
 }
 
 #[serial_test::serial]

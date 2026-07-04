@@ -1,245 +1,230 @@
 # TODO
 
-Active milestone: **P2 - personal-assistant baseline**.
+Last aligned: **2026-07-04**.
+
+Active milestone: **P3 - handoff + sub-agent actors**.
+Preflight: finish the remaining catalog validation gap, then start the actor surface.
 
 `ROADMAP.md` remains the canonical milestone order. This file is the working execution checklist for
-P2 and should stay aligned with product docs §21, §22, §27, and §29.
+the next slice after the P2 personal-assistant baseline. Keep it aligned with core docs §07/§09 and
+product docs §21, §22, §23, §25, §26, §27, and §29.
 
-P1 project manager + remote control is complete. P2 is the point where TempestMiku becomes a fuller
-personal companion again without weakening the runtime bet: one `execute` loop, streaming-first
-events, capability grants, and manual approvals remain the boundaries.
+P2 is closed in the roadmap. New work starts from the runtime catalog system now in the tree; do not
+reintroduce hardcoded mode prompts, hidden capability grants, or chat-native tool sprawl.
 
-## P2 goal
+## Catalog invariants
 
-Ship the personal-assistant baseline:
+- The model still gets one chat-native tool: `execute(code)`.
+- Runtime capability discovery is the host capability catalog exposed through
+  `tools.search(...)`, `tools.docs(...)`, and `tools.call(...)`.
+- Persona/routing discovery is the mode + skill catalog:
+  - `SOUL.md` is the constant identity and boundary layer.
+  - `modes.json` is the source of truth for runtime mode ids, labels, route triggers, default scope,
+    voice cap, declared capabilities, and `activeSkills`.
+  - Mode ids are loaded strings, not Rust enum variants.
+  - `skills/<name>/SKILL.md` files are procedural assets loaded as `skill://<name>` prompt sections.
+  - Skills are not new chat-native tools and do not grant host capabilities by themselves.
+- First-pass reserved sandbox namespaces stay explicit: `secrets`, `memory`, `skills`, and `agents`
+  are `undefined` until their owning milestones add grants, docs, tests, and policy.
+  - P2 memory reads are `resources.read("memory://...")`, not a `memory.*` global.
+  - P3 is the point where `agents.*` may become defined, but only in granted sessions.
+  - `skills.*` remains reserved until the P4/P7 split owns proposal/import/version/reload policy,
+    provenance, approval, and audit.
+- `skill://<name>` is a first-class resource URI in the design docs. Today it is implemented for
+  persona prompt composition only; broader read/import/reload semantics belong to the future skills
+  store, and unregistered `skill://` resource reads fail closed through the unknown-scheme path.
+- Mode-declared capabilities are catalog metadata and grant inputs. Unknown capability names, unknown
+  resource schemes, and missing grants fail closed.
 
-- Miku identity is constant and loaded through the persona layer.
-- Modes are Hermes-style operating bundles: SOUL identity + active mode profile + dedicated skills +
-  capability/scope profile + voice cap.
-- Voice intensity floats by mode and seriousness; Serious Engineer and Handoff stay capped at
-  internal `off`. Chinese density labels and examples live in `miku-voice`, not the client UI.
-- Profile/user recall is injected into turns with bounded context.
-- Personal-assistant state capture proposes durable memories instead of silently writing them.
-- Negative-state grounding stabilizes first and suggests one action that fits in 10 minutes or less.
-- Proactivity is useful but bounded: local planning and reminders are allowed, external/destructive or
-  sensitive writes require explicit approval.
+## Current baseline
 
-## P2 acceptance gate
+- [x] P0/P1/P2 are complete per `ROADMAP.md`.
+- [x] P0 Serious Engineer dogfood remains on the native Deno SDK path for `fs.*`, `code.*`,
+      `proc.*`, artifacts, and HTTP-routed manual approvals; OMP ACP stays replaceable.
+- [x] P1 project-manager and remote-control surfaces cover mode routing/locks, project views,
+      session promotion, resource gateway access, approvals, and SSE replay.
+- [x] Bundled persona assets include `SOUL.md`, `modes.json`, and the seven default skills under
+      `crates/tm-persona/assets/`.
+- [x] Configured persona assets can override the bundle through `TM_PERSONA_PATH`.
+- [x] Missing or unreadable persona assets degrade with visible warnings and bundled fallbacks.
+- [x] `ModeCatalog` / `ModeProfile` load runtime string ids from `modes.json`.
+- [x] `GET /modes`, session responses, mode responses, and `ModeChanged` events expose
+      `activeSkills`.
+- [x] Per-turn prompts compose core runtime notes, `SOUL.md`, active mode profile, active
+      `skill://<name>` markdown, runtime capability notes, and persona warnings in stable order.
+- [x] P2 memory context injects bounded profile facts and scoped recall with provenance.
+- [x] P2 memory writes are approval-gated `write_proposal` flows; approve writes durable records,
+      deny/timeout writes nothing, and outcomes replay as events.
+- [x] Personal-assistant state capture proposes stable preferences, reminders, open loops,
+      commitments/deadlines, decisions, shipped artifacts, and workflows while skipping transient,
+      sensitive, raw-log, and negative-state content by default.
+- [x] Negative-State Grounding routes as a conversational posture, keeps health over productivity,
+      and forbids unsolicited memory writes.
+- [x] P2 memory reads are exposed through `memory://` resources; the `memory` global remains
+      `undefined`.
+- [x] `docs/sdk/tm-runtime.d.ts` includes `skill://` resource URI typing and keeps `skills`
+      reserved.
+- [x] Gated Postgres coverage exists for the P2 memory approval flow while normal `cargo test`
+      stays external-service-free.
 
-- [x] Token-by-token responses over SSE include the active persona/mode/memory context path.
-- [ ] Personal Assistant mode can recall profile facts and scoped recall chunks across sessions.
-- [ ] Durable memory writes are approval-gated: approve writes, deny does not write, timeout defaults
-      to deny, and all outcomes are replayable as events.
-- [ ] The client can show and resolve memory write proposals through the same approval flow.
-- [ ] Negative-State Grounding routes correctly, keeps health over productivity, and ends with no more
-      than one <=10-minute next action.
-- [ ] Serious Engineer mode still uses voice cap `off` and does not inherit high-cuteness output from
-      the personal-assistant layer.
+## P3 catalog preflight
+
+- [x] Keep `docs/sdk/tm-runtime.d.ts` as a checked-in SDK snapshot verified by exhaustive
+      `tools.docs` parity tests.
+- [x] Enrich `tools.docs` entries so every available direct namespace method documents signature,
+      schemas, examples, errors, grants, and approval policy.
+- [x] Add coverage comparing `tools.docs` with `docs/sdk/tm-runtime.d.ts` for `tools`, `resources`,
+      `artifacts`, `fs`, `code`, `proc`, and `http`.
+- [x] Validate catalog skill references: every bundled `activeSkills` entry should resolve to
+      `skills/<name>/SKILL.md`; configured missing skills should emit an exact warning and stable
+      prompt fallback.
+- [x] Keep the fixture proving a new mode can be added through `modes.json` without a Rust enum or
+      callsite migration.
+- [x] Document the configured persona catalog layout: `SOUL.md`, `modes.json`, and
+      `skills/<name>/SKILL.md`.
+- [x] Reconcile `http.get` docs and runtime behavior with the deferred production egress policy:
+      deterministic allowlist helper now, hardened egress later.
+- [x] Keep read-only `skill://<name>` resource reads deferred before P4/P7; for now `skill://` is
+      prompt-composition-only and unregistered resource reads fail closed.
+- [ ] Reconcile the P3 MVP SDK subset with §23: `ROADMAP.md` names `agents.run/spawn/parallel/msg`,
+      while §23 also sketches `pipeline`, `broadcast`, `wait`, `inbox`, and `list`.
+
+Acceptance:
+
+- [ ] No duplicated source of truth between `modes.json`, docs, and Rust hardcoded mode lists.
+- [ ] Unknown mode ids, missing skill refs, ungranted `skill://` reads, and future `skills.*`
+      operations fail closed or degrade with explicit warnings.
+- [x] A contributor can add a local mode + skill bundle without changing Rust code.
+- [ ] Normal `cargo test` stays external-service-free and live OpenAI/Postgres tests remain gated.
+
+## P3 goal
+
+Ship the handoff + sub-agent actor baseline without weakening the catalog boundaries:
+
+- Handoff remains a catalog mode, not a hardcoded side path.
+- `oh-my-pi-handoff` remains the procedural brief skill for handoff behavior.
+- `agents.*` lands as a capability-gated SDK namespace, discoverable through the host catalog.
+- Agent output returns as digests, artifacts, and `agent://` / `history://` resources, not raw
+  transcript dumps into parent context.
+- Actor orchestration extends the existing loop; it does not fork a second product runtime.
+
+## P3 acceptance gate
+
+- [ ] `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` are registered in the host
+      catalog with docs, schemas, examples, grants, and denial behavior.
+- [ ] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
+      as `undefined` or fail closed.
+- [ ] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
+- [ ] Fan-out to multiple workers returns only bounded digests to the parent context.
+- [ ] Sibling agents can coordinate through explicit messages.
+- [ ] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
+      replayable events.
+- [ ] `agent://` and `history://` resources resolve through the resource gateway with grants and
+      bounded previews.
+- [ ] Approval-gated effects inside child agents still route through the same approval broker and
+      timeout/default-deny behavior.
 - [ ] Normal `cargo test` remains external-service-free.
-- [ ] Gated Postgres coverage proves P2 memory rows, write proposals, approval outcomes, and replay.
 
-## P2.0 Scope lock
+## P3.0 Scope lock
 
-- [ ] Treat P2 as an extension of existing `tm-persona`, `tm-server::memory`, `session_events`, and
-      approval broker surfaces.
-- [ ] Do not extract a full `tm-memory` crate until there is a second concrete user for the abstraction.
-- [ ] Keep profile facts + recall chunks as the P2/P1 minimum store; defer vector, BM25/RRF, graph,
-      dreaming, and skill generation to P4.
-- [ ] Preserve the P0/P1 coding backend boundary: OMP ACP is replaceable, native Deno remains the
-      dogfood path for `fs.*`, `code.*`, `proc.*`, artifacts, and HTTP-routed approvals.
-
-Acceptance:
-
-- [ ] P2 implementation can be reviewed as additive product behavior over the existing server loop.
-- [ ] No new runtime loop, raw shell escape hatch, or chat-native tool sprawl is introduced.
-
-## P2.1 Persona asset and mode skill bundles
-
-- [x] Add a first-class persona prompt builder that composes:
-      `SOUL identity + active mode profile + active skill markdown + runtime capability notes`.
-- [x] Load configurable persona assets from `TM_PERSONA_PATH`.
-- [x] Vendor the canonical SOUL.md and 7 default skills as the bundled persona fallback.
-- [x] Preserve degraded boot behavior when assets are missing, with a visible warning in session state.
-- [x] Represent active skills separately from mode addenda so seriousness can lower voice intensity
-      without changing identity.
-- [x] Add tests for loaded assets, degraded assets, prompt composition order, and Serious Engineer
-      voice cap.
-- [x] Expose `activeSkills` on session/mode responses and `ModeChanged` events.
-- [x] Thread active per-turn persona prompts through normal chat, native Deno, and Handoff/coding
-      backends.
+- [ ] Add `tm-agents` only after the actor lifecycle has concrete users: Handoff, parallel subtasks,
+      and resource replay.
+- [ ] Keep the existing agent loop as the single owner of message accumulation, tool-call execution,
+      result shaping, and `EventSink` callbacks.
+- [ ] Do not fork a second runtime loop for sub-agents.
+- [ ] Preserve the native Deno Serious Engineer path for `fs.*`, `code.*`, `proc.*`, artifacts, and
+      HTTP-routed manual approvals.
+- [ ] Keep OMP ACP replaceable; P3 should not make it the permanent SDK model.
 
 Acceptance:
 
-- [x] Personal Assistant prompts contain identity, active mode profile, active skills, and capability
-      notes in stable order.
-- [x] Serious Engineer prompts contain identity but keep voice cap `off`.
-- [x] Missing persona assets do not prevent boot or session creation.
+- [ ] P3 can be reviewed as an additive orchestration layer over the current server, sandbox, host,
+      resource, artifact, and approval contracts.
+- [ ] No raw shell escape hatch, ambient network, direct filesystem reach, or chat-native tool sprawl
+      is introduced.
 
-## P2.2 Personal Assistant mode baseline
+## P3.1 Actor lifecycle
 
-- [ ] Make Personal Assistant the default conversational mode for non-coding planning, writing,
-      reminders, decisions, and open-loop cleanup.
-- [x] Ensure Personal Assistant mode only receives conversational/light memory capabilities in its
-      addendum, not engineering host capabilities.
-- [ ] Add router tests for default personal-assistant prompts, explicit user lock, and override back to
-      Serious Engineer.
-- [x] Keep mode badges and `ModeChanged` replay behavior from P1.
-
-Acceptance:
-
-- [ ] A normal planning/reminder prompt routes to Personal Assistant and emits mode state if needed.
-- [x] A code/safety/irreversible prompt routes or locks to Serious Engineer with voice cap `off`.
-- [x] User locks remain final.
-
-## P2.3 Memory auto-context and profile recall
-
-- [ ] Expand `MemoryContext` beyond raw lists into a bounded prompt block with:
-      profile facts, scoped recall chunks, provenance labels, and budget metadata.
-- [ ] Keep the auto-injected memory budget around the §22 target of ~1600 tokens.
-- [ ] Inject profile facts for Brian (`subject = brian`) and scoped recall for the active mode scope.
-- [ ] Add a minimal ToM/profile synthesis hook with an <=800 character cap and a configurable cadence;
-      keep it off for Serious Engineer turns unless explicitly useful.
-- [ ] Add tests for budget trimming, provenance rendering, empty-memory degradation, and cross-session
-      profile recall.
+- [ ] Define actor ids, parent/child links, status, scope, mode, budget, started/completed timestamps,
+      and cancellation state.
+- [ ] Persist actor lifecycle events in the session event log for replay.
+- [ ] Add cancellation and timeout handling that leaves a replayable terminal state.
+- [ ] Add supervision defaults for crash, timeout, approval denial, and quota exhaustion.
+- [ ] Keep actor transcript storage out of parent model context by default.
 
 Acceptance:
 
-- [ ] P2 turns include useful memory when present and a small/no-op block when absent.
-- [ ] Memory context cannot swamp the user prompt or large tool outputs.
-- [ ] Serious Engineer remains precise and does not over-personalize technical replies.
+- [ ] A parent session can spawn an actor, observe progress, cancel it, and replay the outcome after
+      reconnect.
+- [ ] Actor failure is visible but does not corrupt the parent session.
 
-## P2.4 Memory write proposals and approvals
+## P3.2 Agent SDK surface
 
-- [ ] Define a P2 memory write proposal shape for durable notes/facts:
-      subject, predicate/object or note text, confidence, scope, source session/event, reason, and
-      redaction status.
-- [ ] Emit `write_proposal` events for memory writes before any durable assertion is stored.
-- [ ] Reuse the existing approval broker and POST approval resolution path for approve/deny/timeout.
-- [ ] On approve, write to `profile_facts` or `recall_chunks` with provenance.
-- [ ] On deny or timeout, write nothing durable and append a replayable resolution event.
-- [ ] Add redaction before disk for obvious secrets/tokens.
-- [ ] Add tests for approve, deny, timeout/default-deny, stale proposal, idempotency, and replay.
+- [ ] Add capability names and grant checks for `agents.*`.
+- [ ] Implement `agents.run` for one-shot child work with bounded digest return.
+- [ ] Implement `agents.spawn` for long-running child sessions.
+- [ ] Implement `agents.parallel` for bounded fan-out with aggregate digest.
+- [ ] Implement `agents.msg` for explicit sibling/parent messages.
+- [ ] Update `docs/sdk/tm-runtime.d.ts` and `tools.docs` together.
+- [ ] Add tests for granted, denied, unknown method, invalid args, timeout, and output-spill paths.
 
 Acceptance:
 
-- [ ] Miku can propose "remember this" without silently changing memory.
-- [ ] Every durable P2 memory assertion has provenance.
-- [ ] Timeout defaults to deny and is observable.
+- [ ] The model can discover and use `agents.*` from `tools.search/docs` without loading the entire
+      SDK catalog into the system prompt.
+- [ ] Denied or unavailable `agents.*` calls fail closed with typed host errors.
 
-## P2.5 Personal-assistant state capture
+## P3.3 Resources and artifacts
 
-- [x] Implement the `personal-assistant-state-capture` behavior as proposal logic, not direct writes.
-- [x] Capture stable preferences, active projects/open loops, commitments/deadlines, decisions,
-      recurring blind spots, shipped artifacts, and reusable workflows.
-- [x] Explicitly avoid passing moods, one-off complaints, secrets, raw logs, large notes, and sensitive
-      PII unless the user asks.
-- [x] Keep project-specific commands in project docs or project memory, not global user memory.
-- [x] Add tests for "capture" and "do not capture" examples.
+- [ ] Register `agent://<id>` for child output artifact previews.
+- [ ] Register `history://<id>` for read-only child transcript previews.
+- [ ] Spill large child output to `artifact://` rather than parent context.
+- [ ] Include provenance links from parent events to child resources.
+- [ ] Add bounded preview/list behavior for mobile clients.
 
 Acceptance:
 
-- [x] Stable user/project signal produces one-line memory proposals.
-- [x] Sensitive or transient content does not produce durable proposals by default.
-- [x] Proposed memories are concise enough to approve from the client.
+- [ ] Parent turns contain summaries and handles, not large child transcripts.
+- [ ] Resource reads enforce grants and return shaped `ResourceContent` envelopes.
 
-## P2.6 Negative-State Grounding
+## P3.4 Handoff mode
 
-- [x] Preserve mode 3 as a conversational posture, not a new capability set.
-- [x] Add router triggers for overwhelmed, exhausted, self-deprecating, spiraling, and stuck language.
-- [x] Prompt behavior must stabilize first, reduce demand, avoid shame, and choose one <=10-minute
-      next action only after grounding.
-- [x] Do not create memory writes from negative-state content unless the user explicitly asks.
-- [x] Add tests for routing, response constraints, health-over-productivity, and no unsolicited memory
-      write proposal.
-
-Acceptance:
-
-- [ ] A negative-state prompt routes to mode 3 and never becomes a productivity lecture.
-- [ ] The response proposes at most one tiny next step.
-- [ ] Health override beats shipping pressure.
-
-## P2.7 Bounded proactivity and reminders
-
-- [ ] Represent local reminder/open-loop suggestions as proposals or project items, not external
-      commitments.
-- [ ] Allow safe local actions: summarize, draft, organize TODOs, surface open loops, and suggest next
-      steps.
-- [ ] Gate external, destructive, spend, publish/send, sensitive-memory, and drive-link actions through
-      approval.
-- [ ] Keep scheduled/cron behavior deferred unless it can reuse the existing session event stream and
-      deny-by-default bounds.
-- [ ] Add tests for safe proactivity, gated proactivity, and cron-mode deny/defer behavior where touched.
+- [ ] Keep Handoff's mode profile, default scope, voice cap, declared capabilities, and active skills
+      in `modes.json`.
+- [ ] Use `oh-my-pi-handoff` for the handoff brief template and constraints.
+- [ ] Route implementation-heavy delegation prompts to Handoff without mutating identity.
+- [ ] Preserve Serious Engineer voice cap `off` for the handoff/coding boundary.
+- [ ] Add tests that Handoff prompt composition includes `skill://oh-my-pi-handoff` and does not load
+      `miku-voice`.
 
 Acceptance:
 
-- [ ] Miku can be usefully proactive inside the app without acting outside Brian's approval boundary.
-- [ ] Any external commitment remains impossible without explicit approval.
+- [ ] Handoff behavior changes can be made by editing the catalog assets, not by hardcoding prompt
+      strings in the server.
+- [ ] Handoff remains precise, replayable, and approval-bound.
 
-## P2.8 Client support
+## P3.5 Client and replay support
 
-- [x] Keep voice-cap labels internal to the persona layer; clients show mode names, not
-      `high`/`medium`/`off` or the skill-local Chinese density labels.
-- [ ] Render `write_proposal` events in Flutter Web/PWA.
-- [ ] Let the user approve/deny memory proposals through the existing approval resolution flow.
-- [ ] Show memory proposal text, scope, and provenance in a compact mobile-friendly layout.
-- [ ] Preserve reconnect/resume behavior for pending proposals and resolved outcomes.
-- [ ] Add widget/smoke coverage for memory proposal display, approve, deny, and reconnect.
-
-Acceptance:
-
-- [ ] A phone/browser can review a proposed memory and approve or deny it.
-- [ ] Pending proposals survive disconnect/reconnect.
-- [ ] Client UI does not gain any direct memory-write authority.
-
-## P2.9 Persistence and resource surface
-
-- [ ] Keep normal tests on the in-memory store.
-- [ ] Extend gated Postgres tests for P2 memory proposal state and approved durable rows.
-- [ ] Register or document minimal `memory://` resources needed for P2:
-      `memory://root`, `memory://user-model`, and scoped recall previews.
-- [ ] Ensure unknown memory schemes and missing grants fail closed through the resource gateway.
-- [ ] Keep large memory/debug output out of model context; use bounded previews or artifacts.
+- [ ] Surface actor progress in SSE with compact mobile-friendly events.
+- [ ] Preserve reconnect/resume through `Last-Event-ID`.
+- [ ] Expose child resource links without forcing transcript expansion.
+- [ ] Reuse the existing approval UI for child-agent permission requests.
+- [ ] Add Flutter Web/PWA smoke coverage for actor progress, approval, resource open, and reconnect.
 
 Acceptance:
 
-- [ ] `cargo test` does not require Postgres, network-only services, or live OpenAI calls.
-- [ ] `TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=... cargo test -p tm-server` covers replay,
-      proposals, approvals, profile facts, and recall chunks.
-- [ ] `memory://` access is bounded and policy-checked.
+- [ ] A phone/browser can watch a delegated task, resolve approvals, open child artifacts, and resume
+      after disconnect.
+- [ ] Clients do not gain direct write authority over agents, memory, skills, or files.
 
-## P2.10 Docs and parity fixtures
+## Deferred catalog work
 
-- [ ] Update product docs if implementation changes any behavior described in §21, §22, §27, or §29.
-- [x] Add small parity fixtures for SOUL/miku-voice/personal-assistant-state-capture behavior if the
-      real deployment assets are not checked into this repository.
-- [ ] Document config/env required for memory approval behavior.
-- [x] Document config/env required for persona assets.
-- [ ] Keep roadmap wording accurate: do not mark P2 done until the acceptance gate above passes.
-
-Acceptance:
-
-- [ ] Design docs and implementation agree.
-- [ ] A new contributor can tell which P2 behavior is implemented, deferred, or gated.
-
-## P2 suggested implementation order
-
-1. [x] Persona prompt builder and tests.
-2. [ ] Memory context shape, budget, and profile recall tests.
-3. [ ] Memory write proposal data model and server event path.
-4. [ ] Approval-backed write commit path for profile facts and recall chunks.
-5. [ ] Personal-assistant state-capture proposal rules.
-6. [ ] Negative-State Grounding routing and response constraints.
-7. [ ] Flutter Web/PWA write proposal UI and reconnect coverage.
-8. [ ] Gated Postgres coverage and docs sweep.
-
-## P2 non-goals
-
-- [ ] Do not implement full `tm-memory`, pgvector, BM25/RRF, graph recall, or dreaming; these belong to
-      P4 unless a P2 task proves a smaller extraction is needed.
-- [ ] Do not implement `agents.*`; this belongs to P3.
-- [ ] Do not implement `drive.*`; this belongs to P5.
-- [ ] Do not implement Android OS packaging before P2/P3 product surfaces stabilize.
-- [ ] Do not implement self-evolution writes, skill imports, MCP reload gates, or secret broker work;
-      these belong to P7 or later scoped milestones.
+- [ ] Full `tm-memory`, pgvector, BM25/RRF, graph recall, dream queue, and skill proposal generation
+      remain P4.
+- [ ] `skills.*` import/version/reload, provenance, audit/replay, MCP import gates, and self-evolution
+      tiers remain P7.
+- [ ] `drive.*` remains P5.
+- [ ] Android OS packaging waits until the P3/P5 server and resource surfaces stabilize.
+- [ ] Secret broker work and production egress hardening remain scoped hardening milestones.
 - [ ] Do not relax manual approval, unknown-scheme fail-closed behavior, argv-vector `proc.run`, or
       linked-folder grant boundaries.

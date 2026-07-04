@@ -92,7 +92,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 |---|---|---|
 | `memory.*` | **P2/P4 split** | P2 may expose the minimum profile/user recall and personal-assistant state-capture surface; P4 owns full `tm-memory`, pgvector/FTS, dream queue writes, and richer scoped memory APIs. |
 | `agents.*` | **P3** | Lands with `tm-agents`, actor lifecycle, mailbox/roster, supervision, `agent://` resources, and Handoff mode. |
-| `skills.*` | **P4/P7 split** | P4 can emit approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
+| `skills.*` / `skill://` reads | **P4/P7 split** | Current `skill://...` use is prompt-composition-only. P4 can emit approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, MCP import gates, and any first-class read/list/preview handler. |
 | `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
 | `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as the deterministic allowlist helper until P7 hardening. |
 | `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |

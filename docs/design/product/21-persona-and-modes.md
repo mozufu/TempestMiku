@@ -22,7 +22,7 @@ coding product:
   triggers, declared runtime capabilities, active skill names, grouping class, default scope, and
   voice cap. Switchable.
 - **Skills** (`skills/*/SKILL.md`) — *procedural payloads* loaded by the active mode. They are
-  readable assets, not new chat-native tools.
+  prompt-composed assets, not new chat-native tools or resource reads.
 
 ```
 system prompt = [ SOUL identity (constant) ]
@@ -43,6 +43,10 @@ degrades with the stable warning
 `active skill <skill> referenced by mode <mode> is missing at skills/<skill>/SKILL.md; prompt will use active mode profile fallback`,
 and prompt composition inserts a `missing skill://<skill>` section telling the model to use the
 active mode profile as the fallback.
+
+In P2, `skill://<name>` is only a prompt-composition label for injected skill markdown. It is not a
+registered `resources.read/list/preview` scheme, and the `skills` global remains `undefined` until
+P4/P7 ships the skill proposal/import/reload lifecycle with explicit grants (§7.4 / §9.3).
 
 A mode profile sets task framing and selects skills; it **never** replaces identity. Tone still comes
 from the voice overlay, capped by seriousness, so serious work can turn cuteness down without

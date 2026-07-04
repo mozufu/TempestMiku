@@ -208,8 +208,9 @@ view; approved write proposals expose exact record views at `memory://profile/<s
 and unknown memory paths or missing grants are denied. The JS/TS SDK types these as resource URIs;
 the global `memory` namespace remains `undefined` until an explicit `memory.*` API ships. Broader
 resources such as `…/MEMORY.md`,
-`…/episodic?q=…`, and `…/projects/<name>/…` remain later `tm-memory` work. Skills are addressed
-first-class as `skill://<name>` (→ `SKILL.md`), promoted out of the `memory://…/skills/` path (§9.3).
+`…/episodic?q=…`, and `…/projects/<name>/…` remain later `tm-memory` work. Skills are prompt-composed
+under `skill://<name>` labels today, but those labels are not registered resource URIs; first-class
+`skill://` reads remain P4/P7 work (§9.3).
 
 ## 22.10 Crate layout (`tm-memory`, §28)
 
@@ -220,7 +221,8 @@ first-class as `skill://<name>` (→ `SKILL.md`), promoted out of the `memory://
 - `dream` — embed, extract (facts + relations), importance, reflect, summarize, OMP consolidation, redaction; lease +
   heartbeat to avoid double-runs.
 - `embed` — embeddings role client + local fallback.
-- `resources` — registers the `memory://` + `skill://` handlers into the §9.2 resolver registry.
+- `resources` — registers the implemented `memory://` handler into the §9.2 resolver registry; a
+  future P4/P7 skill lifecycle may add a separate `skill://` handler with its own grants.
 
 Dreaming/extraction use cheaper model roles (§27.3).
 

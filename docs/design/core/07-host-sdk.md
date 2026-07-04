@@ -16,7 +16,9 @@ First-pass globals:
   the op layer stays small.
 - `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2),
   including the present `artifact://` path and the P2 server-side `memory://` gateway when the
-  `resources.read:memory` grant and handler are present.
+  `resources.read:memory` grant and handler are present. `skill://...` labels are
+  prompt-composition provenance only in the current runtime; reads must fail closed until the P4/P7
+  skill lifecycle registers a resource handler and grants.
 - `artifacts.put/get/slice/list(...)` — session artifact store; large outputs return `artifact://`
   handles.
 - `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
@@ -31,7 +33,9 @@ Reserved first-pass globals:
   checks safe while keeping secrets, `memory.*`, skills, and sub-agents closed until their backing
   crates and policies exist. This does **not** close the P2 `memory://` resource route; memory reads
   go through `resources.read(...)` and the `resources.read:memory` grant. If a future namespace
-  exists but a method is incomplete, that method throws `NotImplementedError`.
+  exists but a method is incomplete, that method throws `NotImplementedError`. Likewise,
+  `skill://...` is not a `ResourceUri` today even though composed prompts may use it as a section
+  label for injected skill markdown.
 
 Never exposed:
 
@@ -52,7 +56,10 @@ of truth.
  * P0/P2 surface: no ambient filesystem, process, network, secret, shell, or
  * host access. Every external effect goes through capability-checked SDK
  * namespaces. P2 memory is exposed as memory:// resources behind
- * resources.read:memory, not as a memory.* namespace.
+ * resources.read:memory, not as a memory.* namespace. Bundled skill
+ * markdown may be labeled skill://... inside composed prompts, but that
+ * label is not a resources.read/list/preview surface until the P4/P7 skill
+ * lifecycle work registers a handler and grants.
  */
 
 export {};
@@ -83,6 +90,7 @@ interface JsonArray extends Array<JsonValue> {}
 type MimeType = string;
 type CapabilityName = string;
 type ArtifactUri = `artifact://${string}`;
+type SkillPromptLabel = `skill://${string}`;
 
 type MemoryResourceUri =
   | "memory://root"
@@ -97,7 +105,6 @@ type ResourceUri =
   | `agent://${string}`
   | `history://${string}`
   | MemoryResourceUri
-  | `skill://${string}`
   | `drive://${string}`
   | `cron://${string}`
   | `workspace://session/${string}`
@@ -529,6 +536,9 @@ imply `tools.call(...)` routing.
   `tools.call`. Future namespaces that exist but have incomplete methods throw `NotImplementedError`.
 - P2 memory reads use `resources.read("memory://...")` through `resources.read:memory`; the global
   `memory` namespace remains `undefined` until a later `memory.*` API is explicitly shipped.
+- P2 skill markdown is prompt-composed under `skill://...` labels only. `skill://...` is not a
+  resource URI yet; `resources.read/preview/list("skill://...")` fails closed as an unknown scheme
+  until P4/P7 ships the skill resource lifecycle.
 
 ### 7.4 Deferred namespace placement
 
@@ -539,7 +549,7 @@ approval, and audit boundaries. The root roadmap is canonical (§28), but the SD
 |---|---|---|
 | `memory.*` | P2/P4 split | P2 exposes memory reads as `memory://` resources through `resources.read:memory`; the `memory` global remains `undefined`. A future explicit `memory.*` namespace may expose minimum profile/user recall and state-capture calls, while P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
 | `agents.*` | P3 | Add only with `tm-agents`, actor lifecycle, mailbox/roster, supervision, and `agent://` resource handling. |
-| `skills.*` | P4/P7 split | P4 may create approval-gated skill proposals; P7 owns safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
+| `skills.*` / `skill://` reads | P4/P7 split | P2 may compose bundled skill markdown under `skill://...` prompt labels only. `skills` remains `undefined`, and `resources.read/preview/list("skill://...")` must fail closed until P4/P7 defines approval-gated proposals plus safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
 | `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, and drive organizer flows. |
 | `http.*` hardening | P5 or P7 | Keep current `http.get` as a default-deny deterministic allowlisted helper with no open egress; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |
 | `secrets.use` | P7 | Requires opaque egress-scoped handles from a secret broker; secret values must never materialize in JS heap, artifacts, or model context. |

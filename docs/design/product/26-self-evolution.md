@@ -14,7 +14,8 @@ Realized as the **skills-generation loop** + user-model refinement, governed so 
 - **Skill library as code** (Voyager, Wang et al. 2023): recurring workflows are distilled into
   reusable `skills/` playbooks, **indexed by description embeddings**, **retrieved and composed** on
   later runs. The library **grows**, so she stops re-deriving the same workflow each time (Voyager's
-  anti-catastrophic-forgetting result). §22 dreaming *produces* them; `skills.*` (§07) imports them.
+  anti-catastrophic-forgetting result). §22 dreaming *produces* them; future `skills.*` (§07)
+  imports them.
 - **Learn from experience** (Reflexion, Shinn et al. 2023): **verbal** reflection over what happened,
   stored in memory (§22) as a "semantic gradient" for next time — **no weight updates**, fully
   replayable. This is exactly the §22 reflect step, reused here as the learning signal.
@@ -50,7 +51,7 @@ edit, or delete; everything is replayable (principle #6).
 ## 26.1 What evolves
 
 - **Skills** — Voyager-style: §22 Phase-2 dreaming distills recurring workflows into `skills/`
-  playbooks (embedding-indexed; retrieved + composed via `skills.*`, §07). A new skill is
+  playbooks (embedding-indexed; retrieved + composed via future `skills.*`, §07). A new skill is
   **self-verified** (Self-Refine critique + a dry-run / consistency check) **before** it is committed.
 - **User model** — the facts / profile store of Brian (§22) sharpens with each dream (Reflexion:
   reflections about his preferences and patterns are stored and recalled).
@@ -100,8 +101,8 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
 
 - `tm-memory::dream` (§22.10) — *produces* candidates: extract / reflect / summarize / distill skill;
   the Self-Refine self-critique pass; redaction before any disk write.
-- `tm-host` skills registry (`skills.*`, §07) — the **Voyager skill library**: store / embedding-index
-  / retrieve / compose.
+- Future `tm-host` skills registry (`skills.*`, §07) — the **Voyager skill library**: store /
+  embedding-index / retrieve / compose.
 - `tm-server` (§27) — **tier enforcement** at the config / registry boundary; the review surface
   (`write_proposal` events §27.1); the audit trail (§12).
 - config — `self_evolution.tier` (+ the `write_approval` knobs, §26.2).

@@ -27,7 +27,7 @@ a handler, never patch a central switch.
 | Family | Examples | Resolved | Model-addressable? |
 |---|---|---|---|
 | **Persistence reference** | `blob:sha256:<hash>`, the spill side of `artifact://` | at **load** (rehydration) | no — storage internal |
-| **Resource route** | `agent://` `memory://` `skill://` `cron://` … | **on demand** via `read(uri)` | yes |
+| **Resource route** | `agent://` `memory://` `cron://` … | **on demand** via `read(uri)` | yes |
 
 `blob:` is the hash of content rehydrated when a transcript loads (§25.3) — **not** a router URL. The
 schemes catalogued below are the *resource* family: live, capability-checked, paged reads.
@@ -83,7 +83,10 @@ outputs out of both the model context and the mobile client render path.
 
 ## 9.3 Resource catalog
 
-Internal schemes (v1):
+Internal schemes (v1). The implemented P1/P2 session gateway currently registers
+`artifact://`, `workspace://session`, `linked://`, `project://`, and `memory://`. Other catalog
+entries are reserved designs and must fail closed until their backing subsystem registers a handler
+and grant.
 
 | scheme | resolves | backing subsystem | registered by |
 |---|---|---|---|
@@ -91,15 +94,20 @@ Internal schemes (v1):
 | `agent://<id>` | sub-agent output artifact | agents §23 / §25 | `tm-agents` |
 | `history://<id>` | read-only sub-agent transcript | agents §23 | `tm-agents` |
 | `memory://…` | P2 memory gateway: `root`, `user-model`, approved profile facts, and scoped recall chunks (§22.9). Richer `MEMORY.md`, episodic query, project memory, and dream views remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
-| `skill://<name>` | skill source / `SKILL.md` (procedural playbook) §26 / §07 | skills §22 / §26 | `tm-memory` |
+| `skill://<name>` | **Reserved prompt label only in P2**: composed system prompts may label injected `SKILL.md` sections this way, but `resources.read/list/preview("skill://...")` is not registered and must fail closed until P4/P7 defines the read lifecycle. | skills §22 / §26 | prompt composition now; no resource handler until P4/P7 |
 | `drive://<path>` | user document by canonical path §24 | drive §24 | `tm-drive` |
 | `cron://[<id>]` | scheduler job table: list jobs / a job's def + run history §27.2 | scheduler §27 | `tm-server` |
 | `workspace://session/<path>` | current session sandbox workspace read/list/preview | sandbox workspace §07 / §08 | `tm-sandbox` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
 | `project://<id>/<view>` | aggregate project surface: status, open loops, decisions, linked folders, artifacts, agents | server project layer §27 / memory §22 / host §25 | `tm-server` |
 
-`skill://` is **promoted** from the nested `memory://…/skills/<name>` path to a first-class scheme:
-same store (§22 *Skills* row), direct address.
+`skill://` is **not yet promoted** from prompt-composition provenance to a first-class resource
+scheme. The P2 persona layer injects active skill markdown directly into the system prompt and labels
+those sections with `skill://<name>` for source clarity. That label is not model-readable through the
+SDK or client gateway: `resources.read("skill://...")`, `resources.preview("skill://...")`, and
+`resources.list("skill://...")` must fail closed as unknown schemes. P4/P7 may promote it later, but
+only with a registered handler, scheme-specific grant, provenance, audit/replay, and safe
+import/version/reload rules.
 
 ### Workspace, linked folders, and projects
 
@@ -152,6 +160,8 @@ contract** when enabled; until then they remain an open question (§15).
 ## 9.4 Failure modes & degradation
 
 - **Unknown scheme** → error listing the registered schemes.
+- **Reserved prompt-only label** such as `skill://...` → unknown scheme until the owning milestone
+  registers a handler and grants.
 - **Capability denied** → **fail closed** (§08); the read never runs.
 - **Handler resolves nothing** (id / path missing) → not-found error listing available ids / paths
   (mirrors the artifact-store behavior, §25.5).

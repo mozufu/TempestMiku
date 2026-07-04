@@ -4,7 +4,10 @@
  * P0/P2 surface: no ambient filesystem, process, network, secret, shell, or
  * host access. Every external effect goes through capability-checked SDK
  * namespaces. P2 memory is exposed as memory:// resources behind
- * resources.read:memory, not as a memory.* namespace.
+ * resources.read:memory, not as a memory.* namespace. Bundled skill
+ * markdown may be labeled skill://... inside composed prompts, but that
+ * label is not a resources.read/list/preview surface until the P4/P7 skill
+ * lifecycle work registers a handler and grants.
  */
 
 export {};
@@ -35,6 +38,7 @@ interface JsonArray extends Array<JsonValue> {}
 type MimeType = string;
 type CapabilityName = string;
 type ArtifactUri = `artifact://${string}`;
+type SkillPromptLabel = `skill://${string}`;
 
 type MemoryResourceUri =
   | "memory://root"
@@ -49,7 +53,6 @@ type ResourceUri =
   | `agent://${string}`
   | `history://${string}`
   | MemoryResourceUri
-  | `skill://${string}`
   | `drive://${string}`
   | `cron://${string}`
   | `workspace://session/${string}`
@@ -200,6 +203,9 @@ interface ResourcesNamespace {
    * workspace://session, project://, and the P2 memory:// surface. Each scheme
    * has its own grant such as resources.read:artifact, resources.read:linked,
    * or resources.read:memory; missing grants and unknown schemes fail closed.
+   * skill://... is prompt-composition-only for now, so attempting to read it
+   * must fail closed as an unknown resource scheme until P4/P7 wires the
+   * skill resource lifecycle.
    */
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
   /** resources.preview(uri: ResourceUri): Promise<ResourceContent> */

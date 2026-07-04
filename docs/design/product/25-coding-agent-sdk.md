@@ -22,7 +22,7 @@ Engaged by **Serious Engineer** and **Handoff** modes (§21). Reference: **Oh My
   (jail) and §08 (approval / budgets) provide.
 - **Translating *from* MCP** (Anthropic Model Context Protocol, Nov 2024 — JSON-RPC; hosts / clients /
   servers; **resources / prompts / tools**; LSP-inspired). MCP/OMP-style multi-tool is the *source*;
-  our SDK namespaces (`fs.*` / `code.*` / `proc.*` / `agents.*` / `memory.*` / `skills.*` /
+  our SDK namespaces (`fs.*` / `code.*` / `proc.*` / future `agents.*` / `memory.*` / `skills.*` /
   `artifacts.*`) are the *target* — same capabilities, made code-callable and **progressively
   disclosed** (`tools.search` / `docs`, §07) rather than all-loaded.
 - This is the core bet (§01) realized at the product layer; the engineer modes are its heaviest users.
@@ -68,7 +68,7 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 | eval (persistent kernel) | the `execute` loop itself | already the core (§05) |
 | task / job / irc | `agents.*` | §23 |
 | recall / retain / reflect | `memory.*` | §22 |
-| skills | `skills.*` | §07, §26 |
+| skills | reserved `skills.*`; current `skill://...` labels are prompt-composition-only | §07, §26 |
 | `artifact://` / `agent://` | `artifacts.*` + two-tier store | §25.3 |
 
 ## 25.2 Engineer reach: raw terminal → curated `proc.run` (a deliberate tightening)
@@ -203,8 +203,8 @@ this is what keeps big data and fan-out **out of the window**.
 - `tm-artifacts` (§10.1) — `blob` (content-addressed store: sha256, dedup, MIME sidecar), `artifact`
   (session-local ids + `OutputSink` spill), `agent` (named sub-agent outputs), `resolve` (registers the
   `artifact://` / `agent://` handlers into the §9.2 registry; `blob:` rehydration at load).
-- `agents.*` / `memory.*` / `skills.*` live in their own crates (§23 / §22 / §07 + §26); §25 is the
-  **engineer-facing SDK + the artifact spine**.
+- Future `agents.*` / `memory.*` / `skills.*` live in their own crates (§23 / §22 / §07 + §26); §25
+  is the **engineer-facing SDK + the artifact spine**.
 
 ## 25.5 Failure modes & degradation
 

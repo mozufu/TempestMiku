@@ -399,6 +399,35 @@ async fn deno_artifacts_resolve_through_resource_registry() {
     assert!(error.contains("CapabilityDeniedError"));
     assert!(error.contains("unknown resource scheme"));
 
+    let skill_denied = session
+        .eval(
+            "await resources.read('skill://miku-voice').catch((err) => ({ name: err.name, uri: err.uri, scheme: err.details.scheme, registered: err.details.registered }))",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    let skill_result = skill_denied.result.unwrap();
+    assert_eq!(
+        skill_result["name"],
+        Value::String("CapabilityDeniedError".into())
+    );
+    assert_eq!(skill_result["uri"], Value::String("skill://".into()));
+    assert_eq!(skill_result["scheme"], Value::String("skill".into()));
+    assert!(
+        skill_result["registered"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|scheme| scheme.as_str() == Some("artifact"))
+    );
+    assert!(
+        !skill_result["registered"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|scheme| scheme.as_str() == Some("skill"))
+    );
+
     let docs = session
             .eval(
                 "const artifactDocs = await tools.docs('artifacts.put');\n\
@@ -437,12 +466,30 @@ async fn deno_artifacts_resolve_through_resource_registry() {
         sdk_types.contains("type MemoryResourceUri"),
         "docs/sdk/tm-runtime.d.ts should declare the P2 memory:// resource surface"
     );
+    assert!(
+        sdk_types.contains("type SkillPromptLabel = `skill://${string}`;"),
+        "docs/sdk/tm-runtime.d.ts should keep skill:// as a prompt-composition label"
+    );
+    let resource_uri_decl = sdk_types
+        .split("type ResourceUri =")
+        .nth(1)
+        .unwrap()
+        .split("type SdkPath")
+        .next()
+        .unwrap();
+    assert!(
+        !resource_uri_decl.contains("skill://"),
+        "skill:// is prompt-composition-only until P4/P7 and must not be part of ResourceUri"
+    );
     let resource_description = result["resourceDescription"].as_str().unwrap();
     for needle in [
         "artifact://",
         "linked://",
         "memory://",
         "resources.read:memory",
+        "skill://",
+        "prompt-composition-only",
+        "unknown scheme",
     ] {
         assert!(
             resource_description.contains(needle),

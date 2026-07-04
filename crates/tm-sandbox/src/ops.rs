@@ -213,7 +213,7 @@ fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
             "resources",
             "Read a registered resource URI",
             "resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>",
-            "Read a URI through the scheme-dispatched resource registry. Current handlers cover artifact:// in every Deno session and can cover linked:// plus the P2 memory:// surface when the host registers those handlers. Scheme-specific grants such as resources.read:artifact, resources.read:linked, and resources.read:memory still apply.",
+            "Read a URI through the scheme-dispatched resource registry. Current handlers cover artifact:// in every Deno session and can cover linked:// plus the P2 memory:// surface when the host registers those handlers. Scheme-specific grants such as resources.read:artifact, resources.read:linked, and resources.read:memory still apply. skill:// labels are prompt-composition-only until the P4/P7 skill lifecycle registers a handler, so reading them fails closed as an unknown scheme.",
             json!({
                 "type": "object",
                 "required": ["uri"],

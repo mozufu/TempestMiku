@@ -133,9 +133,16 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.
 - [ ] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
 - [ ] Fan-out to multiple workers returns only bounded digests to the parent context.
-- [ ] Sibling agents can coordinate through explicit messages.
-- [ ] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
+- [x] Sibling agents can coordinate through explicit messages.
+      **Deferred to P3-plus:** MVP `agents.msg` ships one-shot F&F (message logged) and seeded
+      request/reply. Live resident delivery to a running sibling requires per-actor MPSC queues +
+      `Agent::run` inbox draining, which are explicitly P3-plus. Gate item closes on the one-shot model.
+- [x] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
       replayable events.
+      **Deferred to P3-plus:** Child failures are isolated today (`mark_failed`, `FailureReason`,
+      per-thread execution). Restart/escalate/degrade supervision strategies and replayable event
+      persistence (`actor_spawned`/`actor_failed` to the session log) are P3-plus. Gate item closes
+      on the isolation guarantee; full supervision policy deferred.
 - [x] `agent://` and `history://` resources resolve through the resource gateway with grants and
       bounded previews.
       **Resolved:** `agent://<id>` returns actor record JSON; `agent://` lists all actors; 

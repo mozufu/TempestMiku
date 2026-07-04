@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 use tm_artifacts::{ResourceContent, preview};
 use tm_core::DEFAULT_SYSTEM_PROMPT;
+use tm_agents::{AgentResourceHandler, HistoryResourceHandler, MailboxRegistry};
 use tm_host::{
     CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
     ResourceRegistry,
@@ -75,6 +76,7 @@ pub struct AppState<S, M, C> {
     pub approval_broker: Arc<ApprovalBroker>,
     pub artifact_root: PathBuf,
     pub linked_folders: LinkedFolders,
+    pub actor_roster: Arc<MailboxRegistry>,
     live_events:
         Arc<parking_lot::Mutex<std::collections::BTreeMap<Uuid, broadcast::Sender<SessionEvent>>>>,
 }
@@ -91,6 +93,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             approval_broker: Arc::clone(&self.approval_broker),
             artifact_root: self.artifact_root.clone(),
             linked_folders: self.linked_folders.clone(),
+            actor_roster: Arc::clone(&self.actor_roster),
             live_events: Arc::clone(&self.live_events),
         }
     }
@@ -114,8 +117,14 @@ impl<S, M, C> AppState<S, M, C> {
             approval_broker: Arc::new(ApprovalBroker::default()),
             artifact_root: tm_artifacts::default_root(),
             linked_folders: LinkedFolders::default(),
+            actor_roster: Arc::new(MailboxRegistry::new()),
             live_events: Arc::new(parking_lot::Mutex::new(std::collections::BTreeMap::new())),
         }
+    }
+
+    pub fn with_actor_roster(mut self, roster: Arc<MailboxRegistry>) -> Self {
+        self.actor_roster = roster;
+        self
     }
 
     pub fn with_coding_backend(mut self, backend: Arc<dyn CodingBackend>) -> Self {

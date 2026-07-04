@@ -16,9 +16,11 @@ pub mod store;
 pub mod webui;
 
 pub use api::{AppState, app};
+pub use tm_agents::MailboxRegistry;
 pub use auth::{AuthConfig, ForwardedAuthConfig};
 pub use chat::{
-    AgentChatRunner, ChatRunner, ChatTurn, EchoChatRunner, PersistingEventSink, ServerChatRunner,
+    AgentChatRunner, ChatActorExecutor, ChatRunner, ChatTurn, EchoChatRunner, PersistingEventSink,
+    ServerChatRunner,
 };
 pub use coding_backend::{
     ApprovalBroker, ApprovalOption, ApprovalOutcome, ApprovalPrompt, ApprovalResolveDecision,

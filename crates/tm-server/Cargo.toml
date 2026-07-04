@@ -8,6 +8,7 @@ description = "TempestMiku server: session API, SSE stream, persona, and minimal
 
 [dependencies]
 tm-core.workspace = true
+tm-agents.workspace = true
 tm-persona.workspace = true
 tm-artifacts.workspace = true
 tm-host.workspace = true

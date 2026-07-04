@@ -356,6 +356,31 @@ fn linked_folder_capability_notes(linked_folders: &LinkedFolders) -> String {
     notes
 }
 
+#[cfg(test)]
+mod tests {
+    use super::validate_mode;
+    use crate::ServerError;
+    use tm_persona::{ModeId, PersonaConfig};
+
+    #[test]
+    fn validate_mode_accepts_known_modes() {
+        let persona = PersonaConfig::default();
+        for id in ["personal_assistant", "serious_engineer", "handoff"] {
+            assert!(validate_mode(&persona, ModeId::from(id)).is_ok(), "{id}");
+        }
+    }
+
+    #[test]
+    fn validate_mode_rejects_unknown_id() {
+        let persona = PersonaConfig::default();
+        let err = validate_mode(&persona, ModeId::from("nonexistent_mode")).unwrap_err();
+        assert!(
+            matches!(err, ServerError::InvalidRequest(ref msg) if msg.contains("unknown mode")),
+            "expected InvalidRequest with 'unknown mode', got: {err:?}"
+        );
+    }
+}
+
 pub(super) fn route_mode_for_prompt(catalog: &ModeCatalog, content: &str) -> (ModeId, String) {
     let lower = content.to_lowercase();
     let mut profiles = catalog.modes.iter().collect::<Vec<_>>();

@@ -10,6 +10,8 @@ use tm_persona::ModeId;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use uuid::Uuid;
 
+use tm_agents::{ActorDigest, ActorError, ActorExecutor, ActorSpec};
+
 use crate::{Result, ServerError, SessionEvent, Store, StoreEvent};
 
 #[derive(Debug, Clone)]
@@ -256,5 +258,83 @@ where
             let _ = self.sender.send(event);
         }
         Ok(())
+    }
+}
+
+// ─── ChatActorExecutor ────────────────────────────────────────────────────────
+
+/// Runs sub-agents using the existing [`Agent`] loop without routing through
+/// [`AgentChatRunner`]'s blocking channel (which would deadlock when called from
+/// inside a parent actor's sandbox cell).
+///
+/// Injected into [`tm_agents::MailboxRegistry`] at startup; called by the `agents.run`
+/// HostFn body.
+pub struct ChatActorExecutor {
+    llm: Arc<dyn LlmClient>,
+    cfg: AgentConfig,
+    sandbox_factory: Arc<dyn Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync>,
+}
+
+impl ChatActorExecutor {
+    pub fn new(
+        llm: Arc<dyn LlmClient>,
+        cfg: AgentConfig,
+        sandbox_factory: impl Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            llm,
+            cfg,
+            sandbox_factory: Arc::new(sandbox_factory),
+        }
+    }
+}
+
+#[async_trait]
+impl ActorExecutor for ChatActorExecutor {
+    async fn run_to_digest(&self, spec: ActorSpec) -> std::result::Result<ActorDigest, ActorError> {
+        if spec.depth >= spec.budget.max_depth {
+            return Err(ActorError::DepthExceeded(spec.depth));
+        }
+
+        // DenoSandbox sessions are !Send (Deno JS runtime is single-threaded), so we
+        // cannot await agent.run() directly in an async_trait Send future. Spawn a
+        // dedicated thread with its own single-threaded tokio runtime — the same
+        // isolation pattern as AgentChatRunner, but one thread per actor call rather
+        // than a shared sequential queue (which would deadlock when called from inside
+        // a parent actor's sandbox cell).
+        let llm = Arc::clone(&self.llm);
+        let mut cfg = self.cfg.clone();
+        cfg.system_prompt = format!(
+            "You are a specialized sub-agent. Role: {}.\n\
+             Complete the assigned task. When finished, provide a plain-prose summary of your result.",
+            spec.role,
+        );
+        let task = spec.task.clone();
+        let actor_id = spec.id.clone();
+        let sandbox = (self.sandbox_factory)(Uuid::new_v4());
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<std::result::Result<String, ActorError>>();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("actor worker runtime builds");
+            let agent = Agent::new(llm, sandbox, cfg);
+            let result = runtime
+                .block_on(agent.run(&task, &tm_core::NullSink))
+                .map_err(|e| ActorError::Execution(e.to_string()));
+            let _ = tx.send(result);
+        });
+
+        let summary = rx
+            .await
+            .map_err(|_| ActorError::Execution("actor worker dropped response".to_string()))??;
+
+        Ok(ActorDigest {
+            actor_id,
+            summary,
+            artifact_uri: None,
+            history_uri: None, // transcript persistence deferred to P3.3
+        })
     }
 }

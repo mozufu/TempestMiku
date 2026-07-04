@@ -17,6 +17,7 @@ tm-artifacts = { path = "crates/tm-artifacts" }
 tm-host = { path = "crates/tm-host" }
 tm-persona = { path = "crates/tm-persona" }
 tm-server = { path = "crates/tm-server" }
+tm-agents = { path = "crates/tm-agents" }
 
 # async + runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time", "process"] }

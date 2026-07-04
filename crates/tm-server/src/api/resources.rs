@@ -134,8 +134,10 @@ where
         Some("linked") => read_linked_resource(&state.linked_folders, uri, selector).await,
         Some("project") => read_project_resource(state, session_id, uri).await,
         Some("memory") => read_memory_resource(state, session_id, uri, selector).await,
+        Some("agent") => read_agent_resource(state, uri, selector).await,
+        Some("history") => read_history_resource(state, uri, selector).await,
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory"
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history"
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
@@ -171,7 +173,7 @@ where
     C: ChatRunner,
 {
     let Some(uri) = uri.filter(|uri| !uri.is_empty()) else {
-        return Ok(["artifact", "linked", "workspace", "project", "memory"]
+        return Ok(["artifact", "linked", "workspace", "project", "memory", "agent", "history"]
             .into_iter()
             .map(|scheme| ResourceEntry {
                 uri: format!("{scheme}://"),
@@ -205,8 +207,12 @@ where
         Some("linked") => list_linked_resources(&state.linked_folders, Some(uri)).await,
         Some("project") => list_project_resources(state, session_id, uri).await,
         Some("memory") => list_memory_resources(state, session_id, uri).await,
+        Some("agent") => list_agent_resources(state, uri).await,
+        Some("history") => Err(ServerError::Policy(
+            "history:// listing not supported — read a specific history://<id>".to_string(),
+        )),
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory"
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history"
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
@@ -306,6 +312,68 @@ where
         mode_profile(&state.persona, &session.mode_state.mode).default_scope,
     )));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
+    registry.list(Some(uri), &ctx).await.map_err(map_host_error)
+}
+
+async fn read_agent_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(AgentResourceHandler::new(Arc::clone(
+        &state.actor_roster,
+    ))));
+    let ctx =
+        InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
+    registry
+        .read(uri, selector, &ctx)
+        .await
+        .map_err(map_host_error)
+}
+
+async fn read_history_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(HistoryResourceHandler::new(Arc::clone(
+        &state.actor_roster,
+    ))));
+    let ctx =
+        InvocationCtx::new(CapabilityGrants::default().allow("resources.read:history"));
+    registry
+        .read(uri, selector, &ctx)
+        .await
+        .map_err(map_host_error)
+}
+
+async fn list_agent_resources<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(AgentResourceHandler::new(Arc::clone(
+        &state.actor_roster,
+    ))));
+    let ctx =
+        InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 

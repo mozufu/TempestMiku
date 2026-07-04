@@ -12,6 +12,8 @@ use super::util::normalize_for_dedupe;
 const MAX_STATE_CAPTURE_PROPOSALS_PER_TURN: usize = 6;
 const STATE_CAPTURE_MAX_TEXT_CHARS: usize = 280;
 pub(crate) const STATE_CAPTURE_PROVENANCE_LABEL: &str = "personal-assistant-state-capture";
+/// The mode id this state capture belongs to; must resolve in the bundled `ModeCatalog`.
+const MODE_ID: &str = "personal_assistant";
 
 pub fn personal_assistant_state_capture_proposals(
     subject: &str,
@@ -50,7 +52,7 @@ pub fn personal_assistant_state_capture_proposals(
             "source": source,
             "sourceSession": session_id,
             "sourceTurn": "user",
-            "mode": "personal_assistant",
+            "mode": MODE_ID,
             "scope": scope,
             "capturedCategory": candidate.category.as_str(),
             "proposedAt": created_at,
@@ -562,4 +564,20 @@ fn clean_state_capture_body(text: &str) -> Option<String> {
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MODE_ID;
+    use tm_persona::{ModeId, PersonaConfig};
+
+    #[test]
+    fn mode_id_constant_resolves_in_bundled_catalog() {
+        let assets = PersonaConfig::default().load_assets();
+        assert!(
+            assets.mode_profile(&ModeId::from(MODE_ID)).is_some(),
+            "STATE_CAPTURE MODE_ID '{MODE_ID}' not found in bundled modes.json; \
+             update the constant to match the catalog"
+        );
+    }
 }

@@ -1,16 +1,18 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
+use tm_agents::MailboxRegistry;
 use tm_artifacts::default_root;
-use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient};
+use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
+use tm_sandbox::DenoSandbox;
 use tm_host::{ApprovalPolicy, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig};
 use tm_llm::OpenAiClient;
 use tm_persona::PersonaConfig;
 use tm_sandbox::DenoSandboxOptions;
 
 use tm_server::{
-    AgentChatRunner, AppState, AuthConfig, CodingBackend, EchoChatRunner, InMemoryStore,
-    NativeApprovalMode, NativeDenoBackend, OmpAcpBackend, OmpAcpConfig, PostgresStore,
-    ServerChatRunner, StoreMemoryProvider, app,
+    AgentChatRunner, AppState, AuthConfig, ChatActorExecutor, CodingBackend, EchoChatRunner,
+    InMemoryStore, NativeApprovalMode, NativeDenoBackend, OmpAcpBackend, OmpAcpConfig,
+    PostgresStore, ServerChatRunner, StoreMemoryProvider, app,
 };
 
 #[tokio::main]
@@ -30,7 +32,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_config = load_host_config()?;
     let linked_folders = host_config.linked_folders()?;
     let artifact_root = server_artifact_root(&host_config);
-    let runtime = build_runtime(&host_config, &linked_folders, artifact_root.clone())?;
+    let roster = Arc::new(MailboxRegistry::new());
+    let runtime = build_runtime(&host_config, &linked_folders, artifact_root.clone(), Arc::clone(&roster))?;
 
     if let Ok(dsn) = std::env::var("TM_DATABASE_URL")
         && !dsn.trim().is_empty()
@@ -38,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = Arc::new(PostgresStore::connect(&dsn).await?);
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(
-            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth),
+            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
+                .with_actor_roster(Arc::clone(&roster)),
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
@@ -51,7 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let store = Arc::new(InMemoryStore::default());
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(
-            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth),
+            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
+                .with_actor_roster(roster),
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
@@ -78,6 +83,7 @@ fn build_runtime(
     host_config: &P0HostConfig,
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
+    roster: Arc<MailboxRegistry>,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
     let api_key_set = std::env::var("OPENAI_API_KEY")
         .map(|v| !v.trim().is_empty())
@@ -106,13 +112,33 @@ fn build_runtime(
         ..AgentConfig::default()
     };
     let linked_folders = (!linked_folders.is_empty()).then_some(linked_folders.clone());
-    let sandbox_options = DenoSandboxOptions {
+    let mut sandbox_options = DenoSandboxOptions {
         artifact_root,
         linked_folders,
         approval_policy: chat_approval_policy(host_config)?,
         approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
         ..DenoSandboxOptions::default()
     };
+    tm_agents::register(
+        &mut sandbox_options.host_registry,
+        &mut sandbox_options.resource_registry,
+        Arc::clone(&roster),
+    );
+
+    // Inject executor AFTER sandbox_options has agents.* registered so child actor
+    // sandboxes inherit the same host registry (including agents.* for recursive actors).
+    let executor_options = sandbox_options.clone();
+    let executor: Arc<dyn tm_agents::ActorExecutor> = Arc::new(ChatActorExecutor::new(
+        Arc::clone(&llm),
+        cfg.clone(),
+        move |session_id: uuid::Uuid| {
+            let mut opts = executor_options.clone();
+            opts.session_id = session_id.to_string();
+            Arc::new(DenoSandbox::new(opts)) as Arc<dyn Sandbox>
+        },
+    ));
+    roster.set_executor(executor);
+
     let approval_mode = NativeApprovalMode::parse(&host_config.approvals.mode)?;
     tracing::info!(model, "real LLM agent runner configured");
     Ok(BuiltRuntime {

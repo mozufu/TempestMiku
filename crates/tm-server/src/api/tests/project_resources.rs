@@ -230,7 +230,7 @@ async fn skill_resource_gateway_is_prompt_composition_only_until_p4() {
             "{endpoint}: {error}"
         );
         assert!(
-            error.contains("registered: artifact, linked, workspace, project, memory"),
+            error.contains("registered: artifact, linked, workspace, project, memory, agent, history"),
             "{endpoint}: {error}"
         );
     }

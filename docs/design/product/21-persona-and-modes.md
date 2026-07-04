@@ -37,6 +37,13 @@ Rust vendors the default `SOUL.md`, `modes.json`, and bundled skills under
 unreadable configured assets degrade with warnings but fall back to the bundled defaults so the
 default Miku identity and mode catalog stay available.
 
+Catalog skill references are validated against loaded skill assets. Every bundled `activeSkills`
+entry must resolve to `skills/<name>/SKILL.md`. For configured catalogs, a missing active skill
+degrades with the stable warning
+`active skill <skill> referenced by mode <mode> is missing at skills/<skill>/SKILL.md; prompt will use active mode profile fallback`,
+and prompt composition inserts a `missing skill://<skill>` section telling the model to use the
+active mode profile as the fallback.
+
 A mode profile sets task framing and selects skills; it **never** replaces identity. Tone still comes
 from the voice overlay, capped by seriousness, so serious work can turn cuteness down without
 changing who Miku is. V1 does **not** require Rust to know a fixed list of modes: `modes.json`

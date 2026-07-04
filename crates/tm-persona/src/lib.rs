@@ -19,6 +19,7 @@ pub const KNOWN_SKILLS: &[&str] = &[
 const BUNDLED_PERSONA_SOURCE: &str = "bundled:tm-persona/default-persona";
 const BUNDLED_SOUL: &str = include_str!("../assets/SOUL.md");
 const BUNDLED_MODES: &str = include_str!("../assets/modes.json");
+const MISSING_SKILL_PROMPT_FALLBACK: &str = "This active skill is unavailable from persona assets. Use the active mode profile as the fallback.";
 const BUNDLED_SKILLS: &[(&str, &str)] = &[
     (
         "miku-voice",
@@ -268,13 +269,14 @@ impl PersonaConfig {
                 "persona assets missing at {}; using bundled defaults",
                 root.display()
             );
+            let (skills, modes) = bundled_catalog_assets();
             return PersonaAssets {
                 status: PersonaStatus::Degraded {
                     warning: warning.clone(),
                 },
                 soul: Some(BUNDLED_SOUL.to_string()),
-                skills: bundled_skill_map(),
-                modes: bundled_mode_catalog(),
+                skills,
+                modes,
                 warnings: vec![warning],
             };
         }
@@ -293,6 +295,7 @@ impl PersonaConfig {
 
         let modes = load_configured_modes(root, &mut warnings);
         let skills = load_configured_skills(root, &mut warnings);
+        warn_missing_skill_references(&modes, &skills, &mut warnings);
 
         let status = if warnings.is_empty() {
             PersonaStatus::Loaded { path: root.clone() }
@@ -363,11 +366,17 @@ impl PersonaConfig {
         for skill in &profile.active_skills {
             match assets.skills.get(skill.as_str()) {
                 Some(contents) => push_section(&mut prompt, &format!("skill://{skill}"), contents),
-                None => push_section(
-                    &mut prompt,
-                    &format!("missing skill://{skill}"),
-                    "This active skill is unavailable from persona assets. Use the active mode profile as the fallback.",
-                ),
+                None => {
+                    let warning = missing_skill_reference_warning(&profile.mode, skill);
+                    if !warnings.iter().any(|existing| existing == &warning) {
+                        warnings.push(warning);
+                    }
+                    push_section(
+                        &mut prompt,
+                        &format!("missing skill://{skill}"),
+                        MISSING_SKILL_PROMPT_FALLBACK,
+                    );
+                }
             }
         }
 
@@ -443,8 +452,8 @@ fn load_configured_skills(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<S
             Ok(contents) => {
                 skills.insert(skill_name.to_string(), contents);
             }
-            Err(err) => warnings.push(format!(
-                "missing or unreadable skill {skill_name}: {err}; using bundled default if available"
+            Err(_) => warnings.push(format!(
+                "missing or unreadable skills/{skill_name}/SKILL.md; using bundled default if available"
             )),
         }
     }
@@ -453,15 +462,32 @@ fn load_configured_skills(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<S
 }
 
 fn bundled_assets() -> PersonaAssets {
+    let (skills, modes) = bundled_catalog_assets();
     PersonaAssets {
         status: PersonaStatus::Loaded {
             path: PathBuf::from(BUNDLED_PERSONA_SOURCE),
         },
         soul: Some(BUNDLED_SOUL.to_string()),
-        skills: bundled_skill_map(),
-        modes: bundled_mode_catalog(),
+        skills,
+        modes,
         warnings: Vec::new(),
     }
+}
+
+fn bundled_catalog_assets() -> (BTreeMap<String, String>, ModeCatalog) {
+    let skills = bundled_skill_map();
+    let modes = bundled_mode_catalog();
+    let missing = missing_skill_references(&modes, &skills);
+    assert!(
+        missing.is_empty(),
+        "bundled modes.json references missing skills: {}",
+        missing
+            .iter()
+            .map(|(mode, skill)| format!("{mode}:{skill}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    (skills, modes)
 }
 
 fn bundled_skill_map() -> BTreeMap<String, String> {
@@ -481,6 +507,37 @@ fn parse_mode_catalog(contents: &str) -> std::result::Result<ModeCatalog, String
     Ok(catalog)
 }
 
+fn warn_missing_skill_references(
+    catalog: &ModeCatalog,
+    skills: &BTreeMap<String, String>,
+    warnings: &mut Vec<String>,
+) {
+    for (mode, skill) in missing_skill_references(catalog, skills) {
+        warnings.push(missing_skill_reference_warning(&mode, &skill));
+    }
+}
+
+fn missing_skill_references(
+    catalog: &ModeCatalog,
+    skills: &BTreeMap<String, String>,
+) -> Vec<(ModeId, String)> {
+    let mut missing = Vec::new();
+    for profile in &catalog.modes {
+        for skill in &profile.active_skills {
+            if !skills.contains_key(skill) {
+                missing.push((profile.mode.clone(), skill.clone()));
+            }
+        }
+    }
+    missing
+}
+
+fn missing_skill_reference_warning(mode: &ModeId, skill: &str) -> String {
+    format!(
+        "active skill {skill} referenced by mode {mode} is missing at skills/{skill}/SKILL.md; prompt will use active mode profile fallback"
+    )
+}
+
 fn push_section(target: &mut String, title: &str, content: &str) {
     if !target.is_empty() {
         target.push_str("\n\n");
@@ -496,10 +553,15 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{KNOWN_SKILLS, ModeId, PersonaConfig, PersonaStatus};
+    use super::{
+        KNOWN_SKILLS, MISSING_SKILL_PROMPT_FALLBACK, ModeId, PersonaConfig, PersonaStatus,
+    };
+
+    static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn bundled_mode_catalog_has_default_and_handoff_profile() {
@@ -561,6 +623,21 @@ mod tests {
     }
 
     #[test]
+    fn bundled_active_skill_references_resolve_to_skill_assets() {
+        let assets = PersonaConfig::default().load_assets();
+
+        for profile in &assets.modes.modes {
+            for skill in &profile.active_skills {
+                assert!(
+                    assets.skills.contains_key(skill),
+                    "bundled mode {} references missing skills/{skill}/SKILL.md",
+                    profile.mode
+                );
+            }
+        }
+    }
+
+    #[test]
     fn loads_fixture_soul_modes_and_skills() {
         let root = temp_persona_root();
         write_fixture(&root, true, &["custom-skill"], Some(custom_modes_json()));
@@ -614,6 +691,40 @@ mod tests {
         assert!(prompt.system_prompt.contains("skill://miku-voice"));
         assert!(!prompt.system_prompt.contains("missing skill://miku-voice"));
         assert!(prompt.system_prompt.contains("skill://ambiguity-grill"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn configured_missing_active_skill_warns_and_uses_prompt_fallback() {
+        let root = temp_persona_root();
+        write_fixture(&root, true, &[], Some(missing_skill_modes_json()));
+        let expected_warning = "active skill missing-skill referenced by mode custom_runtime_mode is missing at skills/missing-skill/SKILL.md; prompt will use active mode profile fallback";
+
+        let assets = PersonaConfig::from_path(&root).load_assets();
+        assert_eq!(assets.warnings, [expected_warning]);
+        assert_eq!(
+            assets.status,
+            PersonaStatus::Degraded {
+                warning: expected_warning.to_string()
+            }
+        );
+
+        let prompt = PersonaConfig::from_path(&root).build_system_prompt(
+            &ModeId::from("custom_runtime_mode"),
+            "base prompt",
+            "",
+        );
+        assert_eq!(prompt.warnings, [expected_warning]);
+        assert!(
+            prompt
+                .system_prompt
+                .contains("## missing skill://missing-skill")
+        );
+        assert!(prompt.system_prompt.contains(MISSING_SKILL_PROMPT_FALLBACK));
+        assert!(prompt.system_prompt.contains("## Persona asset warnings"));
+        assert!(prompt.system_prompt.contains(expected_warning));
+        assert!(!prompt.system_prompt.contains("## skill://missing-skill"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -681,7 +792,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("tm-persona-test-{}-{nanos}", std::process::id()))
+        let counter = TEMP_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "tm-persona-test-{}-{nanos}-{counter}",
+            std::process::id()
+        ))
     }
 
     fn write_fixture(root: &Path, include_soul: bool, skills: &[&str], modes_json: Option<String>) {
@@ -716,6 +831,32 @@ mod tests {
                     "defaultScope": "global",
                     "activeSkills": ["custom-skill"],
                     "capabilities": ["memory.recall"],
+                    "capabilityClass": "conversation",
+                    "addendum": "Active mode: custom runtime mode.",
+                    "route": {
+                        "isDefault": true,
+                        "priority": 0,
+                        "triggers": []
+                    }
+                }
+            ]
+        })
+        .to_string()
+    }
+
+    fn missing_skill_modes_json() -> String {
+        serde_json::json!({
+            "defaultMode": "custom_runtime_mode",
+            "modes": [
+                {
+                    "mode": "custom_runtime_mode",
+                    "label": "Custom Runtime Mode",
+                    "description": "Loaded only from runtime persona assets.",
+                    "voiceCap": "medium",
+                    "voiceGuidance": "medium: custom runtime mode.",
+                    "defaultScope": "global",
+                    "activeSkills": ["missing-skill"],
+                    "capabilities": [],
                     "capabilityClass": "conversation",
                     "addendum": "Active mode: custom runtime mode.",
                     "route": {

@@ -8,6 +8,12 @@
  * markdown may be labeled skill://... inside composed prompts, but that
  * label is not a resources.read/list/preview surface until the P4/P7 skill
  * lifecycle work registers a handler and grants.
+ *
+ * P3 agents surface: `agents` is defined only in sessions holding the required
+ * agents.* grant. In ungranted sessions it remains `undefined`. Use
+ * `tools.search('agents')` to check availability before calling. Messages
+ * between actors are always plain prose — never control-payload blobs.
+ * Large payloads pass by reference (artifact://, memory://), never inline.
  */
 
 export {};
@@ -27,7 +33,18 @@ declare global {
   var secrets: undefined;
   var memory: undefined;
   var skills: undefined;
-  var agents: undefined;
+
+  /**
+   * P3 — defined in sessions holding the required agents.* grant; `undefined`
+   * in all other sessions. Use `tools.search('agents')` to check availability.
+   * Protocol invariants (all messaging from day one):
+   * - Messages are plain prose — never control-payload blobs (`{"type":"done"}` is banned).
+   * - One ask per message; lead with the answer when replying.
+   * - Large payloads pass by reference (artifact://, memory://), never inline.
+   * - A `null` or void reply means unreachable — do not retry-loop.
+   * - The agent DAG must be acyclic; an actor never waits on its own descendant.
+   */
+  const agents: AgentsNamespace | undefined;
 }
 
 type JsonPrimitive = string | number | boolean | null;
@@ -190,7 +207,8 @@ interface GrantDoc {
     | "process"
     | "secret"
     | "memory"
-    | "artifact";
+    | "artifact"
+    | "agents";
   description: string;
 }
 
@@ -249,6 +267,8 @@ type ResourceKind =
   | "memory_profile_fact"
   | "memory_recall_chunk"
   | "project_view"
+  | "actor"
+  | "history"
   | (string & {});
 
 interface ArtifactsNamespace {
@@ -465,4 +485,90 @@ interface HttpNamespace {
    * production egress hardening remains deferred.
    */
   get(url: string): Promise<string>;
+}
+
+// ─── P3 Agents ───────────────────────────────────────────────────────────────
+
+/**
+ * Capability-gated sub-agent orchestration namespace (§23, P3).
+ *
+ * Available only when the session holds the required agents.* grant.
+ * `globalThis.agents` is `undefined` in ungranted sessions — check before calling.
+ *
+ * MVP surface (P3): run, spawn, parallel, msg.
+ * Stretch / P3-plus (§23 full surface): pipeline, broadcast, send, wait, inbox, list.
+ */
+interface AgentsNamespace {
+  /**
+   * agents.run(role: string, task: string, opts?: AgentRunOpts): Promise<AgentDigest>
+   *
+   * Spawn one child actor, run it to completion, and return a bounded digest.
+   * Full output spills to artifact://; read-only transcript is at history://<id>.
+   * The agent DAG must be acyclic. Requires agents.run grant.
+   */
+  run(role: string, task: string, opts?: AgentRunOpts): Promise<AgentDigest>;
+
+  /**
+   * agents.spawn(role: string, task: string): Promise<AgentHandle>
+   *
+   * Non-blocking spawn; returns a handle for later coordination via agents.msg.
+   * Requires agents.spawn grant. Implementation deferred to P3.2.
+   */
+  spawn(role: string, task: string): Promise<AgentHandle>;
+
+  /**
+   * agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>
+   *
+   * One-wave fan-out: spawns N actors concurrently (bounded pool), awaits all,
+   * and returns ordered digest results. Only digests return to the parent context.
+   * Requires agents.parallel grant. Implementation deferred to P3.2.
+   */
+  parallel(tasks: AgentTask[]): Promise<AgentDigest[]>;
+
+  /**
+   * agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>
+   *
+   * Send a plain-prose message to a spawned actor. Fire-and-forget by default;
+   * set opts.await = true for request/reply. A null/void reply means the actor
+   * is unreachable — do not retry-loop. Requires agents.msg grant.
+   * Implementation deferred to P3.2.
+   */
+  msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>;
+}
+
+/** Bounded digest returned to the parent context from a completed actor (§23.5). */
+interface AgentDigest {
+  /** Stable CamelCase actor ID (≤32 chars). */
+  actorId: string;
+  /** Plain-prose summary — the only part injected into parent context. */
+  summary: string;
+  /** URI of the full output artifact, when output exceeded the digest threshold. */
+  artifactUri: string | null;
+  /** URI of the read-only transcript for this actor. */
+  historyUri: string | null;
+}
+
+/** Opaque handle returned by agents.spawn for coordination via agents.msg (§23.3). */
+interface AgentHandle {
+  /** Stable CamelCase actor ID matching the agent:// registry entry. */
+  id: string;
+}
+
+/** Task descriptor passed to agents.parallel. */
+interface AgentTask {
+  /** Mode/role for the child actor. */
+  role: string;
+  /** Plain-prose task description. */
+  task: string;
+}
+
+/** Optional options for agents.run (reserved; fields added in P3.2). */
+interface AgentRunOpts {
+  [key: string]: unknown;
+}
+
+/** Options for agents.msg. */
+interface MsgOpts {
+  /** If true, block for the actor's reply (request/reply). Default: fire-and-forget. */
+  await?: boolean;
 }

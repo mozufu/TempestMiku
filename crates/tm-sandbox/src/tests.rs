@@ -713,6 +713,43 @@ async fn deno_http_get_is_default_deny_and_allowlisted() {
     assert_eq!(result["deniedRetryable"], Value::Bool(false));
 }
 
+#[test]
+fn agents_namespace_types_declared_in_sdk() {
+    let sdk_types = include_str!("../../../docs/sdk/tm-runtime.d.ts");
+    // Interface and type declarations
+    for needle in [
+        "interface AgentsNamespace",
+        "interface AgentDigest",
+        "interface AgentHandle",
+        "interface AgentTask",
+        "interface MsgOpts",
+        "agents: AgentsNamespace | undefined",
+        // agents.* HostFn signatures — must match tools.docs output exactly
+        "agents.run(role: string, task: string, opts?: AgentRunOpts): Promise<AgentDigest>",
+        "agents.spawn(role: string, task: string): Promise<AgentHandle>",
+        "agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>",
+        "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>",
+        // Protocol invariants documented
+        "plain prose",
+        "retry-loop",
+        // GrantDoc kind extended
+        r#"| "agents""#,
+        // ResourceKind extended
+        r#"| "actor""#,
+        r#"| "history""#,
+    ] {
+        assert!(
+            sdk_types.contains(needle),
+            "docs/sdk/tm-runtime.d.ts is missing: {needle}"
+        );
+    }
+    // agents must NOT appear as an always-defined global (it's undefined in ungranted sessions)
+    assert!(
+        !sdk_types.contains("const agents: AgentsNamespace;"),
+        "agents must be AgentsNamespace | undefined, not unconditionally typed"
+    );
+}
+
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
 async fn deno_p0_sdk_exposes_linked_repo_functions() {

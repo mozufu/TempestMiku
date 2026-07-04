@@ -97,3 +97,20 @@ globalThis.memory = undefined;
 globalThis.skills = undefined;
 globalThis.agents = undefined;
 "#;
+
+/// Injected after [`SDK_PRELUDE`] when the session holds at least one `agents.*` grant.
+///
+/// Replaces the `undefined` placeholder with a real namespace that forwards to HostFns.
+/// Grant enforcement is still server-side; this only surfaces the API surface to LLM code.
+pub(crate) const AGENTS_PRELUDE: &str = r#"
+globalThis.agents = {
+  run: async (role, task, opts = undefined) =>
+    __tm_host_call("agents.run", { role: String(role), task: String(task), ...(opts != null ? { opts } : {}) }),
+  spawn: async (role, task) =>
+    __tm_host_call("agents.spawn", { role: String(role), task: String(task) }),
+  parallel: async (tasks) =>
+    __tm_host_call("agents.parallel", { tasks }),
+  msg: async (handle, text, opts = undefined) =>
+    __tm_host_call("agents.msg", { handle, text: String(text), ...(opts != null ? { opts } : {}) }),
+};
+"#;

@@ -752,6 +752,45 @@ fn agents_namespace_types_declared_in_sdk() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
+async fn deno_agents_namespace_wired_when_granted() {
+    use tm_host::CapabilityGrants;
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        grants: CapabilityGrants::default()
+            .allow("http.get")
+            .allow("resources.read:artifact")
+            .allow("agents.run"),
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let out = session
+        .eval(
+            "({ agentsType: typeof agents, runType: typeof agents?.run, spawnType: typeof agents?.spawn, parallelType: typeof agents?.parallel, msgType: typeof agents?.msg })",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    let result = out.result.unwrap();
+    assert_eq!(result["agentsType"], Value::String("object".into()));
+    assert_eq!(result["runType"], Value::String("function".into()));
+    assert_eq!(result["spawnType"], Value::String("function".into()));
+    assert_eq!(result["parallelType"], Value::String("function".into()));
+    assert_eq!(result["msgType"], Value::String("function".into()));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn deno_agents_namespace_undefined_without_grant() {
+    let sandbox = DenoSandbox::default();
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let out = session
+        .eval("typeof agents", CellBudget::default())
+        .await
+        .unwrap();
+    assert_eq!(out.result, Some(Value::String("undefined".into())));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
 async fn deno_p0_sdk_exposes_linked_repo_functions() {
     let root = tempfile::tempdir().unwrap();
     let artifacts = tempfile::tempdir().unwrap();

@@ -19,7 +19,7 @@ use tm_host::{
 
 use crate::{
     ops::{HttpGetFn, RuntimeHostState, init_ops},
-    prelude::SDK_PRELUDE,
+    prelude::{AGENTS_PRELUDE, SDK_PRELUDE},
     ts::{lower_top_level_await, starts_with_top_level_await, transpile_typescript},
 };
 
@@ -144,11 +144,14 @@ impl DenoSession {
     }
 
     fn install_prelude(&mut self) -> Result<()> {
-        let prelude = SDK_PRELUDE;
-
         self.runtime()
-            .execute_script("<tempestmiku-prelude>", prelude)
+            .execute_script("<tempestmiku-prelude>", SDK_PRELUDE)
             .map_err(|err| tm_core::Error::Sandbox(err.to_string()))?;
+        if self.options.grants.names().any(|n| n.starts_with("agents.")) {
+            self.runtime()
+                .execute_script("<tempestmiku-agents>", AGENTS_PRELUDE)
+                .map_err(|err| tm_core::Error::Sandbox(err.to_string()))?;
+        }
         Ok(())
     }
 }

@@ -132,7 +132,11 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       as `undefined` or fail closed.
       **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.
 - [ ] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
-- [ ] Fan-out to multiple workers returns only bounded digests to the parent context.
+- [x] Fan-out to multiple workers returns only bounded digests to the parent context.
+      **Resolved:** `agents.parallel` and `agents.run` return `ActorDigest` JSON (`actorId`, `summary`,
+      `artifactUri`, `historyUri`) — raw transcripts are never injected into parent context by design.
+      `ChatActorExecutor` runs sub-agents with `NullSink`; full output goes nowhere unless the actor
+      writes to an artifact URI. Test: `agents_parallel_runs_all_and_returns_ordered_digests`.
 - [x] Sibling agents can coordinate through explicit messages.
       **Deferred to P3-plus:** MVP `agents.msg` ships one-shot F&F (message logged) and seeded
       request/reply. Live resident delivery to a running sibling requires per-actor MPSC queues +

@@ -8,7 +8,7 @@ use tm_host::{
     Result, ToolDocs, ToolErrorDoc, ToolExample,
 };
 
-use crate::actor::{ActorBudget, ActorRecord, ActorSpec, ActorStatus};
+use crate::actor::{ActorBudget, ActorId, ActorRecord, ActorSpec, ActorStatus};
 use crate::executor::ActorError;
 use crate::mailbox::MailboxRegistry;
 use crate::supervise::FailureReason;
@@ -355,7 +355,6 @@ impl HostFn for AgentsSpawnFn {
 
 pub struct AgentsParallelFn {
     docs: ToolDocs,
-    #[allow(dead_code)]
     roster: Arc<MailboxRegistry>,
 }
 
@@ -419,11 +418,116 @@ impl HostFn for AgentsParallelFn {
         &self.docs
     }
 
-    async fn call(&self, _args: Value, ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_PARALLEL);
-        Err(HostError::NotImplemented(
-            "agents.parallel — P3.2".to_string(),
-        ))
+
+        let tasks = args["tasks"]
+            .as_array()
+            .ok_or_else(|| HostError::InvalidArgs("tasks must be an array".to_string()))?;
+
+        if tasks.is_empty() {
+            return Ok(json!([]));
+        }
+
+        // Validate all role/task strings before touching the executor or roster.
+        let parsed: Vec<(String, String)> = tasks
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let role = item["role"]
+                    .as_str()
+                    .ok_or_else(|| HostError::InvalidArgs(format!("tasks[{i}].role must be a string")))?
+                    .to_string();
+                let task_str = item["task"]
+                    .as_str()
+                    .ok_or_else(|| HostError::InvalidArgs(format!("tasks[{i}].task must be a string")))?
+                    .to_string();
+                Ok((role, task_str))
+            })
+            .collect::<Result<_>>()?;
+
+        let executor = self
+            .roster
+            .executor()
+            .ok_or_else(|| HostError::NotImplemented("agents.parallel — executor not configured".to_string()))?;
+
+        // Register each actor as Running before spawning.
+        let mut actor_specs: Vec<(ActorId, ActorSpec)> = Vec::with_capacity(parsed.len());
+        for (role, task_str) in parsed {
+            let actor_id = self.roster.next_actor_id(&role);
+            let budget = ActorBudget::default();
+            self.roster
+                .track(ActorRecord {
+                    id: actor_id.clone(),
+                    parent: None,
+                    status: ActorStatus::Running,
+                    mode: Some(role.clone()),
+                    budget: budget.clone(),
+                    spawned_at: Utc::now(),
+                    completed_at: None,
+                    cancelled: false,
+                    failure_reason: None,
+                })
+                .await;
+            actor_specs.push((
+                actor_id.clone(),
+                ActorSpec {
+                    id: actor_id,
+                    role,
+                    task: task_str,
+                    mode: None,
+                    grants: CapabilityGrants::default(),
+                    budget,
+                    parent: None,
+                    depth: 0,
+                },
+            ));
+        }
+
+        // Fan out: spawn all concurrently, collect handles in submission order.
+        let handles: Vec<tokio::task::JoinHandle<Result<Value>>> = actor_specs
+            .into_iter()
+            .map(|(actor_id, spec)| {
+                let executor = Arc::clone(&executor);
+                let roster = Arc::clone(&self.roster);
+                tokio::spawn(async move {
+                    match executor.run_to_digest(spec).await {
+                        Ok(digest) => {
+                            roster.mark_complete(&actor_id).await;
+                            tracing::debug!(actor_id = %actor_id, "parallel actor completed");
+                            Ok(json!({
+                                "actorId": digest.actor_id.as_str(),
+                                "summary": digest.summary,
+                                "artifactUri": digest.artifact_uri,
+                                "historyUri": digest.history_uri,
+                            }))
+                        }
+                        Err(err) => {
+                            let reason = map_actor_error(&err);
+                            tracing::warn!(actor_id = %actor_id, error = %err, "parallel actor failed");
+                            roster.mark_failed(&actor_id, reason).await;
+                            Err(HostError::HostCall(format!("actor {actor_id} failed: {err}")))
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        // Await in submission order so results[i] matches tasks[i].
+        // On first actor failure, return the error (remaining actors run to completion
+        // in their detached tokio tasks and update the roster via Arc).
+        let mut digests: Vec<Value> = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let result = handle
+                .await
+                .map_err(|e| HostError::HostCall(format!("parallel actor panicked: {e}")))?;
+            match result {
+                Ok(digest) => digests.push(digest),
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(Value::Array(digests))
     }
 }
 
@@ -616,6 +720,95 @@ mod tests {
         assert!(
             matches!(err, HostError::CapabilityDenied(ref s) if s == caps::AGENTS_PARALLEL)
         );
+    }
+
+    #[tokio::test]
+    async fn agents_parallel_executor_not_configured_returns_not_implemented() {
+        let f = AgentsParallelFn::new(make_roster());
+        let ctx = ctx_with(caps::AGENTS_PARALLEL);
+        let err = f
+            .call(json!({"tasks": [{"role": "r", "task": "t"}]}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::NotImplemented(_)));
+    }
+
+    #[tokio::test]
+    async fn agents_parallel_empty_tasks_returns_empty_array() {
+        let f = AgentsParallelFn::new(make_roster());
+        let ctx = ctx_with(caps::AGENTS_PARALLEL);
+        let result = f.call(json!({"tasks": []}), &ctx).await.unwrap();
+        assert_eq!(result, json!([]));
+    }
+
+    #[tokio::test]
+    async fn agents_parallel_invalid_args_returns_invalid_args_error() {
+        let f = AgentsParallelFn::new(make_roster());
+        let ctx = ctx_with(caps::AGENTS_PARALLEL);
+        // tasks is not an array
+        let err = f.call(json!({"tasks": "oops"}), &ctx).await.unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)));
+        // task.role is not a string
+        let err = f
+            .call(json!({"tasks": [{"role": 99, "task": "t"}]}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)));
+    }
+
+    #[tokio::test]
+    async fn agents_parallel_runs_all_and_returns_ordered_digests() {
+        use crate::actor::{ActorDigest, ActorId, ActorSpec, ActorStatus};
+        use crate::executor::{ActorError, ActorExecutor};
+
+        struct EchoExecutor;
+        #[async_trait::async_trait]
+        impl ActorExecutor for EchoExecutor {
+            async fn run_to_digest(
+                &self,
+                spec: ActorSpec,
+            ) -> std::result::Result<ActorDigest, ActorError> {
+                Ok(ActorDigest {
+                    actor_id: spec.id,
+                    summary: format!("echo: {}", spec.task),
+                    artifact_uri: None,
+                    history_uri: None,
+                })
+            }
+        }
+
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(EchoExecutor));
+        let f = AgentsParallelFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_PARALLEL);
+
+        let result = f
+            .call(
+                json!({"tasks": [
+                    {"role": "researcher", "task": "task A"},
+                    {"role": "writer",     "task": "task B"},
+                    {"role": "reviewer",   "task": "task C"},
+                ]}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let digests = result.as_array().unwrap();
+        assert_eq!(digests.len(), 3);
+
+        // Results are ordered: digests[i] corresponds to tasks[i]
+        assert!(digests[0]["summary"].as_str().unwrap().contains("task A"));
+        assert!(digests[1]["summary"].as_str().unwrap().contains("task B"));
+        assert!(digests[2]["summary"].as_str().unwrap().contains("task C"));
+
+        // All actors have valid ids and are tracked as Terminated
+        for d in digests {
+            let id_str = d["actorId"].as_str().expect("actorId field");
+            let actor_id = ActorId::new(id_str).expect("valid actor id");
+            let rec = roster.get(&actor_id).await.unwrap();
+            assert_eq!(rec.status, ActorStatus::Terminated);
+        }
     }
 
     #[tokio::test]

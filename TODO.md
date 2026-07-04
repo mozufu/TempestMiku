@@ -231,8 +231,12 @@ Acceptance:
       **Resolved:** Background `std::thread::spawn` with dedicated `current_thread` runtime; actor tracked
       as `Running` immediately, roster updated to `Terminated` on completion. Tests: spawn denied,
       not-impl without executor, invalid args, handle returned + background completion.
-- [ ] Implement `agents.parallel([{role, task}, …])` — one-wave fan-out with bounded pool and ordered
+- [x] Implement `agents.parallel([{role, task}, …])` — one-wave fan-out with bounded pool and ordered
       digest results.
+      **Resolved:** Validates all args before executor check; tracks all actors as Running; fans out via
+      `tokio::spawn` per actor (all run concurrently); awaits handles in submission order so results[i]
+      matches tasks[i]; first actor failure returns error, remaining detached tasks update roster via Arc.
+      Tests: denied, not-impl, empty array, invalid args, 3-actor ordered digests.
 - [ ] Implement `agents.msg(handle, text, opts?)` — send to a spawned actor (request/reply or
       fire-and-forget).
 - [ ] Update `docs/sdk/tm-runtime.d.ts` and `tools.docs` together; never one without the other.

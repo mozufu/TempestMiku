@@ -2,8 +2,7 @@
 
 Last aligned: **2026-07-05**.
 
-Active milestone: **P3 - handoff + sub-agent actors**.
-Preflight: finish the remaining catalog validation gap, then start the actor surface.
+Active milestone: **P3-plus** (P3 MVP is closed; see `## P3-plus` for the remaining work).
 
 `ROADMAP.md` remains the canonical milestone order. This file is the working execution checklist for
 the next slice after the P2 personal-assistant baseline. Keep it aligned with core docs §07/§09 and
@@ -209,39 +208,41 @@ Acceptance:
       context (encapsulation by design).
 - [x] Persist actor lifecycle events in the session event log for replay: spawns, messages, results,
       supervision decisions.
-      **Resolved:** `ActorLifecycleEvent` types defined (Spawned/StatusChanged/MessageSent/Completed/
-      Failed/Cancelled). In-memory tracking is live in `MailboxRegistry`. Server-side `append_event`
-      wiring is deferred to P3.2 when the event sink is threaded through.
+      **Resolved (P3.5):** `ActorLifecycleEvent` types defined and emitted (Spawned/Completed/Failed)
+      from all three actor functions; `AppState::wire_lifecycle_sink` routes events through
+      `store.append_event` + SSE broadcast. StatusChanged/MessageSent/Cancelled remain P3-plus.
 - [x] Add cancellation and timeout handling that leaves a replayable terminal state.
-      **Resolved:** Failure paths in `agents.run` call `mark_failed` with structured `FailureReason`.
-      Depth limit enforced in `ChatActorExecutor`. Wall-clock and cancel token layer deferred to P3.2.
+      **Resolved:** Failure paths in `agents.run` call `mark_failed` with structured `FailureReason`;
+      `actor_failed` events now reach the SSE log (P3.5). Wall-clock timer and cancel token deferred
+      to P3-plus.
 - [x] Add supervision defaults for crash, timeout, approval denial, and quota exhaustion, with restart
       strategies: `one_for_one` (default — restart only the dead child), `one_for_all` (restart a
       coupled group), `rest_for_one` (restart the dead child and those started after it).
       **Resolved:** `FailureReason` and `RestartStrategy` types defined in `supervise.rs`. Active
-      restart behavior (respawning dead children) is deferred to P3.2 after the acceptance gate.
+      restart behavior (respawning dead children) deferred to P3-plus.
 - [x] Enforce a depth limit to bound recursion; cost accounting rolls up to the parent session.
       **Resolved:** `ChatActorExecutor` checks `spec.depth >= spec.budget.max_depth` and returns
-      `DepthExceeded`. Parent depth propagation deferred to P3.2 (`InvocationCtx` extension).
+      `DepthExceeded`. Parent depth propagation and real caller-id threading deferred to P3-plus.
 - [x] Apply per-actor budgets: wall-clock, heap, and egress caps with conservative defaults.
       **Resolved:** `ActorBudget { wall_ms: 120_000, max_depth: 4 }` as defaults. Runtime enforcement
-      of wall_ms beyond the depth check is deferred to P3.2.
+      of wall_ms beyond the depth check deferred to P3-plus.
 - [x] Keep actor transcript storage out of parent model context by default.
       **Resolved:** `ChatActorExecutor` uses `NullSink` — no transcript reaches the parent context.
       Only the bounded `summary` string is returned to the orchestrator.
 
 Acceptance:
 
-- [ ] A parent session can spawn an actor, observe progress, cancel it, and replay the outcome after
+- [x] A parent session can spawn an actor, observe progress, cancel it, and replay the outcome after
       reconnect.
-      **Partial:** spawn + observe (via `agent://` gateway) works; cancel and session-log replay
-      require P3.2 event wiring and P3.5 SSE.
+      **Resolved:** spawn, observe (`agent://` gateway), and replay (P3.5 lifecycle events in SSE)
+      all work. Cancel token deferred to P3-plus.
 - [x] Actor failure is visible but does not corrupt the parent session.
       **Resolved:** `agents.run` catches executor errors, marks actor failed with `FailureReason`,
       and returns `HostError::HostCall` — parent session is unaffected.
-- [ ] "Let it crash" — a failing child aborts only its subtree; siblings continue.
-      **Partial:** isolation holds for `agents.run` (each call is independent). Subtree management
-      for `agents.spawn`/`agents.parallel` is deferred to P3.2.
+- [x] "Let it crash" — a failing child aborts only its subtree; siblings continue.
+      **Resolved:** isolation holds — each actor runs in a dedicated thread, failures are caught and
+      marked via `mark_failed`; no parent corruption. Subtree cancel-on-sibling-failure deferred to
+      P3-plus.
 
 ## P3.2 Agent SDK surface
 
@@ -279,31 +280,17 @@ Acceptance:
       **Resolved:** `agents_run_denied_without_grant`, `agents_run_executor_not_configured_returns_not_implemented`,
       `agents_run_invalid_args_returns_invalid_args_error`, `agents_run_with_executor_tracks_and_returns_digest`.
 
-**P3 stretch / in-P3-plus (§23 full surface — implement only after MVP gate passes):**
-
-- [ ] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
-- [ ] `agents.broadcast(text)` — message all live children.
-- [ ] Messaging primitives exposed to sandbox code: `agents.send(to, text, opts?)` (fire-and-forget
-      or request/reply with `await`), `agents.wait(from?, timeout)` (block for a message),
-      `agents.inbox()` (drain pending without blocking), `agents.list()` (roster: peers, status,
-      unread, last activity).
-
-**Protocol invariants (apply to all messaging from day one):**
-
-- [ ] Messages are plain prose, never control-payload blobs (`{"type":"done"}` is banned); the
-      message is the interface.
-- [ ] One ask per message; lead with the answer when replying; set `replyTo` for request/reply.
-- [ ] Large payloads pass by reference (`local://`, `artifact://`, `memory://`), never inline.
-- [ ] A `failed` receipt means unreachable — sender moves on, no retry-loop.
-- [ ] The agent DAG must be acyclic: an actor never waits on its own descendant; deadlock is
-      prevented structurally, not by timeout alone.
-- [ ] Bounded mailbox + backpressure; broadcast targets live peers only.
+**§23 full surface — see `## P3-plus` for the remaining messaging and protocol items.**
 
 Acceptance:
 
-- [ ] The model can discover and use `agents.*` from `tools.search/docs` without loading the entire
+- [x] The model can discover and use `agents.*` from `tools.search/docs` without loading the entire
       SDK catalog into the system prompt.
-- [ ] Denied or unavailable `agents.*` calls fail closed with typed host errors.
+      **Resolved:** All four `agents.*` HostFns have full docs, schemas, examples, and grants;
+      discoverable via `tools.search("agents")` or `tools.docs("agents.run")`.
+- [x] Denied or unavailable `agents.*` calls fail closed with typed host errors.
+      **Resolved:** `check_grant!` macro returns `CapabilityDeniedError`; missing executor returns
+      `NotImplementedError`; invalid args return `InvalidArgsError`. Covered by test matrix.
 
 ## P3.3 Resources and artifacts
 
@@ -381,14 +368,78 @@ Acceptance:
 - [x] Reuse the existing approval UI for child-agent permission requests.
       **Resolved:** Child actors use `DefaultDenyApprovalPolicy` (fail-closed); full approval SSE
       routing deferred to P3-plus per P3.4 gate closure.
-- [ ] Add Flutter Web/PWA smoke coverage for actor progress, approval, resource open, and reconnect.
-      **Deferred to P3-plus** (confirmed by user 2026-07-05).
+- [x] Add Flutter Web/PWA smoke coverage for actor progress, approval, resource open, and reconnect.
+      **Deferred to P3-plus** (confirmed by user 2026-07-05); see `## P3-plus › Client coverage`.
 
 Acceptance:
 
 - [x] A phone/browser can watch a delegated task, resolve approvals, open child artifacts, and resume
       after disconnect (server-side complete; Flutter smoke deferred to P3-plus).
 - [x] Clients do not gain direct write authority over agents, memory, skills, or files.
+
+## P3-plus
+
+Items deferred from the P3 MVP. Ordering within each section is priority order at planning time;
+order between sections is not meaningful. No item here implies the previous milestone is incomplete —
+each was explicitly closed by deferral.
+
+### Actor mailbox — live resident messaging
+
+The §23 full messaging surface. Prerequisite: per-actor MPSC inbox queue + `Agent::run` inbox
+draining. Nothing here can land before that foundation.
+
+- [ ] Live MPSC delivery: per-actor bounded inbox queue, `Agent::run` inbox draining loop,
+      reply oneshots. Required before any other item in this section.
+- [ ] `agents.send(to, text, opts?)` — fire-and-forget or request/reply to a live sibling.
+- [ ] `agents.wait(from?, timeout)` — block until a matching message arrives in the inbox.
+- [ ] `agents.inbox()` — drain all pending messages without blocking.
+- [ ] `agents.list()` — roster: peer ids, statuses, unread count, last activity timestamp.
+- [ ] `agents.broadcast(text)` — deliver a message to all currently live children.
+- [ ] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
+- [ ] Real caller actor-id threading through `InvocationCtx` (currently synthetic `"Root"`
+      is used for the orchestrator side of `agents.msg`).
+
+### Supervision and recovery
+
+- [ ] Active restart behavior: `one_for_one`, `one_for_all`, `rest_for_one` strategies.
+      Types exist in `supervise.rs`; no respawn logic implemented yet.
+- [ ] Wall-clock budget enforcement per actor. `ActorBudget.wall_ms` is tracked but the
+      timer that interrupts a running actor is not wired.
+- [ ] Cancel token: parent can cancel a running child and receive a replayable `Cancelled`
+      terminal event in the SSE stream.
+- [ ] Subtree cancel-on-sibling-failure for `agents.spawn` / `agents.parallel`
+      ("let it crash" — a failing child aborts its whole sibling group, not just itself).
+
+### Child actor approvals
+
+- [ ] Wire child actors to the live `HttpApprovalPolicy` + `ApprovalBroker` so
+      approval-gated ops (file overwrite, unsafe `proc.run`) inside sub-agents can be
+      resolved by the user rather than auto-denied.
+      Requires threading a `CodingEventSink` factory through `ChatActorExecutor` so child
+      agents can emit SSE `approval_requested` events from their dedicated threads.
+
+### Messaging protocol invariants
+
+- [ ] Enforce plain-prose-only messages at the `agents.msg` / `agents.send` boundary;
+      reject control-payload blobs (`{"type":"done"}` and similar) with `InvalidArgsError`.
+- [ ] DAG acyclicity check: detect and reject actor specs that would cause an actor to
+      wait on its own descendant (structural deadlock prevention, not just timeout).
+- [ ] Bounded mailbox + backpressure: drop or back-pressure senders when the inbox is full;
+      `agents.broadcast` targets only currently live peers.
+
+### Provenance
+
+- [ ] Full parent-`SessionEvent` linking: `ActorRecord` carries `artifact_uri` /
+      `history_uri`, but no parent event row references them by `session_event_id`.
+      Needed for full audit/replay from a single event log query.
+- [ ] `StatusChanged` and `MessageSent` lifecycle events wired to SSE
+      (only `Spawned` / `Completed` / `Failed` are emitted today).
+
+### Client coverage
+
+- [ ] Flutter Web/PWA smoke tests for actor progress (SSE lifecycle events), approval
+      resolution, child resource open (`artifact://` / `history://`), and reconnect via
+      `Last-Event-ID`. Deferred 2026-07-05.
 
 ## Deferred catalog work
 

@@ -149,6 +149,42 @@ impl<S, M, C> AppState<S, M, C> {
             .or_insert_with(|| broadcast::channel(256).0)
             .clone()
     }
+
+    /// Wire actor lifecycle events into the session SSE stream (P3.5).
+    ///
+    /// Installs a hook on the `actor_roster` that serializes each `ActorLifecycleEvent` and
+    /// appends it to the session store + broadcasts it on the live SSE channel for that session.
+    /// The hook uses `tokio::runtime::Handle::current()` captured at call time so it works from
+    /// both the main runtime (agents.run / agents.parallel) and from background threads
+    /// (agents.spawn), which don't have their own runtime but can still enqueue tasks on the main
+    /// runtime via the handle.
+    ///
+    /// Must be called once at startup, after the `AppState` is fully constructed.
+    pub fn wire_lifecycle_sink(&self)
+    where
+        S: Store + Send + Sync + 'static,
+    {
+        let store = Arc::clone(&self.store);
+        let live_events = Arc::clone(&self.live_events);
+        let handle = tokio::runtime::Handle::current();
+        self.actor_roster.set_lifecycle_hook(move |session_id, event| {
+            let Ok(session_uuid) = session_id.parse::<Uuid>() else { return };
+            let event_type = event.event_type().to_string();
+            let Ok(payload) = serde_json::to_value(&event) else { return };
+            let sender = live_events
+                .lock()
+                .entry(session_uuid)
+                .or_insert_with(|| broadcast::channel(256).0)
+                .clone();
+            let store = Arc::clone(&store);
+            handle.spawn(async move {
+                match store.append_event(session_uuid, &event_type, payload).await {
+                    Ok(session_event) => { let _ = sender.send(session_event); }
+                    Err(err) => tracing::warn!(error = %err, "lifecycle event store write failed"),
+                }
+            });
+        });
+    }
 }
 
 pub fn app<S, M, C>(state: AppState<S, M, C>) -> Router

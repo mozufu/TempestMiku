@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             artifact_root.clone(),
             runtime.native_deno,
         )?;
+        state.wire_lifecycle_sink();
         serve(addr, state).await?;
     } else {
         tracing::warn!(
@@ -61,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             artifact_root.clone(),
             runtime.native_deno,
         )?;
+        state.wire_lifecycle_sink();
         serve(addr, state).await?;
     }
 

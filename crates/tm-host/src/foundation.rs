@@ -210,6 +210,8 @@ pub struct InvocationCtx {
     pub grants: CapabilityGrants,
     pub approvals: Arc<dyn ApprovalPolicy>,
     pub approval_timeout: Duration,
+    /// Session UUID string; empty when no session context is available.
+    pub session_id: String,
 }
 
 impl std::fmt::Debug for InvocationCtx {
@@ -217,6 +219,7 @@ impl std::fmt::Debug for InvocationCtx {
         f.debug_struct("InvocationCtx")
             .field("grants", &self.grants)
             .field("approval_timeout", &self.approval_timeout)
+            .field("session_id", &self.session_id)
             .finish_non_exhaustive()
     }
 }
@@ -239,7 +242,13 @@ impl InvocationCtx {
             grants,
             approvals,
             approval_timeout,
+            session_id: String::new(),
         }
+    }
+
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = session_id.into();
+        self
     }
 
     pub async fn require_approval(&self, action: &str) -> Result<()> {

@@ -8,7 +8,7 @@ use tm_host::{
     Result, ToolDocs, ToolErrorDoc, ToolExample,
 };
 
-use crate::actor::{ActorBudget, ActorId, ActorRecord, ActorSpec, ActorStatus};
+use crate::actor::{ActorBudget, ActorId, ActorLifecycleEvent, ActorRecord, ActorSpec, ActorStatus};
 use crate::executor::ActorError;
 use crate::mailbox::{ActorMessage, MailboxRegistry};
 use crate::supervise::FailureReason;
@@ -173,8 +173,10 @@ impl HostFn for AgentsRunFn {
             .executor()
             .ok_or_else(|| HostError::NotImplemented("agents.run — executor not configured".to_string()))?;
 
+        let session_id = ctx.session_id.clone();
         let actor_id = self.roster.next_actor_id(&role);
         let budget = ActorBudget::default();
+        let spawned_at = Utc::now();
 
         let record = ActorRecord {
             id: actor_id.clone(),
@@ -182,7 +184,7 @@ impl HostFn for AgentsRunFn {
             status: ActorStatus::Running,
             mode: Some(role.clone()),
             budget: budget.clone(),
-            spawned_at: Utc::now(),
+            spawned_at,
             completed_at: None,
             cancelled: false,
             failure_reason: None,
@@ -191,6 +193,18 @@ impl HostFn for AgentsRunFn {
             history_uri: None,
         };
         self.roster.track(record).await;
+        self.roster.emit_lifecycle(
+            &session_id,
+            ActorLifecycleEvent::Spawned {
+                actor_id: actor_id.clone(),
+                parent_id: None,
+                role: role.clone(),
+                task: task.clone(),
+                depth: 0,
+                budget: budget.clone(),
+                spawned_at,
+            },
+        );
 
         tracing::debug!(actor_id = %actor_id, role = %role, "actor spawned");
 
@@ -218,6 +232,16 @@ impl HostFn for AgentsRunFn {
                         digest.history_uri.clone(),
                     )
                     .await;
+                self.roster.emit_lifecycle(
+                    &session_id,
+                    ActorLifecycleEvent::Completed {
+                        actor_id: actor_id.clone(),
+                        completed_at: Utc::now(),
+                        summary: Some(digest.summary.clone()),
+                        artifact_uri: digest.artifact_uri.clone(),
+                        history_uri: digest.history_uri.clone(),
+                    },
+                );
                 tracing::debug!(actor_id = %actor_id, "actor completed");
                 Ok(json!({
                     "actorId": digest.actor_id.as_str(),
@@ -229,6 +253,14 @@ impl HostFn for AgentsRunFn {
             Err(err) => {
                 let reason = map_actor_error(&err);
                 tracing::warn!(actor_id = %actor_id, error = %err, "actor failed");
+                self.roster.emit_lifecycle(
+                    &session_id,
+                    ActorLifecycleEvent::Failed {
+                        actor_id: actor_id.clone(),
+                        failed_at: Utc::now(),
+                        reason: reason.clone(),
+                    },
+                );
                 self.roster.mark_failed(&actor_id, reason).await;
                 Err(HostError::HostCall(err.to_string()))
             }
@@ -312,8 +344,10 @@ impl HostFn for AgentsSpawnFn {
             .executor()
             .ok_or_else(|| HostError::NotImplemented("agents.spawn — executor not configured".to_string()))?;
 
+        let session_id = ctx.session_id.clone();
         let actor_id = self.roster.next_actor_id(&role);
         let budget = ActorBudget::default();
+        let spawned_at = Utc::now();
 
         let record = ActorRecord {
             id: actor_id.clone(),
@@ -321,7 +355,7 @@ impl HostFn for AgentsSpawnFn {
             status: ActorStatus::Running,
             mode: Some(role.clone()),
             budget: budget.clone(),
-            spawned_at: Utc::now(),
+            spawned_at,
             completed_at: None,
             cancelled: false,
             failure_reason: None,
@@ -330,6 +364,18 @@ impl HostFn for AgentsSpawnFn {
             history_uri: None,
         };
         self.roster.track(record).await;
+        self.roster.emit_lifecycle(
+            &session_id,
+            ActorLifecycleEvent::Spawned {
+                actor_id: actor_id.clone(),
+                parent_id: None,
+                role: role.clone(),
+                task: task.clone(),
+                depth: 0,
+                budget: budget.clone(),
+                spawned_at,
+            },
+        );
 
         let spec = ActorSpec {
             id: actor_id.clone(),
@@ -359,15 +405,33 @@ impl HostFn for AgentsSpawnFn {
                     }
                     rt.block_on(roster.mark_complete_with_digest(
                         &actor_id_bg,
-                        digest.summary,
-                        digest.artifact_uri,
-                        digest.history_uri,
+                        digest.summary.clone(),
+                        digest.artifact_uri.clone(),
+                        digest.history_uri.clone(),
                     ));
+                    roster.emit_lifecycle(
+                        &session_id,
+                        ActorLifecycleEvent::Completed {
+                            actor_id: actor_id_bg.clone(),
+                            completed_at: Utc::now(),
+                            summary: Some(digest.summary),
+                            artifact_uri: digest.artifact_uri,
+                            history_uri: digest.history_uri,
+                        },
+                    );
                     tracing::debug!(actor_id = %actor_id_bg, "spawned actor completed");
                 }
                 Err(err) => {
                     let reason = map_actor_error(&err);
                     tracing::warn!(actor_id = %actor_id_bg, error = %err, "spawned actor failed");
+                    roster.emit_lifecycle(
+                        &session_id,
+                        ActorLifecycleEvent::Failed {
+                            actor_id: actor_id_bg.clone(),
+                            failed_at: Utc::now(),
+                            reason: reason.clone(),
+                        },
+                    );
                     rt.block_on(roster.mark_failed(&actor_id_bg, reason));
                 }
             }
@@ -477,11 +541,14 @@ impl HostFn for AgentsParallelFn {
             .executor()
             .ok_or_else(|| HostError::NotImplemented("agents.parallel — executor not configured".to_string()))?;
 
+        let session_id = ctx.session_id.clone();
+
         // Register each actor as Running before spawning.
         let mut actor_specs: Vec<(ActorId, ActorSpec)> = Vec::with_capacity(parsed.len());
         for (role, task_str) in parsed {
             let actor_id = self.roster.next_actor_id(&role);
             let budget = ActorBudget::default();
+            let spawned_at = Utc::now();
             self.roster
                 .track(ActorRecord {
                     id: actor_id.clone(),
@@ -489,7 +556,7 @@ impl HostFn for AgentsParallelFn {
                     status: ActorStatus::Running,
                     mode: Some(role.clone()),
                     budget: budget.clone(),
-                    spawned_at: Utc::now(),
+                    spawned_at,
                     completed_at: None,
                     cancelled: false,
                     failure_reason: None,
@@ -498,6 +565,18 @@ impl HostFn for AgentsParallelFn {
                     history_uri: None,
                 })
                 .await;
+            self.roster.emit_lifecycle(
+                &session_id,
+                ActorLifecycleEvent::Spawned {
+                    actor_id: actor_id.clone(),
+                    parent_id: None,
+                    role: role.clone(),
+                    task: task_str.clone(),
+                    depth: 0,
+                    budget: budget.clone(),
+                    spawned_at,
+                },
+            );
             actor_specs.push((
                 actor_id.clone(),
                 ActorSpec {
@@ -519,6 +598,7 @@ impl HostFn for AgentsParallelFn {
             .map(|(actor_id, spec)| {
                 let executor = Arc::clone(&executor);
                 let roster = Arc::clone(&self.roster);
+                let session_id = session_id.clone();
                 tokio::spawn(async move {
                     match executor.run_to_digest(spec).await {
                         Ok(digest) => {
@@ -533,6 +613,16 @@ impl HostFn for AgentsParallelFn {
                                     digest.history_uri.clone(),
                                 )
                                 .await;
+                            roster.emit_lifecycle(
+                                &session_id,
+                                ActorLifecycleEvent::Completed {
+                                    actor_id: actor_id.clone(),
+                                    completed_at: Utc::now(),
+                                    summary: Some(digest.summary.clone()),
+                                    artifact_uri: digest.artifact_uri.clone(),
+                                    history_uri: digest.history_uri.clone(),
+                                },
+                            );
                             tracing::debug!(actor_id = %actor_id, "parallel actor completed");
                             Ok(json!({
                                 "actorId": digest.actor_id.as_str(),
@@ -544,6 +634,14 @@ impl HostFn for AgentsParallelFn {
                         Err(err) => {
                             let reason = map_actor_error(&err);
                             tracing::warn!(actor_id = %actor_id, error = %err, "parallel actor failed");
+                            roster.emit_lifecycle(
+                                &session_id,
+                                ActorLifecycleEvent::Failed {
+                                    actor_id: actor_id.clone(),
+                                    failed_at: Utc::now(),
+                                    reason: reason.clone(),
+                                },
+                            );
                             roster.mark_failed(&actor_id, reason).await;
                             Err(HostError::HostCall(format!("actor {actor_id} failed: {err}")))
                         }
@@ -1194,5 +1292,152 @@ mod tests {
         let rec = roster.get(&actor_id).await.unwrap();
         assert_eq!(rec.status, crate::actor::ActorStatus::Terminated);
         assert!(rec.completed_at.is_some());
+    }
+
+    // ─── P3.5: lifecycle event emission tests ────────────────────────────────
+
+    fn lifecycle_hook() -> (
+        Arc<std::sync::Mutex<Vec<ActorLifecycleEvent>>>,
+        impl Fn(String, ActorLifecycleEvent) + Send + Sync + 'static,
+    ) {
+        let captured: Arc<std::sync::Mutex<Vec<ActorLifecycleEvent>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured2 = Arc::clone(&captured);
+        let hook = move |_session_id: String, event: ActorLifecycleEvent| {
+            captured2.lock().unwrap().push(event);
+        };
+        (captured, hook)
+    }
+
+    struct EchoExec;
+    #[async_trait::async_trait]
+    impl crate::executor::ActorExecutor for EchoExec {
+        async fn run_to_digest(
+            &self,
+            spec: crate::actor::ActorSpec,
+        ) -> std::result::Result<crate::actor::ActorDigest, crate::executor::ActorError> {
+            Ok(crate::actor::ActorDigest {
+                actor_id: spec.id,
+                summary: format!("echo: {}", spec.task),
+                artifact_uri: None,
+                history_uri: None,
+                history_content: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn agents_run_emits_spawned_and_completed_lifecycle_events() {
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(EchoExec));
+        let (events, hook) = lifecycle_hook();
+        roster.set_lifecycle_hook(hook);
+
+        let f = AgentsRunFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_RUN);
+        f.call(json!({"role": "worker", "task": "do it"}), &ctx)
+            .await
+            .unwrap();
+
+        let evs = events.lock().unwrap();
+        assert_eq!(evs.len(), 2, "expected Spawned + Completed, got {evs:?}");
+        assert!(matches!(&evs[0], ActorLifecycleEvent::Spawned { role, .. } if role == "worker"));
+        assert!(matches!(&evs[1], ActorLifecycleEvent::Completed { summary, .. } if summary.as_deref() == Some("echo: do it")));
+    }
+
+    #[tokio::test]
+    async fn agents_run_emits_failed_lifecycle_event_on_error() {
+        use crate::executor::ActorError;
+        struct FailExecutor;
+        #[async_trait::async_trait]
+        impl crate::executor::ActorExecutor for FailExecutor {
+            async fn run_to_digest(
+                &self,
+                _spec: crate::actor::ActorSpec,
+            ) -> std::result::Result<crate::actor::ActorDigest, ActorError> {
+                Err(ActorError::Execution("boom".to_string()))
+            }
+        }
+
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(FailExecutor));
+        let (events, hook) = lifecycle_hook();
+        roster.set_lifecycle_hook(hook);
+
+        let f = AgentsRunFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_RUN);
+        let _ = f.call(json!({"role": "worker", "task": "fail"}), &ctx).await;
+
+        let evs = events.lock().unwrap();
+        assert_eq!(evs.len(), 2, "expected Spawned + Failed, got {evs:?}");
+        assert!(matches!(&evs[0], ActorLifecycleEvent::Spawned { .. }));
+        assert!(matches!(&evs[1], ActorLifecycleEvent::Failed { .. }));
+    }
+
+    #[tokio::test]
+    async fn agents_parallel_emits_spawned_and_completed_for_each_actor() {
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(EchoExec));
+        let (events, hook) = lifecycle_hook();
+        roster.set_lifecycle_hook(hook);
+
+        let f = AgentsParallelFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_PARALLEL);
+        f.call(
+            json!({"tasks": [{"role": "worker", "task": "A"}, {"role": "worker", "task": "B"}]}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        let evs = events.lock().unwrap();
+        // 2 Spawned + 2 Completed = 4 total (order: Spawned A, Spawned B, then Completed in any order)
+        let spawned = evs.iter().filter(|e| matches!(e, ActorLifecycleEvent::Spawned { .. })).count();
+        let completed = evs.iter().filter(|e| matches!(e, ActorLifecycleEvent::Completed { .. })).count();
+        assert_eq!(spawned, 2, "expected 2 Spawned events");
+        assert_eq!(completed, 2, "expected 2 Completed events");
+    }
+
+    #[tokio::test]
+    async fn agents_spawn_emits_spawned_and_eventually_completed() {
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(EchoExec));
+        let (events, hook) = lifecycle_hook();
+        roster.set_lifecycle_hook(hook);
+
+        let f = AgentsSpawnFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_SPAWN);
+        f.call(json!({"role": "worker", "task": "bg"}), &ctx)
+            .await
+            .unwrap();
+
+        // Spawned event fires synchronously before returning the handle
+        {
+            let evs = events.lock().unwrap();
+            assert!(
+                matches!(evs.first(), Some(ActorLifecycleEvent::Spawned { .. })),
+                "first event should be Spawned immediately"
+            );
+        }
+
+        // Background thread completes quickly (EchoExec is trivial); wait for Completed
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let evs = events.lock().unwrap();
+        assert_eq!(evs.len(), 2, "expected Spawned + Completed after background completion, got {evs:?}");
+        assert!(matches!(&evs[1], ActorLifecycleEvent::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_hook_no_op_when_not_set() {
+        // Verify emit_lifecycle is safe with no hook installed (no panic, no error)
+        let roster = Arc::new(MailboxRegistry::new());
+        roster.set_executor(Arc::new(EchoExec));
+        let f = AgentsRunFn::new(Arc::clone(&roster));
+        let ctx = ctx_with(caps::AGENTS_RUN);
+        // Should not panic even though no lifecycle hook is set
+        f.call(json!({"role": "worker", "task": "t"}), &ctx)
+            .await
+            .unwrap();
     }
 }

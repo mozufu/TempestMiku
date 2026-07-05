@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::actor::{ActorId, ActorRecord, ActorStatus};
+use crate::actor::{ActorId, ActorLifecycleEvent, ActorRecord, ActorStatus};
 use crate::executor::ActorExecutor;
 use crate::supervise::FailureReason;
 
@@ -57,6 +57,12 @@ pub struct MailboxRegistry {
     /// In-memory actor transcripts keyed by actor id (P3.3).
     /// Populated by ChatActorExecutor after each run; served by HistoryResourceHandler.
     transcripts: RwLock<HashMap<ActorId, String>>,
+    /// Optional lifecycle event hook (P3.5).
+    ///
+    /// Set once at server startup via `set_lifecycle_hook`. When set, `emit_lifecycle` calls
+    /// the hook synchronously — the hook implementation is responsible for routing the event
+    /// to the right session SSE stream (typically via `tokio::runtime::Handle::spawn`).
+    lifecycle_hook: std::sync::OnceLock<Box<dyn Fn(String, ActorLifecycleEvent) + Send + Sync>>,
 }
 
 impl MailboxRegistry {
@@ -67,6 +73,25 @@ impl MailboxRegistry {
             next_seq: AtomicU64::new(0),
             messages: RwLock::new(Vec::new()),
             transcripts: RwLock::new(HashMap::new()),
+            lifecycle_hook: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Install the lifecycle event hook (P3.5). Called once at server startup.
+    ///
+    /// The hook is called synchronously from `emit_lifecycle`; async work (e.g. store writes)
+    /// must be dispatched inside the hook via a captured `tokio::runtime::Handle`.
+    pub fn set_lifecycle_hook(
+        &self,
+        hook: impl Fn(String, ActorLifecycleEvent) + Send + Sync + 'static,
+    ) {
+        let _ = self.lifecycle_hook.set(Box::new(hook));
+    }
+
+    /// Fire the lifecycle hook if one is installed (no-op otherwise).
+    pub fn emit_lifecycle(&self, session_id: &str, event: ActorLifecycleEvent) {
+        if let Some(hook) = self.lifecycle_hook.get() {
+            hook(session_id.to_string(), event);
         }
     }
 

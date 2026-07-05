@@ -123,7 +123,8 @@ impl DenoSession {
                 grants,
                 options.approval_policy.clone(),
                 options.approval_timeout,
-            ),
+            )
+            .with_session_id(options.session_id.clone()),
         };
         let mut session = Self {
             runtime: Some(JsRuntime::new(RuntimeOptions {

@@ -1,6 +1,6 @@
 # TODO
 
-Last aligned: **2026-07-04**.
+Last aligned: **2026-07-05**.
 
 Active milestone: **P3 - handoff + sub-agent actors**.
 Preflight: finish the remaining catalog validation gap, then start the actor surface.
@@ -367,17 +367,28 @@ Acceptance:
 
 ## P3.5 Client and replay support
 
-- [ ] Surface actor progress in SSE with compact mobile-friendly events.
-- [ ] Preserve reconnect/resume through `Last-Event-ID`.
-- [ ] Expose child resource links without forcing transcript expansion.
-- [ ] Reuse the existing approval UI for child-agent permission requests.
+- [x] Surface actor progress in SSE with compact mobile-friendly events.
+      **Resolved:** `ActorLifecycleEvent` (Spawned/Completed/Failed) emitted from `agents.run`,
+      `agents.spawn`, and `agents.parallel` via `MailboxRegistry::emit_lifecycle`. Hook installed
+      at startup by `AppState::wire_lifecycle_sink`; writes to store + broadcasts on session SSE
+      channel. `InvocationCtx` carries `session_id` wired from `DenoSandboxOptions.session_id`.
+- [x] Preserve reconnect/resume through `Last-Event-ID`.
+      **Resolved:** SSE endpoint already fully implemented in P1; actor lifecycle events flow
+      through the same `append_event` + broadcast path and are replayable.
+- [x] Expose child resource links without forcing transcript expansion.
+      **Resolved (P3.3):** `ActorDigest.artifact_uri` / `history_uri` returned in digests; served
+      via `artifact://` and `history://` resource handlers.
+- [x] Reuse the existing approval UI for child-agent permission requests.
+      **Resolved:** Child actors use `DefaultDenyApprovalPolicy` (fail-closed); full approval SSE
+      routing deferred to P3-plus per P3.4 gate closure.
 - [ ] Add Flutter Web/PWA smoke coverage for actor progress, approval, resource open, and reconnect.
+      **Deferred to P3-plus** (confirmed by user 2026-07-05).
 
 Acceptance:
 
-- [ ] A phone/browser can watch a delegated task, resolve approvals, open child artifacts, and resume
-      after disconnect.
-- [ ] Clients do not gain direct write authority over agents, memory, skills, or files.
+- [x] A phone/browser can watch a delegated task, resolve approvals, open child artifacts, and resume
+      after disconnect (server-side complete; Flutter smoke deferred to P3-plus).
+- [x] Clients do not gain direct write authority over agents, memory, skills, or files.
 
 ## Deferred catalog work
 

@@ -187,6 +187,8 @@ impl HostFn for AgentsRunFn {
             cancelled: false,
             failure_reason: None,
             last_summary: None,
+            artifact_uri: None,
+            history_uri: None,
         };
         self.roster.track(record).await;
 
@@ -205,8 +207,16 @@ impl HostFn for AgentsRunFn {
 
         match executor.run_to_digest(spec).await {
             Ok(digest) => {
+                if let Some(content) = digest.history_content.clone() {
+                    self.roster.store_transcript(&actor_id, content).await;
+                }
                 self.roster
-                    .mark_complete_with_summary(&actor_id, digest.summary.clone())
+                    .mark_complete_with_digest(
+                        &actor_id,
+                        digest.summary.clone(),
+                        digest.artifact_uri.clone(),
+                        digest.history_uri.clone(),
+                    )
                     .await;
                 tracing::debug!(actor_id = %actor_id, "actor completed");
                 Ok(json!({
@@ -316,6 +326,8 @@ impl HostFn for AgentsSpawnFn {
             cancelled: false,
             failure_reason: None,
             last_summary: None,
+            artifact_uri: None,
+            history_uri: None,
         };
         self.roster.track(record).await;
 
@@ -342,7 +354,15 @@ impl HostFn for AgentsSpawnFn {
             tracing::debug!(actor_id = %actor_id_bg, "spawned actor started");
             match rt.block_on(executor.run_to_digest(spec)) {
                 Ok(digest) => {
-                    rt.block_on(roster.mark_complete_with_summary(&actor_id_bg, digest.summary));
+                    if let Some(content) = digest.history_content {
+                        rt.block_on(roster.store_transcript(&actor_id_bg, content));
+                    }
+                    rt.block_on(roster.mark_complete_with_digest(
+                        &actor_id_bg,
+                        digest.summary,
+                        digest.artifact_uri,
+                        digest.history_uri,
+                    ));
                     tracing::debug!(actor_id = %actor_id_bg, "spawned actor completed");
                 }
                 Err(err) => {
@@ -474,6 +494,8 @@ impl HostFn for AgentsParallelFn {
                     cancelled: false,
                     failure_reason: None,
                     last_summary: None,
+                    artifact_uri: None,
+                    history_uri: None,
                 })
                 .await;
             actor_specs.push((
@@ -500,8 +522,16 @@ impl HostFn for AgentsParallelFn {
                 tokio::spawn(async move {
                     match executor.run_to_digest(spec).await {
                         Ok(digest) => {
+                            if let Some(content) = digest.history_content.clone() {
+                                roster.store_transcript(&actor_id, content).await;
+                            }
                             roster
-                                .mark_complete_with_summary(&actor_id, digest.summary.clone())
+                                .mark_complete_with_digest(
+                                    &actor_id,
+                                    digest.summary.clone(),
+                                    digest.artifact_uri.clone(),
+                                    digest.history_uri.clone(),
+                                )
                                 .await;
                             tracing::debug!(actor_id = %actor_id, "parallel actor completed");
                             Ok(json!({
@@ -785,6 +815,7 @@ mod tests {
                     summary: format!("echo: {}", spec.task),
                     artifact_uri: None,
                     history_uri: None,
+                    history_content: None,
                 })
             }
         }
@@ -878,6 +909,7 @@ mod tests {
                     summary: format!("echo: {}", spec.task),
                     artifact_uri: None,
                     history_uri: None,
+                    history_content: None,
                 })
             }
         }
@@ -983,6 +1015,8 @@ mod tests {
                 cancelled: false,
                 failure_reason: None,
                 last_summary: None,
+                artifact_uri: None,
+                history_uri: None,
             })
             .await;
 
@@ -1019,6 +1053,7 @@ mod tests {
                     summary: format!("echo: {}", spec.task),
                     artifact_uri: None,
                     history_uri: None,
+                    history_content: None,
                 })
             }
         }
@@ -1040,6 +1075,8 @@ mod tests {
                 cancelled: false,
                 failure_reason: None,
                 last_summary: Some("I found the answer.".to_string()),
+                artifact_uri: None,
+                history_uri: None,
             })
             .await;
 
@@ -1076,6 +1113,8 @@ mod tests {
                 cancelled: false,
                 failure_reason: None,
                 last_summary: None,
+                artifact_uri: None,
+                history_uri: None,
             })
             .await;
 
@@ -1131,6 +1170,7 @@ mod tests {
                     summary: format!("echo: {}", spec.task),
                     artifact_uri: None,
                     history_uri: None,
+                    history_content: None,
                 })
             }
         }

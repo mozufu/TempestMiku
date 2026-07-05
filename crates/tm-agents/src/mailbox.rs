@@ -54,6 +54,9 @@ pub struct MailboxRegistry {
     executor: std::sync::OnceLock<Arc<dyn ActorExecutor>>,
     next_seq: AtomicU64,
     messages: RwLock<Vec<ActorMessage>>,
+    /// In-memory actor transcripts keyed by actor id (P3.3).
+    /// Populated by ChatActorExecutor after each run; served by HistoryResourceHandler.
+    transcripts: RwLock<HashMap<ActorId, String>>,
 }
 
 impl MailboxRegistry {
@@ -63,6 +66,7 @@ impl MailboxRegistry {
             executor: std::sync::OnceLock::new(),
             next_seq: AtomicU64::new(0),
             messages: RwLock::new(Vec::new()),
+            transcripts: RwLock::new(HashMap::new()),
         }
     }
 
@@ -122,15 +126,36 @@ impl MailboxRegistry {
         }
     }
 
-    /// Mark an actor as successfully terminated and store its digest summary.
+    /// Mark an actor as successfully terminated and store its full digest (P3.3).
     ///
-    /// The stored summary seeds seeded continuations in `agents.msg` request/reply.
-    pub async fn mark_complete_with_summary(&self, id: &ActorId, summary: String) {
+    /// Stores summary (seeds `agents.msg` continuations), artifact URI, and history URI.
+    pub async fn mark_complete_with_digest(
+        &self,
+        id: &ActorId,
+        summary: String,
+        artifact_uri: Option<String>,
+        history_uri: Option<String>,
+    ) {
         if let Some(rec) = self.actors.write().await.get_mut(id) {
             rec.status = ActorStatus::Terminated;
             rec.completed_at = Some(Utc::now());
             rec.last_summary = Some(summary);
+            rec.artifact_uri = artifact_uri;
+            rec.history_uri = history_uri;
         }
+    }
+
+    /// Store the full transcript for an actor (P3.3).
+    ///
+    /// Called by the orchestrator after `run_to_digest` returns `history_content`.
+    /// Served by `HistoryResourceHandler`.
+    pub async fn store_transcript(&self, id: &ActorId, content: String) {
+        self.transcripts.write().await.insert(id.clone(), content);
+    }
+
+    /// Retrieve the stored transcript for an actor, if any.
+    pub async fn get_transcript(&self, id: &ActorId) -> Option<String> {
+        self.transcripts.read().await.get(id).cloned()
     }
 
     /// Append a message to the bounded in-memory log.
@@ -198,6 +223,8 @@ mod tests {
             cancelled: false,
             failure_reason: None,
             last_summary: None,
+            artifact_uri: None,
+            history_uri: None,
         }
     }
 
@@ -283,5 +310,35 @@ mod tests {
     fn executor_not_set_returns_none() {
         let registry = MailboxRegistry::new();
         assert!(registry.executor().is_none());
+    }
+
+    #[tokio::test]
+    async fn mark_complete_with_digest_stores_uris() {
+        let registry = MailboxRegistry::new();
+        let id = ActorId::new("Worker").unwrap();
+        registry.track(test_record("Worker")).await;
+        registry
+            .mark_complete_with_digest(
+                &id,
+                "summary".to_string(),
+                Some("artifact://1".to_string()),
+                Some("history://Worker".to_string()),
+            )
+            .await;
+        let rec = registry.get(&id).await.unwrap();
+        assert_eq!(rec.status, ActorStatus::Terminated);
+        assert_eq!(rec.last_summary.as_deref(), Some("summary"));
+        assert_eq!(rec.artifact_uri.as_deref(), Some("artifact://1"));
+        assert_eq!(rec.history_uri.as_deref(), Some("history://Worker"));
+    }
+
+    #[tokio::test]
+    async fn store_and_get_transcript() {
+        let registry = MailboxRegistry::new();
+        let id = ActorId::new("Worker").unwrap();
+        assert!(registry.get_transcript(&id).await.is_none());
+        registry.store_transcript(&id, "line 1\nline 2\n".to_string()).await;
+        let content = registry.get_transcript(&id).await.unwrap();
+        assert!(content.contains("line 1"));
     }
 }

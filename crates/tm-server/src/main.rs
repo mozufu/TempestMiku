@@ -128,7 +128,8 @@ fn build_runtime(
     // Inject executor AFTER sandbox_options has agents.* registered so child actor
     // sandboxes inherit the same host registry (including agents.* for recursive actors).
     let executor_options = sandbox_options.clone();
-    let executor: Arc<dyn tm_agents::ActorExecutor> = Arc::new(ChatActorExecutor::new(
+    let executor_artifact_root = executor_options.artifact_root.clone();
+    let executor: Arc<dyn tm_agents::ActorExecutor> = Arc::new(ChatActorExecutor::with_artifact_root(
         Arc::clone(&llm),
         cfg.clone(),
         move |session_id: uuid::Uuid| {
@@ -136,6 +137,7 @@ fn build_runtime(
             opts.session_id = session_id.to_string();
             Arc::new(DenoSandbox::new(opts)) as Arc<dyn Sandbox>
         },
+        Some(executor_artifact_root),
     ));
     roster.set_executor(executor);
 

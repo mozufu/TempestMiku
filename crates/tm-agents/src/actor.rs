@@ -104,6 +104,10 @@ pub struct ActorRecord {
     pub failure_reason: Option<FailureReason>,
     /// Plain-prose digest summary stored on completion; seeds seeded continuations in agents.msg.
     pub last_summary: Option<String>,
+    /// URI of the primary output artifact produced by this actor (P3.3).
+    pub artifact_uri: Option<String>,
+    /// URI of the read-only transcript for this actor (P3.3).
+    pub history_uri: Option<String>,
 }
 
 /// Opaque handle returned by `agents.spawn` for coordination via messages (§23.3).
@@ -127,6 +131,10 @@ pub struct ActorDigest {
     pub artifact_uri: Option<String>,
     /// URI of the read-only transcript for this actor.
     pub history_uri: Option<String>,
+    /// Full transcript content captured by CollectingSink (P3.3).
+    /// Stripped before the digest JSON is sent to the model; stored in MailboxRegistry.transcripts.
+    #[serde(skip)]
+    pub history_content: Option<String>,
 }
 
 /// Actor lifecycle events for the session event log (§23.4, P3.1).

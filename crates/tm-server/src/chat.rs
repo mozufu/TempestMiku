@@ -1,10 +1,12 @@
 use std::{
+    path::PathBuf,
     sync::{Arc, Mutex},
     thread,
 };
 
 use async_trait::async_trait;
 use serde_json::json;
+use tm_artifacts::ArtifactStore;
 use tm_core::{Agent, AgentConfig, EventSink, LlmClient, Sandbox};
 use tm_persona::ModeId;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
@@ -110,6 +112,30 @@ impl AgentChatRunner {
         });
         Self {
             sender: Mutex::new(sender),
+        }
+    }
+}
+
+impl ChatActorExecutor {
+    pub fn new(
+        llm: Arc<dyn LlmClient>,
+        cfg: AgentConfig,
+        sandbox_factory: impl Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_artifact_root(llm, cfg, sandbox_factory, None)
+    }
+
+    pub fn with_artifact_root(
+        llm: Arc<dyn LlmClient>,
+        cfg: AgentConfig,
+        sandbox_factory: impl Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync + 'static,
+        artifact_root: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            llm,
+            cfg,
+            sandbox_factory: Arc::new(sandbox_factory),
+            artifact_root,
         }
     }
 }
@@ -261,6 +287,45 @@ where
     }
 }
 
+// ─── CollectingSink ───────────────────────────────────────────────────────────
+
+/// Captures all agent events as a plain-text transcript (P3.3).
+///
+/// Used by `ChatActorExecutor` to record sub-agent output for `history://` resources.
+struct CollectingSink(Mutex<Vec<String>>);
+
+impl CollectingSink {
+    fn new() -> Self {
+        Self(Mutex::new(Vec::new()))
+    }
+
+    fn push(&self, line: String) {
+        self.0.lock().expect("collecting sink lock").push(line);
+    }
+
+    fn into_transcript(self) -> String {
+        self.0.into_inner().expect("collecting sink lock").join("\n")
+    }
+}
+
+impl EventSink for CollectingSink {
+    fn on_text(&self, delta: &str) {
+        self.push(format!("[text] {delta}"));
+    }
+    fn on_tool_call(&self, name: &str) {
+        self.push(format!("[tool_call] {name}"));
+    }
+    fn on_cell_start(&self, code: &str) {
+        self.push(format!("[cell_start] {code}"));
+    }
+    fn on_cell_result(&self, shaped: &str) {
+        self.push(format!("[cell_result] {shaped}"));
+    }
+    fn on_final(&self, text: &str) {
+        self.push(format!("[final] {text}"));
+    }
+}
+
 // ─── ChatActorExecutor ────────────────────────────────────────────────────────
 
 /// Runs sub-agents using the existing [`Agent`] loop without routing through
@@ -273,20 +338,8 @@ pub struct ChatActorExecutor {
     llm: Arc<dyn LlmClient>,
     cfg: AgentConfig,
     sandbox_factory: Arc<dyn Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync>,
-}
-
-impl ChatActorExecutor {
-    pub fn new(
-        llm: Arc<dyn LlmClient>,
-        cfg: AgentConfig,
-        sandbox_factory: impl Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            llm,
-            cfg,
-            sandbox_factory: Arc::new(sandbox_factory),
-        }
-    }
+    /// Artifact root for reading child cell-spills and writing transcripts (P3.3).
+    artifact_root: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -313,28 +366,59 @@ impl ActorExecutor for ChatActorExecutor {
         let actor_id = spec.id.clone();
         let sandbox = (self.sandbox_factory)(Uuid::new_v4());
 
-        let (tx, rx) = tokio::sync::oneshot::channel::<std::result::Result<String, ActorError>>();
+        let artifact_root = self.artifact_root.clone();
+        let child_session_id = Uuid::new_v4();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<
+            std::result::Result<(String, String), ActorError>,
+        >();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("actor worker runtime builds");
             let agent = Agent::new(llm, sandbox, cfg);
+            let sink = CollectingSink::new();
             let result = runtime
-                .block_on(agent.run(&task, &tm_core::NullSink))
+                .block_on(agent.run(&task, &sink))
                 .map_err(|e| ActorError::Execution(e.to_string()));
-            let _ = tx.send(result);
+            let transcript = sink.into_transcript();
+            let _ = tx.send(result.map(|summary| (summary, transcript)));
         });
 
-        let summary = rx
+        let (summary, transcript) = rx
             .await
             .map_err(|_| ActorError::Execution("actor worker dropped response".to_string()))??;
+
+        // Populate artifact_uri from child cell-spills; write transcript as history_uri.
+        let (artifact_uri, history_uri) = if let Some(ref root) = artifact_root {
+            match ArtifactStore::open(root, &child_session_id.to_string()) {
+                Ok(store) => {
+                    let artifact_uri = store.list().into_iter().next().map(|r| r.uri);
+                    let history_uri = if !transcript.is_empty() {
+                        store
+                            .put_text(&transcript, Some("transcript".to_string()), "text/plain")
+                            .ok()
+                            .map(|r| r.uri)
+                    } else {
+                        None
+                    };
+                    (artifact_uri, history_uri)
+                }
+                Err(_) => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
+        let history_content = if transcript.is_empty() { None } else { Some(transcript) };
 
         Ok(ActorDigest {
             actor_id,
             summary,
-            artifact_uri: None,
-            history_uri: None, // transcript persistence deferred to P3.3
+            artifact_uri,
+            history_uri,
+            history_content,
         })
     }
 }

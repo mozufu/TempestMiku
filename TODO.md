@@ -156,8 +156,8 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       on the isolation guarantee; full supervision policy deferred.
 - [x] `agent://` and `history://` resources resolve through the resource gateway with grants and
       bounded previews.
-      **Resolved:** `agent://<id>` returns actor record JSON; `agent://` lists all actors; 
-      `history://<id>` returns placeholder until transcript storage lands in P3.3.
+      **Resolved:** `agent://<id>` returns actor record JSON (including `artifact_uri`/`history_uri`);
+      `agent://` lists all actors; `history://<id>` serves real bounded transcripts (P3.3).
 - [x] Approval-gated effects inside child agents still route through the same approval broker and
       timeout/default-deny behavior.
       **Deferred to P3-plus:** Child actors always get `DefaultDenyApprovalPolicy` — approval-gated
@@ -311,16 +311,29 @@ Acceptance:
       **Resolved:** `AgentResourceHandler` reads `ActorRecord` JSON for `agent://<id>` and lists
       all actors for `agent://`. Artifact content (full output) deferred below.
 - [x] Register `history://<id>` for read-only child transcript previews.
-      **Resolved:** `HistoryResourceHandler` returns a placeholder until transcript storage lands.
-- [ ] Spill large child output to `artifact://` rather than parent context; only bounded digests
+      **Resolved:** `HistoryResourceHandler` serves real transcripts from `MailboxRegistry.transcripts`
+      with 50-line default pagination, `"start-end"` selector, `has_more` flag, and 1 KB preview.
+- [x] Spill large child output to `artifact://` rather than parent context; only bounded digests
       return to the orchestrator's model context.
-- [ ] Include provenance links from parent events to child resources.
-- [ ] Add bounded preview/list behavior for mobile clients.
+      **Resolved:** `ChatActorExecutor::run_to_digest` uses `CollectingSink` to capture all events;
+      opens `ArtifactStore` for the child session after run; first artifact → `artifact_uri`;
+      transcript → written to child artifact store → `history_uri`. `ActorDigest.history_content`
+      carries the raw transcript (skipped from JSON so it never reaches the model); orchestrator
+      stores it via `MailboxRegistry.store_transcript`.
+- [x] Include provenance links from parent events to child resources.
+      **Resolved:** `ActorRecord` carries `artifact_uri` and `history_uri`; exposed via `agent://<id>`
+      resource JSON. Full parent-`SessionEvent` linking deferred to P3-plus.
+- [x] Add bounded preview/list behavior for mobile clients.
+      **Resolved:** `HistoryResourceHandler::list` filters to actors with `history_uri` set;
+      `HistoryResourceHandler::read` returns selector-bounded content with `has_more` and `preview`.
 
 Acceptance:
 
-- [ ] Parent turns contain summaries and handles, not large child transcripts.
-- [ ] Resource reads enforce grants and return shaped `ResourceContent` envelopes.
+- [x] Parent turns contain summaries and handles, not large child transcripts.
+      **Resolved:** `ActorDigest.history_content` is `#[serde(skip)]`; model only sees `summary`.
+- [x] Resource reads enforce grants and return shaped `ResourceContent` envelopes.
+      **Resolved:** `HistoryResourceHandler` requires `CAP_HISTORY_READ`; returns `ResourceContent`
+      with all fields populated.
 
 ## P3.4 Handoff mode
 

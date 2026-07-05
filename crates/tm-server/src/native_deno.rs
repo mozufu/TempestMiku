@@ -114,6 +114,9 @@ async fn run_native_turn(
     sink: Arc<dyn CodingEventSink>,
 ) -> Result<CodingTurnResult> {
     options.session_id = turn.session_id.to_string();
+    // Merge mode-profile-declared capabilities into sandbox grants for this turn.
+    // Supports glob patterns (e.g. "agents.*") via CapabilityGrants::permits.
+    options.grants = options.grants.allow_many(turn.capabilities.iter().cloned());
     options.approval_policy = match approval_mode {
         NativeApprovalMode::Deny => Arc::new(DefaultDenyApprovalPolicy),
         NativeApprovalMode::Manual => Arc::new(HttpApprovalPolicy {

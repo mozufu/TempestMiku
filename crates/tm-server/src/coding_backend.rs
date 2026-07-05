@@ -25,6 +25,9 @@ pub struct CodingTurn {
     pub system_prompt: String,
     pub mode: tm_persona::ModeId,
     pub scope: String,
+    /// Declared capabilities from the mode profile (e.g. `["agents.*", "backend.coding"]`).
+    /// Merged into sandbox grants for this turn; supports `.*` glob patterns.
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

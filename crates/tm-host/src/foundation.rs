@@ -195,7 +195,13 @@ impl CapabilityGrants {
     }
 
     pub fn permits(&self, name: &str) -> bool {
-        self.allowed.contains(name)
+        self.allowed.iter().any(|granted| {
+            if let Some(prefix) = granted.strip_suffix(".*") {
+                name == prefix || name.starts_with(&format!("{prefix}."))
+            } else {
+                granted == name
+            }
+        })
     }
 }
 
@@ -507,4 +513,34 @@ fn parse_scheme(uri: &str) -> Result<String> {
     uri.split_once("://")
         .map(|(scheme, _)| scheme.to_string())
         .ok_or_else(|| HostError::InvalidArgs(format!("missing URI scheme in {uri}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_grants_exact_match() {
+        let g = CapabilityGrants::default().allow("agents.run");
+        assert!(g.permits("agents.run"));
+        assert!(!g.permits("agents.spawn"));
+        assert!(!g.permits("agents"));
+    }
+
+    #[test]
+    fn capability_grants_glob_match() {
+        let g = CapabilityGrants::default().allow("agents.*");
+        assert!(g.permits("agents.run"));
+        assert!(g.permits("agents.spawn"));
+        assert!(g.permits("agents.parallel"));
+        assert!(g.permits("agents.msg"));
+        assert!(!g.permits("other.run"));
+        assert!(!g.permits("agents_run"), "underscore variant must not match");
+    }
+
+    #[test]
+    fn capability_grants_names_includes_glob() {
+        let g = CapabilityGrants::default().allow("agents.*");
+        assert!(g.names().any(|n| n.starts_with("agents.")));
+    }
 }

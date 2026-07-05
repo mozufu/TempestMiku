@@ -674,6 +674,7 @@ mod tests {
                 system_prompt: "system prompt".to_string(),
                 mode: tm_persona::ModeId::from("handoff"),
                 scope: "project:tempestmiku".to_string(),
+                capabilities: vec![],
             },
             sink: sink.clone(),
         })));

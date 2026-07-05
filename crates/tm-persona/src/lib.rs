@@ -576,6 +576,8 @@ mod tests {
         assert_eq!(handoff.default_scope, "project:tempestmiku");
         assert_eq!(handoff.active_skills, ["oh-my-pi-handoff"]);
         assert!(handoff.has_capability("backend.coding"));
+        assert!(handoff.has_capability("agents.run"), "agents.* glob must match agents.run");
+        assert!(handoff.has_capability("agents.spawn"), "agents.* glob must match agents.spawn");
     }
 
     #[test]

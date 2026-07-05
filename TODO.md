@@ -131,7 +131,14 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
 - [x] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
       as `undefined` or fail closed.
       **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.
-- [ ] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
+- [x] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
+      **Resolved:** Mode profile, default scope, voice cap, capabilities, and active skills live in
+      `modes.json`; no server-side hardcodes. System prompt is catalog-driven via
+      `PersonaConfig::build_system_prompt`. `CapabilityGrants::permits` now supports glob patterns
+      so `"agents.*"` in a mode profile activates all `agents.*` sandbox grants. Capabilities flow
+      through `CodingTurn.capabilities` → `run_native_turn` → `options.grants`. Tests: persona
+      handoff profile assertions, `!contains("miku-voice")` for handoff turn, `agents.*` capability
+      declared, glob-permits unit tests in `tm-host`.
 - [x] Fan-out to multiple workers returns only bounded digests to the parent context.
       **Resolved:** `agents.parallel` and `agents.run` return `ActorDigest` JSON (`actorId`, `summary`,
       `artifactUri`, `historyUri`) — raw transcripts are never injected into parent context by design.
@@ -317,21 +324,33 @@ Acceptance:
 
 ## P3.4 Handoff mode
 
-- [ ] Keep Handoff's mode profile, default scope, voice cap, declared capabilities, and active skills
+- [x] Keep Handoff's mode profile, default scope, voice cap, declared capabilities, and active skills
       in `modes.json` (currently present; verify no server-side hardcode duplicates it).
-- [ ] Use `oh-my-pi-handoff` for the handoff brief template and constraints.
-- [ ] Route implementation-heavy delegation prompts to Handoff without mutating identity.
-- [ ] Preserve Serious Engineer voice cap `off` for the handoff/coding boundary.
-- [ ] Add tests that Handoff prompt composition includes `skill://oh-my-pi-handoff` and does not load
+      **Resolved:** All state lives in `modes.json`; persona loading is fully catalog-driven.
+- [x] Use `oh-my-pi-handoff` for the handoff brief template and constraints.
+      **Resolved:** `active_skills: ["oh-my-pi-handoff"]` in catalog; `build_system_prompt` injects
+      `## skill://oh-my-pi-handoff` section from the bundled SKILL.md.
+- [x] Route implementation-heavy delegation prompts to Handoff without mutating identity.
+      **Resolved:** Router triggers `["handoff", "delegate"]` at priority 100 in modes.json.
+- [x] Preserve Serious Engineer voice cap `off` for the handoff/coding boundary.
+      **Resolved:** Both modes have `voice_cap: "off"`; no voice injection at the handoff boundary.
+- [x] Add tests that Handoff prompt composition includes `skill://oh-my-pi-handoff` and does not load
       `miku-voice`.
-- [ ] Capability `agents.*` is declared in `modes.json` for Handoff; verify the grant activates when
+      **Resolved:** `coding_turn_prompt_uses_active_persona_bundle` asserts both.
+- [x] Capability `agents.*` is declared in `modes.json` for Handoff; verify the grant activates when
       the sandbox session uses the Handoff mode profile.
+      **Resolved:** `CapabilityGrants::permits` now supports `.*` globs; `CodingTurn.capabilities`
+      carries mode-profile capabilities; `run_native_turn` merges them into sandbox grants. Tests:
+      `capability_grants_glob_match` in `tm-host`; persona handoff test asserts `has_capability("agents.run")`.
 
 Acceptance:
 
-- [ ] Handoff behavior changes can be made by editing the catalog assets, not by hardcoding prompt
+- [x] Handoff behavior changes can be made by editing the catalog assets, not by hardcoding prompt
       strings in the server.
-- [ ] Handoff remains precise, replayable, and approval-bound.
+      **Resolved:** Confirmed — zero handoff-specific strings in server Rust code.
+- [x] Handoff remains precise, replayable, and approval-bound.
+      **Resolved:** Child actors under handoff use `DefaultDenyApprovalPolicy` (fail-closed); full
+      approval SSE routing deferred to P3-plus per the gate item closure above.
 
 ## P3.5 Client and replay support
 

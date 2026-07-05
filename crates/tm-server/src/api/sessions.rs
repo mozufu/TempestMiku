@@ -460,6 +460,7 @@ where
                         system_prompt: persona_prompt.system_prompt.clone(),
                         mode: session.mode_state.mode.clone(),
                         scope: scope.clone(),
+                        capabilities: turn_profile.capabilities.clone(),
                     },
                     sink,
                 )

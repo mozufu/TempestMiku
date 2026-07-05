@@ -395,5 +395,9 @@ async fn coding_turn_prompt_uses_active_persona_bundle() {
 
     assert_eq!(turns[1].mode, ModeId::from("handoff"));
     assert!(turns[1].system_prompt.contains("skill://oh-my-pi-handoff"));
+    assert!(!turns[1].system_prompt.contains("skill://miku-voice"),
+        "handoff mode must not inject miku-voice skill");
     assert_eq!(turns[1].scope, "project:tempestmiku");
+    assert!(turns[1].capabilities.iter().any(|c| c == "agents.*"),
+        "handoff mode must declare agents.* capability");
 }

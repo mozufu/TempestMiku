@@ -7,7 +7,8 @@ use std::{
 use async_trait::async_trait;
 use serde_json::json;
 use tm_artifacts::ArtifactStore;
-use tm_core::{Agent, AgentConfig, EventSink, LlmClient, Sandbox};
+use tm_core::{Agent, AgentConfig, EventSink, InboxDrain, LlmClient, Sandbox};
+use tm_host::CapabilityGrants;
 use tm_persona::ModeId;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use uuid::Uuid;
@@ -134,8 +135,30 @@ impl ChatActorExecutor {
         Self {
             llm,
             cfg,
+            sandbox_factory: Arc::new(move |session_id, _actor_id, _grants| {
+                sandbox_factory(session_id)
+            }),
+            artifact_root,
+            actor_roster: None,
+        }
+    }
+
+    pub fn with_actor_context(
+        llm: Arc<dyn LlmClient>,
+        cfg: AgentConfig,
+        sandbox_factory: impl Fn(Uuid, Option<&str>, &CapabilityGrants) -> Arc<dyn Sandbox>
+        + Send
+        + Sync
+        + 'static,
+        artifact_root: Option<PathBuf>,
+        actor_roster: Arc<tm_agents::MailboxRegistry>,
+    ) -> Self {
+        Self {
+            llm,
+            cfg,
             sandbox_factory: Arc::new(sandbox_factory),
             artifact_root,
+            actor_roster: Some(actor_roster),
         }
     }
 }
@@ -304,7 +327,10 @@ impl CollectingSink {
     }
 
     fn into_transcript(self) -> String {
-        self.0.into_inner().expect("collecting sink lock").join("\n")
+        self.0
+            .into_inner()
+            .expect("collecting sink lock")
+            .join("\n")
     }
 }
 
@@ -337,9 +363,42 @@ impl EventSink for CollectingSink {
 pub struct ChatActorExecutor {
     llm: Arc<dyn LlmClient>,
     cfg: AgentConfig,
-    sandbox_factory: Arc<dyn Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync>,
+    sandbox_factory:
+        Arc<dyn Fn(Uuid, Option<&str>, &CapabilityGrants) -> Arc<dyn Sandbox> + Send + Sync>,
     /// Artifact root for reading child cell-spills and writing transcripts (P3.3).
     artifact_root: Option<PathBuf>,
+    actor_roster: Option<Arc<tm_agents::MailboxRegistry>>,
+}
+
+struct ActorMailboxDrain {
+    roster: Arc<tm_agents::MailboxRegistry>,
+    actor_id: tm_agents::ActorId,
+}
+
+#[async_trait]
+impl InboxDrain for ActorMailboxDrain {
+    async fn drain(&self) -> tm_core::Result<Vec<String>> {
+        Ok(self
+            .roster
+            .drain_inbox(&self.actor_id, None)
+            .await
+            .into_iter()
+            .map(|message| {
+                let reply_to = message
+                    .reply_to
+                    .as_ref()
+                    .map(|id| format!("\nreplyTo: {}", id.as_str()))
+                    .unwrap_or_default();
+                format!(
+                    "from: {}\nsentAt: {}\ntext: {}{}",
+                    message.from.as_str(),
+                    message.sent_at.to_rfc3339(),
+                    message.text,
+                    reply_to
+                )
+            })
+            .collect())
+    }
 }
 
 #[async_trait]
@@ -364,14 +423,17 @@ impl ActorExecutor for ChatActorExecutor {
         );
         let task = spec.task.clone();
         let actor_id = spec.id.clone();
-        let sandbox = (self.sandbox_factory)(Uuid::new_v4());
-
         let artifact_root = self.artifact_root.clone();
         let child_session_id = Uuid::new_v4();
+        let sandbox =
+            (self.sandbox_factory)(child_session_id, Some(actor_id.as_str()), &spec.grants);
+        let inbox = self.actor_roster.as_ref().map(|roster| ActorMailboxDrain {
+            roster: Arc::clone(roster),
+            actor_id: actor_id.clone(),
+        });
 
-        let (tx, rx) = tokio::sync::oneshot::channel::<
-            std::result::Result<(String, String), ActorError>,
-        >();
+        let (tx, rx) =
+            tokio::sync::oneshot::channel::<std::result::Result<(String, String), ActorError>>();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -380,7 +442,11 @@ impl ActorExecutor for ChatActorExecutor {
             let agent = Agent::new(llm, sandbox, cfg);
             let sink = CollectingSink::new();
             let result = runtime
-                .block_on(agent.run(&task, &sink))
+                .block_on(agent.run_with_inbox(
+                    &task,
+                    &sink,
+                    inbox.as_ref().map(|inbox| inbox as &dyn InboxDrain),
+                ))
                 .map_err(|e| ActorError::Execution(e.to_string()));
             let transcript = sink.into_transcript();
             let _ = tx.send(result.map(|summary| (summary, transcript)));
@@ -411,7 +477,11 @@ impl ActorExecutor for ChatActorExecutor {
             (None, None)
         };
 
-        let history_content = if transcript.is_empty() { None } else { Some(transcript) };
+        let history_content = if transcript.is_empty() {
+            None
+        } else {
+            Some(transcript)
+        };
 
         Ok(ActorDigest {
             actor_id,

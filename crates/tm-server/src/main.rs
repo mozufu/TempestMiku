@@ -3,10 +3,10 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tm_agents::MailboxRegistry;
 use tm_artifacts::default_root;
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
-use tm_sandbox::DenoSandbox;
 use tm_host::{ApprovalPolicy, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig};
 use tm_llm::OpenAiClient;
 use tm_persona::PersonaConfig;
+use tm_sandbox::DenoSandbox;
 use tm_sandbox::DenoSandboxOptions;
 
 use tm_server::{
@@ -33,7 +33,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let linked_folders = host_config.linked_folders()?;
     let artifact_root = server_artifact_root(&host_config);
     let roster = Arc::new(MailboxRegistry::new());
-    let runtime = build_runtime(&host_config, &linked_folders, artifact_root.clone(), Arc::clone(&roster))?;
+    let runtime = build_runtime(
+        &host_config,
+        &linked_folders,
+        artifact_root.clone(),
+        Arc::clone(&roster),
+    )?;
 
     if let Ok(dsn) = std::env::var("TM_DATABASE_URL")
         && !dsn.trim().is_empty()
@@ -131,16 +136,26 @@ fn build_runtime(
     // sandboxes inherit the same host registry (including agents.* for recursive actors).
     let executor_options = sandbox_options.clone();
     let executor_artifact_root = executor_options.artifact_root.clone();
-    let executor: Arc<dyn tm_agents::ActorExecutor> = Arc::new(ChatActorExecutor::with_artifact_root(
-        Arc::clone(&llm),
-        cfg.clone(),
-        move |session_id: uuid::Uuid| {
-            let mut opts = executor_options.clone();
-            opts.session_id = session_id.to_string();
-            Arc::new(DenoSandbox::new(opts)) as Arc<dyn Sandbox>
-        },
-        Some(executor_artifact_root),
-    ));
+    let executor_roster = Arc::clone(&roster);
+    let executor: Arc<dyn tm_agents::ActorExecutor> =
+        Arc::new(ChatActorExecutor::with_actor_context(
+            Arc::clone(&llm),
+            cfg.clone(),
+            move |session_id: uuid::Uuid,
+                  actor_id: Option<&str>,
+                  grants: &tm_host::CapabilityGrants| {
+                let mut opts = executor_options.clone();
+                opts.session_id = session_id.to_string();
+                opts.actor_id = actor_id.map(str::to_string);
+                opts.grants = opts
+                    .grants
+                    .clone()
+                    .allow_many(grants.names().map(str::to_string));
+                Arc::new(DenoSandbox::new(opts)) as Arc<dyn Sandbox>
+            },
+            Some(executor_artifact_root),
+            executor_roster,
+        ));
     roster.set_executor(executor);
 
     let approval_mode = NativeApprovalMode::parse(&host_config.approvals.mode)?;

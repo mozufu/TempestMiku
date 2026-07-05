@@ -495,8 +495,9 @@ interface HttpNamespace {
  * Available only when the session holds the required agents.* grant.
  * `globalThis.agents` is `undefined` in ungranted sessions — check before calling.
  *
- * MVP surface (P3): run, spawn, parallel, msg.
- * Stretch / P3-plus (§23 full surface): pipeline, broadcast, send, wait, inbox, list.
+ * P3 surface: run, spawn, parallel, msg.
+ * P3-plus foundation: live per-actor inbox delivery through send, wait,
+ * inbox, and list. Stretch/full surface still deferred: pipeline, broadcast.
  */
 interface AgentsNamespace {
   /**
@@ -531,19 +532,58 @@ interface AgentsNamespace {
    *
    * Send a plain-prose message to a spawned actor.
    *
-   * Fire-and-forget (default): records the message in the session log and returns
-   * undefined immediately — the actor is not interrupted.
+   * Fire-and-forget (default): delivers to the actor's bounded live inbox and
+   * returns undefined immediately.
    *
-   * Request/reply (opts.await = true): runs a one-shot seeded continuation from
-   * the target actor's last digest summary + the new text, and returns the reply string.
-   * Each await call is stateless: repeated calls re-seed from the original summary, not
-   * from the previous reply.
+   * Request/reply (opts.await = true): for running actors, delivers to the live
+   * inbox and waits for the actor to reply to the caller. For already completed
+   * actors, this remains a compatibility one-shot seeded from the target actor's
+   * last digest summary + the new text.
    *
    * A null/void reply means the actor is unreachable — do not retry-loop (§23.9).
    * Messages must be plain prose — never control-payload blobs. Pass large payloads by
    * reference (artifact://, memory://). Requires agents.msg grant.
    */
   msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>;
+
+  /**
+   * agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>
+   *
+   * Deliver a plain-prose message to one live actor inbox. Fire-and-forget
+   * returns a delivered/failed receipt. With opts.await = true, waits for a
+   * matching reply message in the caller inbox and returns it, or null on timeout.
+   * Requires agents.send grant.
+   */
+  send(
+    to: AgentHandle | string,
+    text: string,
+    opts?: SendOpts,
+  ): Promise<AgentReceipt | AgentMessage | null>;
+
+  /**
+   * agents.wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>
+   *
+   * Block until the current actor inbox receives a matching message. Top-level
+   * orchestrator code uses the synthetic Root inbox. Returns null on timeout.
+   * Requires agents.wait grant.
+   */
+  wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>;
+
+  /**
+   * agents.inbox(): Promise<AgentMessage[]>
+   *
+   * Drain all pending messages from the current actor inbox without blocking.
+   * Requires agents.inbox grant.
+   */
+  inbox(): Promise<AgentMessage[]>;
+
+  /**
+   * agents.list(): Promise<AgentRosterEntry[]>
+   *
+   * Return the actor roster with status, unread inbox count, last activity, and
+   * resource links. Requires agents.list grant.
+   */
+  list(): Promise<AgentRosterEntry[]>;
 }
 
 /** Bounded digest returned to the parent context from a completed actor (§23.5). */
@@ -572,6 +612,32 @@ interface AgentTask {
   task: string;
 }
 
+/** Plain-prose message delivered through a bounded actor inbox. */
+interface AgentMessage {
+  from: string;
+  to: string;
+  text: string;
+  replyTo: string | null;
+  sentAt: string;
+}
+
+/** Delivery receipt for fire-and-forget sends. */
+interface AgentReceipt {
+  status: "delivered" | "failed";
+}
+
+/** Roster row returned by agents.list(). */
+interface AgentRosterEntry {
+  id: string;
+  parentId: string | null;
+  status: "running" | "idle" | "parked" | "terminated";
+  mode: string | null;
+  unread: number;
+  lastActivity: string | null;
+  artifactUri: string | null;
+  historyUri: string | null;
+}
+
 /** Optional options for agents.run (reserved; fields added in P3.2). */
 interface AgentRunOpts {
   [key: string]: unknown;
@@ -581,4 +647,14 @@ interface AgentRunOpts {
 interface MsgOpts {
   /** If true, block for the actor's reply (request/reply). Default: fire-and-forget. */
   await?: boolean;
+  /** Milliseconds to wait for live request/reply. Default: 30000. */
+  timeoutMs?: number;
+}
+
+/** Options for agents.send. */
+interface SendOpts {
+  /** If true, wait for a reply message to the caller inbox. */
+  await?: boolean;
+  /** Milliseconds to wait for a reply. Default: 30000. */
+  timeoutMs?: number;
 }

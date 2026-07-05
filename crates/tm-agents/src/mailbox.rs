@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock, mpsc};
 
 use crate::actor::{ActorId, ActorLifecycleEvent, ActorRecord, ActorStatus};
 use crate::executor::ActorExecutor;
@@ -43,14 +44,144 @@ pub enum Receipt {
 /// Maximum number of messages retained in the in-memory log.
 /// Older messages are dropped (oldest-first) once this limit is exceeded.
 const MAX_MESSAGES: usize = 1000;
+const MAX_INBOX_MESSAGES: usize = 64;
+
+struct ActorInbox {
+    sender: mpsc::Sender<ActorMessage>,
+    receiver: Mutex<mpsc::Receiver<ActorMessage>>,
+    backlog: Mutex<VecDeque<ActorMessage>>,
+    unread: AtomicU64,
+    last_activity: RwLock<Option<DateTime<Utc>>>,
+}
+
+impl ActorInbox {
+    fn new() -> Arc<Self> {
+        let (sender, receiver) = mpsc::channel(MAX_INBOX_MESSAGES);
+        Arc::new(Self {
+            sender,
+            receiver: Mutex::new(receiver),
+            backlog: Mutex::new(VecDeque::new()),
+            unread: AtomicU64::new(0),
+            last_activity: RwLock::new(None),
+        })
+    }
+
+    async fn touch(&self, at: DateTime<Utc>) {
+        *self.last_activity.write().await = Some(at);
+    }
+
+    async fn last_activity(&self) -> Option<DateTime<Utc>> {
+        self.last_activity.read().await.clone()
+    }
+
+    fn unread(&self) -> usize {
+        self.unread.load(Ordering::Relaxed) as usize
+    }
+
+    fn mark_delivered_to_inbox(&self) {
+        self.unread.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_taken_by_actor(&self) {
+        let _ = self
+            .unread
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(1))
+            });
+    }
+
+    async fn drain(&self, from: Option<&ActorId>) -> Vec<ActorMessage> {
+        let mut drained = Vec::new();
+
+        {
+            let mut backlog = self.backlog.lock().await;
+            let mut retained = VecDeque::new();
+            while let Some(message) = backlog.pop_front() {
+                if message_matches_from(&message, from) {
+                    self.mark_taken_by_actor();
+                    drained.push(message);
+                } else {
+                    retained.push_back(message);
+                }
+            }
+            *backlog = retained;
+        }
+
+        let mut receiver = self.receiver.lock().await;
+        loop {
+            match receiver.try_recv() {
+                Ok(message) if message_matches_from(&message, from) => {
+                    self.mark_taken_by_actor();
+                    drained.push(message);
+                }
+                Ok(message) => {
+                    self.backlog.lock().await.push_back(message);
+                }
+                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                    break;
+                }
+            }
+        }
+
+        drained
+    }
+
+    async fn wait(&self, from: Option<&ActorId>, timeout: Duration) -> Option<ActorMessage> {
+        if let Some(message) = self.take_matching_backlog(from).await {
+            return Some(message);
+        }
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let received = {
+                let mut receiver = self.receiver.lock().await;
+                tokio::time::timeout(remaining, receiver.recv()).await
+            };
+            match received {
+                Ok(Some(message)) if message_matches_from(&message, from) => {
+                    self.mark_taken_by_actor();
+                    return Some(message);
+                }
+                Ok(Some(message)) => {
+                    self.backlog.lock().await.push_back(message);
+                }
+                Ok(None) | Err(_) => return None,
+            }
+        }
+    }
+
+    async fn take_matching_backlog(&self, from: Option<&ActorId>) -> Option<ActorMessage> {
+        let mut backlog = self.backlog.lock().await;
+        let index = backlog
+            .iter()
+            .position(|message| message_matches_from(message, from))?;
+        let message = backlog.remove(index)?;
+        drop(backlog);
+        self.mark_taken_by_actor();
+        Some(message)
+    }
+}
+
+fn message_matches_from(message: &ActorMessage, from: Option<&ActorId>) -> bool {
+    match from {
+        Some(from) => &message.from == from,
+        None => true,
+    }
+}
 
 /// Concurrent roster of live actors, plus the injected executor for `agents.run` (P3.1).
 ///
-/// P3.2 additions: bounded in-memory message log (`messages`) and `mark_complete_with_summary`
-/// so `agents.msg` request/reply can seed a continuation from the target actor's last output.
-/// The true per-actor MPSC channel layer (bounded queues, `CancelToken`) is deferred to P3-plus.
+/// Keeps both a bounded replay/debug message log and live bounded per-actor inbox queues.
+/// Completed actors retain their last digest summary so `agents.msg` can still use the
+/// P3 compatibility seeded-continuation path when a target is no longer running.
 pub struct MailboxRegistry {
     actors: RwLock<HashMap<ActorId, ActorRecord>>,
+    inboxes: RwLock<HashMap<ActorId, Arc<ActorInbox>>>,
     executor: std::sync::OnceLock<Arc<dyn ActorExecutor>>,
     next_seq: AtomicU64,
     messages: RwLock<Vec<ActorMessage>>,
@@ -69,6 +200,7 @@ impl MailboxRegistry {
     pub fn new() -> Self {
         Self {
             actors: RwLock::new(HashMap::new()),
+            inboxes: RwLock::new(HashMap::new()),
             executor: std::sync::OnceLock::new(),
             next_seq: AtomicU64::new(0),
             messages: RwLock::new(Vec::new()),
@@ -128,6 +260,7 @@ impl MailboxRegistry {
 
     /// Register an actor in the roster.
     pub async fn track(&self, record: ActorRecord) {
+        self.ensure_inbox(&record.id).await;
         self.actors.write().await.insert(record.id.clone(), record);
     }
 
@@ -195,6 +328,62 @@ impl MailboxRegistry {
         msgs.push(msg);
     }
 
+    /// Deliver a message to the recipient's live inbox and append it to the bounded log.
+    ///
+    /// Unknown or terminated actors return [`Receipt::Failed`]. The synthetic `Root`
+    /// actor is always reachable so child actors can reply to the top-level orchestrator.
+    pub async fn send_message(&self, msg: ActorMessage) -> Receipt {
+        if !self.is_reachable(&msg.to).await {
+            return Receipt::Failed;
+        }
+
+        let inbox = self.ensure_inbox(&msg.to).await;
+        match inbox.sender.try_send(msg.clone()) {
+            Ok(()) => {
+                inbox.mark_delivered_to_inbox();
+                inbox.touch(msg.sent_at).await;
+                self.record_message(msg).await;
+                Receipt::Delivered
+            }
+            Err(_) => Receipt::Failed,
+        }
+    }
+
+    /// Drain all pending messages for `actor_id`, optionally filtering by sender.
+    pub async fn drain_inbox(
+        &self,
+        actor_id: &ActorId,
+        from: Option<&ActorId>,
+    ) -> Vec<ActorMessage> {
+        let inbox = self.ensure_inbox(actor_id).await;
+        inbox.drain(from).await
+    }
+
+    /// Wait for the next matching message for `actor_id` until `timeout` elapses.
+    pub async fn wait_for_message(
+        &self,
+        actor_id: &ActorId,
+        from: Option<&ActorId>,
+        timeout: Duration,
+    ) -> Option<ActorMessage> {
+        let inbox = self.ensure_inbox(actor_id).await;
+        inbox.wait(from, timeout).await
+    }
+
+    pub async fn unread_count(&self, actor_id: &ActorId) -> usize {
+        let Some(inbox) = self.inboxes.read().await.get(actor_id).cloned() else {
+            return 0;
+        };
+        inbox.unread()
+    }
+
+    pub async fn last_activity(&self, actor_id: &ActorId) -> Option<DateTime<Utc>> {
+        let Some(inbox) = self.inboxes.read().await.get(actor_id).cloned() else {
+            return None;
+        };
+        inbox.last_activity().await
+    }
+
     /// Snapshot of all messages in the log (oldest-first).
     pub async fn messages(&self) -> Vec<ActorMessage> {
         self.messages.read().await.clone()
@@ -213,6 +402,28 @@ impl MailboxRegistry {
     /// Snapshot of all tracked actor records.
     pub async fn list(&self) -> Vec<ActorRecord> {
         self.actors.read().await.values().cloned().collect()
+    }
+
+    async fn ensure_inbox(&self, actor_id: &ActorId) -> Arc<ActorInbox> {
+        if let Some(inbox) = self.inboxes.read().await.get(actor_id).cloned() {
+            return inbox;
+        }
+        let mut inboxes = self.inboxes.write().await;
+        inboxes
+            .entry(actor_id.clone())
+            .or_insert_with(ActorInbox::new)
+            .clone()
+    }
+
+    async fn is_reachable(&self, actor_id: &ActorId) -> bool {
+        if actor_id.as_str() == "Root" {
+            return true;
+        }
+        self.actors
+            .read()
+            .await
+            .get(actor_id)
+            .is_some_and(|record| record.status != ActorStatus::Terminated)
     }
 }
 
@@ -312,7 +523,10 @@ mod tests {
         let id = registry.next_actor_id("researcher");
         let s = id.as_str();
         assert!(s.starts_with('R'), "should start with 'R', got {s}");
-        assert!(s.chars().all(|c| c.is_alphanumeric()), "must be alphanumeric: {s}");
+        assert!(
+            s.chars().all(|c| c.is_alphanumeric()),
+            "must be alphanumeric: {s}"
+        );
         assert!(s.len() <= 32, "must be ≤32 chars: {s}");
     }
 
@@ -362,8 +576,94 @@ mod tests {
         let registry = MailboxRegistry::new();
         let id = ActorId::new("Worker").unwrap();
         assert!(registry.get_transcript(&id).await.is_none());
-        registry.store_transcript(&id, "line 1\nline 2\n".to_string()).await;
+        registry
+            .store_transcript(&id, "line 1\nline 2\n".to_string())
+            .await;
         let content = registry.get_transcript(&id).await.unwrap();
         assert!(content.contains("line 1"));
+    }
+
+    #[tokio::test]
+    async fn send_message_delivers_to_actor_inbox() {
+        let registry = MailboxRegistry::new();
+        let from = ActorId::new("Root").unwrap();
+        let to = ActorId::new("Worker").unwrap();
+        registry.track(test_record("Worker")).await;
+
+        let receipt = registry
+            .send_message(ActorMessage {
+                from: from.clone(),
+                to: to.clone(),
+                text: "status?".to_string(),
+                reply_to: None,
+                sent_at: Utc::now(),
+            })
+            .await;
+
+        assert_eq!(receipt, Receipt::Delivered);
+        assert_eq!(registry.unread_count(&to).await, 1);
+        let drained = registry.drain_inbox(&to, None).await;
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].from, from);
+        assert_eq!(drained[0].text, "status?");
+        assert_eq!(registry.unread_count(&to).await, 0);
+    }
+
+    #[tokio::test]
+    async fn send_message_to_terminated_actor_fails() {
+        let registry = MailboxRegistry::new();
+        let to = ActorId::new("Worker").unwrap();
+        registry.track(test_record("Worker")).await;
+        registry.mark_complete(&to).await;
+
+        let receipt = registry
+            .send_message(ActorMessage {
+                from: ActorId::new("Root").unwrap(),
+                to: to.clone(),
+                text: "status?".to_string(),
+                reply_to: None,
+                sent_at: Utc::now(),
+            })
+            .await;
+
+        assert_eq!(receipt, Receipt::Failed);
+        assert!(registry.drain_inbox(&to, None).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wait_for_message_filters_by_sender_without_losing_others() {
+        let registry = MailboxRegistry::new();
+        let worker = ActorId::new("Worker").unwrap();
+        let alpha = ActorId::new("Alpha").unwrap();
+        let beta = ActorId::new("Beta").unwrap();
+        registry.track(test_record("Worker")).await;
+        registry.track(test_record("Alpha")).await;
+        registry.track(test_record("Beta")).await;
+
+        for (from, text) in [(alpha.clone(), "from alpha"), (beta.clone(), "from beta")] {
+            assert_eq!(
+                registry
+                    .send_message(ActorMessage {
+                        from,
+                        to: worker.clone(),
+                        text: text.to_string(),
+                        reply_to: None,
+                        sent_at: Utc::now(),
+                    })
+                    .await,
+                Receipt::Delivered
+            );
+        }
+
+        let beta_msg = registry
+            .wait_for_message(&worker, Some(&beta), Duration::from_millis(50))
+            .await
+            .unwrap();
+        assert_eq!(beta_msg.text, "from beta");
+
+        let remaining = registry.drain_inbox(&worker, None).await;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].from, alpha);
+        assert_eq!(remaining[0].text, "from alpha");
     }
 }

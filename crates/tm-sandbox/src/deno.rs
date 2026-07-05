@@ -28,6 +28,7 @@ use crate::{
 pub struct DenoSandboxOptions {
     pub artifact_root: PathBuf,
     pub session_id: String,
+    pub actor_id: Option<String>,
     pub http_allowlist: BTreeMap<String, String>,
     pub host_registry: HostRegistry,
     pub resource_registry: ResourceRegistry,
@@ -42,6 +43,7 @@ impl Default for DenoSandboxOptions {
         Self {
             artifact_root: tm_artifacts::default_root(),
             session_id: "default".to_string(),
+            actor_id: None,
             http_allowlist: BTreeMap::new(),
             host_registry: HostRegistry::new(),
             resource_registry: ResourceRegistry::new(),
@@ -124,7 +126,8 @@ impl DenoSession {
                 options.approval_policy.clone(),
                 options.approval_timeout,
             )
-            .with_session_id(options.session_id.clone()),
+            .with_session_id(options.session_id.clone())
+            .with_actor_id(options.actor_id.clone()),
         };
         let mut session = Self {
             runtime: Some(JsRuntime::new(RuntimeOptions {
@@ -148,7 +151,12 @@ impl DenoSession {
         self.runtime()
             .execute_script("<tempestmiku-prelude>", SDK_PRELUDE)
             .map_err(|err| tm_core::Error::Sandbox(err.to_string()))?;
-        if self.options.grants.names().any(|n| n.starts_with("agents.")) {
+        if self
+            .options
+            .grants
+            .names()
+            .any(|n| n.starts_with("agents."))
+        {
             self.runtime()
                 .execute_script("<tempestmiku-agents>", AGENTS_PRELUDE)
                 .map_err(|err| tm_core::Error::Sandbox(err.to_string()))?;

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use futures::StreamExt;
 
 use crate::{
@@ -7,6 +8,16 @@ use crate::{
     Result, Sandbox, SessionConfig, StreamEvent, ToolChoice, ToolSpec,
     prompt::DEFAULT_SYSTEM_PROMPT, shape::shape_result,
 };
+
+/// Optional source of actor inbox messages for the agent loop.
+///
+/// Product layers can provide this without making `tm-core` depend on any
+/// concrete actor crate. Each drained string is appended as a user message before
+/// the next model turn.
+#[async_trait]
+pub trait InboxDrain: Send + Sync {
+    async fn drain(&self) -> Result<Vec<String>>;
+}
 
 /// How the model is asked to run code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,10 +102,30 @@ impl Agent {
 
     /// Run the agent to a final answer, streaming events to `sink` as they arrive.
     pub async fn run(&self, user: &str, sink: &dyn EventSink) -> Result<String> {
+        self.run_with_inbox(user, sink, None).await
+    }
+
+    /// Run the agent with an optional actor inbox drain.
+    ///
+    /// Pending inbox messages are appended before each model turn, preserving the
+    /// existing streaming/tool loop while letting live actor messages wake the
+    /// next turn without adding another runtime loop.
+    pub async fn run_with_inbox(
+        &self,
+        user: &str,
+        sink: &dyn EventSink,
+        inbox: Option<&dyn InboxDrain>,
+    ) -> Result<String> {
         let mut messages = vec![self.system_message(), Message::user(user)];
         let mut session = self.sandbox.open(SessionConfig::default()).await?;
 
         for _ in 0..self.cfg.max_turns {
+            if let Some(inbox) = inbox {
+                for message in inbox.drain().await? {
+                    messages.push(Message::user(format!("[actor inbox]\n{message}")));
+                }
+            }
+
             let request = self.build_request(&messages);
 
             // Stream the turn; assistant tokens reach the sink the instant they land.

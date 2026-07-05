@@ -65,6 +65,9 @@ reintroduce hardcoded mode prompts, hidden capability grants, or chat-native too
       reserved.
 - [x] Gated Postgres coverage exists for the P2 memory approval flow while normal `cargo test`
       stays external-service-free.
+- [x] P3-plus foundation slice: `MailboxRegistry` now has bounded per-actor inbox queues,
+      `Agent::run` can drain actor inbox messages into the next model turn, `InvocationCtx` carries
+      live actor ids, and `agents.send/wait/inbox/list` are registered SDK calls.
 
 ## P3 catalog preflight
 
@@ -125,8 +128,10 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
 - [x] `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` are registered in the host
       catalog with docs, schemas, examples, grants, and denial behavior.
       **Resolved:** All four HostFns registered with full docs/schemas/examples/grants. All four are
-      live with `ChatActorExecutor`. `agents.msg` ships one-shot (P3.2): F&F logs the message; await
-      runs a seeded continuation. Live sibling coordination deferred to P3-plus.
+      live with `ChatActorExecutor`. **P3-plus update:** `agents.send`, `agents.wait`,
+      `agents.inbox`, and `agents.list` are now registered with matching docs/schemas/examples/grants;
+      `agents.msg` delivers to live inboxes for running actors and keeps the seeded continuation
+      fallback for completed actors.
 - [x] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
       as `undefined` or fail closed.
       **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.
@@ -144,9 +149,9 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       `ChatActorExecutor` runs sub-agents with `NullSink`; full output goes nowhere unless the actor
       writes to an artifact URI. Test: `agents_parallel_runs_all_and_returns_ordered_digests`.
 - [x] Sibling agents can coordinate through explicit messages.
-      **Deferred to P3-plus:** MVP `agents.msg` ships one-shot F&F (message logged) and seeded
-      request/reply. Live resident delivery to a running sibling requires per-actor MPSC queues +
-      `Agent::run` inbox draining, which are explicitly P3-plus. Gate item closes on the one-shot model.
+      **P3-plus update:** live resident delivery now uses per-actor bounded inbox queues plus
+      `Agent::run` inbox draining. `agents.send/wait/inbox/list` are live; broadcast/pipeline and
+      stricter protocol enforcement remain open P3-plus items.
 - [x] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
       replayable events.
       **Deferred to P3-plus:** Child failures are isolated today (`mark_failed`, `FailureReason`,
@@ -203,14 +208,16 @@ Acceptance:
 - [x] Each actor has its own context window and a granted memory scope; no shared mutable state
       between actors.
       **Resolved:** Each actor gets fresh `Agent::run()` invocation with no shared message history.
-      Child actors start with `CapabilityGrants::default()` (empty — most restrictive).
+      **P3-plus update:** child actors inherit only the caller's `agents.*` grants so live mailbox
+      coordination works without inheriting filesystem/process powers.
 - [x] Sub-agents start with no conversation history; everything needed is in the assignment + shared
       context (encapsulation by design).
 - [x] Persist actor lifecycle events in the session event log for replay: spawns, messages, results,
       supervision decisions.
       **Resolved (P3.5):** `ActorLifecycleEvent` types defined and emitted (Spawned/Completed/Failed)
       from all three actor functions; `AppState::wire_lifecycle_sink` routes events through
-      `store.append_event` + SSE broadcast. StatusChanged/MessageSent/Cancelled remain P3-plus.
+      `store.append_event` + SSE broadcast. **P3-plus update:** `MessageSent` now emits for delivered
+      live mailbox messages. StatusChanged/Cancelled remain P3-plus.
 - [x] Add cancellation and timeout handling that leaves a replayable terminal state.
       **Resolved:** Failure paths in `agents.run` call `mark_failed` with structured `FailureReason`;
       `actor_failed` events now reach the SSE log (P3.5). Wall-clock timer and cancel token deferred
@@ -222,7 +229,8 @@ Acceptance:
       restart behavior (respawning dead children) deferred to P3-plus.
 - [x] Enforce a depth limit to bound recursion; cost accounting rolls up to the parent session.
       **Resolved:** `ChatActorExecutor` checks `spec.depth >= spec.budget.max_depth` and returns
-      `DepthExceeded`. Parent depth propagation and real caller-id threading deferred to P3-plus.
+      `DepthExceeded`. **P3-plus update:** real caller-id threading is now in `InvocationCtx` and
+      Deno child sandbox options; parent depth propagation remains deferred.
 - [x] Apply per-actor budgets: wall-clock, heap, and egress caps with conservative defaults.
       **Resolved:** `ActorBudget { wall_ms: 120_000, max_depth: 4 }` as defaults. Runtime enforcement
       of wall_ms beyond the depth check deferred to P3-plus.
@@ -265,16 +273,14 @@ Acceptance:
       Tests: denied, not-impl, empty array, invalid args, 3-actor ordered digests.
 - [x] Implement `agents.msg(handle, text, opts?)` — send to a spawned actor (request/reply or
       fire-and-forget).
-      **Resolved (P3.2 one-shot model):** Fire-and-forget records `ActorMessage` in bounded log and
-      returns `null`. Request/reply (`opts.await = true`) runs a one-shot seeded continuation from
-      the target's `last_summary` + new text via the injected executor; each call is stateless (re-seeds
-      from the original summary). Unknown handle → `null` (unreachable receipt, §23.9). Continuation
-      actors are ephemeral (not rostered) to prevent unbounded roster growth. `ActorRecord` gains
-      `last_summary`; `MailboxRegistry` gains `record_message`, `messages`, `mark_complete_with_summary`.
-      Live resident mailbox (MPSC queues, inbox draining, `send`/`wait`/`inbox`/`broadcast`) is P3-plus.
+      **Resolved (P3.2 one-shot model, upgraded in first P3-plus slice):** P3 shipped a one-shot
+      compatibility model. Fire-and-forget now delivers to the live bounded inbox for running actors
+      while preserving the bounded message log; `opts.await = true` waits for a live reply when the
+      target is running, and falls back to the seeded-continuation path for already completed actors.
+      Unknown handle → `null` (unreachable receipt, §23.9). Continuation actors remain ephemeral.
 - [x] Update `docs/sdk/tm-runtime.d.ts` and `tools.docs` together; never one without the other.
-      **Resolved:** `tm-runtime.d.ts` `msg` doc-comment updated to document MVP one-shot semantics;
-      `AgentsMsgFn` `ToolDocs` description updated; `23-agents-orchestration.md` callout added.
+      **Resolved:** `tm-runtime.d.ts`, `AgentsMsgFn`/new mailbox HostFn `ToolDocs`, and
+      `23-agents-orchestration.md` are aligned for the live inbox surface.
 - [x] Add tests for: granted, denied, unknown method, invalid args, timeout, output-spill, and
       unreachable-handle paths.
       **Resolved:** `agents_run_denied_without_grant`, `agents_run_executor_not_configured_returns_not_implemented`,
@@ -286,8 +292,8 @@ Acceptance:
 
 - [x] The model can discover and use `agents.*` from `tools.search/docs` without loading the entire
       SDK catalog into the system prompt.
-      **Resolved:** All four `agents.*` HostFns have full docs, schemas, examples, and grants;
-      discoverable via `tools.search("agents")` or `tools.docs("agents.run")`.
+      **Resolved:** P3 HostFns and the first P3-plus mailbox HostFns have full docs, schemas,
+      examples, and grants; discoverable via `tools.search("agents")` or `tools.docs("agents.run")`.
 - [x] Denied or unavailable `agents.*` calls fail closed with typed host errors.
       **Resolved:** `check_grant!` macro returns `CapabilityDeniedError`; missing executor returns
       `NotImplementedError`; invalid args return `InvalidArgsError`. Covered by test matrix.
@@ -359,6 +365,8 @@ Acceptance:
       `agents.spawn`, and `agents.parallel` via `MailboxRegistry::emit_lifecycle`. Hook installed
       at startup by `AppState::wire_lifecycle_sink`; writes to store + broadcasts on session SSE
       channel. `InvocationCtx` carries `session_id` wired from `DenoSandboxOptions.session_id`.
+      **P3-plus update:** delivered `agents.msg` / `agents.send` messages now emit `MessageSent`
+      lifecycle events through the same hook.
 - [x] Preserve reconnect/resume through `Last-Event-ID`.
       **Resolved:** SSE endpoint already fully implemented in P1; actor lifecycle events flow
       through the same `append_event` + broadcast path and are replayable.
@@ -385,19 +393,22 @@ each was explicitly closed by deferral.
 
 ### Actor mailbox — live resident messaging
 
-The §23 full messaging surface. Prerequisite: per-actor MPSC inbox queue + `Agent::run` inbox
-draining. Nothing here can land before that foundation.
+The §23 full messaging surface. The foundation is now in place: per-actor bounded inbox queues,
+`Agent::run` inbox draining, caller actor-id threading, and the first live mailbox SDK calls.
 
-- [ ] Live MPSC delivery: per-actor bounded inbox queue, `Agent::run` inbox draining loop,
-      reply oneshots. Required before any other item in this section.
-- [ ] `agents.send(to, text, opts?)` — fire-and-forget or request/reply to a live sibling.
-- [ ] `agents.wait(from?, timeout)` — block until a matching message arrives in the inbox.
-- [ ] `agents.inbox()` — drain all pending messages without blocking.
-- [ ] `agents.list()` — roster: peer ids, statuses, unread count, last activity timestamp.
+- [x] Live MPSC delivery: per-actor bounded inbox queue, `Agent::run` inbox draining loop,
+      and request/reply waits. Required before any other item in this section.
+      **Resolved:** `MailboxRegistry` creates bounded `tokio::mpsc` inboxes per actor, keeps a
+      compatibility message log, returns failed receipts for unreachable/full inboxes, and `tm-core`
+      exposes an `InboxDrain` hook used by `ChatActorExecutor`.
+- [x] `agents.send(to, text, opts?)` — fire-and-forget or request/reply to a live sibling.
+- [x] `agents.wait(from?, timeout)` — block until a matching message arrives in the inbox.
+- [x] `agents.inbox()` — drain all pending messages without blocking.
+- [x] `agents.list()` — roster: peer ids, statuses, unread count, last activity timestamp.
 - [ ] `agents.broadcast(text)` — deliver a message to all currently live children.
 - [ ] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
-- [ ] Real caller actor-id threading through `InvocationCtx` (currently synthetic `"Root"`
-      is used for the orchestrator side of `agents.msg`).
+- [x] Real caller actor-id threading through `InvocationCtx` (top-level orchestrator calls still use
+      synthetic `"Root"`; child sandboxes receive their real actor id).
 
 ### Supervision and recovery
 
@@ -432,8 +443,8 @@ draining. Nothing here can land before that foundation.
 - [ ] Full parent-`SessionEvent` linking: `ActorRecord` carries `artifact_uri` /
       `history_uri`, but no parent event row references them by `session_event_id`.
       Needed for full audit/replay from a single event log query.
-- [ ] `StatusChanged` and `MessageSent` lifecycle events wired to SSE
-      (only `Spawned` / `Completed` / `Failed` are emitted today).
+- [ ] `StatusChanged` lifecycle events wired to SSE (`MessageSent` is now emitted for delivered
+      live mailbox messages; `Spawned` / `Completed` / `Failed` were already live).
 
 ### Client coverage
 

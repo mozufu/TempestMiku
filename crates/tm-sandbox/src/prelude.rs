@@ -103,6 +103,16 @@ globalThis.agents = undefined;
 /// Replaces the `undefined` placeholder with a real namespace that forwards to HostFns.
 /// Grant enforcement is still server-side; this only surfaces the API surface to LLM code.
 pub(crate) const AGENTS_PRELUDE: &str = r#"
+const __tm_actor_id = (ref) => typeof ref === "string" ? ref : ref?.id;
+const __tm_wait_args = (from = undefined, timeoutMs = undefined) => {
+  if (from && typeof from === "object" && !Object.prototype.hasOwnProperty.call(from, "id")) {
+    return from;
+  }
+  return {
+    ...(from == null ? {} : { from: __tm_actor_id(from) }),
+    ...(timeoutMs == null ? {} : { timeoutMs: Number(timeoutMs) }),
+  };
+};
 globalThis.agents = {
   run: async (role, task, opts = undefined) =>
     __tm_host_call("agents.run", { role: String(role), task: String(task), ...(opts != null ? { opts } : {}) }),
@@ -112,5 +122,13 @@ globalThis.agents = {
     __tm_host_call("agents.parallel", { tasks }),
   msg: async (handle, text, opts = undefined) =>
     __tm_host_call("agents.msg", { handle, text: String(text), ...(opts != null ? { opts } : {}) }),
+  send: async (to, text, opts = undefined) =>
+    __tm_host_call("agents.send", { to: __tm_actor_id(to), text: String(text), ...(opts != null ? { opts } : {}) }),
+  wait: async (from = undefined, timeoutMs = undefined) =>
+    __tm_host_call("agents.wait", __tm_wait_args(from, timeoutMs)),
+  inbox: async () =>
+    __tm_host_call("agents.inbox", {}),
+  list: async () =>
+    __tm_host_call("agents.list", {}),
 };
 "#;

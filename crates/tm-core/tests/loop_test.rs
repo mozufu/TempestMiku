@@ -11,8 +11,8 @@ use parking_lot::Mutex;
 use serde_json::Value;
 
 use tm_core::{
-    Agent, AgentConfig, CellBudget, ChatRequest, Error, EvalOutput, EventSink, LlmClient, Message,
-    Protocol, Result, Role, Sandbox, Session, SessionConfig, StreamEvent,
+    Agent, AgentConfig, CellBudget, ChatRequest, Error, EvalOutput, EventSink, InboxDrain,
+    LlmClient, Message, Protocol, Result, Role, Sandbox, Session, SessionConfig, StreamEvent,
 };
 
 /// An `LlmClient` that replays a fixed script of stream events per turn and records every
@@ -70,6 +70,25 @@ impl Session for EchoSession {
 
     async fn reset(&mut self) -> Result<()> {
         Ok(())
+    }
+}
+
+struct StaticInbox {
+    messages: Mutex<VecDeque<String>>,
+}
+
+impl StaticInbox {
+    fn new(messages: Vec<&str>) -> Self {
+        Self {
+            messages: Mutex::new(messages.into_iter().map(str::to_string).collect()),
+        }
+    }
+}
+
+#[async_trait]
+impl InboxDrain for StaticInbox {
+    async fn drain(&self) -> Result<Vec<String>> {
+        Ok(self.messages.lock().drain(..).collect())
     }
 }
 
@@ -220,4 +239,37 @@ async fn fenced_block_loop_executes() {
         .find(|m| m.role == Role::User && m.content.contains("[execution result]"))
         .expect("execution result fed back as a user message");
     assert!(fed_back.content.contains("display(2 + 2)"));
+}
+
+#[tokio::test]
+async fn run_with_inbox_drains_before_model_turn() {
+    let scripts = vec![vec![
+        StreamEvent::Text("I saw the inbox.".into()),
+        StreamEvent::Finish {
+            reason: Some("stop".into()),
+        },
+    ]];
+
+    let llm = Arc::new(FakeLlm::new(scripts));
+    let agent = Agent::new(
+        llm.clone(),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let inbox = StaticInbox::new(vec!["from: Worker\ntext: done"]);
+
+    let answer = agent
+        .run_with_inbox("wait for worker", &sink, Some(&inbox))
+        .await
+        .unwrap();
+    assert_eq!(answer, "I saw the inbox.");
+
+    let requests = llm.requests.lock();
+    let inbox_msg = requests[0]
+        .iter()
+        .find(|m| m.role == Role::User && m.content.contains("[actor inbox]"))
+        .expect("inbox message should be appended before the first turn");
+    assert!(inbox_msg.content.contains("from: Worker"));
+    assert!(inbox_msg.content.contains("text: done"));
 }

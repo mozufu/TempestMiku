@@ -1,16 +1,16 @@
 //! TempestMiku actor lifecycle, mailbox, orchestration, supervision, and agent:// resources.
 //!
-//! P3 implementation — `agents.run`, `agents.spawn`, and `agents.parallel` are live when an
-//! `ActorExecutor` is injected at startup. `agents.msg` is registered and grant-checked, but its
-//! concrete mailbox request/reply behavior is still pending.
+//! P3/P3-plus implementation — `agents.run`, `agents.spawn`, `agents.parallel`, `agents.msg`,
+//! and the first live mailbox primitives (`agents.send`, `agents.wait`, `agents.inbox`,
+//! `agents.list`) are live when an `ActorExecutor` is injected at startup.
 //!
 //! Crate layout (§23.8):
 //! - [`actor`]      — identity, lifecycle, status, handle, budget, digest, lifecycle events
 //! - [`executor`]   — `ActorExecutor` trait injected by `tm-server` at startup
-//! - [`mailbox`]    — message types, actor roster registry (`MailboxRegistry`)
-//! - [`orchestrate`] — P3 MVP `agents.*` HostFns (run/spawn/parallel live, msg pending); `register`
+//! - [`mailbox`]    — message types, bounded actor inboxes, actor roster registry (`MailboxRegistry`)
+//! - [`orchestrate`] — P3/P3-plus `agents.*` HostFns; `register`
 //! - [`supervise`]  — supervision tree types, restart strategies, failure reasons
-//! - [`resources`]  — `agent://` (live reads/list) and `history://` (stub) ResourceHandlers
+//! - [`resources`]  — `agent://` and `history://` ResourceHandlers
 
 pub mod actor;
 pub mod executor;

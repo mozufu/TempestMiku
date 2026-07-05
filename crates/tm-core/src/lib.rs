@@ -15,7 +15,7 @@ mod shape;
 mod sink;
 mod stream;
 
-pub use agent::{Agent, AgentConfig, Protocol};
+pub use agent::{Agent, AgentConfig, InboxDrain, Protocol};
 pub use error::{Error, Result};
 pub use llm::{ChatRequest, LlmClient, Usage};
 pub use message::{FunctionSpec, Message, Role, ToolCall, ToolChoice, ToolSpec};

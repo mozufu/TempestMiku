@@ -212,6 +212,11 @@ pub struct InvocationCtx {
     pub approval_timeout: Duration,
     /// Session UUID string; empty when no session context is available.
     pub session_id: String,
+    /// Current actor id, when the host call originates inside a sub-agent sandbox.
+    ///
+    /// Top-level orchestrator sessions leave this unset and are treated as `Root`
+    /// by the agents mailbox layer.
+    pub actor_id: Option<String>,
 }
 
 impl std::fmt::Debug for InvocationCtx {
@@ -220,6 +225,7 @@ impl std::fmt::Debug for InvocationCtx {
             .field("grants", &self.grants)
             .field("approval_timeout", &self.approval_timeout)
             .field("session_id", &self.session_id)
+            .field("actor_id", &self.actor_id)
             .finish_non_exhaustive()
     }
 }
@@ -243,11 +249,17 @@ impl InvocationCtx {
             approvals,
             approval_timeout,
             session_id: String::new(),
+            actor_id: None,
         }
     }
 
     pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = session_id.into();
+        self
+    }
+
+    pub fn with_actor_id(mut self, actor_id: Option<impl Into<String>>) -> Self {
+        self.actor_id = actor_id.map(Into::into);
         self
     }
 
@@ -543,8 +555,15 @@ mod tests {
         assert!(g.permits("agents.spawn"));
         assert!(g.permits("agents.parallel"));
         assert!(g.permits("agents.msg"));
+        assert!(g.permits("agents.send"));
+        assert!(g.permits("agents.wait"));
+        assert!(g.permits("agents.inbox"));
+        assert!(g.permits("agents.list"));
         assert!(!g.permits("other.run"));
-        assert!(!g.permits("agents_run"), "underscore variant must not match");
+        assert!(
+            !g.permits("agents_run"),
+            "underscore variant must not match"
+        );
     }
 
     #[test]

@@ -722,13 +722,21 @@ fn agents_namespace_types_declared_in_sdk() {
         "interface AgentDigest",
         "interface AgentHandle",
         "interface AgentTask",
+        "interface AgentMessage",
+        "interface AgentReceipt",
+        "interface AgentRosterEntry",
         "interface MsgOpts",
+        "interface SendOpts",
         "agents: AgentsNamespace | undefined",
         // agents.* HostFn signatures — must match tools.docs output exactly
         "agents.run(role: string, task: string, opts?: AgentRunOpts): Promise<AgentDigest>",
         "agents.spawn(role: string, task: string): Promise<AgentHandle>",
         "agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>",
         "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>",
+        "agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>",
+        "agents.wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>",
+        "agents.inbox(): Promise<AgentMessage[]>",
+        "agents.list(): Promise<AgentRosterEntry[]>",
         // Protocol invariants documented
         "plain prose",
         "retry-loop",
@@ -758,13 +766,13 @@ async fn deno_agents_namespace_wired_when_granted() {
         grants: CapabilityGrants::default()
             .allow("http.get")
             .allow("resources.read:artifact")
-            .allow("agents.run"),
+            .allow("agents.*"),
         ..DenoSandboxOptions::default()
     });
     let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
     let out = session
         .eval(
-            "({ agentsType: typeof agents, runType: typeof agents?.run, spawnType: typeof agents?.spawn, parallelType: typeof agents?.parallel, msgType: typeof agents?.msg })",
+            "({ agentsType: typeof agents, runType: typeof agents?.run, spawnType: typeof agents?.spawn, parallelType: typeof agents?.parallel, msgType: typeof agents?.msg, sendType: typeof agents?.send, waitType: typeof agents?.wait, inboxType: typeof agents?.inbox, listType: typeof agents?.list })",
             CellBudget::default(),
         )
         .await
@@ -775,6 +783,10 @@ async fn deno_agents_namespace_wired_when_granted() {
     assert_eq!(result["spawnType"], Value::String("function".into()));
     assert_eq!(result["parallelType"], Value::String("function".into()));
     assert_eq!(result["msgType"], Value::String("function".into()));
+    assert_eq!(result["sendType"], Value::String("function".into()));
+    assert_eq!(result["waitType"], Value::String("function".into()));
+    assert_eq!(result["inboxType"], Value::String("function".into()));
+    assert_eq!(result["listType"], Value::String("function".into()));
 }
 
 #[serial_test::serial]

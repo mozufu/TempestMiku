@@ -75,6 +75,51 @@ compare rounds without scraping logs:
 }
 ```
 
+## Recording Evidence Runs
+
+The recording pipeline is the preferred local/dev E2E gate. It reuses the same
+public HTTP/SSE session API, but writes a full evidence bundle instead of only a
+round summary:
+
+```sh
+cargo run -p tm-e2e -- record suite
+```
+
+The default output lands at:
+
+```sh
+target/tm-e2e/runs/<timestamp>-suite/
+```
+
+Useful variants:
+
+```sh
+cargo run -p tm-e2e -- record api
+cargo run -p tm-e2e -- record ui --headed
+TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api
+```
+
+The normal `suite` run starts an in-process `tm-server` fixture, uses the
+deterministic echo/scripted backends, drives the real Flutter Web UI through
+Playwright, and stays network-free. If the Flutter Web build already exists,
+skip rebuilding it with:
+
+```sh
+TM_E2E_SKIP_FLUTTER_BUILD=1 cargo run -p tm-e2e -- record suite
+```
+
+Each evidence bundle includes:
+
+- `manifest.json` — schema v2 run metadata, git state, sanitized env, scenario
+  statuses, server config, and artifact paths.
+- `events.ndjson` — every SSE event observed by the Rust client path.
+- `http.ndjson` — public API requests/responses observed by the Rust client path.
+- `transcript.md` — readable scenario timeline.
+- `resources/` — captured previews/resolved resource envelopes.
+- `ui/` — Playwright screenshots, videos/traces, console logs, network logs, and
+  UI result JSON.
+- `report.md` and `index.html` — human-openable summaries.
+
 ## Actor Smoke
 
 `tm_e2e::run_actor_smoke` is a narrow public-API smoke used by tests for the

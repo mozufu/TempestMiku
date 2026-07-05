@@ -3,8 +3,9 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use serde_json::{json, to_value};
 use tm_e2e::{
-    E2eConfig, MikuClient, ScriptedSpeaker, WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions,
-    run_actor_smoke, run_workflow, write_workflow_record,
+    E2eConfig, EVIDENCE_SCHEMA_VERSION, MikuClient, RecordOptions, ScriptedSpeaker,
+    WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions, run_actor_smoke, run_record_api, run_workflow,
+    write_workflow_record,
 };
 use tm_server::{
     AppState, ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig,
@@ -134,6 +135,53 @@ async fn actor_smoke_covers_progress_approval_resource_and_replay() {
     server.abort();
 }
 
+#[tokio::test]
+async fn recorded_api_suite_writes_evidence_bundle() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_dir = temp.path().join("record-api");
+
+    let manifest = run_record_api(RecordOptions {
+        output_dir: Some(run_dir.clone()),
+        headed: false,
+        skip_flutter_build: true,
+    })
+    .await
+    .unwrap();
+
+    assert!(manifest.ok);
+    assert_eq!(manifest.schema_version, EVIDENCE_SCHEMA_VERSION);
+    assert!(run_dir.join("manifest.json").exists());
+    assert!(run_dir.join("events.ndjson").exists());
+    assert!(run_dir.join("http.ndjson").exists());
+    assert!(run_dir.join("transcript.md").exists());
+    assert!(run_dir.join("report.md").exists());
+    assert!(run_dir.join("index.html").exists());
+    assert!(
+        manifest
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.name == "api-public" && scenario.ok)
+    );
+    assert!(
+        manifest
+            .scenarios
+            .iter()
+            .any(|scenario| scenario.name == "api-actor" && scenario.ok)
+    );
+    assert!(
+        manifest
+            .resources
+            .iter()
+            .any(|resource| resource.uri.starts_with("memory://profile/"))
+    );
+    assert!(
+        manifest
+            .resources
+            .iter()
+            .any(|resource| resource.uri == "artifact://0")
+    );
+}
+
 async fn start_server(
     auth: AuthConfig,
 ) -> (String, tokio::task::JoinHandle<()>, tempfile::TempDir) {
@@ -142,17 +190,11 @@ async fn start_server(
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
-    let state = AppState::new(
-        store,
-        memory,
-        chat,
-        tm_server::ModesConfig::default(),
-        auth,
-    )
-    .with_artifact_root(artifact_root.clone())
-    .with_coding_backend(Arc::new(ArtifactBackend {
-        root: artifact_root,
-    }));
+    let state = AppState::new(store, memory, chat, tm_server::ModesConfig::default(), auth)
+        .with_artifact_root(artifact_root.clone())
+        .with_coding_backend(Arc::new(ArtifactBackend {
+            root: artifact_root,
+        }));
     let router = app(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

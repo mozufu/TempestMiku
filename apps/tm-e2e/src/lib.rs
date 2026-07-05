@@ -1,3 +1,6 @@
+mod evidence;
+mod record;
+
 use std::{env, fs, path::Path, time::Duration};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -8,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tm_core::{ChatRequest, LlmClient, Message, ToolChoice};
 use tm_llm::OpenAiClient;
+
+pub use evidence::*;
+pub use record::*;
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8787";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -37,10 +43,11 @@ impl E2eConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MikuClient {
     http: reqwest::Client,
     cfg: E2eConfig,
+    recorder: Option<EvidenceRecorder>,
 }
 
 impl MikuClient {
@@ -48,11 +55,24 @@ impl MikuClient {
         let http = reqwest::Client::builder()
             .build()
             .context("building E2E HTTP client")?;
-        Ok(Self { http, cfg })
+        Ok(Self {
+            http,
+            cfg,
+            recorder: None,
+        })
     }
 
     pub fn from_env() -> Result<Self> {
         Self::new(E2eConfig::from_env())
+    }
+
+    pub fn with_recorder(mut self, recorder: EvidenceRecorder) -> Self {
+        self.recorder = Some(recorder);
+        self
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.cfg.base_url
     }
 
     pub async fn create_session(&self, mode: Option<&str>) -> Result<SessionInfo> {
@@ -243,6 +263,9 @@ impl MikuClient {
                     let Some(event) = parse_sse_block(&block)? else {
                         continue;
                     };
+                    if let Some(recorder) = &self.recorder {
+                        recorder.record_event(session_id, &event)?;
+                    }
                     let done = stop(&event);
                     events.push(event);
                     if done {
@@ -263,7 +286,7 @@ impl MikuClient {
             .send()
             .await
             .with_context(|| format!("POST {path}"))?;
-        response_json(response, path).await
+        response_json(response, "POST", path, &body, self.recorder.as_ref()).await
     }
 
     async fn get_json(&self, path: &str) -> Result<Value> {
@@ -272,7 +295,7 @@ impl MikuClient {
             .send()
             .await
             .with_context(|| format!("GET {path}"))?;
-        response_json(response, path).await
+        response_json(response, "GET", path, &Value::Null, self.recorder.as_ref()).await
     }
 
     async fn get_json_with_query(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
@@ -282,7 +305,24 @@ impl MikuClient {
             .send()
             .await
             .with_context(|| format!("GET {path}"))?;
-        response_json(response, path).await
+        let query_path = if query.is_empty() {
+            path.to_string()
+        } else {
+            let query = query
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{path}?{query}")
+        };
+        response_json(
+            response,
+            "GET",
+            &query_path,
+            &Value::Null,
+            self.recorder.as_ref(),
+        )
+        .await
     }
 
     fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
@@ -307,12 +347,36 @@ fn path_with_slash(path: &str) -> String {
     }
 }
 
-async fn response_json(response: Response, path: &str) -> Result<Value> {
-    let response = ensure_success(response).await?;
-    response
-        .json::<Value>()
+async fn response_json(
+    response: Response,
+    method: &str,
+    path: &str,
+    request: &Value,
+    recorder: Option<&EvidenceRecorder>,
+) -> Result<Value> {
+    let status = response.status();
+    let status_u16 = status.as_u16();
+    let body = response
+        .text()
         .await
-        .with_context(|| format!("decoding JSON response for {path}"))
+        .with_context(|| format!("reading response body for {method} {path}"))?;
+    let decoded = if body.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str::<Value>(&body).unwrap_or_else(|_| Value::String(body.clone()))
+    };
+    if let Some(recorder) = recorder {
+        recorder.record_http(method, path, status_u16, request, &decoded)?;
+    }
+    if !status.is_success() {
+        bail!("HTTP {status}: {}", body.trim());
+    }
+    if body.trim().is_empty() {
+        Ok(Value::Null)
+    } else {
+        serde_json::from_str::<Value>(&body)
+            .with_context(|| format!("decoding JSON response for {path}"))
+    }
 }
 
 async fn ensure_success(response: Response) -> Result<Response> {

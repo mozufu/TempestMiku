@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:evidence": "playwright test -c evidence.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0"

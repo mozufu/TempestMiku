@@ -9,6 +9,8 @@ description = "TempestMiku local/dev E2E hatch that drives Miku through the publ
 [dependencies]
 tm-core.workspace = true
 tm-llm.workspace = true
+tm-artifacts.workspace = true
+tm-server.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 futures.workspace = true
@@ -16,9 +18,8 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+chrono.workspace = true
+axum.workspace = true
 
 [dev-dependencies]
-tm-artifacts.workspace = true
-tm-server.workspace = true
-axum.workspace = true
 tempfile = "3"

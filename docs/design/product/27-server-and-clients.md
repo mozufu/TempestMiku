@@ -240,10 +240,17 @@ through the same public session API as the Web/PWA client. It creates sessions, 
 reads SSE with `Last-Event-ID`, resolves approvals, verifies memory resources, promotes project
 state, and reads resource views without adding a privileged debug endpoint or a second execution path.
 
-Normal `cargo test` uses the scripted mode and an in-process `tm-server` fixture, so it stays
-network-free. Live actor runs require `TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native Deno
-engineering coverage remains in the focused server tests for `fs.*`, `code.*`, `proc.*`, artifacts,
-and approval approve/deny/timeout behavior.
+The preferred manual/dev gate is `cargo run -p tm-e2e -- record suite`. It starts an in-process
+`tm-server` fixture, records raw SSE and HTTP evidence, captures referenced resources, drives the real
+Flutter Web UI through Playwright, and writes a human-openable evidence bundle under
+`target/tm-e2e/runs/<timestamp>-suite/` (`manifest.json`, `events.ndjson`, `http.ndjson`,
+`transcript.md`, resource captures, UI screenshots/video/trace, `report.md`, and `index.html`).
+
+Normal `cargo test` uses scripted API/actor coverage and an in-process `tm-server` fixture, so it stays
+network-free and does not require Flutter or Playwright. Live actor recordings require
+`TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native Deno engineering coverage remains in the
+focused server tests for `fs.*`, `code.*`, `proc.*`, artifacts, and approval approve/deny/timeout
+behavior.
 
 ## 27.10 Mechanism provenance
 

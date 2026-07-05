@@ -15,7 +15,7 @@
   - `crates/tm-sandbox`: M0 `StubSandbox` plus the M1 `deno_core` JS/TS backend with persistent cells, timeout/reset, output spill, resource reads, SDK prelude, and host-call bridge.
   - `crates/tm-artifacts`: session artifacts and content-addressed blob storage.
   - `crates/tm-host`: host registry, capability grants, approval policy, resource registry, linked folders, `fs.*`, `code.*`, and argv-vector `proc.run`.
-  - `crates/tm-persona`: mode labels, voice caps, and configurable persona asset status.
+  - `crates/tm-modes`: mode catalog, routing, voice caps, and configurable mode/skill asset status.
   - `crates/tm-server`: axum session API, replayable SSE/event store, minimal memory provider, approvals, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
   - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and Deno sandbox by default; `--stub-sandbox` remains for protocol tests.
   - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.

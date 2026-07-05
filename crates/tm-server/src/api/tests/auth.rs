@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn bearer_and_forwarded_auth_are_enforced() {
     let (app, _) = test_app(
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::BearerToken("secret".to_string()),
     );
     let denied = app
@@ -53,7 +53,7 @@ async fn bearer_and_forwarded_auth_are_enforced() {
     }
 
     let (forwarded, _) = test_app(
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::Forwarded(ForwardedAuthConfig {
             user_header: "x-forwarded-user".to_string(),
             expected_user: Some("brian".to_string()),

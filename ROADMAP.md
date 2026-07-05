@@ -40,7 +40,7 @@ slice (coding reach, project continuity, voice, mode router, memory recall, appr
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
 `tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
-`tm-host`, `tm-persona`, `tm-agents`, `tm-server`, `apps/tm-cli`, and client scaffolds under
+`tm-host`, `tm-modes`, `tm-agents`, `tm-server`, `apps/tm-cli`, and client scaffolds under
 `clients/`. The implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP
 bridging, the native P0 Serious Engineer dogfood slice, the CLI native cutover proof for
 linked-repo edit/run/artifact workflows, native Deno HTTP approvals for the Serious Engineer backend,
@@ -124,7 +124,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 ## Crate plan
 
-Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-persona`,
+Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-modes`,
 `tm-agents`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The P0a bridge
 currently lives in `tm-server::omp_acp`; minimal memory lives in `tm-server::memory`; `fs.*` /
 `code.*` / `proc.*` live in `tm-host`; actor lifecycle, mailbox, orchestration, and resources live

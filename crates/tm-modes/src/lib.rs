@@ -14,12 +14,13 @@ pub const KNOWN_SKILLS: &[&str] = &[
     "personal-assistant-state-capture",
     "scope-guard",
     "weekly-ship-ledger",
+    "serious-engineer-ops",
 ];
 
-const BUNDLED_PERSONA_SOURCE: &str = "bundled:tm-persona/default-persona";
+const BUNDLED_MODES_SOURCE: &str = "bundled:tm-modes/default-modes";
 const BUNDLED_SOUL: &str = include_str!("../assets/SOUL.md");
 const BUNDLED_MODES: &str = include_str!("../assets/modes.json");
-const MISSING_SKILL_PROMPT_FALLBACK: &str = "This active skill is unavailable from persona assets. Use the active mode profile as the fallback.";
+const MISSING_SKILL_PROMPT_FALLBACK: &str = "Guidance for this situation is temporarily unavailable. Default to careful, capability-appropriate behavior and ask before uncertain or destructive actions.";
 const BUNDLED_SKILLS: &[(&str, &str)] = &[
     (
         "miku-voice",
@@ -48,6 +49,10 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
     (
         "weekly-ship-ledger",
         include_str!("../assets/skills/weekly-ship-ledger/SKILL.md"),
+    ),
+    (
+        "serious-engineer-ops",
+        include_str!("../assets/skills/serious-engineer-ops/SKILL.md"),
     ),
 ];
 
@@ -146,15 +151,12 @@ pub struct ModeProfile {
     pub mode: ModeId,
     pub label: String,
     pub voice_cap: String,
-    #[serde(default)]
-    pub voice_guidance: String,
     pub default_scope: String,
     #[serde(default)]
     pub active_skills: Vec<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
     pub capability_class: String,
-    pub addendum: String,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -167,12 +169,10 @@ impl ModeProfile {
             label: mode.as_str().to_string(),
             mode,
             voice_cap: "medium".to_string(),
-            voice_guidance: "medium: runtime mode profile was unavailable.".to_string(),
             default_scope: "global".to_string(),
             active_skills: Vec::new(),
             capabilities: Vec::new(),
             capability_class: "conversation".to_string(),
-            addendum: "Active mode profile unavailable. Preserve Tempest Miku identity and fail closed for capabilities.".to_string(),
             description: "Runtime mode profile unavailable.".to_string(),
             route: ModeRoute::default(),
         }
@@ -205,21 +205,21 @@ fn capability_matches(declared: &str, capability: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
-pub enum PersonaStatus {
+pub enum AssetStatus {
     Loaded { path: PathBuf },
     Degraded { warning: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersonaAssets {
-    pub status: PersonaStatus,
+pub struct ModeAssets {
+    pub status: AssetStatus,
     pub soul: Option<String>,
     pub skills: BTreeMap<String, String>,
     pub modes: ModeCatalog,
     pub warnings: Vec<String>,
 }
 
-impl PersonaAssets {
+impl ModeAssets {
     pub fn mode_profile(&self, mode: &ModeId) -> Option<&ModeProfile> {
         self.modes.profile(mode)
     }
@@ -232,26 +232,26 @@ impl PersonaAssets {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersonaPrompt {
+pub struct ComposedPrompt {
     pub system_prompt: String,
     pub profile: ModeProfile,
-    pub status: PersonaStatus,
+    pub status: AssetStatus,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct PersonaConfig {
+pub struct ModesConfig {
     pub asset_path: Option<PathBuf>,
 }
 
-impl PersonaConfig {
+impl ModesConfig {
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
         Self {
             asset_path: Some(path.into()),
         }
     }
 
-    pub fn load_status(&self) -> PersonaStatus {
+    pub fn load_status(&self) -> AssetStatus {
         self.load_assets().status
     }
 
@@ -259,19 +259,19 @@ impl PersonaConfig {
         self.load_assets().modes.default_mode()
     }
 
-    pub fn load_assets(&self) -> PersonaAssets {
+    pub fn load_assets(&self) -> ModeAssets {
         let Some(root) = &self.asset_path else {
             return bundled_assets();
         };
 
         if !root.exists() {
             let warning = format!(
-                "persona assets missing at {}; using bundled defaults",
+                "mode assets missing at {}; using bundled defaults",
                 root.display()
             );
             let (skills, modes) = bundled_catalog_assets();
-            return PersonaAssets {
-                status: PersonaStatus::Degraded {
+            return ModeAssets {
+                status: AssetStatus::Degraded {
                     warning: warning.clone(),
                 },
                 soul: Some(BUNDLED_SOUL.to_string()),
@@ -298,14 +298,14 @@ impl PersonaConfig {
         warn_missing_skill_references(&modes, &skills, &mut warnings);
 
         let status = if warnings.is_empty() {
-            PersonaStatus::Loaded { path: root.clone() }
+            AssetStatus::Loaded { path: root.clone() }
         } else {
-            PersonaStatus::Degraded {
+            AssetStatus::Degraded {
                 warning: warnings.join("; "),
             }
         };
 
-        PersonaAssets {
+        ModeAssets {
             status,
             soul,
             skills,
@@ -319,7 +319,7 @@ impl PersonaConfig {
         mode: &ModeId,
         base_system_prompt: &str,
         capability_notes: &str,
-    ) -> PersonaPrompt {
+    ) -> ComposedPrompt {
         let assets = self.load_assets();
         let mut warnings = assets.warnings.clone();
         let profile = match assets.mode_profile(mode) {
@@ -339,43 +339,15 @@ impl PersonaConfig {
             None => push_section(&mut prompt, "SOUL.md", BUNDLED_SOUL),
         }
 
-        let active_skills = if profile.active_skills.is_empty() {
-            "none".to_string()
-        } else {
-            profile.active_skills.join(", ")
-        };
-        let capabilities = if profile.capabilities.is_empty() {
-            "none".to_string()
-        } else {
-            profile.capabilities.join(", ")
-        };
-        let mode_profile = format!(
-            "{}\n\nMode id: {}\nLabel: {}\nVoice cap: {}\nVoice guidance: {}\nDefault scope: {}\nCapability class: {}\nDeclared capabilities: {}\nActive skills: {}",
-            profile.addendum,
-            profile.mode,
-            profile.label,
-            profile.voice_cap,
-            profile.voice_guidance,
-            profile.default_scope,
-            profile.capability_class,
-            capabilities,
-            active_skills
-        );
-        push_section(&mut prompt, "Active mode profile", &mode_profile);
-
         for skill in &profile.active_skills {
             match assets.skills.get(skill.as_str()) {
-                Some(contents) => push_section(&mut prompt, &format!("skill://{skill}"), contents),
+                Some(contents) => push_raw(&mut prompt, strip_frontmatter(contents)),
                 None => {
                     let warning = missing_skill_reference_warning(&profile.mode, skill);
                     if !warnings.iter().any(|existing| existing == &warning) {
                         warnings.push(warning);
                     }
-                    push_section(
-                        &mut prompt,
-                        &format!("missing skill://{skill}"),
-                        MISSING_SKILL_PROMPT_FALLBACK,
-                    );
+                    push_raw(&mut prompt, MISSING_SKILL_PROMPT_FALLBACK);
                 }
             }
         }
@@ -385,10 +357,10 @@ impl PersonaConfig {
         }
 
         if !warnings.is_empty() {
-            push_section(&mut prompt, "Persona asset warnings", &warnings.join("\n"));
+            push_section(&mut prompt, "Mode asset warnings", &warnings.join("\n"));
         }
 
-        PersonaPrompt {
+        ComposedPrompt {
             system_prompt: prompt,
             profile,
             status: assets.status,
@@ -461,11 +433,11 @@ fn load_configured_skills(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<S
     skills
 }
 
-fn bundled_assets() -> PersonaAssets {
+fn bundled_assets() -> ModeAssets {
     let (skills, modes) = bundled_catalog_assets();
-    PersonaAssets {
-        status: PersonaStatus::Loaded {
-            path: PathBuf::from(BUNDLED_PERSONA_SOURCE),
+    ModeAssets {
+        status: AssetStatus::Loaded {
+            path: PathBuf::from(BUNDLED_MODES_SOURCE),
         },
         soul: Some(BUNDLED_SOUL.to_string()),
         skills,
@@ -534,7 +506,7 @@ fn missing_skill_references(
 
 fn missing_skill_reference_warning(mode: &ModeId, skill: &str) -> String {
     format!(
-        "active skill {skill} referenced by mode {mode} is missing at skills/{skill}/SKILL.md; prompt will use active mode profile fallback"
+        "active skill {skill} referenced by mode {mode} is missing at skills/{skill}/SKILL.md; prompt will use the missing-skill fallback"
     )
 }
 
@@ -548,6 +520,29 @@ fn push_section(target: &mut String, title: &str, content: &str) {
     target.push_str(content.trim());
 }
 
+fn push_raw(target: &mut String, content: &str) {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !target.is_empty() {
+        target.push_str("\n\n");
+    }
+    target.push_str(trimmed);
+}
+
+/// Frontmatter (name/description/tags) is router bookkeeping, not something the model needs to read.
+fn strip_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    let Some(rest) = trimmed.strip_prefix("---\n") else {
+        return trimmed;
+    };
+    match rest.find("\n---") {
+        Some(end) => rest[end + 4..].trim_start_matches('\n'),
+        None => trimmed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -558,14 +553,14 @@ mod tests {
     };
 
     use super::{
-        KNOWN_SKILLS, MISSING_SKILL_PROMPT_FALLBACK, ModeId, PersonaConfig, PersonaStatus,
+        KNOWN_SKILLS, MISSING_SKILL_PROMPT_FALLBACK, ModeId, ModesConfig, AssetStatus,
     };
 
     static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn bundled_mode_catalog_has_default_and_handoff_profile() {
-        let assets = PersonaConfig::default().load_assets();
+        let assets = ModesConfig::default().load_assets();
         assert_eq!(assets.modes.default_mode().as_str(), "personal_assistant");
         let handoff = assets
             .modes
@@ -582,13 +577,12 @@ mod tests {
 
     #[test]
     fn bundled_router_modes_have_labels_and_scopes() {
-        let assets = PersonaConfig::default().load_assets();
+        let assets = ModesConfig::default().load_assets();
         let grill = assets
             .modes
             .profile(&ModeId::from("ambiguity_grill"))
             .expect("ambiguity grill profile");
         assert_eq!(grill.label, "Ambiguity Grill");
-        assert!(grill.addendum.contains("mode 2"));
         assert_eq!(grill.active_skills, ["miku-voice", "ambiguity-grill"]);
 
         let grounding = assets
@@ -600,12 +594,29 @@ mod tests {
     }
 
     #[test]
-    fn default_config_loads_bundled_persona_assets() {
-        let assets = PersonaConfig::default().load_assets();
+    fn composed_prompt_never_leaks_skill_frontmatter_or_mode_metadata() {
+        let catalog = ModesConfig::default().load_assets().modes;
+        for profile in &catalog.modes {
+            let prompt = ModesConfig::default().build_system_prompt(&profile.mode, "base", "");
+            let leaks = ["description:", "tags:", "hermes:", "category:", "skill://", "Mode id:", "Voice cap:", "Capability class:", "Declared capabilities:"];
+            for leak in leaks {
+                assert!(
+                    !prompt.system_prompt.contains(leak),
+                    "mode {} prompt leaked runtime bookkeeping {leak:?}:\n{}",
+                    profile.mode,
+                    prompt.system_prompt
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_config_loads_bundled_mode_assets() {
+        let assets = ModesConfig::default().load_assets();
         assert_eq!(
             assets.status,
-            PersonaStatus::Loaded {
-                path: PathBuf::from("bundled:tm-persona/default-persona")
+            AssetStatus::Loaded {
+                path: PathBuf::from("bundled:tm-modes/default-modes")
             }
         );
         assert!(assets.warnings.is_empty());
@@ -613,7 +624,7 @@ mod tests {
         for skill in KNOWN_SKILLS {
             assert!(
                 assets.skills.contains_key(*skill),
-                "bundled persona assets are missing {skill}"
+                "bundled mode assets are missing {skill}"
             );
         }
         assert!(
@@ -626,7 +637,7 @@ mod tests {
 
     #[test]
     fn bundled_active_skill_references_resolve_to_skill_assets() {
-        let assets = PersonaConfig::default().load_assets();
+        let assets = ModesConfig::default().load_assets();
 
         for profile in &assets.modes.modes {
             for skill in &profile.active_skills {
@@ -641,11 +652,11 @@ mod tests {
 
     #[test]
     fn loads_fixture_soul_modes_and_skills() {
-        let root = temp_persona_root();
+        let root = temp_modes_root();
         write_fixture(&root, true, &["custom-skill"], Some(custom_modes_json()));
 
-        let assets = PersonaConfig::from_path(&root).load_assets();
-        assert_eq!(assets.status, PersonaStatus::Loaded { path: root.clone() });
+        let assets = ModesConfig::from_path(&root).load_assets();
+        assert_eq!(assets.status, AssetStatus::Loaded { path: root.clone() });
         assert!(assets.soul.unwrap().contains("Fixture SOUL"));
         assert!(
             assets
@@ -666,11 +677,11 @@ mod tests {
 
     #[test]
     fn degrades_when_soul_modes_or_skills_are_missing() {
-        let root = temp_persona_root();
+        let root = temp_modes_root();
         write_fixture(&root, false, &["ambiguity-grill"], None);
 
-        let assets = PersonaConfig::from_path(&root).load_assets();
-        let PersonaStatus::Degraded { warning } = assets.status else {
+        let assets = ModesConfig::from_path(&root).load_assets();
+        let AssetStatus::Degraded { warning } = assets.status else {
             panic!("missing SOUL.md and modes should degrade");
         };
         assert!(warning.contains("SOUL.md"));
@@ -684,56 +695,50 @@ mod tests {
                 .contains("miku-voice")
         );
 
-        let prompt = PersonaConfig::from_path(&root).build_system_prompt(
+        let prompt = ModesConfig::from_path(&root).build_system_prompt(
             &ModeId::from("ambiguity_grill"),
             "base prompt",
             "capability notes",
         );
         assert!(prompt.system_prompt.contains("SOUL.md"));
-        assert!(prompt.system_prompt.contains("skill://miku-voice"));
-        assert!(!prompt.system_prompt.contains("missing skill://miku-voice"));
-        assert!(prompt.system_prompt.contains("skill://ambiguity-grill"));
+        assert!(prompt.system_prompt.contains("語氣層"));
+        assert!(prompt.system_prompt.contains("ambiguity-grill fixture skill body"));
+        assert!(!prompt.system_prompt.contains("temporarily unavailable"));
 
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn configured_missing_active_skill_warns_and_uses_prompt_fallback() {
-        let root = temp_persona_root();
+        let root = temp_modes_root();
         write_fixture(&root, true, &[], Some(missing_skill_modes_json()));
-        let expected_warning = "active skill missing-skill referenced by mode custom_runtime_mode is missing at skills/missing-skill/SKILL.md; prompt will use active mode profile fallback";
+        let expected_warning = "active skill missing-skill referenced by mode custom_runtime_mode is missing at skills/missing-skill/SKILL.md; prompt will use the missing-skill fallback";
 
-        let assets = PersonaConfig::from_path(&root).load_assets();
+        let assets = ModesConfig::from_path(&root).load_assets();
         assert_eq!(assets.warnings, [expected_warning]);
         assert_eq!(
             assets.status,
-            PersonaStatus::Degraded {
+            AssetStatus::Degraded {
                 warning: expected_warning.to_string()
             }
         );
 
-        let prompt = PersonaConfig::from_path(&root).build_system_prompt(
+        let prompt = ModesConfig::from_path(&root).build_system_prompt(
             &ModeId::from("custom_runtime_mode"),
             "base prompt",
             "",
         );
         assert_eq!(prompt.warnings, [expected_warning]);
-        assert!(
-            prompt
-                .system_prompt
-                .contains("## missing skill://missing-skill")
-        );
         assert!(prompt.system_prompt.contains(MISSING_SKILL_PROMPT_FALLBACK));
-        assert!(prompt.system_prompt.contains("## Persona asset warnings"));
+        assert!(prompt.system_prompt.contains("## Mode asset warnings"));
         assert!(prompt.system_prompt.contains(expected_warning));
-        assert!(!prompt.system_prompt.contains("## skill://missing-skill"));
 
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn mode_profiles_map_expected_skills_voice_and_scope() {
-        let assets = PersonaConfig::default().load_assets();
+        let assets = ModesConfig::default().load_assets();
         let assistant = assets
             .modes
             .profile(&ModeId::from("personal_assistant"))
@@ -750,7 +755,7 @@ mod tests {
             .modes
             .profile(&ModeId::from("serious_engineer"))
             .expect("serious profile");
-        assert!(serious.active_skills.is_empty());
+        assert_eq!(serious.active_skills, vec!["serious-engineer-ops"]);
         assert!(serious.has_capability("fs.read"));
         assert!(serious.has_capability("code.edit"));
         assert!(serious.has_capability("proc.run"));
@@ -762,7 +767,7 @@ mod tests {
 
     #[test]
     fn negative_state_grounding_prompt_is_health_first_conversational_posture() {
-        let prompt = PersonaConfig::default().build_system_prompt(
+        let prompt = ModesConfig::default().build_system_prompt(
             &ModeId::from("negative_state_grounding"),
             "base prompt",
             "",
@@ -773,9 +778,9 @@ mod tests {
             prompt.profile.active_skills,
             vec!["miku-voice", "negative-state-grounding"]
         );
-        assert!(prompt.system_prompt.contains("conversation-only posture"));
-        assert!(prompt.system_prompt.contains("health-over-productivity"));
-        assert!(prompt.system_prompt.contains("at most one next action"));
+        assert!(prompt.system_prompt.contains("conversational posture"));
+        assert!(prompt.system_prompt.contains("Health-over-productivity"));
+        assert!(prompt.system_prompt.contains("one next action"));
         assert!(prompt.system_prompt.contains("10 minutes or less"));
         assert!(
             prompt
@@ -785,18 +790,18 @@ mod tests {
         assert!(
             !prompt
                 .system_prompt
-                .contains("skill://personal-assistant-state-capture")
+                .contains("Personal Assistant State Capture")
         );
     }
 
-    fn temp_persona_root() -> PathBuf {
+    fn temp_modes_root() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let counter = TEMP_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "tm-persona-test-{}-{nanos}-{counter}",
+            "tm-modes-test-{}-{nanos}-{counter}",
             std::process::id()
         ))
     }
@@ -827,14 +832,12 @@ mod tests {
                 {
                     "mode": "custom_runtime_mode",
                     "label": "Custom Runtime Mode",
-                    "description": "Loaded only from runtime persona assets.",
+                    "description": "Loaded only from runtime mode assets.",
                     "voiceCap": "medium",
-                    "voiceGuidance": "medium: custom runtime mode.",
                     "defaultScope": "global",
                     "activeSkills": ["custom-skill"],
                     "capabilities": ["memory.recall"],
                     "capabilityClass": "conversation",
-                    "addendum": "Active mode: custom runtime mode.",
                     "route": {
                         "isDefault": true,
                         "priority": 0,
@@ -853,14 +856,12 @@ mod tests {
                 {
                     "mode": "custom_runtime_mode",
                     "label": "Custom Runtime Mode",
-                    "description": "Loaded only from runtime persona assets.",
+                    "description": "Loaded only from runtime mode assets.",
                     "voiceCap": "medium",
-                    "voiceGuidance": "medium: custom runtime mode.",
                     "defaultScope": "global",
                     "activeSkills": ["missing-skill"],
                     "capabilities": [],
                     "capabilityClass": "conversation",
-                    "addendum": "Active mode: custom runtime mode.",
                     "route": {
                         "isDefault": true,
                         "priority": 0,

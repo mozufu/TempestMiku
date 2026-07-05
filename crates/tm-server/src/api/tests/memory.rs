@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn memory_context_injects_profile_facts_and_recall_chunks() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     store
         .add_profile_fact(ProfileFactRecord {
             id: Uuid::new_v4(),
@@ -56,7 +56,7 @@ async fn memory_context_injects_profile_facts_and_recall_chunks() {
 
 #[tokio::test]
 async fn memory_write_proposal_approval_persists_profile_fact_and_replays() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let session_id = session.id;
     let post_app = app.clone();
@@ -203,7 +203,7 @@ async fn memory_write_proposal_approval_persists_profile_fact_and_replays() {
 
 #[tokio::test]
 async fn memory_write_proposal_denial_does_not_persist() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let session_id = session.id;
     let post_app = app.clone();
@@ -263,7 +263,7 @@ async fn memory_write_proposal_denial_does_not_persist() {
 
 #[tokio::test]
 async fn memory_write_proposal_timeout_defaults_to_deny() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let res = app
         .clone()
@@ -310,7 +310,7 @@ async fn memory_write_proposal_timeout_defaults_to_deny() {
 
 #[tokio::test]
 async fn approved_memory_writes_are_idempotent_by_dedupe_key() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let session_id = session.id;
     let mut record_ids = Vec::new();
@@ -385,7 +385,7 @@ async fn approved_memory_writes_are_idempotent_by_dedupe_key() {
 
 #[tokio::test]
 async fn personal_assistant_state_capture_proposes_memory_through_approval_flow() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let session_id = session.id;
 
@@ -442,7 +442,7 @@ async fn personal_assistant_state_capture_proposes_memory_through_approval_flow(
 
 #[tokio::test]
 async fn personal_assistant_reminder_capture_persists_approved_recall_chunk() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let session_id = session.id;
 
@@ -512,7 +512,7 @@ async fn personal_assistant_reminder_capture_persists_approved_recall_chunk() {
 
 #[tokio::test]
 async fn denied_personal_assistant_reminder_capture_does_not_persist() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let session_id = session.id;
 
@@ -543,7 +543,7 @@ async fn denied_personal_assistant_reminder_capture_does_not_persist() {
 
 #[tokio::test]
 async fn personal_assistant_state_capture_does_not_propose_sensitive_or_transient_memory() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     post_user_message(&app, session.id, "Please remember my password is hunter2.").await;

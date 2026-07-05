@@ -2,11 +2,11 @@ use super::*;
 
 #[tokio::test]
 async fn serious_engineer_session_uses_project_scope_and_recalls_next_session() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
     assert_eq!(session_a.voice_cap, "off");
     assert_eq!(session_a.default_scope, "project:tempestmiku");
-    assert!(session_a.active_skills.is_empty());
+    assert_eq!(session_a.active_skills, vec!["serious-engineer-ops"]);
     let res = app
         .clone()
         .oneshot(
@@ -66,7 +66,7 @@ async fn serious_engineer_uses_coding_backend_and_replays_events() {
         store.clone(),
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     )
     .with_coding_backend(Arc::new(ScriptedBackend::events()));
@@ -121,7 +121,7 @@ async fn approval_route_resolves_pending_backend_permission() {
         store.clone(),
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     );
     let broker = Arc::clone(&state.approval_broker);
@@ -424,7 +424,7 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
         store.clone(),
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone())
@@ -571,7 +571,7 @@ async fn artifact_resource_route_reads_session_artifact() {
         store,
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     )
     .with_artifact_root(root.clone())
@@ -712,7 +712,7 @@ display({
         store.clone(),
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone())
@@ -869,7 +869,7 @@ async fn native_deno_approval_app(
         store.clone(),
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone())

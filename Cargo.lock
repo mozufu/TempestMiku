@@ -3869,7 +3869,7 @@ dependencies = [
  "tm-core",
  "tm-host",
  "tm-llm",
- "tm-persona",
+ "tm-modes",
  "tm-sandbox",
  "tokio",
  "tracing",
@@ -3944,7 +3944,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tm-persona"
+name = "tm-modes"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -3994,7 +3994,7 @@ dependencies = [
  "tm-core",
  "tm-host",
  "tm-llm",
- "tm-persona",
+ "tm-modes",
  "tm-sandbox",
  "tokio",
  "tokio-postgres",

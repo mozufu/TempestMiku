@@ -511,7 +511,7 @@ fn row_to_project_item(row: tokio_postgres::Row) -> Result<ProjectItemRecord> {
 
 fn row_to_session_record(row: &tokio_postgres::Row) -> Result<SessionRecord> {
     let mode: Value = row.get("mode");
-    let mode: tm_persona::ModeId =
+    let mode: tm_modes::ModeId =
         serde_json::from_value(mode).map_err(|err| ServerError::Store(err.to_string()))?;
     let mode_state: Option<Value> = row.get("mode_state_json");
     let mode_state = match mode_state {

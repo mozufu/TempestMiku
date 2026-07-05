@@ -672,7 +672,7 @@ mod tests {
                 session_id,
                 user_prompt: "prompt".to_string(),
                 system_prompt: "system prompt".to_string(),
-                mode: tm_persona::ModeId::from("handoff"),
+                mode: tm_modes::ModeId::from("handoff"),
                 scope: "project:tempestmiku".to_string(),
                 capabilities: vec![],
             },

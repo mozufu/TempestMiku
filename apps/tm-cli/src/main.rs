@@ -22,7 +22,7 @@ use tm_host::{
     P0HostConfig,
 };
 use tm_llm::OpenAiClient;
-use tm_persona::{ModeId, PersonaConfig};
+use tm_modes::{ModeId, ModesConfig};
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions, StubSandbox};
 
 #[tokio::main(flavor = "current_thread")]
@@ -260,7 +260,7 @@ fn serious_engineer_prompt(_host_config: &P0HostConfig, linked_folders: &LinkedF
             ));
         }
     }
-    PersonaConfig::default()
+    ModesConfig::default()
         .build_system_prompt(
             &ModeId::from("serious_engineer"),
             tm_core::DEFAULT_SYSTEM_PROMPT,
@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(cfg.cell_budget.output_bytes, 50_000);
         assert!(cfg.system_prompt.contains("SOUL.md"));
         assert!(cfg.system_prompt.contains("Tempest Miku"));
-        assert!(cfg.system_prompt.contains("Active mode: Serious Engineer"));
-        assert!(cfg.system_prompt.contains("Voice cap: off"));
+        assert!(cfg.system_prompt.contains("Serious Engineer Operating Notes"));
+        assert!(cfg.system_prompt.contains("proc.run(cmd, args)"));
     }
 }

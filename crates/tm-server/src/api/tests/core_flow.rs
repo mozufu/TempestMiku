@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn session_creation_message_append_event_append_and_replay_work() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     assert_eq!(
         session.active_skills,
@@ -63,22 +63,20 @@ async fn session_creation_message_append_event_append_and_replay_work() {
 }
 
 #[tokio::test]
-async fn modes_catalog_is_loaded_from_runtime_persona_assets() {
+async fn modes_catalog_is_loaded_from_runtime_mode_assets() {
     let temp = tempfile::tempdir().unwrap();
-    write_persona_fixture(temp.path());
+    write_mode_assets_fixture(temp.path());
     let custom = serde_json::json!({
         "defaultMode": "custom_runtime_mode",
         "modes": [
             {
                 "mode": "custom_runtime_mode",
                 "label": "Custom Runtime Mode",
-                "description": "Runtime-only mode from the persona catalog.",
+                "description": "Runtime-only mode from the mode catalog.",
                 "voiceCap": "medium",
-                "voiceGuidance": "medium: custom runtime mode.",
                 "defaultScope": "global",
                 "activeSkills": ["miku-voice"],
                 "capabilityClass": "conversation",
-                "addendum": "Active mode: Custom Runtime Mode.",
                 "route": {
                     "isDefault": true,
                     "priority": 0,
@@ -93,7 +91,7 @@ async fn modes_catalog_is_loaded_from_runtime_persona_assets() {
     )
     .unwrap();
 
-    let (app, _) = test_app(PersonaConfig::from_path(temp.path()), AuthConfig::NoAuth);
+    let (app, _) = test_app(ModesConfig::from_path(temp.path()), AuthConfig::NoAuth);
     let catalog = app
         .clone()
         .oneshot(
@@ -117,7 +115,7 @@ async fn modes_catalog_is_loaded_from_runtime_persona_assets() {
 
 #[tokio::test]
 async fn sessions_history_lists_recent_sessions_and_hydrates_transcript() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let first = create(&app).await;
     post_user_message(&app, first.id, "first session asks for status").await;
     tokio::time::sleep(Duration::from_millis(2)).await;
@@ -264,22 +262,22 @@ async fn sessions_history_lists_recent_sessions_and_hydrates_transcript() {
 }
 
 #[tokio::test]
-async fn missing_persona_path_boots_degraded_with_warning() {
+async fn missing_mode_assets_path_boots_degraded_with_warning() {
     let (app, _) = test_app(
-        PersonaConfig::from_path("/definitely/missing/tempestmiku/persona"),
+        ModesConfig::from_path("/definitely/missing/tempestmiku/modes"),
         AuthConfig::NoAuth,
     );
     let session = create(&app).await;
     match session.persona_status {
-        crate::PersonaStatus::Degraded { warning } => assert!(warning.contains("missing")),
-        crate::PersonaStatus::Loaded { .. } => panic!("missing path must degrade"),
+        crate::AssetStatus::Degraded { warning } => assert!(warning.contains("missing")),
+        crate::AssetStatus::Loaded { .. } => panic!("missing path must degrade"),
     }
 }
 
 #[tokio::test]
-async fn chat_turn_prompt_uses_active_persona_bundle() {
+async fn chat_turn_prompt_uses_active_mode_bundle() {
     let temp = tempfile::tempdir().unwrap();
-    write_persona_fixture(temp.path());
+    write_mode_assets_fixture(temp.path());
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(RecordingChatRunner::default());
@@ -288,7 +286,7 @@ async fn chat_turn_prompt_uses_active_persona_bundle() {
         store,
         memory,
         chat,
-        PersonaConfig::from_path(temp.path()),
+        ModesConfig::from_path(temp.path()),
         AuthConfig::NoAuth,
     );
     let app = app(state);
@@ -318,34 +316,34 @@ async fn chat_turn_prompt_uses_active_persona_bundle() {
     assert_eq!(turns.len(), 3);
     assert_eq!(turns[0].mode, ModeId::from("personal_assistant"));
     assert!(turns[0].system_prompt.contains("Fixture SOUL"));
-    assert!(turns[0].system_prompt.contains("skill://miku-voice"));
+    assert!(turns[0].system_prompt.contains("miku-voice fixture body"));
     assert!(
         turns[0]
             .system_prompt
-            .contains("skill://personal-assistant-state-capture")
+            .contains("personal-assistant-state-capture fixture body")
     );
 
     assert_eq!(turns[1].mode, ModeId::from("ambiguity_grill"));
-    assert!(turns[1].system_prompt.contains("skill://ambiguity-grill"));
+    assert!(turns[1].system_prompt.contains("ambiguity-grill fixture body"));
     assert!(
         !turns[1]
             .system_prompt
-            .contains("skill://negative-state-grounding")
+            .contains("negative-state-grounding fixture body")
     );
 
     assert_eq!(turns[2].mode, ModeId::from("negative_state_grounding"));
     assert!(
         turns[2]
             .system_prompt
-            .contains("skill://negative-state-grounding")
+            .contains("negative-state-grounding fixture body")
     );
     assert_eq!(turns[2].scope, "global");
 }
 
 #[tokio::test]
-async fn coding_turn_prompt_uses_active_persona_bundle() {
+async fn coding_turn_prompt_uses_active_mode_bundle() {
     let temp = tempfile::tempdir().unwrap();
-    write_persona_fixture(temp.path());
+    write_mode_assets_fixture(temp.path());
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
@@ -355,7 +353,7 @@ async fn coding_turn_prompt_uses_active_persona_bundle() {
         store,
         memory,
         chat,
-        PersonaConfig::from_path(temp.path()),
+        ModesConfig::from_path(temp.path()),
         AuthConfig::NoAuth,
     )
     .with_coding_backend(backend);
@@ -389,13 +387,13 @@ async fn coding_turn_prompt_uses_active_persona_bundle() {
     assert!(
         turns[0]
             .system_prompt
-            .contains("Active mode: Serious Engineer")
+            .contains("serious-engineer-ops fixture body")
     );
-    assert!(!turns[0].system_prompt.contains("skill://miku-voice"));
+    assert!(!turns[0].system_prompt.contains("miku-voice fixture body"));
 
     assert_eq!(turns[1].mode, ModeId::from("handoff"));
-    assert!(turns[1].system_prompt.contains("skill://oh-my-pi-handoff"));
-    assert!(!turns[1].system_prompt.contains("skill://miku-voice"),
+    assert!(turns[1].system_prompt.contains("oh-my-pi-handoff fixture body"));
+    assert!(!turns[1].system_prompt.contains("miku-voice fixture body"),
         "handoff mode must not inject miku-voice skill");
     assert_eq!(turns[1].scope, "project:tempestmiku");
     assert!(turns[1].capabilities.iter().any(|c| c == "agents.*"),

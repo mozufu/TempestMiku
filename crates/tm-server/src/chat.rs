@@ -10,7 +10,7 @@ use serde_json::json;
 use tm_artifacts::ArtifactStore;
 use tm_core::{Agent, AgentConfig, EventSink, InboxDrain, LlmClient, Sandbox};
 use tm_host::CapabilityGrants;
-use tm_persona::ModeId;
+use tm_modes::ModeId;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use uuid::Uuid;
 

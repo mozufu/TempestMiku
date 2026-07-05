@@ -569,11 +569,11 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::MODE_ID;
-    use tm_persona::{ModeId, PersonaConfig};
+    use tm_modes::{ModeId, ModesConfig};
 
     #[test]
     fn mode_id_constant_resolves_in_bundled_catalog() {
-        let assets = PersonaConfig::default().load_assets();
+        let assets = ModesConfig::default().load_assets();
         assert!(
             assets.mode_profile(&ModeId::from(MODE_ID)).is_some(),
             "STATE_CAPTURE MODE_ID '{MODE_ID}' not found in bundled modes.json; \

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tm_persona::{ModeId, PersonaStatus};
+use tm_modes::{ModeId, AssetStatus};
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
@@ -15,13 +15,13 @@ pub struct SessionRecord {
     pub status: String,
     pub mode: ModeId,
     pub mode_state: ModeState,
-    pub persona_status: PersonaStatus,
+    pub persona_status: AssetStatus,
 }
 
 #[derive(Debug, Clone)]
 pub struct NewSession {
     pub mode: ModeId,
-    pub persona_status: PersonaStatus,
+    pub persona_status: AssetStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -242,7 +242,7 @@ pub enum StoreEvent {
         lock_source: Option<String>,
         override_source: Option<String>,
         updated_at: DateTime<Utc>,
-        persona_status: PersonaStatus,
+        persona_status: AssetStatus,
     },
     Final {
         text: String,

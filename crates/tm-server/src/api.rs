@@ -35,7 +35,7 @@ use crate::{
     ApprovalBroker, ApprovalStatus, AuthConfig, ChatRunner, ChatTurn, CodingBackend, CodingTurn,
     MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus,
     ModeCatalog, ModeId, ModeProfile, NewProjectItem, NewSession, PersistingEventSink,
-    PersonaConfig, ProjectItemKind, ProjectItemRecord, ResolveApprovalRequest, Result, ServerError,
+    ModesConfig, ProjectItemKind, ProjectItemRecord, ResolveApprovalRequest, Result, ServerError,
     SessionEvent, Store, StoreCodingEventSink, StoreEvent, store::ModeState,
     store::RecallChunkRecord,
 };
@@ -70,7 +70,7 @@ pub struct AppState<S, M, C> {
     pub store: Arc<S>,
     pub memory: Arc<M>,
     pub chat: Arc<C>,
-    pub persona: PersonaConfig,
+    pub persona: ModesConfig,
     pub auth: AuthConfig,
     pub coding_backend: Option<Arc<dyn CodingBackend>>,
     pub approval_broker: Arc<ApprovalBroker>,
@@ -104,7 +104,7 @@ impl<S, M, C> AppState<S, M, C> {
         store: Arc<S>,
         memory: Arc<M>,
         chat: Arc<C>,
-        persona: PersonaConfig,
+        persona: ModesConfig,
         auth: AuthConfig,
     ) -> Self {
         Self {

@@ -28,9 +28,9 @@ use crate::{
     auth::ForwardedAuthConfig,
     store::{ProfileFactRecord, RecallChunkRecord},
 };
-use tm_persona::KNOWN_SKILLS;
+use tm_modes::KNOWN_SKILLS;
 
-fn test_app(persona: PersonaConfig, auth: AuthConfig) -> (Router, Arc<InMemoryStore>) {
+fn test_app(persona: ModesConfig, auth: AuthConfig) -> (Router, Arc<InMemoryStore>) {
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
@@ -57,7 +57,7 @@ async fn postgres_test_app() -> Option<(Router, Arc<PostgresStore>)> {
         store.clone(),
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     );
     Some((app(state), store))
@@ -145,7 +145,7 @@ impl CodingBackend for ScriptedBackend {
                     "diff",
                     json!({
                         "backend": "test",
-                        "path": "crates/tm-persona/src/lib.rs",
+                        "path": "crates/tm-modes/src/lib.rs",
                         "oldText": null,
                         "newText": "patched",
                     }),
@@ -184,7 +184,7 @@ impl CodingBackend for ScriptedBackend {
                         turn.session_id,
                         ApprovalPrompt {
                             action: "write file".to_string(),
-                            scope: json!({ "path": "crates/tm-persona/src/lib.rs" }),
+                            scope: json!({ "path": "crates/tm-modes/src/lib.rs" }),
                             options: vec![
                                 ApprovalOption {
                                     option_id: "allow".to_string(),
@@ -399,7 +399,7 @@ async fn resolve_test_approval(app: &Router, session_id: Uuid, approval_id: Uuid
     assert_eq!(res.status(), StatusCode::OK);
 }
 
-fn write_persona_fixture(root: &std::path::Path) {
+fn write_mode_assets_fixture(root: &std::path::Path) {
     std::fs::write(
         root.join("SOUL.md"),
         "# Fixture SOUL\nIdentity constant and Mode Router fixture.",
@@ -407,7 +407,7 @@ fn write_persona_fixture(root: &std::path::Path) {
     .unwrap();
     std::fs::write(
         root.join("modes.json"),
-        serde_json::to_string_pretty(&PersonaConfig::default().load_assets().modes).unwrap(),
+        serde_json::to_string_pretty(&ModesConfig::default().load_assets().modes).unwrap(),
     )
     .unwrap();
     for skill in KNOWN_SKILLS {

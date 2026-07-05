@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn project_views_and_promotion_are_idempotent() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
     let res = app
         .clone()
@@ -109,7 +109,7 @@ async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
         store,
         memory,
         chat,
-        PersonaConfig::default(),
+        ModesConfig::default(),
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone())
@@ -204,7 +204,7 @@ async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
 
 #[tokio::test]
 async fn skill_resource_gateway_is_prompt_composition_only_until_p4() {
-    let (app, _) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, _) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     for endpoint in ["resolve", "preview", "list"] {
@@ -238,7 +238,7 @@ async fn skill_resource_gateway_is_prompt_composition_only_until_p4() {
 
 #[tokio::test]
 async fn memory_resource_gateway_reads_root_user_model_and_records() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let fact_id = Uuid::new_v4();
     let chunk_id = Uuid::new_v4();
@@ -300,7 +300,7 @@ async fn memory_resource_gateway_reads_root_user_model_and_records() {
 
 #[tokio::test]
 async fn memory_resource_gateway_denies_unknown_and_ungranted_reads() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     let unknown = app
         .clone()
@@ -337,7 +337,7 @@ async fn memory_resource_gateway_denies_unknown_and_ungranted_reads() {
 
 #[tokio::test]
 async fn session_resource_preview_returns_compact_bounded_memory_preview() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
     store
         .add_recall_chunk(RecallChunkRecord {
@@ -376,7 +376,7 @@ async fn session_resource_preview_returns_compact_bounded_memory_preview() {
 
 #[tokio::test]
 async fn miku_initiated_promotion_denies_by_default_on_timeout() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
     let res = app
         .clone()

@@ -43,8 +43,8 @@ reintroduce hardcoded mode prompts, hidden capability grants, or chat-native too
 - [x] P1 project-manager and remote-control surfaces cover mode routing/locks, project views,
       session promotion, resource gateway access, approvals, and SSE replay.
 - [x] Bundled persona assets include `SOUL.md`, `modes.json`, and the seven default skills under
-      `crates/tm-persona/assets/`.
-- [x] Configured persona assets can override the bundle through `TM_PERSONA_PATH`.
+      `crates/tm-modes/assets/`.
+- [x] Configured persona assets can override the bundle through `TM_MODES_PATH`.
 - [x] Missing or unreadable persona assets degrade with visible warnings and bundled fallbacks.
 - [x] `ModeCatalog` / `ModeProfile` load runtime string ids from `modes.json`.
 - [x] `GET /modes`, session responses, mode responses, and `ModeChanged` events expose
@@ -107,7 +107,7 @@ Acceptance:
       operations fail closed or degrade with explicit warnings.
       **Resolved:** `validate_mode` fails closed with `InvalidRequest`; tests added for both
       known and unknown mode paths. Missing-skill and `skill://` fail-closed behavior has
-      existing test coverage in `tm-persona` and `tm-sandbox`.
+      existing test coverage in `tm-modes` and `tm-sandbox`.
 - [x] A contributor can add a local mode + skill bundle without changing Rust code.
 - [x] Normal `cargo test` stays external-service-free and live OpenAI/Postgres tests remain gated.
 
@@ -138,7 +138,7 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
 - [x] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
       **Resolved:** Mode profile, default scope, voice cap, capabilities, and active skills live in
       `modes.json`; no server-side hardcodes. System prompt is catalog-driven via
-      `PersonaConfig::build_system_prompt`. `CapabilityGrants::permits` now supports glob patterns
+      `ModesConfig::build_system_prompt`. `CapabilityGrants::permits` now supports glob patterns
       so `"agents.*"` in a mode profile activates all `agents.*` sandbox grants. Capabilities flow
       through `CodingTurn.capabilities` → `run_native_turn` → `options.grants`. Tests: persona
       handoff profile assertions, `!contains("miku-voice")` for handoff turn, `agents.*` capability

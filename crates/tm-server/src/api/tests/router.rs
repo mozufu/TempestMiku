@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     post_user_message(&app, session.id, "please fix this Rust code bug").await;
@@ -45,7 +45,7 @@ async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
 
 #[test]
 fn router_triggers_negative_state_grounding_for_negative_language() {
-    let catalog = PersonaConfig::default().load_assets().modes;
+    let catalog = ModesConfig::default().load_assets().modes;
     for (content, trigger) in [
         ("everything is too much and I am overwhelmed", "overwhelmed"),
         ("I'm exhausted and have no energy", "exhausted"),
@@ -67,7 +67,7 @@ fn router_triggers_negative_state_grounding_for_negative_language() {
 
 #[tokio::test]
 async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     post_user_message(
@@ -82,7 +82,7 @@ async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
         latest.mode_state.mode,
         ModeId::from("negative_state_grounding")
     );
-    let profile = PersonaConfig::default()
+    let profile = ModesConfig::default()
         .load_assets()
         .profile_or_unknown(&latest.mode_state.mode);
     assert_eq!(profile.capability_class, "conversation");
@@ -110,7 +110,7 @@ async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
 
 #[tokio::test]
 async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     let lock = app
@@ -178,7 +178,7 @@ async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route()
 
 #[tokio::test]
 async fn user_override_can_switch_to_serious_engineer_through_lock() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     let lock = app
@@ -239,7 +239,7 @@ async fn user_override_can_switch_to_serious_engineer_through_lock() {
 
 #[tokio::test]
 async fn router_lock_unlock_and_replay_mode_events() {
-    let (app, store) = test_app(PersonaConfig::default(), AuthConfig::NoAuth);
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     let res = app
@@ -267,7 +267,10 @@ async fn router_lock_unlock_and_replay_mode_events() {
         json!("serious_engineer")
     );
     assert_eq!(mode_events[1].payload_json["voice_cap"], json!("off"));
-    assert_eq!(mode_events[1].payload_json["activeSkills"], json!([]));
+    assert_eq!(
+        mode_events[1].payload_json["activeSkills"],
+        json!(["serious-engineer-ops"])
+    );
     assert!(
         mode_events[1].payload_json["router_reason"]
             .as_str()
@@ -348,7 +351,7 @@ async fn router_lock_unlock_and_replay_mode_events() {
     let latest = store.get_session(session.id).await.unwrap();
     assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
     assert_eq!(
-        PersonaConfig::default()
+        ModesConfig::default()
             .load_assets()
             .profile_or_unknown(&latest.mode_state.mode)
             .voice_cap,

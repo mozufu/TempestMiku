@@ -39,6 +39,6 @@ pub use store::{
     StoreEvent,
 };
 pub use tm_agents::MailboxRegistry;
-pub use tm_persona::{
-    ModeCatalog, ModeId, ModeProfile, PersonaAssets, PersonaConfig, PersonaPrompt, PersonaStatus,
+pub use tm_modes::{
+    ModeCatalog, ModeId, ModeProfile, ModeAssets, ModesConfig, ComposedPrompt, AssetStatus,
 };

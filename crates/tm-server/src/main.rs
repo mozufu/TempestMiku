@@ -5,7 +5,7 @@ use tm_artifacts::default_root;
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
 use tm_host::{ApprovalPolicy, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig};
 use tm_llm::OpenAiClient;
-use tm_persona::PersonaConfig;
+use tm_modes::ModesConfig;
 use tm_sandbox::DenoSandbox;
 use tm_sandbox::DenoSandboxOptions;
 
@@ -27,8 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = std::env::var("TM_SERVER_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8787".to_string())
         .parse()?;
-    let persona = std::env::var_os("TM_PERSONA_PATH")
-        .map(PersonaConfig::from_path)
+    let persona = std::env::var_os("TM_MODES_PATH")
+        .map(ModesConfig::from_path)
         .unwrap_or_default();
     let host_config = load_host_config()?;
     let linked_folders = host_config.linked_folders()?;

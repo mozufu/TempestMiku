@@ -6,12 +6,10 @@
       "label": "Personal Assistant",
       "description": "Planning, reminders, writing, open loops, and decision cleanup.",
       "voiceCap": "medium",
-      "voiceGuidance": "medium: keep Miku warm and present, with only occasional voice flourishes.",
       "defaultScope": "global",
       "activeSkills": ["miku-voice", "personal-assistant-state-capture"],
       "capabilities": ["memory.recall", "memory.propose"],
       "capabilityClass": "conversation",
-      "addendum": "Active mode: Personal Assistant. Use conversational planning and light memory; do not unlock engineering host capabilities.",
       "route": {
         "isDefault": true,
         "priority": 0,
@@ -23,12 +21,10 @@
       "label": "Ambiguity Grill",
       "description": "Vague or contradictory prompts become sharp clarification before planning.",
       "voiceCap": "high",
-      "voiceGuidance": "high: teasing and sharp is allowed; roast the fog, not Brian.",
       "defaultScope": "global",
       "activeSkills": ["miku-voice", "ambiguity-grill"],
       "capabilities": [],
       "capabilityClass": "conversation",
-      "addendum": "Active mode: Ambiguity Grill (mode 2). Ask 3-7 sharp clarifying questions before planning; keep capability scope conversational.",
       "route": {
         "priority": 90,
         "triggers": ["燒烤", "grill me", "ambiguous"]
@@ -39,12 +35,10 @@
       "label": "Negative-State Grounding",
       "description": "Overwhelm, exhaustion, spiraling, or self-attack gets stabilized first.",
       "voiceCap": "high",
-      "voiceGuidance": "high: warmer and softer is allowed; grounding beats productivity.",
       "defaultScope": "global",
       "activeSkills": ["miku-voice", "negative-state-grounding"],
       "capabilities": [],
       "capabilityClass": "conversation",
-      "addendum": "Active mode: Negative-State Grounding (mode 3). This is a conversation-only posture, not a new capability set. Stabilize first, preserve the health-over-productivity rule, and offer at most one next action that takes 10 minutes or less. Do not propose memory writes from negative-state prompts unless Brian explicitly asks to remember a stable preference.",
       "route": {
         "priority": 80,
         "triggers": [
@@ -75,12 +69,10 @@
       "label": "Serious Engineer",
       "description": "Code, safety, production, money, external, irreversible, legal, or medical work.",
       "voiceCap": "off",
-      "voiceGuidance": "off: keep identity but remove cute flourishes; precision, tests, approvals, and rollback matter most.",
       "defaultScope": "project:tempestmiku",
-      "activeSkills": [],
+      "activeSkills": ["serious-engineer-ops"],
       "capabilities": ["fs.*", "code.*", "proc.*", "backend.coding"],
       "capabilityClass": "engineering",
-      "addendum": "Active mode: Serious Engineer (mode 4). Use fs.*, code.*, and proc.* through the SDK for linked-repo work. Voice cap: off - preserve Tempest Miku identity, but keep technical replies precise and avoid voice flourishes unless the context is explicitly light. Never use shell strings; use proc.run(cmd, args). Destructive, external, or out-of-grant actions require approval or fail closed.",
       "route": {
         "priority": 70,
         "triggers": [
@@ -110,12 +102,10 @@
       "label": "Handoff",
       "description": "Delegate implementation-heavy coding work through the configured coding backend.",
       "voiceCap": "off",
-      "voiceGuidance": "off: keep the brief precise, self-contained, and evidence-first.",
       "defaultScope": "project:tempestmiku",
       "activeSkills": ["oh-my-pi-handoff"],
       "capabilities": ["agents.*", "backend.coding"],
       "capabilityClass": "handoff",
-      "addendum": "Active mode: Handoff (mode 5). Delegate implementation-heavy coding work through the configured coding backend. Voice cap: off - preserve Tempest Miku identity, but keep the handoff precise and evidence-first.",
       "route": {
         "priority": 100,
         "triggers": ["handoff", "delegate"]

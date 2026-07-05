@@ -707,7 +707,7 @@ pub async fn run_workflow(
         .context("coding prompt did not route to Serious Engineer")?;
     let coding_mode = mode.data["mode"].as_str().unwrap_or("serious_engineer");
     ensure!(mode.data["voice_cap"] == json!("off"));
-    ensure!(mode.data["activeSkills"] == json!([]));
+    ensure!(mode.data["activeSkills"] == json!(["serious-engineer-ops"]));
     let coding_final = final_text(&coding_events)?;
     ensure!(!coding_final.contains("喵"));
     rounds.push(conversation_round(

@@ -225,7 +225,7 @@ where
 }
 
 pub(super) fn mode_response(
-    persona: &PersonaConfig,
+    persona: &ModesConfig,
     mode_state: ModeState,
     changed: bool,
     ignored_reason: Option<String>,
@@ -281,7 +281,7 @@ where
 pub(super) fn mode_changed_payload(
     from: Option<ModeId>,
     mode_state: &ModeState,
-    persona_status: crate::PersonaStatus,
+    persona_status: crate::AssetStatus,
     profile: &ModeProfile,
 ) -> Result<Value> {
     Ok(serde_json::to_value(StoreEvent::ModeChanged {
@@ -299,15 +299,15 @@ pub(super) fn mode_changed_payload(
     })?)
 }
 
-pub(super) fn mode_profile(persona: &PersonaConfig, mode: &ModeId) -> ModeProfile {
+pub(super) fn mode_profile(persona: &ModesConfig, mode: &ModeId) -> ModeProfile {
     persona.load_assets().profile_or_unknown(mode)
 }
 
-pub(super) fn active_skills(persona: &PersonaConfig, mode: &ModeId) -> Vec<String> {
+pub(super) fn active_skills(persona: &ModesConfig, mode: &ModeId) -> Vec<String> {
     mode_profile(persona, mode).active_skills
 }
 
-pub(super) fn validate_mode(persona: &PersonaConfig, mode: ModeId) -> Result<ModeId> {
+pub(super) fn validate_mode(persona: &ModesConfig, mode: ModeId) -> Result<ModeId> {
     let assets = persona.load_assets();
     if assets.mode_profile(&mode).is_some() {
         Ok(mode)
@@ -328,7 +328,7 @@ pub(super) fn validate_mode(persona: &PersonaConfig, mode: ModeId) -> Result<Mod
 pub(super) fn build_turn_prompt<S, M, C>(
     state: &AppState<S, M, C>,
     mode: &ModeId,
-) -> tm_persona::PersonaPrompt {
+) -> tm_modes::ComposedPrompt {
     state.persona.build_system_prompt(
         mode,
         DEFAULT_SYSTEM_PROMPT,
@@ -360,11 +360,11 @@ fn linked_folder_capability_notes(linked_folders: &LinkedFolders) -> String {
 mod tests {
     use super::validate_mode;
     use crate::ServerError;
-    use tm_persona::{ModeId, PersonaConfig};
+    use tm_modes::{ModeId, ModesConfig};
 
     #[test]
     fn validate_mode_accepts_known_modes() {
-        let persona = PersonaConfig::default();
+        let persona = ModesConfig::default();
         for id in ["personal_assistant", "serious_engineer", "handoff"] {
             assert!(validate_mode(&persona, ModeId::from(id)).is_ok(), "{id}");
         }
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn validate_mode_rejects_unknown_id() {
-        let persona = PersonaConfig::default();
+        let persona = ModesConfig::default();
         let err = validate_mode(&persona, ModeId::from("nonexistent_mode")).unwrap_err();
         assert!(
             matches!(err, ServerError::InvalidRequest(ref msg) if msg.contains("unknown mode")),

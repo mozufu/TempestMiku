@@ -15,7 +15,7 @@ tm-llm = { path = "crates/tm-llm" }
 tm-sandbox = { path = "crates/tm-sandbox" }
 tm-artifacts = { path = "crates/tm-artifacts" }
 tm-host = { path = "crates/tm-host" }
-tm-persona = { path = "crates/tm-persona" }
+tm-modes = { path = "crates/tm-modes" }
 tm-server = { path = "crates/tm-server" }
 tm-agents = { path = "crates/tm-agents" }
 

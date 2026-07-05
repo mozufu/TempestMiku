@@ -146,7 +146,7 @@ async fn start_server(
         store,
         memory,
         chat,
-        tm_server::PersonaConfig::default(),
+        tm_server::ModesConfig::default(),
         auth,
     )
     .with_artifact_root(artifact_root.clone())
@@ -172,7 +172,7 @@ async fn start_actor_smoke_server() -> (String, tokio::task::JoinHandle<()>, tem
         store,
         memory,
         chat,
-        tm_server::PersonaConfig::default(),
+        tm_server::ModesConfig::default(),
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone());

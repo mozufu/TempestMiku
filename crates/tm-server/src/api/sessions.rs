@@ -19,7 +19,7 @@ pub struct CreateSessionResponse {
     pub id: Uuid,
     pub mode: ModeId,
     pub mode_state: ModeState,
-    pub persona_status: crate::PersonaStatus,
+    pub persona_status: crate::AssetStatus,
     pub label: String,
     pub voice_cap: String,
     pub default_scope: String,
@@ -57,7 +57,7 @@ pub struct SessionMessagesResponse {
     pub id: Uuid,
     pub mode: ModeId,
     pub mode_state: ModeState,
-    pub persona_status: crate::PersonaStatus,
+    pub persona_status: crate::AssetStatus,
     pub label: String,
     pub voice_cap: String,
     pub default_scope: String,
@@ -216,9 +216,9 @@ where
 }
 
 fn session_response(
-    persona: &PersonaConfig,
+    persona: &ModesConfig,
     session: crate::SessionRecord,
-    persona_status: crate::PersonaStatus,
+    persona_status: crate::AssetStatus,
 ) -> CreateSessionResponse {
     let profile = mode_profile(persona, &session.mode);
     CreateSessionResponse {
@@ -234,7 +234,7 @@ fn session_response(
 }
 
 fn session_summary_response(
-    persona: &PersonaConfig,
+    persona: &ModesConfig,
     summary: crate::SessionSummaryRecord,
 ) -> SessionSummaryResponse {
     let title = compact_session_text(summary.summary.as_deref())
@@ -662,7 +662,7 @@ fn spawn_personal_assistant_state_capture<S, M, C>(
 }
 
 fn memory_write_proposal_from_request(
-    persona: &PersonaConfig,
+    persona: &ModesConfig,
     session_id: Uuid,
     session: &crate::SessionRecord,
     payload: ProposeMemoryWriteRequest,

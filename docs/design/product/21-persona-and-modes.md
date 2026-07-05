@@ -26,25 +26,30 @@ coding product:
 
 ```
 system prompt = [ SOUL identity (constant) ]
-              + [ active mode profile ]
-              + [ active skill markdown for that mode ]
-              + [ voice overlay @ context-appropriate intensity ]
+              + [ active skill markdown for that mode, frontmatter stripped ]
+              + [ voice overlay @ context-appropriate intensity, via miku-voice when loaded ]
               + [ memory: recall context + summary (§22) ]
 ```
 
+Mode id, capability list, voice cap, and scope are dispatch data the router and host act on — they
+are never rendered into the prompt as labels. Miku doesn't read "Mode id: serious_engineer" or
+"Voice cap: off"; she reads SOUL.md plus whichever skill markdown the active mode attached. Voice
+intensity likewise isn't told to her as a value — it's implicit in whether `miku-voice` is among the
+attached skills, and the skill's own concentration table reads intensity from context.
+
 Rust vendors the default `SOUL.md`, `modes.json`, and bundled skills under
-`crates/tm-persona/assets/`. A configured persona asset path may override those files; missing or
+`crates/tm-modes/assets/`. A configured mode/skill asset path may override those files; missing or
 unreadable configured assets degrade with warnings but fall back to the bundled defaults so the
 default Miku identity and mode catalog stay available.
 
 Catalog skill references are validated against loaded skill assets. Every bundled `activeSkills`
 entry must resolve to `skills/<name>/SKILL.md`. For configured catalogs, a missing active skill
 degrades with the stable warning
-`active skill <skill> referenced by mode <mode> is missing at skills/<skill>/SKILL.md; prompt will use active mode profile fallback`,
-and prompt composition inserts a `missing skill://<skill>` section telling the model to use the
-active mode profile as the fallback.
+`active skill <skill> referenced by mode <mode> is missing at skills/<skill>/SKILL.md; prompt will use the missing-skill fallback`,
+and prompt composition falls back to a short, generic "default to careful, capability-appropriate
+behavior" note in place of that skill's markdown.
 
-In P2, `skill://<name>` is only a prompt-composition label for injected skill markdown. It is not a
+In P2, skill loading and mode/skill ids are server-side dispatch concerns only; they are not a
 registered `resources.read/list/preview` scheme, and the `skills` global remains `undefined` until
 P4/P7 ships the skill proposal/import/reload lifecycle with explicit grants (§7.4 / §9.3).
 
@@ -63,7 +68,7 @@ Pick the smallest sufficient mode.
 | 1 | **Personal Assistant** (default) | planning, reminders, writing, open loops, decision cleanup | conversation + light `memory.*` / `drive.*`, TODO | `medium` | `miku-voice`, `personal-assistant-state-capture` |
 | 2 | **Ambiguity Grill / 燒烤我** | vague / contradictory / "grill me" / "燒烤我" / hiding the real problem | conversation; 3–7 sharp Qs → plan | `high` | `miku-voice`, `ambiguity-grill` |
 | 3 | **Negative-State Grounding** | overwhelmed / self-deprecating / exhausted / spiraling / stuck | conversation; stabilize → at most one ≤10-min action | `high` | `miku-voice`, `negative-state-grounding` |
-| 4 | **Serious Engineer** | code / safety / production / money / external / irreversible / legal / medical | native `fs.*` / `code.*` / `proc.*` (§25), with P0a OMP ACP still available as a replaceable bridge; future light `agents.*` | `off` | — |
+| 4 | **Serious Engineer** | code / safety / production / money / external / irreversible / legal / medical | native `fs.*` / `code.*` / `proc.*` (§25), with P0a OMP ACP still available as a replaceable bridge; future light `agents.*` | `off` | `serious-engineer-ops` |
 | 5 | **Handoff** | delegate impl-heavy work to a coding agent (Oh-my-pi / A2A) | `agents.*` (§23) + brief generation | `off` | `oh-my-pi-handoff` |
 
 Modes 2/3 are conversational *postures* (no new capabilities); 4/5 unlock the technical surface.

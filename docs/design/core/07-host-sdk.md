@@ -70,7 +70,8 @@ of truth.
  * required agents.* grant. In ungranted sessions it remains `undefined`.
  * P3 shipped run, spawn, parallel, and msg; the first P3-plus foundation slice
  * adds live per-actor inbox delivery through send, wait, inbox, and list.
- * pipeline, broadcast, cancel, restart, and child approval routing remain later
+ * Child approval routing through the live HTTP broker is now in place; pipeline,
+ * broadcast, cancel, restart, and stricter protocol enforcement remain later
  * P3-plus work.
  */
 
@@ -560,7 +561,7 @@ approval, and audit boundaries. The root roadmap is canonical (§28), but the SD
 | Namespace / surface | Target milestone | SDK rule |
 |---|---|---|
 | `memory.*` | P2/P4 split | P2 exposes memory reads as `memory://` resources through `resources.read:memory`; the `memory` global remains `undefined`. A future explicit `memory.*` namespace may expose minimum profile/user recall and state-capture calls, while P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
-| `agents.*` | P3/P3+ | P3 exposes `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` with `tm-agents`, actor lifecycle, mailbox/roster, supervision defaults, and `agent://` resource handling. The first P3-plus foundation slice adds live bounded-inbox `agents.send`, `agents.wait`, `agents.inbox`, and `agents.list`; `pipeline`, `broadcast`, active restart/cancel, and child approval routing remain P3-plus. |
+| `agents.*` | P3/P3+ | P3 exposes `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` with `tm-agents`, actor lifecycle, mailbox/roster, supervision defaults, and `agent://` resource handling. The first P3-plus foundation slice adds live bounded-inbox `agents.send`, `agents.wait`, `agents.inbox`, and `agents.list`, plus child approval routing through the live HTTP broker; `pipeline`, `broadcast`, active restart/cancel, and stricter protocol enforcement remain P3-plus. |
 | `skills.*` / `skill://` reads | P4/P7 split | P2 may compose bundled skill markdown under `skill://...` prompt labels only. `skills` remains `undefined`, and `resources.read/preview/list("skill://...")` must fail closed until P4/P7 defines approval-gated proposals plus safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
 | `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, and drive organizer flows. |
 | `http.*` hardening | P5 or P7 | Keep current `http.get` as a default-deny deterministic allowlisted helper with no open egress; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |

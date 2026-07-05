@@ -320,6 +320,7 @@ impl HostFn for AgentsRunFn {
 
         let spec = ActorSpec {
             id: actor_id.clone(),
+            session_id: session_id.clone(),
             role,
             task,
             mode: None,
@@ -489,6 +490,7 @@ impl HostFn for AgentsSpawnFn {
 
         let spec = ActorSpec {
             id: actor_id.clone(),
+            session_id: session_id.clone(),
             role,
             task,
             mode: None,
@@ -695,6 +697,7 @@ impl HostFn for AgentsParallelFn {
                 actor_id.clone(),
                 ActorSpec {
                     id: actor_id,
+                    session_id: session_id.clone(),
                     role,
                     task: task_str,
                     mode: None,
@@ -959,6 +962,7 @@ impl HostFn for AgentsMsgFn {
         let budget = ActorBudget::default();
         let spec = ActorSpec {
             id: continuation_id.clone(),
+            session_id: ctx.session_id.clone(),
             role: continuation_role,
             task: seeded_task,
             mode: None,

@@ -329,6 +329,238 @@ async fn native_deno_backend_approval_timeout_defaults_to_deny() {
 }
 
 #[tokio::test]
+async fn native_child_actor_approval_replays_and_child_resource_opens() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("repo");
+    std::fs::create_dir_all(linked_root.join("src")).unwrap();
+    std::fs::write(
+        linked_root.join("Cargo.toml"),
+        "[package]\nname = \"native-child-approval-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::write(linked_root.join("src/lib.rs"), "pub fn x() -> i32 { 1 }\n").unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "repo".to_string(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: vec!["cargo".to_string()],
+        safe_args: vec![vec!["cargo".to_string(), "test".to_string()]],
+    }])
+    .unwrap();
+
+    let parent_code = r#"
+const digest = await agents.run("worker", "Run cargo clean with approval, then create a child artifact.");
+display(digest);
+"#;
+    let child_code = r#"
+const run = await proc.run("cargo", ["clean"], { cwd: "repo:" });
+const artifact = artifacts.put("child resource open ok", { title: "child output" });
+display({ exitCode: run.exitCode, artifact: artifact.uri });
+"#;
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("parent_call".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(json!({ "code": parent_code }).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("child_call".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(json!({ "code": child_code }).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("child done with artifact://0".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("parent saw child finish".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+    ]));
+    let cfg = AgentConfig {
+        model: "fake".to_string(),
+        max_turns: 4,
+        cell_budget: CellBudget {
+            wall_ms: 240_000,
+            output_bytes: 50_000,
+        },
+        ..AgentConfig::default()
+    };
+
+    let roster = Arc::new(tm_agents::MailboxRegistry::new());
+    let mut sandbox_options = DenoSandboxOptions {
+        artifact_root: artifact_root.clone(),
+        linked_folders: Some(linked.clone()),
+        approval_timeout: Duration::from_secs(5),
+        ..DenoSandboxOptions::default()
+    };
+    tm_agents::register(
+        &mut sandbox_options.host_registry,
+        &mut sandbox_options.resource_registry,
+        Arc::clone(&roster),
+    );
+
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        PersonaConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone())
+    .with_linked_folders(linked.clone())
+    .with_actor_roster(Arc::clone(&roster));
+    let broker = Arc::clone(&state.approval_broker);
+
+    let executor_options = sandbox_options.clone();
+    let executor_roster = Arc::clone(&roster);
+    let executor_approval_roster = Arc::clone(&roster);
+    let executor_broker = Arc::clone(&broker);
+    let llm_for_executor: Arc<dyn LlmClient> = llm.clone();
+    let executor: Arc<dyn tm_agents::ActorExecutor> =
+        Arc::new(crate::ChatActorExecutor::with_actor_context(
+            llm_for_executor,
+            cfg.clone(),
+            move |session_id, actor_id, grants| {
+                let mut opts = executor_options.clone();
+                opts.session_id = session_id.to_string();
+                opts.actor_id = actor_id.map(str::to_string);
+                opts.grants = opts
+                    .grants
+                    .clone()
+                    .allow_many(grants.names().map(str::to_string));
+                let sink: Arc<dyn CodingEventSink> = Arc::new(crate::RosterCodingEventSink::new(
+                    session_id,
+                    Arc::clone(&executor_approval_roster),
+                ));
+                opts.approval_policy = Arc::new(
+                    crate::HttpApprovalPolicy::new(Arc::clone(&executor_broker), session_id, sink)
+                        .with_actor_id(actor_id.map(str::to_string)),
+                );
+                Arc::new(tm_sandbox::DenoSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
+            },
+            Some(artifact_root.clone()),
+            executor_roster,
+        ));
+    roster.set_executor(executor);
+
+    let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+    let backend = NativeDenoBackend::new(
+        llm_for_backend,
+        cfg,
+        sandbox_options,
+        NativeApprovalMode::Manual,
+        broker,
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    state.wire_lifecycle_sink();
+    let app = app(state);
+    let session = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
+    let session_id = session.id;
+
+    let post_app = app.clone();
+    let post = tokio::spawn(async move {
+        post_app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"handoff child approval"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    });
+
+    let approval = wait_for_event_payload(&store, session.id, "approval").await;
+    assert_eq!(approval["backend"], json!("native-deno"));
+    assert_eq!(approval["action"], json!("proc.run cargo clean"));
+    let actor_id = approval["scope"]["actorId"]
+        .as_str()
+        .expect("child approval should carry actorId")
+        .to_string();
+    let approval_id = approval["approvalId"]
+        .as_str()
+        .and_then(|value| value.parse::<uuid::Uuid>().ok())
+        .unwrap();
+    resolve_test_approval(&app, session.id, approval_id, "approve").await;
+
+    let response = post.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let completed = wait_for_event_payload(&store, session.id, "actor_completed").await;
+    assert_eq!(completed["actor_id"], json!(actor_id));
+    assert_eq!(completed["artifact_uri"], json!("artifact://0"));
+    assert_eq!(
+        completed["history_uri"],
+        json!(format!("history://{actor_id}"))
+    );
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    let kinds = events
+        .iter()
+        .map(|event| event.event_type.as_str())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&"actor_spawned"));
+    assert!(kinds.contains(&"approval"));
+    assert!(kinds.contains(&"approval_resolved"));
+    assert!(kinds.contains(&"actor_completed"));
+    assert!(kinds.contains(&"final"));
+
+    let replay_after_spawn = events
+        .iter()
+        .find(|event| event.event_type == "actor_spawned")
+        .and_then(|event| event.seq.checked_sub(1));
+    let replay = store
+        .events_after(session.id, replay_after_spawn)
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .iter()
+            .any(|event| event.event_type == "approval_resolved"),
+        "Last-Event-ID replay should include child approval resolution"
+    );
+
+    let artifact = get_session_resource_json(&app, session.id, "resolve", "artifact://0").await;
+    assert!(
+        artifact["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("child resource open ok")
+    );
+    let history_uri = format!("history://{actor_id}");
+    let history = get_session_resource_json(&app, session.id, "resolve", &history_uri).await;
+    assert!(
+        history["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("[cell_result]")
+    );
+}
+
+#[tokio::test]
 async fn artifact_resource_route_reads_session_artifact() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().to_path_buf();

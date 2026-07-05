@@ -80,6 +80,12 @@ impl Default for ActorBudget {
 #[derive(Debug, Clone)]
 pub struct ActorSpec {
     pub id: ActorId,
+    /// Parent session UUID string used for replayable SSE/resource routing.
+    ///
+    /// Child actors still own their private model context, but effects they surface
+    /// to the user (approval prompts, lifecycle events, and artifacts) belong to
+    /// the spawning session.
+    pub session_id: String,
     pub role: String,
     pub task: String,
     pub mode: Option<String>,

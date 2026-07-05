@@ -231,4 +231,60 @@ void main() {
     expect(client.resolvedApprovals.single, endsWith(':approve'));
     expect(find.text('Memory proposal'), findsNothing);
   });
+
+  testWidgets('handles actor approval, child resource, and reconnect cursor',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'handoff actor approval');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Handoff'), findsOneWidget);
+    expect(find.textContaining('Actor Worker0 completed'), findsOneWidget);
+    expect(find.text('artifact://0'), findsOneWidget);
+    expect(find.textContaining('待核可 · proc.run cargo clean'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('artifact://0'));
+    await tester.pump();
+    await tester.tap(
+      find.widgetWithText(GestureDetector, 'artifact://0'),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Scripted resource'), findsOneWidget);
+    expect(find.text('Preview for artifact://0'), findsOneWidget);
+
+    await tester.tap(find.byType(ModalBarrier).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    await tester.tap(find.textContaining('待核可 · proc.run cargo clean'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('actorId: Worker0'), findsOneWidget);
+    await tester.tap(find.text('Allow once'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(client.resolvedApprovals, hasLength(1));
+    expect(client.resolvedApprovals.single, endsWith(':approve'));
+    expect(find.textContaining('待核可 · proc.run cargo clean'), findsNothing);
+
+    final remembered = client.rememberedLastEventIds.values.single;
+    await tester.pumpWidget(MikuApp(key: UniqueKey(), client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(client.eventResumeIds.last, remembered);
+    expect(find.textContaining('從事件 #$remembered'), findsOneWidget);
+  });
 }

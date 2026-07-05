@@ -119,11 +119,11 @@ async fn run_native_turn(
     options.grants = options.grants.allow_many(turn.capabilities.iter().cloned());
     options.approval_policy = match approval_mode {
         NativeApprovalMode::Deny => Arc::new(DefaultDenyApprovalPolicy),
-        NativeApprovalMode::Manual => Arc::new(HttpApprovalPolicy {
-            broker: approval_broker,
-            session_id: turn.session_id,
-            sink: Arc::clone(&sink),
-        }),
+        NativeApprovalMode::Manual => Arc::new(HttpApprovalPolicy::new(
+            approval_broker,
+            turn.session_id,
+            Arc::clone(&sink),
+        )),
     };
     cfg.system_prompt = turn.system_prompt.clone();
 
@@ -146,10 +146,31 @@ async fn run_native_turn(
     })
 }
 
-struct HttpApprovalPolicy {
+pub struct HttpApprovalPolicy {
     broker: Arc<ApprovalBroker>,
     session_id: Uuid,
     sink: Arc<dyn CodingEventSink>,
+    actor_id: Option<String>,
+}
+
+impl HttpApprovalPolicy {
+    pub fn new(
+        broker: Arc<ApprovalBroker>,
+        session_id: Uuid,
+        sink: Arc<dyn CodingEventSink>,
+    ) -> Self {
+        Self {
+            broker,
+            session_id,
+            sink,
+            actor_id: None,
+        }
+    }
+
+    pub fn with_actor_id(mut self, actor_id: Option<impl Into<String>>) -> Self {
+        self.actor_id = actor_id.map(Into::into);
+        self
+    }
 }
 
 #[async_trait]
@@ -165,7 +186,7 @@ impl ApprovalPolicy for HttpApprovalPolicy {
             .request_permission_detailed_for_backend(
                 self.session_id,
                 NATIVE_DENO_BACKEND,
-                approval_prompt(&action),
+                approval_prompt(&action, self.actor_id.as_deref()),
                 timeout,
                 Arc::clone(&self.sink),
             )
@@ -175,13 +196,19 @@ impl ApprovalPolicy for HttpApprovalPolicy {
     }
 }
 
-fn approval_prompt(action: &str) -> ApprovalPrompt {
+fn approval_prompt(action: &str, actor_id: Option<&str>) -> ApprovalPrompt {
+    let mut scope = serde_json::Map::new();
+    scope.insert("action".to_string(), json!(action));
+    scope.insert(
+        "capability".to_string(),
+        json!(action.split_whitespace().next().unwrap_or(action)),
+    );
+    if let Some(actor_id) = actor_id {
+        scope.insert("actorId".to_string(), json!(actor_id));
+    }
     ApprovalPrompt {
         action: action.to_string(),
-        scope: json!({
-            "action": action,
-            "capability": action.split_whitespace().next().unwrap_or(action),
-        }),
+        scope: Value::Object(scope),
         options: vec![
             ApprovalOption {
                 option_id: "allow".to_string(),

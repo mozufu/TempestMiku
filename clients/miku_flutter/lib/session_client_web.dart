@@ -100,6 +100,12 @@ class WebMikuSessionClient implements MikuSessionClient {
       'tool_call_update',
       'cell_start',
       'cell_result',
+      'actor_spawned',
+      'actor_status',
+      'actor_message',
+      'actor_completed',
+      'actor_failed',
+      'actor_cancelled',
       'write_proposal',
       'error',
     ]) {

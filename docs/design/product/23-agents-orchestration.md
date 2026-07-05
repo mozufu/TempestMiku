@@ -97,8 +97,11 @@ P3 ships the first concrete slice only:
 > The first P3-plus slice replaces message-log-only delivery with bounded per-actor inbox queues:
 > fire-and-forget now reaches a live actor inbox, `opts.await = true` waits for a live reply when
 > the target is still running, and already completed actors keep the old seeded-continuation fallback.
-> Lower-level `send`/`wait`/`inbox`/`list` are live; `broadcast`, `pipeline`, active supervision,
-> cancel, and child approval routing remain later P3-plus work.
+> Lower-level `send`/`wait`/`inbox`/`list` are live. Child approval requests now route through the
+> parent session's live `HttpApprovalPolicy` + `ApprovalBroker`, so approval-gated effects inside
+> child actors emit replayable SSE `approval` / `approval_resolved` events and resolve through the
+> same UI/API path as top-level coding turns. `broadcast`, `pipeline`, active supervision, cancel,
+> and stricter protocol enforcement remain later P3-plus work.
 
 The remaining §23 full surface is split across the landed P3-plus foundation and later P3-plus work:
 

@@ -23,9 +23,9 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
+use tm_agents::{AgentResourceHandler, HistoryResourceHandler, MailboxRegistry};
 use tm_artifacts::{ResourceContent, preview};
 use tm_core::DEFAULT_SYSTEM_PROMPT;
-use tm_agents::{AgentResourceHandler, HistoryResourceHandler, MailboxRegistry};
 use tm_host::{
     CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
     ResourceRegistry,
@@ -127,6 +127,11 @@ impl<S, M, C> AppState<S, M, C> {
         self
     }
 
+    pub fn with_approval_broker(mut self, broker: Arc<ApprovalBroker>) -> Self {
+        self.approval_broker = broker;
+        self
+    }
+
     pub fn with_coding_backend(mut self, backend: Arc<dyn CodingBackend>) -> Self {
         self.coding_backend = Some(backend);
         self
@@ -167,23 +172,56 @@ impl<S, M, C> AppState<S, M, C> {
         let store = Arc::clone(&self.store);
         let live_events = Arc::clone(&self.live_events);
         let handle = tokio::runtime::Handle::current();
-        self.actor_roster.set_lifecycle_hook(move |session_id, event| {
-            let Ok(session_uuid) = session_id.parse::<Uuid>() else { return };
-            let event_type = event.event_type().to_string();
-            let Ok(payload) = serde_json::to_value(&event) else { return };
-            let sender = live_events
-                .lock()
-                .entry(session_uuid)
-                .or_insert_with(|| broadcast::channel(256).0)
-                .clone();
-            let store = Arc::clone(&store);
-            handle.spawn(async move {
-                match store.append_event(session_uuid, &event_type, payload).await {
-                    Ok(session_event) => { let _ = sender.send(session_event); }
-                    Err(err) => tracing::warn!(error = %err, "lifecycle event store write failed"),
-                }
+        self.actor_roster
+            .set_lifecycle_hook(move |session_id, event| {
+                let Ok(session_uuid) = session_id.parse::<Uuid>() else {
+                    return;
+                };
+                let event_type = event.event_type().to_string();
+                let Ok(payload) = serde_json::to_value(&event) else {
+                    return;
+                };
+                let sender = live_events
+                    .lock()
+                    .entry(session_uuid)
+                    .or_insert_with(|| broadcast::channel(256).0)
+                    .clone();
+                let store = Arc::clone(&store);
+                handle.spawn(async move {
+                    match store.append_event(session_uuid, &event_type, payload).await {
+                        Ok(session_event) => {
+                            let _ = sender.send(session_event);
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "lifecycle event store write failed")
+                        }
+                    }
+                });
             });
-        });
+
+        let store = Arc::clone(&self.store);
+        let live_events = Arc::clone(&self.live_events);
+        self.actor_roster
+            .set_raw_event_hook(move |session_id, event_type, payload| {
+                let store = Arc::clone(&store);
+                let live_events = Arc::clone(&live_events);
+                Box::pin(async move {
+                    let session_uuid = session_id
+                        .parse::<Uuid>()
+                        .map_err(|err| format!("invalid session id {session_id}: {err}"))?;
+                    let sender = live_events
+                        .lock()
+                        .entry(session_uuid)
+                        .or_insert_with(|| broadcast::channel(256).0)
+                        .clone();
+                    let event = store
+                        .append_event(session_uuid, &event_type, payload)
+                        .await
+                        .map_err(|err| err.to_string())?;
+                    let _ = sender.send(event);
+                    Ok(())
+                })
+            });
     }
 }
 

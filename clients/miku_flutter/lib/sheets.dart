@@ -630,241 +630,244 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
     final accent = widget.accent;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 9, 16, 18),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 38,
-            height: 5,
-            decoration: BoxDecoration(
-              color: tok.border,
-              borderRadius: BorderRadius.circular(999),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: accent,
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: Icon(
-                  Icons.warning_amber_rounded,
-                  color: _textOn(accent),
-                  size: 21,
-                ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 38,
+              height: 5,
+              decoration: BoxDecoration(
+                color: tok.border,
+                borderRadius: BorderRadius.circular(999),
               ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '需要你核可',
-                      style: TextStyle(
-                        color: tok.text,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                    const SizedBox(height: 1),
-                    Text(
-                      'Miku 想執行操作',
-                      style: TextStyle(
-                        color: tok.muted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 13),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(13),
-            decoration: BoxDecoration(
-              color: tok.bg,
-              border: Border.all(color: tok.border),
-              borderRadius: BorderRadius.circular(13),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.approval.action,
-                  style: TextStyle(
-                    color: tok.text,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    fontFamily: 'monospace',
-                    height: 1.5,
-                  ),
-                ),
-                if (widget.approval.scope.isNotEmpty) ...[
-                  const SizedBox(height: 9),
-                  Wrap(
-                    spacing: 7,
-                    runSpacing: 6,
-                    children: widget.approval.scope.entries.map((e) {
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: tok.surface,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text(
-                          '${e.key}: ${e.value}',
-                          style: TextStyle(
-                            color: tok.muted,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 13),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                '逾時自動拒絕',
-                style: TextStyle(
-                  color: tok.muted,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              Text(
-                '${_secs}s',
-                style: TextStyle(
-                  color: tok.text,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: _secs / _initialSecs,
-              backgroundColor: tok.border.withOpacity(0.6),
-              valueColor: AlwaysStoppedAnimation<Color>(accent),
-              minHeight: 5,
-            ),
-          ),
-          const SizedBox(height: 14),
-          if (widget.approval.options.isEmpty)
+            const SizedBox(height: 14),
             Row(
               children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: widget.onDeny,
-                    child: Container(
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: tok.bg,
-                        border: Border.all(color: tok.border),
-                        borderRadius: BorderRadius.circular(13),
-                      ),
-                      child: Center(
-                        child: Text(
-                          '拒絕',
-                          style: TextStyle(
-                            color: tok.text,
-                            fontSize: 14.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: accent,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Icon(
+                    Icons.warning_amber_rounded,
+                    color: _textOn(accent),
+                    size: 21,
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 11),
                 Expanded(
-                  flex: 3,
-                  child: GestureDetector(
-                    onTap: widget.onApprove,
-                    child: Container(
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: accent,
-                        borderRadius: BorderRadius.circular(13),
-                      ),
-                      child: Center(
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.check, color: _textOn(accent), size: 17),
-                            const SizedBox(width: 7),
-                            Text(
-                              '核可並執行',
-                              style: TextStyle(
-                                color: _textOn(accent),
-                                fontSize: 14.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '需要你核可',
+                        style: TextStyle(
+                          color: tok.text,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.3,
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 1),
+                      Text(
+                        'Miku 想執行操作',
+                        style: TextStyle(
+                          color: tok.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
-            )
-          else
-            Column(
-              children: widget.approval.options.map((option) {
-                final isReject = option.kind.startsWith('reject') ||
-                    option.kind.startsWith('deny');
-                final buttonColor = isReject ? tok.bg : accent;
-                final textColor = isReject ? tok.text : _textOn(accent);
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: GestureDetector(
-                    onTap: () => widget.onOption(option),
-                    child: Container(
-                      width: double.infinity,
-                      height: 46,
-                      decoration: BoxDecoration(
-                        color: buttonColor,
-                        border: Border.all(
-                          color: isReject ? tok.border : accent,
+            ),
+            const SizedBox(height: 13),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(13),
+              decoration: BoxDecoration(
+                color: tok.bg,
+                border: Border.all(color: tok.border),
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.approval.action,
+                    style: TextStyle(
+                      color: tok.text,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                      height: 1.5,
+                    ),
+                  ),
+                  if (widget.approval.scope.isNotEmpty) ...[
+                    const SizedBox(height: 9),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 6,
+                      children: widget.approval.scope.entries.map((e) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 9, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: tok.surface,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            '${e.key}: ${e.value}',
+                            style: TextStyle(
+                              color: tok.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 13),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '逾時自動拒絕',
+                  style: TextStyle(
+                    color: tok.muted,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  '${_secs}s',
+                  style: TextStyle(
+                    color: tok.text,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: _secs / _initialSecs,
+                backgroundColor: tok.border.withOpacity(0.6),
+                valueColor: AlwaysStoppedAnimation<Color>(accent),
+                minHeight: 5,
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (widget.approval.options.isEmpty)
+              Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: widget.onDeny,
+                      child: Container(
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: tok.bg,
+                          border: Border.all(color: tok.border),
+                          borderRadius: BorderRadius.circular(13),
                         ),
-                        borderRadius: BorderRadius.circular(13),
-                      ),
-                      child: Center(
-                        child: Text(
-                          option.name.isEmpty ? option.optionId : option.name,
-                          style: TextStyle(
-                            color: textColor,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
+                        child: Center(
+                          child: Text(
+                            '拒絕',
+                            style: TextStyle(
+                              color: tok.text,
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                );
-              }).toList(),
-            ),
-        ],
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 3,
+                    child: GestureDetector(
+                      onTap: widget.onApprove,
+                      child: Container(
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check,
+                                  color: _textOn(accent), size: 17),
+                              const SizedBox(width: 7),
+                              Text(
+                                '核可並執行',
+                                style: TextStyle(
+                                  color: _textOn(accent),
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            else
+              Column(
+                children: widget.approval.options.map((option) {
+                  final isReject = option.kind.startsWith('reject') ||
+                      option.kind.startsWith('deny');
+                  final buttonColor = isReject ? tok.bg : accent;
+                  final textColor = isReject ? tok.text : _textOn(accent);
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: GestureDetector(
+                      onTap: () => widget.onOption(option),
+                      child: Container(
+                        width: double.infinity,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: buttonColor,
+                          border: Border.all(
+                            color: isReject ? tok.border : accent,
+                          ),
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: Center(
+                          child: Text(
+                            option.name.isEmpty ? option.optionId : option.name,
+                            style: TextStyle(
+                              color: textColor,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+          ],
+        ),
       ),
     );
   }

@@ -75,6 +75,15 @@ compare rounds without scraping logs:
 }
 ```
 
+## Actor Smoke
+
+`tm_e2e::run_actor_smoke` is a narrow public-API smoke used by tests for the
+P3+ actor surface. It creates a Handoff session, watches actor lifecycle events
+over SSE, resolves a child `native-deno` approval through
+`POST /sessions/:id/approvals/:approval_id`, opens the child `artifact://`
+resource through the session resource gateway, and reconnects with
+`Last-Event-ID` to prove replay includes the approval and completion events.
+
 ## Live Speaker Run
 
 Live mode uses an OpenAI-compatible model as the outside test actor. It is
@@ -90,6 +99,8 @@ Use `TM_E2E_SPEAKER_MODEL` to choose a separate model for the E2E actor.
 
 The workflow verifies the public P1/P2 surface: session creation, Miku persona
 metadata, SSE streaming and replay, mode routing, memory approval/persistence,
-project promotion, and resource reads. The full native Deno engineering path
-remains covered by the existing focused server tests for `fs.*`, `code.*`,
-`proc.*`, artifacts, and approval approve/deny/timeout behavior.
+project promotion, and resource reads. Actor smoke verifies the public P3+
+attach/approve/resource/replay path. The full native Deno engineering path
+remains covered by focused server tests for `fs.*`, `code.*`, `proc.*`,
+artifacts, child actor approval routing, and approval approve/deny/timeout
+behavior.

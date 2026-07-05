@@ -1,4 +1,6 @@
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -12,6 +14,10 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 use crate::actor::{ActorId, ActorLifecycleEvent, ActorRecord, ActorStatus};
 use crate::executor::ActorExecutor;
 use crate::supervise::FailureReason;
+
+type RawEventFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
+type RawEventHook =
+    dyn Fn(String, String, serde_json::Value) -> RawEventFuture + Send + Sync + 'static;
 
 /// A plain-prose message between actors (§23.2).
 ///
@@ -194,6 +200,11 @@ pub struct MailboxRegistry {
     /// the hook synchronously — the hook implementation is responsible for routing the event
     /// to the right session SSE stream (typically via `tokio::runtime::Handle::spawn`).
     lifecycle_hook: std::sync::OnceLock<Box<dyn Fn(String, ActorLifecycleEvent) + Send + Sync>>,
+    /// Optional raw session-event hook for non-lifecycle actor-thread events.
+    ///
+    /// Child approval requests use this so they can write replayable SSE events from
+    /// their own worker threads without depending on `tm-server` storage types.
+    raw_event_hook: std::sync::OnceLock<Box<RawEventHook>>,
 }
 
 impl MailboxRegistry {
@@ -206,6 +217,7 @@ impl MailboxRegistry {
             messages: RwLock::new(Vec::new()),
             transcripts: RwLock::new(HashMap::new()),
             lifecycle_hook: std::sync::OnceLock::new(),
+            raw_event_hook: std::sync::OnceLock::new(),
         }
     }
 
@@ -225,6 +237,30 @@ impl MailboxRegistry {
         if let Some(hook) = self.lifecycle_hook.get() {
             hook(session_id.to_string(), event);
         }
+    }
+
+    /// Install a raw session-event hook. Called once by the server at startup.
+    ///
+    /// Unlike lifecycle events, this hook is async so callers running inside actor
+    /// worker runtimes can await persistence before continuing an approval flow.
+    pub fn set_raw_event_hook(
+        &self,
+        hook: impl Fn(String, String, serde_json::Value) -> RawEventFuture + Send + Sync + 'static,
+    ) {
+        let _ = self.raw_event_hook.set(Box::new(hook));
+    }
+
+    /// Emit a raw session event through the configured hook.
+    pub async fn emit_raw_event(
+        &self,
+        session_id: &str,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), String> {
+        let Some(hook) = self.raw_event_hook.get() else {
+            return Err("raw actor event hook not configured".to_string());
+        };
+        hook(session_id.to_string(), event_type.to_string(), payload).await
     }
 
     /// Inject the executor at startup (called once by `tm-server`'s `build_runtime`).

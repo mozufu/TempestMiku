@@ -10,9 +10,10 @@ use tm_sandbox::DenoSandbox;
 use tm_sandbox::DenoSandboxOptions;
 
 use tm_server::{
-    AgentChatRunner, AppState, AuthConfig, ChatActorExecutor, CodingBackend, EchoChatRunner,
-    InMemoryStore, NativeApprovalMode, NativeDenoBackend, OmpAcpBackend, OmpAcpConfig,
-    PostgresStore, ServerChatRunner, StoreMemoryProvider, app,
+    AgentChatRunner, AppState, ApprovalBroker, AuthConfig, ChatActorExecutor, CodingBackend,
+    CodingEventSink, EchoChatRunner, HttpApprovalPolicy, InMemoryStore, NativeApprovalMode,
+    NativeDenoBackend, OmpAcpBackend, OmpAcpConfig, PostgresStore, RosterCodingEventSink,
+    ServerChatRunner, StoreMemoryProvider, app,
 };
 
 #[tokio::main]
@@ -33,11 +34,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let linked_folders = host_config.linked_folders()?;
     let artifact_root = server_artifact_root(&host_config);
     let roster = Arc::new(MailboxRegistry::new());
+    let approval_broker = Arc::new(ApprovalBroker::default());
     let runtime = build_runtime(
         &host_config,
         &linked_folders,
         artifact_root.clone(),
         Arc::clone(&roster),
+        Arc::clone(&approval_broker),
     )?;
 
     if let Ok(dsn) = std::env::var("TM_DATABASE_URL")
@@ -47,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(
             AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
+                .with_approval_broker(Arc::clone(&approval_broker))
                 .with_actor_roster(Arc::clone(&roster)),
             &linked_folders,
             artifact_root.clone(),
@@ -62,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(
             AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
+                .with_approval_broker(Arc::clone(&approval_broker))
                 .with_actor_roster(roster),
             &linked_folders,
             artifact_root.clone(),
@@ -91,6 +96,7 @@ fn build_runtime(
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
     roster: Arc<MailboxRegistry>,
+    approval_broker: Arc<ApprovalBroker>,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
     let api_key_set = std::env::var("OPENAI_API_KEY")
         .map(|v| !v.trim().is_empty())
@@ -119,6 +125,7 @@ fn build_runtime(
         ..AgentConfig::default()
     };
     let linked_folders = (!linked_folders.is_empty()).then_some(linked_folders.clone());
+    let approval_mode = NativeApprovalMode::parse(&host_config.approvals.mode)?;
     let mut sandbox_options = DenoSandboxOptions {
         artifact_root,
         linked_folders,
@@ -137,6 +144,8 @@ fn build_runtime(
     let executor_options = sandbox_options.clone();
     let executor_artifact_root = executor_options.artifact_root.clone();
     let executor_roster = Arc::clone(&roster);
+    let executor_approval_roster = Arc::clone(&roster);
+    let executor_approval_broker = Arc::clone(&approval_broker);
     let executor: Arc<dyn tm_agents::ActorExecutor> =
         Arc::new(ChatActorExecutor::with_actor_context(
             Arc::clone(&llm),
@@ -151,6 +160,20 @@ fn build_runtime(
                     .grants
                     .clone()
                     .allow_many(grants.names().map(str::to_string));
+                if matches!(approval_mode, NativeApprovalMode::Manual) {
+                    let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
+                        session_id,
+                        Arc::clone(&executor_approval_roster),
+                    ));
+                    opts.approval_policy = Arc::new(
+                        HttpApprovalPolicy::new(
+                            Arc::clone(&executor_approval_broker),
+                            session_id,
+                            sink,
+                        )
+                        .with_actor_id(actor_id.map(str::to_string)),
+                    );
+                }
                 Arc::new(DenoSandbox::new(opts)) as Arc<dyn Sandbox>
             },
             Some(executor_artifact_root),
@@ -158,7 +181,6 @@ fn build_runtime(
         ));
     roster.set_executor(executor);
 
-    let approval_mode = NativeApprovalMode::parse(&host_config.approvals.mode)?;
     tracing::info!(model, "real LLM agent runner configured");
     Ok(BuiltRuntime {
         chat: Arc::new(ServerChatRunner::Agent(AgentChatRunner::deno(

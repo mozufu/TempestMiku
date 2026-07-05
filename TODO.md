@@ -164,11 +164,10 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       `agent://` lists all actors; `history://<id>` serves real bounded transcripts (P3.3).
 - [x] Approval-gated effects inside child agents still route through the same approval broker and
       timeout/default-deny behavior.
-      **Deferred to P3-plus:** Child actors always get `DefaultDenyApprovalPolicy` — approval-gated
-      ops (file overwrite, unsafe `proc.run`, etc.) receive `ApprovalTimeoutError` and are denied.
-      Fail-closed is guaranteed. Wiring child actors to the live `HttpApprovalPolicy` + `ApprovalBroker`
-      requires threading a `CodingEventSink` factory through `ChatActorExecutor` so child agents can
-      emit SSE approval events from their dedicated threads — deferred to P3-plus.
+      **Resolved (P3-plus):** Child actor sandboxes now use the live `HttpApprovalPolicy` +
+      `ApprovalBroker` when manual approvals are enabled. `RosterCodingEventSink` routes approval
+      and approval-resolution events from child worker threads into the parent session's replayable
+      SSE/event log; timeout/default-deny behavior still holds when no live policy is configured.
 - [x] Normal `cargo test` remains external-service-free.
 
 ## P3.0 Scope lock
@@ -208,8 +207,9 @@ Acceptance:
 - [x] Each actor has its own context window and a granted memory scope; no shared mutable state
       between actors.
       **Resolved:** Each actor gets fresh `Agent::run()` invocation with no shared message history.
-      **P3-plus update:** child actors inherit only the caller's `agents.*` grants so live mailbox
-      coordination works without inheriting filesystem/process powers.
+      **P3-plus update:** child `ActorSpec` grants still carry only caller `agents.*` grants for
+      mailbox coordination; linked-folder `fs.*` / `code.*` / `proc.*` grants come from the sandbox
+      config and remain approval-bound.
 - [x] Sub-agents start with no conversation history; everything needed is in the assignment + shared
       context (encapsulation by design).
 - [x] Persist actor lifecycle events in the session event log for replay: spawns, messages, results,
@@ -309,8 +309,8 @@ Acceptance:
 - [x] Spill large child output to `artifact://` rather than parent context; only bounded digests
       return to the orchestrator's model context.
       **Resolved:** `ChatActorExecutor::run_to_digest` uses `CollectingSink` to capture all events;
-      opens `ArtifactStore` for the child session after run; first artifact → `artifact_uri`;
-      transcript → written to child artifact store → `history_uri`. `ActorDigest.history_content`
+      opens `ArtifactStore` for the parent session after run; new child artifact → `artifact_uri`;
+      transcript → `history://<actor>`. `ActorDigest.history_content`
       carries the raw transcript (skipped from JSON so it never reaches the model); orchestrator
       stores it via `MailboxRegistry.store_transcript`.
 - [x] Include provenance links from parent events to child resources.
@@ -355,8 +355,8 @@ Acceptance:
       strings in the server.
       **Resolved:** Confirmed — zero handoff-specific strings in server Rust code.
 - [x] Handoff remains precise, replayable, and approval-bound.
-      **Resolved:** Child actors under handoff use `DefaultDenyApprovalPolicy` (fail-closed); full
-      approval SSE routing deferred to P3-plus per the gate item closure above.
+      **Resolved:** Child actors under Handoff use live HTTP approvals when manual approval mode is
+      configured, and otherwise fail closed through default-deny timeout behavior.
 
 ## P3.5 Client and replay support
 
@@ -374,15 +374,18 @@ Acceptance:
       **Resolved (P3.3):** `ActorDigest.artifact_uri` / `history_uri` returned in digests; served
       via `artifact://` and `history://` resource handlers.
 - [x] Reuse the existing approval UI for child-agent permission requests.
-      **Resolved:** Child actors use `DefaultDenyApprovalPolicy` (fail-closed); full approval SSE
-      routing deferred to P3-plus per P3.4 gate closure.
+      **Resolved (P3-plus):** Child approval requests emit ordinary `approval` /
+      `approval_resolved` SSE events with `scope.actorId`, so existing server routes and Flutter
+      approval UI resolve them without a second approval path.
 - [x] Add Flutter Web/PWA smoke coverage for actor progress, approval, resource open, and reconnect.
-      **Deferred to P3-plus** (confirmed by user 2026-07-05); see `## P3-plus › Client coverage`.
+      **Resolved (P3-plus):** Flutter subscribes to actor lifecycle event types; widget smoke covers
+      actor progress, approval resolution, child `artifact://` open, and reconnect via remembered
+      `Last-Event-ID`.
 
 Acceptance:
 
 - [x] A phone/browser can watch a delegated task, resolve approvals, open child artifacts, and resume
-      after disconnect (server-side complete; Flutter smoke deferred to P3-plus).
+      after disconnect.
 - [x] Clients do not gain direct write authority over agents, memory, skills, or files.
 
 ## P3-plus
@@ -423,11 +426,13 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 
 ### Child actor approvals
 
-- [ ] Wire child actors to the live `HttpApprovalPolicy` + `ApprovalBroker` so
+- [x] Wire child actors to the live `HttpApprovalPolicy` + `ApprovalBroker` so
       approval-gated ops (file overwrite, unsafe `proc.run`) inside sub-agents can be
       resolved by the user rather than auto-denied.
-      Requires threading a `CodingEventSink` factory through `ChatActorExecutor` so child
-      agents can emit SSE `approval_requested` events from their dedicated threads.
+      **Resolved:** `ChatActorExecutor` now receives the parent session id in `ActorSpec`,
+      constructs child sandboxes in the parent session artifact/event namespace, and uses
+      `RosterCodingEventSink` to emit replayable `approval` / `approval_resolved` events from
+      dedicated actor threads.
 
 ### Messaging protocol invariants
 
@@ -448,9 +453,12 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 
 ### Client coverage
 
-- [ ] Flutter Web/PWA smoke tests for actor progress (SSE lifecycle events), approval
+- [x] Flutter Web/PWA smoke tests for actor progress (SSE lifecycle events), approval
       resolution, child resource open (`artifact://` / `history://`), and reconnect via
-      `Last-Event-ID`. Deferred 2026-07-05.
+      `Last-Event-ID`.
+      **Resolved:** `tm-e2e::run_actor_smoke` covers the public HTTP/SSE flow; Flutter widget
+      smoke covers actor event subscription, approval resolution, child resource preview, and
+      reattach with the remembered event cursor.
 
 ## Deferred catalog work
 

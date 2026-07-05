@@ -16,11 +16,10 @@ pub mod store;
 pub mod webui;
 
 pub use api::{AppState, app};
-pub use tm_agents::MailboxRegistry;
 pub use auth::{AuthConfig, ForwardedAuthConfig};
 pub use chat::{
     AgentChatRunner, ChatActorExecutor, ChatRunner, ChatTurn, EchoChatRunner, PersistingEventSink,
-    ServerChatRunner,
+    RosterCodingEventSink, ServerChatRunner,
 };
 pub use coding_backend::{
     ApprovalBroker, ApprovalOption, ApprovalOutcome, ApprovalPrompt, ApprovalResolveDecision,
@@ -32,13 +31,14 @@ pub use memory::{
     MemoryContext, MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal,
     MemoryWriteStatus, StoreMemoryProvider,
 };
-pub use native_deno::{NativeApprovalMode, NativeDenoBackend};
+pub use native_deno::{HttpApprovalPolicy, NativeApprovalMode, NativeDenoBackend};
 pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
 pub use store::{
     InMemoryStore, MessageRecord, ModeState, NewProjectItem, NewSession, PostgresStore,
     ProjectItemKind, ProjectItemRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store,
     StoreEvent,
 };
+pub use tm_agents::MailboxRegistry;
 pub use tm_persona::{
     ModeCatalog, ModeId, ModeProfile, PersonaAssets, PersonaConfig, PersonaPrompt, PersonaStatus,
 };

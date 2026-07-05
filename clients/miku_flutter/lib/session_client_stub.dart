@@ -12,7 +12,10 @@ class ScriptedMikuClient implements MikuSessionClient {
   final Map<String, List<MikuEvent>> _pendingEvents = {};
   final Map<String, String> _approvalSessions = {};
   final Map<String, String> _approvalProposals = {};
+  final Map<String, String> _approvalBackends = {};
   final Map<String, Map<String, Object?>> _proposals = {};
+  final Map<String, String> rememberedLastEventIds = {};
+  final List<String?> eventResumeIds = [];
   final List<String> resolvedApprovals = [];
   final List<String> lockedModes = [];
   final List<String> overriddenModes = [];
@@ -136,7 +139,11 @@ class ScriptedMikuClient implements MikuSessionClient {
 
   @override
   Future<LoadedSession> loadSession(String sessionId) async {
-    final session = _sessions[sessionId] ?? await createSession();
+    final base = _sessions[sessionId] ?? await createSession();
+    final session = _copySession(
+      base,
+      lastEventId: rememberedLastEventIds[base.id] ?? base.lastEventId,
+    );
     _currentId = session.id;
     return LoadedSession(
       session: session,
@@ -148,20 +155,88 @@ class ScriptedMikuClient implements MikuSessionClient {
 
   @override
   Stream<MikuEvent> events(String sessionId, {String? lastEventId}) {
+    eventResumeIds.add(lastEventId);
     return _controllers
         .putIfAbsent(sessionId, () => StreamController<MikuEvent>.broadcast())
         .stream;
   }
 
   @override
-  void rememberLastEventId(String sessionId, String lastEventId) {}
+  void rememberLastEventId(String sessionId, String lastEventId) {
+    rememberedLastEventIds[sessionId] = lastEventId;
+  }
 
   @override
   Future<void> sendMessage(String sessionId, String content) async {
     final controller = _controllers[sessionId];
     if (controller == null) return;
     _appendMessage(sessionId, 'user', content);
-    if (content.toLowerCase().contains('code')) {
+    final lower = content.toLowerCase();
+    if (lower.contains('actor') || lower.contains('handoff')) {
+      _sessions[sessionId] = _sessionForMode(sessionId, 'handoff');
+      controller.add(
+        MikuEvent(
+          type: 'mode',
+          id: _eventId(),
+          data: const {
+            'mode': 'handoff',
+            'label': 'Handoff',
+            'voice_cap': 'off',
+            'activeSkills': ['oh-my-pi-handoff'],
+          },
+        ),
+      );
+      controller.add(MikuEvent(
+        type: 'actor_spawned',
+        id: _eventId(),
+        data: const {
+          'actor_id': 'Worker0',
+          'role': 'worker',
+          'task': 'scripted actor smoke',
+        },
+      ));
+      final approvalId = 'approval-${_nextEventId++}';
+      _approvalSessions[approvalId] = sessionId;
+      _approvalBackends[approvalId] = 'native-deno';
+      final approvalEvent = MikuEvent(
+        type: 'approval',
+        id: _eventId(),
+        data: {
+          'approvalId': approvalId,
+          'backend': 'native-deno',
+          'action': 'proc.run cargo clean',
+          'scope': const {
+            'actorId': 'Worker0',
+            'capability': 'proc.run',
+          },
+          'options': const [
+            {
+              'optionId': 'allow',
+              'name': 'Allow once',
+              'kind': 'allow_once',
+            },
+            {
+              'optionId': 'reject',
+              'name': 'Reject once',
+              'kind': 'reject_once',
+            },
+          ],
+          'timeoutMs': 60000,
+        },
+      );
+      controller.add(approvalEvent);
+      _pendingEvents.putIfAbsent(sessionId, () => []).add(approvalEvent);
+      controller.add(MikuEvent(
+        type: 'actor_completed',
+        id: _eventId(),
+        data: const {
+          'actor_id': 'Worker0',
+          'summary': 'scripted actor complete',
+          'artifact_uri': 'artifact://0',
+          'history_uri': 'history://Worker0',
+        },
+      ));
+    } else if (lower.contains('code')) {
       _sessions[sessionId] = _sessionForMode(sessionId, 'serious_engineer');
       controller.add(
         MikuEvent(
@@ -176,7 +251,9 @@ class ScriptedMikuClient implements MikuSessionClient {
         ),
       );
     }
-    final text = 'Miku heard: $content';
+    final text = lower.contains('actor') || lower.contains('handoff')
+        ? 'Actor Worker0 completed child resource artifact://0'
+        : 'Miku heard: $content';
     controller.add(MikuEvent(type: 'text', id: _eventId(), data: {
       'delta': text,
     }));
@@ -206,6 +283,7 @@ class ScriptedMikuClient implements MikuSessionClient {
       };
       _approvalSessions[approvalId] = sessionId;
       _approvalProposals[approvalId] = proposalId;
+      _approvalBackends[approvalId] = 'memory';
       _proposals[proposalId] = proposal;
       final proposalEvent = MikuEvent(
         type: 'write_proposal',
@@ -260,16 +338,18 @@ class ScriptedMikuClient implements MikuSessionClient {
     final proposalId = _approvalProposals[approvalId];
     _pendingEvents[sessionId]?.removeWhere((event) =>
         (event.type == 'approval' && event.data['approvalId'] == approvalId) ||
-        (event.type == 'write_proposal' &&
+        (proposalId != null &&
+            event.type == 'write_proposal' &&
             event.data['proposalId'] == proposalId));
     final approved = decision == 'approve';
+    final backend = _approvalBackends[approvalId] ?? 'memory';
     controller.add(
       MikuEvent(
         type: 'approval_resolved',
         id: _eventId(),
         data: {
           'approvalId': approvalId,
-          'backend': 'memory',
+          'backend': backend,
           'status': approved ? 'approved' : 'denied',
           'outcome': 'selected',
           'optionId': approved ? 'allow' : 'reject',
@@ -430,6 +510,19 @@ class ScriptedMikuClient implements MikuSessionClient {
           : 'global',
       activeSkills: _activeSkills(mode),
       locked: locked,
+      lastEventId: lastEventId,
+    );
+  }
+
+  MikuSession _copySession(MikuSession session, {String? lastEventId}) {
+    return MikuSession(
+      id: session.id,
+      mode: session.mode,
+      label: session.label,
+      voiceCap: session.voiceCap,
+      defaultScope: session.defaultScope,
+      activeSkills: session.activeSkills,
+      locked: session.locked,
       lastEventId: lastEventId,
     );
   }

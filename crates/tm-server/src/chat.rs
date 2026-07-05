@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     path::PathBuf,
     sync::{Arc, Mutex},
     thread,
@@ -15,7 +16,7 @@ use uuid::Uuid;
 
 use tm_agents::{ActorDigest, ActorError, ActorExecutor, ActorSpec};
 
-use crate::{Result, ServerError, SessionEvent, Store, StoreEvent};
+use crate::{CodingEventSink, Result, ServerError, SessionEvent, Store, StoreEvent};
 
 #[derive(Debug, Clone)]
 pub struct ChatTurn {
@@ -310,6 +311,49 @@ where
     }
 }
 
+// ─── RosterCodingEventSink ───────────────────────────────────────────────────
+
+/// Persists coding-style events through the actor roster's raw event hook.
+///
+/// This is used by child actor approval policies. Child actors run on their own
+/// worker threads, but their user-visible approval prompts still belong to the
+/// parent session event log.
+pub struct RosterCodingEventSink {
+    session_id: Uuid,
+    roster: Arc<tm_agents::MailboxRegistry>,
+}
+
+impl RosterCodingEventSink {
+    pub fn new(session_id: Uuid, roster: Arc<tm_agents::MailboxRegistry>) -> Self {
+        Self { session_id, roster }
+    }
+}
+
+#[async_trait]
+impl CodingEventSink for RosterCodingEventSink {
+    async fn emit(
+        &self,
+        event_type: &str,
+        payload_json: serde_json::Value,
+    ) -> Result<SessionEvent> {
+        self.roster
+            .emit_raw_event(
+                &self.session_id.to_string(),
+                event_type,
+                payload_json.clone(),
+            )
+            .await
+            .map_err(ServerError::Store)?;
+        Ok(SessionEvent {
+            session_id: self.session_id,
+            seq: 0,
+            event_type: event_type.to_string(),
+            payload_json,
+            created_at: chrono::Utc::now(),
+        })
+    }
+}
+
 // ─── CollectingSink ───────────────────────────────────────────────────────────
 
 /// Captures all agent events as a plain-text transcript (P3.3).
@@ -424,9 +468,23 @@ impl ActorExecutor for ChatActorExecutor {
         let task = spec.task.clone();
         let actor_id = spec.id.clone();
         let artifact_root = self.artifact_root.clone();
-        let child_session_id = Uuid::new_v4();
+        let owner_session_id = spec
+            .session_id
+            .parse::<Uuid>()
+            .unwrap_or_else(|_| Uuid::new_v4());
+        let existing_artifact_ids = artifact_root
+            .as_ref()
+            .and_then(|root| ArtifactStore::open(root, owner_session_id.to_string()).ok())
+            .map(|store| {
+                store
+                    .list()
+                    .into_iter()
+                    .map(|artifact| artifact.id)
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
         let sandbox =
-            (self.sandbox_factory)(child_session_id, Some(actor_id.as_str()), &spec.grants);
+            (self.sandbox_factory)(owner_session_id, Some(actor_id.as_str()), &spec.grants);
         let inbox = self.actor_roster.as_ref().map(|roster| ActorMailboxDrain {
             roster: Arc::clone(roster),
             actor_id: actor_id.clone(),
@@ -456,19 +514,18 @@ impl ActorExecutor for ChatActorExecutor {
             .await
             .map_err(|_| ActorError::Execution("actor worker dropped response".to_string()))??;
 
-        // Populate artifact_uri from child cell-spills; write transcript as history_uri.
+        // Populate artifact_uri from child cell-spills; transcript content is served via history://.
         let (artifact_uri, history_uri) = if let Some(ref root) = artifact_root {
-            match ArtifactStore::open(root, &child_session_id.to_string()) {
+            match ArtifactStore::open(root, owner_session_id.to_string()) {
                 Ok(store) => {
-                    let artifact_uri = store.list().into_iter().next().map(|r| r.uri);
-                    let history_uri = if !transcript.is_empty() {
-                        store
-                            .put_text(&transcript, Some("transcript".to_string()), "text/plain")
-                            .ok()
-                            .map(|r| r.uri)
-                    } else {
-                        None
-                    };
+                    let artifact_uri = store
+                        .list()
+                        .into_iter()
+                        .rev()
+                        .find(|artifact| !existing_artifact_ids.contains(&artifact.id))
+                        .map(|r| r.uri);
+                    let history_uri =
+                        (!transcript.is_empty()).then(|| format!("history://{actor_id}"));
                     (artifact_uri, history_uri)
                 }
                 Err(_) => (None, None),

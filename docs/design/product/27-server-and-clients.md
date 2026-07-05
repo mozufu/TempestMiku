@@ -2,8 +2,8 @@
 
 > A headless, single-user, self-hosted daemon; one Flutter client targets Web/PWA first and Android
 > later over the same streaming API. Grounded in two proven primitives: **Server-Sent Events** (the
-> server pushes tokens / events down one long-lived connection) and **cron** (the companion is proactive
-> on a schedule).
+> server pushes tokens / events down one long-lived connection) and, for P4, **cron** (the companion is
+> proactive on a schedule).
 
 The core declared UI / deployment out of scope (design README). This is the deliberate expansion
 (decision A): the Rust core runs as a long-lived service; clients are thin views over its event stream.
@@ -17,9 +17,10 @@ The core declared UI / deployment out of scope (design README). This is the deli
   mode, resolve an approval) is **discrete** and fits plain POSTs. SSE is HTTP-native, proxy- and
   HTTP/2-friendly, and **resumable** — which lines up with the core's streaming-first LlmClient (§04)
   and `EventSink` (§05 / §10).
-- **Proactivity = cron** (Vixie cron, 1987; the de-facto Unix scheduler, five-field crontab). The
-  companion acts on a schedule, not only on request; the current deployment already runs cron jobs
-  (weekly ship ledger, reminders) with `cron_mode: deny`.
+- **Scheduled proactivity = P4 cron** (Vixie cron, 1987; the de-facto Unix scheduler, five-field
+  crontab). The current deployment already runs cron jobs (weekly ship ledger, reminders) with
+  `cron_mode: deny`; the Rust rewrite keeps P2 bounded proactivity request-bound until the P4
+  scheduler lands.
 - **Replayable** (core principle #6): every client surface is a **view over one ordered event
   stream**, so a session can be resumed, audited, and reproduced.
 - **No on-device sandbox** (decision A): V8 / `deno_core` stays on the server; clients never execute code.
@@ -27,14 +28,15 @@ The core declared UI / deployment out of scope (design README). This is the deli
 ## 27.1 `tm-server` & the session event stream
 
 Wraps the agent loop (§05 / §10) as a long-lived service; owns session lifecycle, the capability
-registry, and the product subsystems (mode router §21, memory §22, agents §23, drive §24).
+registry, and the current product subsystems (mode router §21, memory §22, agents §23), with drive
+and scheduler surfaces reserved for later milestones (§24 / §27.2).
 
 ```mermaid
 flowchart TD
   FLUTTER[Flutter client<br/>Web/PWA first, Android later] -->|SSE stream| SRV[tm-server]
   FLUTTER -->|POST control| SRV
   FLUTTER -->|resource resolve/list/preview| SRV
-  SCHED[scheduler cron] -->|start session| SRV
+  SCHED[P4 scheduler cron] -.start session.-> SRV
   SRV --> CORE[agent loop + sandbox + registry]
   CORE --> SUBS[persona / memory / agents / drive]
 ```
@@ -91,14 +93,15 @@ P2 implements bounded proactivity without a scheduler: Personal Assistant turns 
 and open-loop recall chunks through the existing `write_proposal` + approval path. Approved entries are
 memory records visible through `memory://`; they are not background jobs and never push on their own.
 
-A **scheduler** (cron lineage) starts sessions on a schedule: the **weekly ship ledger**
+In P4, a **scheduler** (cron lineage) will start sessions on a schedule: the **weekly ship ledger**
 (`weekly-ship-ledger` skill, §29), deadline nudges, post-session **dreaming** (§22.5), and the drive
-**organizer** (§24.3).
+**organizer** (§24.3). Until that lands, `cron://` is a reserved resource shape and scheduled jobs are
+not part of the live server surface.
 
-- **Bounds.** Scheduled runs honor `goals.max_turns` (baseline **8**), the proactivity bounds (§21.3),
+- **P4 bounds.** Scheduled runs honor `goals.max_turns` (baseline **8**), the proactivity bounds (§21.3),
   and `cron_mode: deny` — a scheduled run that hits an approval gate **defers** (queues for Brian),
   never auto-acts. `cron.wrap_response: true`, `script_timeout_seconds: 120` (§29).
-- **Visibility.** A scheduled run emits through the same `EventSink` / SSE, so it is streamed,
+- **P4 visibility.** A scheduled run emits through the same `EventSink` / SSE, so it is streamed,
   audited, and replayable exactly like an interactive turn (#6).
 
 ## 27.3 Model roles
@@ -130,7 +133,8 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 - **Mobile remote control (P1).** Phone/browser control uses the same server API as every client: SSE
   for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
-  `project://`, `memory://`, `drive://`, and `cron://` links. The phone is only a view and controller;
+  `project://`, `memory://`, and `history://` links. Reserved `drive://` and `cron://` links use the
+  same gateway shape once P5/P4 registers handlers and grants. The phone is only a view and controller;
   the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
   The P2 memory gateway currently exposes `memory://root`, `memory://user-model`, and exact approved
   profile fact / scoped recall record URIs, with compact previews and fail-closed unknown paths (§22.9).
@@ -141,7 +145,7 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 
-## 27.5 API shape (resolved for P0/P1)
+## 27.5 API shape (resolved for the current P0-P3 surface)
 
 - **Outbound** (server→LLM): **settled** — OpenAI-compatible chat completions with `stream: true`
   (§11); SSE all the way from the model provider through the loop to the client.
@@ -152,10 +156,12 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
 
-The session resource gateway supports resolve/list/preview for the live P0-P2 schemes:
-`artifact://`, `workspace://session/...`, `linked://...`, `project://...`, and the P2 `memory://`
-surface (§22.9). `GET /sessions/:id/resources/preview` returns a bounded metadata envelope with empty
-`content`; clients resolve full content only on demand.
+The session resource gateway supports resolve/list/preview for the live P0-P3 schemes:
+`artifact://`, `workspace://session/...`, `linked://...`, `project://...`, the P2 `memory://`
+surface (§22.9), and the P3 `agent://` / `history://` actor resources (§23). Reserved `drive://`
+and `cron://` paths fail closed until their milestones register handlers and grants. `GET
+/sessions/:id/resources/preview` returns a bounded metadata envelope with empty `content`; clients
+resolve full content only on demand.
 
 Coding execution is a backend choice behind the same API. `TM_OMP_ACP_ENABLED=1` dispatches Serious
 Engineer / Handoff turns to the P0a OMP ACP bridge; otherwise, when a real LLM is configured,
@@ -205,7 +211,8 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
   OpenAI-compatible endpoint (§27.5).
 - `store` — in-memory and Postgres-shaped session storage: sessions, messages, append-only events,
   approvals, project refs, and replay from `Last-Event-ID`.
-- `schedule` — cron-style scheduler; job table; bounds (`max_turns`, `cron_mode`); registers the `cron://` handler (list jobs / a job's def + run history) into the §9.2 registry.
+- Future `schedule` (P4) — cron-style scheduler, job table, bounds (`max_turns`, `cron_mode`), and
+  `cron://` handler (list jobs / a job's def + run history) in the §9.2 registry.
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).
 - `auth` — local token / no-auth for dev plus trusted forwarded identity for reverse-proxy deployments.
 - `coding_backend` / `native_deno` / `omp_acp` — the common backend interface, native Serious
@@ -217,8 +224,8 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 
 - **SSE disconnect** — client reconnects with `Last-Event-ID`; server resumes from the replay log; no
   token loss; a finished turn replays `final`.
-- **Scheduler fires while offline / approval pending** — `cron_mode: deny` **defers**; the job is
-  queued and surfaced on next connect, never auto-acted.
+- **Future scheduler fires while offline / approval pending** — P4 `cron_mode: deny` **defers**; the
+  job is queued and surfaced on next connect, never auto-acted.
 - **Model role unavailable** — fallback chain (`gpt-5.5` → `gpt-5.4-mini`); an aux role down degrades
   to `cheap`.
 - **Approval timeout (60s)** — denied-by-default (manual mode), logged; the loop continues without the

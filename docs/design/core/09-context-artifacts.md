@@ -9,9 +9,9 @@
 - This is the mechanism that keeps a 2 MB fetch from ever entering the window: it lands in the
   store, the code works on it in-sandbox, and only `display(summary)` reaches context.
 
-The two-tier store behind these handles — global `blob:sha256:` + session `artifact://` / `agent://`
-— is specified in §25.3. This section owns the **read path**: how any handle (and every other
-readable thing) is resolved.
+The two-tier store behind these handles — global `blob:sha256:` + session `artifact://`, with actor
+resources at `agent://` / `history://` using the spill path as needed — is specified in §25.3. This
+section owns the **read path**: how any handle (and every other readable thing) is resolved.
 
 ## 9.2 Resource resolution — one registry, scheme-keyed handlers
 
@@ -83,20 +83,20 @@ outputs out of both the model context and the mobile client render path.
 
 ## 9.3 Resource catalog
 
-Internal schemes (v1). The implemented P1/P2 session gateway currently registers
-`artifact://`, `workspace://session`, `linked://`, `project://`, and `memory://`. Other catalog
-entries are reserved designs and must fail closed until their backing subsystem registers a handler
-and grant.
+Internal schemes (v1). The implemented P0-P3 session gateway currently registers `artifact://`,
+`workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, and `history://`.
+Other catalog entries are reserved designs and must fail closed until their backing subsystem
+registers a handler and grant.
 
 | scheme | resolves | backing subsystem | registered by |
 |---|---|---|---|
 | `artifact://<id>` | session-local tool output (monotonic int) | artifact store §25 | `tm-artifacts` |
-| `agent://<id>` | sub-agent output artifact | agents §23 / §25 | `tm-agents` |
+| `agent://<id>` | sub-agent output/record resource | agents §23 / §25 | `tm-agents` |
 | `history://<id>` | read-only sub-agent transcript | agents §23 | `tm-agents` |
 | `memory://…` | P2 memory gateway: `root`, `user-model`, approved profile facts, and scoped recall chunks (§22.9). Richer `MEMORY.md`, episodic query, project memory, and dream views remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
 | `skill://<name>` | **Reserved prompt label only in P2**: composed system prompts may label injected `SKILL.md` sections this way, but `resources.read/list/preview("skill://...")` is not registered and must fail closed until P4/P7 defines the read lifecycle. | skills §22 / §26 | prompt composition now; no resource handler until P4/P7 |
-| `drive://<path>` | user document by canonical path §24 | drive §24 | `tm-drive` |
-| `cron://[<id>]` | scheduler job table: list jobs / a job's def + run history §27.2 | scheduler §27 | `tm-server` |
+| `drive://<path>` | reserved P5 user document by canonical path §24 | drive §24 | `tm-drive` later |
+| `cron://[<id>]` | reserved P4 scheduler job table: list jobs / a job's def + run history §27.2 | scheduler §27 | `tm-server` later |
 | `workspace://session/<path>` | current session sandbox workspace read/list/preview | sandbox workspace §07 / §08 | `tm-sandbox` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
 | `project://<id>/<view>` | aggregate project surface: status, open loops, decisions, linked folders, artifacts, agents | server project layer §27 / memory §22 / host §25 | `tm-server` |

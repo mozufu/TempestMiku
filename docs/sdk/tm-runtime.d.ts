@@ -9,11 +9,13 @@
  * label is not a resources.read/list/preview surface until the P4/P7 skill
  * lifecycle work registers a handler and grants.
  *
- * P3 agents surface: `agents` is defined only in sessions holding the required
+ * P3/P3-plus agents surface: `agents` is defined only in sessions holding the required
  * agents.* grant. In ungranted sessions it remains `undefined`. Use
  * `tools.search('agents')` to check availability before calling. Messages
  * between actors are always plain prose — never control-payload blobs.
  * Large payloads pass by reference (artifact://, memory://), never inline.
+ * P3 shipped run/spawn/parallel/msg; the first P3-plus foundation slice adds
+ * live inbox delivery through send/wait/inbox/list.
  */
 
 export {};
@@ -217,13 +219,14 @@ interface ResourcesNamespace {
    * resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>
    *
    * Scheme-dispatched resource read. Current registered schemes include
-   * artifact:// and, in the server resource gateway, linked://,
-   * workspace://session, project://, and the P2 memory:// surface. Each scheme
-   * has its own grant such as resources.read:artifact, resources.read:linked,
-   * or resources.read:memory; missing grants and unknown schemes fail closed.
-   * skill://... is prompt-composition-only for now, so attempting to read it
-   * must fail closed as an unknown resource scheme until P4/P7 wires the
-   * skill resource lifecycle.
+   * artifact://, linked://, workspace://session, project://, the P2 memory://
+   * surface, and the P3 agent:// / history:// handlers. Each scheme has its
+   * own grant such as resources.read:artifact, resources.read:linked,
+   * resources.read:memory, resources.read:agent, or resources.read:history;
+   * missing grants and unknown schemes fail closed.
+   * skill://... is prompt-composition-only for now; drive:// and cron:// are
+   * reserved URI shapes. Reads for unregistered schemes must fail closed until
+   * their owning milestones wire handlers and grants.
    */
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
   /** resources.preview(uri: ResourceUri): Promise<ResourceContent> */

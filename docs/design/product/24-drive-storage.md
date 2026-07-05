@@ -31,7 +31,7 @@ filing. Drive is the one storage role the user thinks of as **"my files."**
 | Layer | For | Identity | Doc |
 |---|---|---|---|
 | **Blobs** | images / binaries | content hash (`blob:sha256:`) | §25 |
-| **Artifacts** | agent / tool outputs | session-local id (`artifact://`, `agent://`) | §25 |
+| **Artifacts / actor resources** | tool outputs and sub-agent records | session `artifact://`; actor `agent://` / `history://` | §25 / §23 |
 | **Drive** | the *user's* documents | user-facing path + attributes | this doc |
 
 Drive entries may **reference** a blob (a filed image is a `blob:sha256:` under a drive path) — content is
@@ -107,7 +107,7 @@ flowchart LR
 - `organize` — placement proposer + background re-filer (lease + heartbeat); tier-gated apply / propose.
 - `vdir` — virtual-directory query views; maps a path to a conjunctive attribute query.
 - `policy` — `FsPolicy` grants (mint / attenuate / revoke); link ⇒ memory-scope coupling (§22.6).
-- `resources` — registers the `drive://<path>` handler into the §9.2 resolver registry; drive browser feed (§27).
+- `resources` — will register the `drive://<path>` handler into the §9.2 resolver registry; drive browser feed (§27).
 
 ## 24.7 Failure modes & degradation
 

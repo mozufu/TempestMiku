@@ -3,7 +3,7 @@
 ## Project identity
 
 - TempestMiku is a Rust rewrite of the running `hermes-agent` Tempest Miku deployment: self-hosted, single-user, characterful personal AI companion plus code-execution agent runtime.
-- Parity comes first. P0-P3 are not done until they preserve the current behavior for their slice: Miku voice, mode router, memory recall/profile, and manual approvals.
+- Parity comes first. Shipped P0-P3 slices must keep preserving current behavior: Miku voice, mode router, memory recall/profile, and manual approvals.
 - This is not a generic coding agent. Product work must preserve the constant Miku identity and the serious-mode voice cap.
 
 ## Current workspace state
@@ -16,10 +16,12 @@
   - `crates/tm-artifacts`: session artifacts and content-addressed blob storage.
   - `crates/tm-host`: host registry, capability grants, approval policy, resource registry, linked folders, `fs.*`, `code.*`, and argv-vector `proc.run`.
   - `crates/tm-modes`: mode catalog, routing, voice caps, and configurable mode/skill asset status.
+  - `crates/tm-agents`: actor lifecycle, mailbox, `agents.run/spawn/parallel/msg/send/wait/inbox/list`, supervision defaults, and `agent://` / `history://` resources.
   - `crates/tm-server`: axum session API, replayable SSE/event store, minimal memory provider, approvals, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
   - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and Deno sandbox by default; `--stub-sandbox` remains for protocol tests.
+  - `apps/tm-e2e`: local/dev public-API workflow harness for scripted and opt-in live session smoke coverage.
   - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.
-- Not production-complete or not yet split into dedicated crates: `tm-mcp`, `tm-trace`, full `tm-memory`, `tm-agents`, `tm-drive`, scheduler/dreaming, full mode router/project promotion, and Android OS packaging.
+- Not production-complete or not yet split into dedicated crates: `tm-mcp`, `tm-trace`, full `tm-memory`, `tm-drive`, scheduler/dreaming, remaining P3+ actor surface (`broadcast`/`pipeline`, restart/cancel, DAG/protocol enforcement, fuller provenance), richer drive/skill/memory approval surfaces, and Android OS packaging.
 
 ## Read before changing code
 
@@ -45,15 +47,13 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Sweep the runtime SDK contract: add or generate `tm-runtime.d.ts`, enrich `tools.docs`, and reconcile the current allowlisted `http.get` helper with the deferred production egress policy.
-2. Ship P1 project manager + remote control: mode router lock/override, project/open-loop/decision views, session-to-project promotion, fuller resource gateway, and Flutter Web/PWA approval/resource workflows.
-3. Harden server persistence boundaries with gated Postgres coverage while keeping normal `cargo test` external-service-free.
-4. Keep P0a OMP ACP replaceable and continue proving native `fs.*` / `code.*` / `proc.*` can handle the same dogfood edits without weakening approval/security.
-5. Only extract or add expansion crates (`tm-memory`, `tm-agents`, `tm-drive`, `tm-mcp`, scheduler/dreaming) after the P1 server/resource surface is settled.
+1. Continue P3+ actor work: `broadcast`/`pipeline`, restart strategies, cancel tokens, DAG/protocol enforcement, and fuller provenance.
+2. Keep the native/OMP coding backend boundary boring: OMP ACP remains replaceable, while native Deno remains the dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed manual approvals.
+3. Defer expansion crates and surfaces (`tm-memory`, `tm-drive`, `tm-mcp`, `tm-trace`, scheduler/dreaming, Android OS packaging) until the P3+ actor and server/resource surfaces are stable.
 
 Do not start yet unless explicitly requested:
 
-- Android OS packaging before P1 server APIs stabilize.
+- Android OS packaging before the P2/P3 product surfaces stabilize.
 - Drive auto-organizer before approval policy and memory scopes exist.
 - Self-evolution writes before audit/replay and tier gates exist.
 - Deep research/orchestration before `agents.*`, artifacts, memory scopes, and scheduler are real.

@@ -3,7 +3,7 @@
 - **In-language Python ecosystem.** Decided: TS on `deno_core`. If real Python libraries become
   necessary in-REPL, the CPython-subprocess backend (§6.6) drops in behind the `Sandbox` trait —
   loop, SDK, and registry unchanged.
-- **V8 startup cost.** Mitigated by session pooling; measure before optimizing.
+- **V8 startup cost.** M3 may add session pooling; measure before optimizing.
 - **Streaming a *running* cell's stdout to the model** (not just the UI) — deferred; assistant
   tokens and tool-call args stream from day 1 (§5.5), but the model still sees one shaped result
   per finished cell.

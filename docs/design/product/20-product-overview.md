@@ -47,14 +47,14 @@ letting engineering erase the identity (§21).
 ## How the product maps onto the core
 
 Almost everything new is **just another host capability** registered in `tm-host`
-(principle #9 — hot-addable capabilities), plus a thin persona layer, a server (+ scheduler), thin
-clients, and background workers.
+(principle #9 — hot-addable capabilities), plus a thin persona layer, a server, thin clients, and
+future scheduler/background workers.
 
 ```mermaid
 flowchart TD
     AND[Android] --> SRV
     WEB[WebUI] --> SRV
-    SCHED[scheduler / cron §27] --> SRV
+    SCHED[P4 scheduler / cron §27] -.-> SRV
     SRV[tm-server: session API + SSE] --> RT[Persona router §21]
     SRV -.P0a coding backend.-> OACP[OMP ACP bridge §25]
     OACP --> OMP[Oh My Pi coding agent]
@@ -65,11 +65,11 @@ flowchart TD
     REG --> CORE[core caps: http/fs/artifacts/secrets/skills/mcp]
     REG --> MEM[memory.* engine §22]
     REG --> AGT[agents.* §23]
-    REG --> DRV[drive.* §24]
+    REG -.P5.-> DRV[drive.* §24]
     REG --> CODE[fs.*/code.*/proc.* §25]
     LOOP -.approvals.-> APV[ApprovalPolicy §08]
-    MEM -.dream.-> DREAM[bg: consolidation §22]
-    DRV -.file.-> ORG[bg: auto-organizer §24]
+    MEM -.P4 dream.-> DREAM[bg: consolidation §22]
+    DRV -.P5 file.-> ORG[bg: auto-organizer §24]
 ```
 
 The bet survives because the product is **capabilities + a persona layer + a server/clients +

@@ -33,8 +33,8 @@ and registry, different executor. The choice is reversible by construction.
 
 A `Session` is one long-lived V8 isolate + context. `eval(code)` runs a cell in that context;
 top-level `let/const/var` and assignments persist. `reset()` tears down and recreates the isolate
-for a clean slate. Sessions are **pooled** to amortize V8 startup; a fresh isolate is handed out
-per agent run and returned/reset afterward.
+for a clean slate. M3 may add session pooling to amortize V8 startup; until then the contract is a
+fresh or reset isolate behind the same `Sandbox` / `Session` traits.
 
 ### 6.3 Resource limits
 
@@ -125,7 +125,7 @@ const artifacts = {
 
 // M1 has a deterministic default-deny helper; broader network egress remains deferred.
 globalThis.http = { get: (url: string) => tools.call("http.get", { url }) };
-// Reserved future namespaces are explicitly present but unavailable in the first pass.
+// Closed-by-default namespaces are explicitly present so feature checks are safe.
 globalThis.secrets = undefined;
 globalThis.memory = undefined;
 globalThis.skills = undefined;
@@ -138,10 +138,10 @@ globalThis.agents = undefined;
 bridge — register a handler, emit a typed stub — so the op layer never grows and never needs a
 rebuild (§3 principle 9). The first real JS/TS pass exposes `fs.*`, `code.search`, JSON-hunk
 `code.edit`, argv-vector `proc.run`, and the default-deny/allowlisted `http.get` helper. `secrets`,
-`memory`, `skills`, and `agents` are set to `undefined` until their backing crates and policies
-exist. The P2 `memory://` route is a resource handler reached through `resources.read`, not a
-`memory.*` namespace. If a future namespace exists but a method is not ready, it throws
-`NotImplementedError`.
+`memory`, and `skills` remain `undefined`; the P2 `memory://` route is a resource handler reached
+through `resources.read`, not a `memory.*` namespace. `agents` also starts as `undefined`, then the
+P3 agents prelude replaces it with `AgentsNamespace` only for sessions holding an `agents.*` grant.
+If a future namespace exists but a method is not ready, it throws `NotImplementedError`.
 
 For an **out-of-process** backend (Python), the same SDK is implemented over **JSON-RPC** on a
 pipe/socket: the in-sandbox `host.*` makes a blocking RPC, the Rust host services it

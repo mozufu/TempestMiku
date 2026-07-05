@@ -15,10 +15,11 @@ First-pass globals:
   capability without adding another chat-native tool. New capabilities register behind `tools.call`;
   the op layer stays small.
 - `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2),
-  including the present `artifact://` path and the P2 server-side `memory://` gateway when the
-  `resources.read:memory` grant and handler are present. `skill://...` labels are
-  prompt-composition provenance only in the current runtime; reads must fail closed until the P4/P7
-  skill lifecycle registers a resource handler and grants.
+  including the live `artifact://`, `workspace://session`, `linked://`, `project://`, `memory://`,
+  `agent://`, and `history://` handlers when their grants are present. `skill://...` labels are
+  prompt-composition provenance only in the current runtime; `drive://` and `cron://` are reserved
+  URI shapes; reads for unregistered schemes must fail closed until the owning milestone registers a
+  handler and grants.
 - `artifacts.put/get/slice/list(...)` — session artifact store; large outputs return `artifact://`
   handles.
 - `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
@@ -39,8 +40,8 @@ Reserved first-pass globals:
   `resources.read(...)` and the `resources.read:memory` grant. `agents` starts as `undefined` too,
   then the P3 sandbox prelude replaces it with `AgentsNamespace` only when the session has an
   `agents.*` grant. If a namespace exists but a method is incomplete, that method throws
-  `NotImplementedError`. Likewise, `skill://...` is not a `ResourceUri` today even though composed
-  prompts may use it as a section label for injected skill markdown.
+  `NotImplementedError`. Likewise, `skill://...` is not a readable `ResourceUri` today even though
+  composed prompts may use it as a section label for injected skill markdown.
 
 Never exposed:
 

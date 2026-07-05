@@ -148,8 +148,8 @@ flowchart TD
 ## 23.5 Context & memory discipline per actor (principle #3)
 
 - **Own window.** Each actor has its **own** context; an N-way fan-out does **not** N× the parent window.
-  Only the **digest the orchestrator code chooses** returns to context; full outputs land as `agent://`
-  artifacts (§25, two-tier handler).
+  Only the **digest the orchestrator code chooses** returns to context; full outputs land behind
+  `agent://` / `history://` resources, with large payloads stored out of context as needed (§25).
 - **No shared history.** Sub-agents start with no conversation history — everything needed is in the
   **assignment + shared context** (encapsulation). They coordinate by **messages**, not by reading each
   other's transcript.
@@ -170,7 +170,8 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 - **P3-plus foundation calls:** lower-level mailbox primitives `agents.send`, `agents.wait`,
   `agents.inbox`, and `agents.list`.
 - **Remaining P3-plus calls:** `agents.pipeline` and `agents.broadcast`.
-- **Resources:** `agent://<id>` (output artifact, §25); `history://<id>` (read-only transcript).
+- **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
+  `history://<id>` (read-only transcript).
   Roster listing is also exposed through `agents.list()`.
 
 ## 23.8 Crate layout (`tm-agents`, §28)
@@ -202,7 +203,7 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 | messaging as the foundation, encapsulation / state-hiding, **extreme late-binding** | **Alan Kay's OOP** | the whole inter-agent model |
 | async message passing, mailboxes, addresses, **designate-next-behavior**, share-nothing | **Hewitt actor model** | formal coordination semantics |
 | **supervision trees**, **let it crash**, restart strategies | **Erlang/OTP** (Armstrong) | fault isolation + recovery |
-| orchestration-as-code DAG (parallel / pipeline / handles), digest-only context, `agent://` artifacts | **Oh My Pi** | code-driven wiring + context discipline |
+| orchestration-as-code DAG (parallel / pipeline / handles), digest-only context, `agent://` resources | **Oh My Pi** | code-driven wiring + context discipline |
 
 ---
 

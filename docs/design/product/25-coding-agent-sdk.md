@@ -69,7 +69,8 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 | task / job / irc | `agents.*` | §23 |
 | recall / retain / reflect | `memory.*` | §22 |
 | skills | reserved `skills.*`; current `skill://...` labels are prompt-composition-only | §07, §26 |
-| `artifact://` / `agent://` | `artifacts.*` + two-tier store | §25.3 |
+| `artifact://` | session artifacts via `tm-artifacts` | §25.3 |
+| `agent://` / `history://` | actor resources via `tm-agents`, with large payloads stored out of context | §23 / §25.3 |
 
 ## 25.2 Engineer reach: raw terminal → curated `proc.run` (a deliberate tightening)
 
@@ -131,19 +132,21 @@ folder keeps the same URI if it moves from an in-process adaptor to a remote con
 First `code.edit` is **patch edit only**. LSP (`code.lsp`) and AST (`code.ast`) stay in the SDK map
 but are later milestones, not part of the first serious-engineer cut.
 
-### 25.2.2 First-pass JS/TS runtime contract
+### 25.2.2 Current JS/TS runtime contract
 
-The first serious-engineer runtime exposes the authoritative SDK surface in §7.1. Product-layer scope
-is intentionally narrower than the full translation map:
+The current serious-engineer and handoff runtime exposes the authoritative SDK surface in §7.1.
+Product-layer scope is intentionally narrower than the full translation map:
 
 - **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `code`,
   `proc`, and the current M1/P0 default-deny deterministic allowlisted `http.get` helper. The
   `resources` namespace includes the P2 `memory://` gateway where the server registers the handler
-  and grants `resources.read:memory`.
-- **Reserved but unavailable:** `secrets`, `memory`, `skills`, and `agents` are explicitly set to
-  `undefined` so optional chaining and feature checks do not throw `ReferenceError`. The `memory`
-  global staying undefined is intentional; present P2 memory reads are resource reads, not
-  `memory.*` calls.
+  and grants `resources.read:memory`; P3/P3-plus Handoff and orchestration sessions also expose
+  grant-gated `agents.run/spawn/parallel/msg/send/wait/inbox/list`.
+- **Closed by default:** `secrets`, `memory`, `skills`, and `agents` are explicitly set to
+  `undefined` in the base prelude so optional chaining and feature checks do not throw
+  `ReferenceError`. The `memory` global staying undefined is intentional; present P2 memory reads are
+  resource reads, not `memory.*` calls. `agents` is replaced with `AgentsNamespace` only when the
+  session holds an `agents.*` grant.
 - **Deferred:** `code.ast` and `code.lsp` remain in the translation map but are not first-pass runtime
   namespaces. A future namespace may exist while a method is incomplete; that method throws
   `NotImplementedError`.
@@ -180,18 +183,20 @@ flowchart TD
   integrity** on read; blobs live in a global dir and **outlive sessions**. Externalized out of
   transcripts above a threshold (OMP `BLOB_EXTERNALIZE_THRESHOLD` = 1024 B), rehydrated on load. Note:
   `blob:` is a **persistence reference resolved at load**, not a router URL.
-- **Tier 2 — session-scoped artifacts** (`artifact://<id>`, `agent://<name>`): full tool / sub-agent
-  outputs. `artifact://` = session-local **monotonic integer** (`.log`); `agent://` = **name-based**
-  (`.md`; `-2` suffix on repeat; nested `Parent.Child`). **Spill-on-truncation** via an output sink —
-  bounded in context, full on disk (OMP `OutputSink`, spill at `DEFAULT_MAX_BYTES` = 50 KB). Output
-  caps match the deployment: **50 KB / 2000 lines / 2000 line-length** (§29).
+- **Tier 2 — session-scoped artifacts and actor resources** (`artifact://<id>`, plus `agent://<id>` /
+  `history://<id>`): full tool and sub-agent outputs. `artifact://` is a session-local **monotonic
+  integer** handled by `tm-artifacts`; `agent://` and `history://` are actor resource routes handled
+  by `tm-agents`, using artifact storage for large child outputs as needed. **Spill-on-truncation**
+  via an output sink — bounded in context, full on disk (OMP `OutputSink`, spill at
+  `DEFAULT_MAX_BYTES` = 50 KB). Output caps match the deployment: **50 KB / 2000 lines / 2000
+  line-length** (§29).
 - **Resume / fork / move:** scan-and-continue ids; **fork copies artifacts, blobs are global (no
   copy)**; move renames the session + artifact dir together. Mirrors OMP `blob-artifact-architecture`.
 
 Implemented in `tm-artifacts` (§10.1), extended from the single-tier sketch in §09 to the two-tier
-model above. This section owns the **storage tiers** only; the **read / routing** of `artifact://` /
-`agent://` (and every other scheme) is unified under the §9.2 resolver registry. With §22 and §23,
-this is what keeps big data and fan-out **out of the window**.
+model above. This section owns the **storage tiers** only; the **read / routing** of `artifact://`,
+`agent://`, `history://`, and every other scheme is unified under the §9.2 resolver registry. With
+§22 and §23, this is what keeps big data and fan-out **out of the window**.
 
 ## 25.4 Crate layout
 
@@ -201,9 +206,11 @@ this is what keeps big data and fan-out **out of the window**.
   resource handler for read/list/preview over granted local or remote folders; wired to the capability
   registry (§07) + `ApprovalPolicy` (§08).
 - `tm-artifacts` (§10.1) — `blob` (content-addressed store: sha256, dedup, MIME sidecar), `artifact`
-  (session-local ids + `OutputSink` spill), `agent` (named sub-agent outputs), `resolve` (registers the
-  `artifact://` / `agent://` handlers into the §9.2 registry; `blob:` rehydration at load).
-- Future `agents.*` / `memory.*` / `skills.*` live in their own crates (§23 / §22 / §07 + §26); §25
+  (session-local ids + `OutputSink` spill), and `blob:` rehydration at load; it registers the
+  `artifact://` handler into the §9.2 registry.
+- `tm-agents` (§23) — `agents.*` host functions plus `agent://` and `history://` handlers; large actor
+  payloads may spill through `tm-artifacts`.
+- Future `memory.*` / `skills.*` live in their own crates (§22 / §07 + §26); §25
   is the **engineer-facing SDK + the artifact spine**.
 
 ## 25.5 Failure modes & degradation

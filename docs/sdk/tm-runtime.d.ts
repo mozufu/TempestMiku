@@ -14,8 +14,8 @@
  * `tools.search('agents')` to check availability before calling. Messages
  * between actors are always plain prose — never control-payload blobs.
  * Large payloads pass by reference (artifact://, memory://), never inline.
- * P3 shipped run/spawn/parallel/msg; the first P3-plus foundation slice adds
- * live inbox delivery through send/wait/inbox/list.
+ * P3 shipped run/spawn/parallel/msg; P3-plus adds live inbox delivery through
+ * send/broadcast/wait/inbox/list.
  */
 
 export {};
@@ -499,8 +499,8 @@ interface HttpNamespace {
  * `globalThis.agents` is `undefined` in ungranted sessions — check before calling.
  *
  * P3 surface: run, spawn, parallel, msg.
- * P3-plus foundation: live per-actor inbox delivery through send, wait,
- * inbox, and list. Stretch/full surface still deferred: pipeline, broadcast.
+ * P3-plus foundation: live per-actor inbox delivery through send, broadcast,
+ * wait, inbox, and list. Stretch/full surface still deferred: pipeline.
  */
 interface AgentsNamespace {
   /**
@@ -562,6 +562,16 @@ interface AgentsNamespace {
     text: string,
     opts?: SendOpts,
   ): Promise<AgentReceipt | AgentMessage | null>;
+
+  /**
+   * agents.broadcast(text: string): Promise<AgentBroadcastReceipt[]>
+   *
+   * Deliver a plain-prose message to the caller's direct live children. Top-level
+   * orchestrator code uses the synthetic Root actor and targets root-level live
+   * children. Broadcast is fire-and-forget only; no replies are awaited.
+   * Requires agents.broadcast grant.
+   */
+  broadcast(text: string): Promise<AgentBroadcastReceipt[]>;
 
   /**
    * agents.wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>
@@ -626,6 +636,12 @@ interface AgentMessage {
 
 /** Delivery receipt for fire-and-forget sends. */
 interface AgentReceipt {
+  status: "delivered" | "failed";
+}
+
+/** Per-target receipt returned by agents.broadcast(). */
+interface AgentBroadcastReceipt {
+  actorId: string;
   status: "delivered" | "failed";
 }
 

@@ -40,7 +40,7 @@ character + mode, budget, and capability grant. Cast as an actor:
 | **Behavior** | current **mode** (§21) + **role** + capability grant; resolved per message (late binding) |
 | **Designate next behavior** | mode switch / scope update between messages (persona self-edit, §21) |
 | **Create** | P3 MVP: `agents.spawn` / `agents.run` |
-| **Send** | P3 MVP: `agents.msg`; P3-plus foundation: `agents.send/wait/inbox/list`; later P3-plus: broadcast (§23.2) |
+| **Send** | P3 MVP: `agents.msg`; P3-plus foundation: `agents.send/broadcast/wait/inbox/list` (§23.2) |
 
 Encapsulation is hard: one actor **never** reaches into another's context or transcript. `history://<id>`
 is **read-only** observation, not state access; coordination is by message, not by shared memory.
@@ -55,7 +55,7 @@ message send through `agents.msg`; the rest of this table is the P3-plus/full ma
 |---|---|
 | `send(to, text)` | fire-and-forget to one id; per-recipient receipt (`delivered` / `failed`) |
 | `send(to, text, await)` | request / reply: block for the recipient's reply |
-| `broadcast(text)` (`to: all`) | to all live peers; no replies expected |
+| `broadcast(text)` (`to: children`) | to direct live children; no replies expected |
 | `wait(from?, timeout)` | block for a message (optionally from one id); timeout = clean "none" |
 | `inbox()` | drain pending without blocking |
 | `list()` | roster: peers, status (`running` / `idle` / `parked`), unread, last activity |
@@ -97,22 +97,22 @@ P3 ships the first concrete slice only:
 > The first P3-plus slice replaces message-log-only delivery with bounded per-actor inbox queues:
 > fire-and-forget now reaches a live actor inbox, `opts.await = true` waits for a live reply when
 > the target is still running, and already completed actors keep the old seeded-continuation fallback.
-> Lower-level `send`/`wait`/`inbox`/`list` are live. Child approval requests now route through the
+> Lower-level `send`/`broadcast`/`wait`/`inbox`/`list` are live. Child approval requests now route through the
 > parent session's live `HttpApprovalPolicy` + `ApprovalBroker`, so approval-gated effects inside
 > child actors emit replayable SSE `approval` / `approval_resolved` events and resolve through the
-> same UI/API path as top-level coding turns. `broadcast`, `pipeline`, active supervision, cancel,
-> and stricter protocol enforcement remain later P3-plus work.
+> same UI/API path as top-level coding turns. `pipeline`, active supervision, cancel, and stricter
+> protocol enforcement remain later P3-plus work.
 
 The remaining §23 full surface is split across the landed P3-plus foundation and later P3-plus work:
 
 | P3-plus call | Effect |
 |---|---|
 | `agents.send(to, text, opts?)` | lower-level send to one actor id |
+| `agents.broadcast(text)` | message direct live children |
 | `agents.wait(from?, timeout)` | block for a message |
 | `agents.inbox()` | drain pending messages without blocking |
 | `agents.list()` | roster: peers, status, unread, last activity |
 | `agents.pipeline(items, …stages)` | staged map, **barrier between stages** |
-| `agents.broadcast(text)` | message all live children |
 
 Handles **wire the DAG by reference** — an upstream result feeds a downstream prompt, so the large transcript
 is never re-inlined. P3 MVP `parallel` = one wave; P3-plus `pipeline` = waves with a barrier. The graph
@@ -167,9 +167,9 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 ## 23.7 `agents.*` capability + `agent://` resources
 
 - **P3 calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
-- **P3-plus foundation calls:** lower-level mailbox primitives `agents.send`, `agents.wait`,
-  `agents.inbox`, and `agents.list`.
-- **Remaining P3-plus calls:** `agents.pipeline` and `agents.broadcast`.
+- **P3-plus foundation calls:** lower-level mailbox primitives `agents.send`,
+  `agents.broadcast`, `agents.wait`, `agents.inbox`, and `agents.list`.
+- **Remaining P3-plus calls:** `agents.pipeline`.
 - **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
   `history://<id>` (read-only transcript).
   Roster listing is also exposed through `agents.list()`.
@@ -178,10 +178,9 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 
 - `actor` — identity, lifecycle (spawn / run / park / terminate), behavior binding (mode + grant); each a
   recursive runtime session (§05/§06).
-- `mailbox` — async queue, addressing, delivery + receipts; P3-plus adds broadcast after the
-  landed wait / inbox primitives.
+- `mailbox` — async queue, addressing, delivery + receipts.
 - `orchestrate` — P3/P3-plus `agents.*` constructors (run / spawn / parallel / msg / send / wait /
-  inbox / list); later P3-plus adds pipeline and broadcast helpers.
+  broadcast / inbox / list); later P3-plus adds pipeline helpers.
 - `supervise` — supervision tree, restart strategies, budgets, depth cap, cost rollup.
 - `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry;
   P3 roster/resource discovery goes through the resource gateway; the first P3-plus foundation
@@ -194,7 +193,7 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 - **Deadlock** (A waits on B waits on A) — forbidden by the **acyclic** rule; async messaging + `wait`
   timeouts prevent indefinite blocking.
 - **Runaway recursion / cost** — depth cap + per-actor budgets + rollup; conservative defaults (§15).
-- **Mailbox storm** — bounded mailbox + backpressure; broadcast targets live peers only.
+- **Mailbox storm** — bounded mailbox + backpressure; broadcast targets direct live children only.
 
 ## 23.10 Mechanism provenance
 

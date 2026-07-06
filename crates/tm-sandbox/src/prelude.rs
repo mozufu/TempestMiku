@@ -124,6 +124,8 @@ globalThis.agents = {
     __tm_host_call("agents.msg", { handle, text: String(text), ...(opts != null ? { opts } : {}) }),
   send: async (to, text, opts = undefined) =>
     __tm_host_call("agents.send", { to: __tm_actor_id(to), text: String(text), ...(opts != null ? { opts } : {}) }),
+  broadcast: async (text) =>
+    __tm_host_call("agents.broadcast", { text: String(text) }),
   wait: async (from = undefined, timeoutMs = undefined) =>
     __tm_host_call("agents.wait", __tm_wait_args(from, timeoutMs)),
   inbox: async () =>

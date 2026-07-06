@@ -18,14 +18,15 @@ use crate::supervise::FailureReason;
 
 /// Capability names for the P3/P3-plus `agents.*` calls (§23.3, ROADMAP authority).
 ///
-/// `pipeline`, `broadcast`, active supervision, cancel, and child approval routing remain later
-/// P3-plus work.
+/// `pipeline`, active supervision, cancel, and fuller protocol enforcement remain later P3-plus
+/// work.
 pub mod caps {
     pub const AGENTS_RUN: &str = "agents.run";
     pub const AGENTS_SPAWN: &str = "agents.spawn";
     pub const AGENTS_PARALLEL: &str = "agents.parallel";
     pub const AGENTS_MSG: &str = "agents.msg";
     pub const AGENTS_SEND: &str = "agents.send";
+    pub const AGENTS_BROADCAST: &str = "agents.broadcast";
     pub const AGENTS_WAIT: &str = "agents.wait";
     pub const AGENTS_INBOX: &str = "agents.inbox";
     pub const AGENTS_LIST: &str = "agents.list";
@@ -48,7 +49,7 @@ mod spawn;
 #[cfg(test)]
 mod tests;
 
-use mailbox_fns::{AgentsInboxFn, AgentsListFn, AgentsSendFn, AgentsWaitFn};
+use mailbox_fns::{AgentsBroadcastFn, AgentsInboxFn, AgentsListFn, AgentsSendFn, AgentsWaitFn};
 use msg::AgentsMsgFn;
 use parallel::AgentsParallelFn;
 use run::AgentsRunFn;
@@ -70,6 +71,7 @@ pub fn register(
     host_registry.register(Arc::new(AgentsParallelFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsMsgFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsSendFn::new(Arc::clone(&roster))));
+    host_registry.register(Arc::new(AgentsBroadcastFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsWaitFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsInboxFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsListFn::new(Arc::clone(&roster))));

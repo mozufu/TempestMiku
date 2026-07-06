@@ -1,5 +1,120 @@
 use super::*;
 
+// ─── agents.broadcast ────────────────────────────────────────────────────────
+
+pub struct AgentsBroadcastFn {
+    docs: ToolDocs,
+    roster: Arc<MailboxRegistry>,
+}
+
+impl AgentsBroadcastFn {
+    pub fn new(roster: Arc<MailboxRegistry>) -> Self {
+        Self {
+            roster,
+            docs: ToolDocs {
+                name: caps::AGENTS_BROADCAST.to_string(),
+                namespace: "agents".to_string(),
+                summary: "Deliver a plain-prose message to direct live child actors".to_string(),
+                description: Some(
+                    "Broadcasts a plain-prose message to the caller's direct live children \
+                     through bounded per-actor inboxes. Top-level sessions use the synthetic \
+                     Root actor, so they target root-level live children. Broadcast is \
+                     fire-and-forget only; no replies are awaited. Returns one receipt per \
+                     target. Requires agents.broadcast grant."
+                        .to_string(),
+                ),
+                signature:
+                    "agents.broadcast(text: string): Promise<AgentBroadcastReceipt[]>".to_string(),
+                args_schema: json!({
+                    "type": "object",
+                    "required": ["text"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "text": { "type": "string" }
+                    }
+                }),
+                result_schema: Some(json!({
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "actorId": { "type": "string" },
+                            "status": { "type": "string" }
+                        }
+                    }
+                })),
+                examples: vec![ToolExample {
+                    title: Some("Notify all direct children".to_string()),
+                    code: "const receipts = await agents.broadcast('Please send your final status when ready.');"
+                        .to_string(),
+                    notes: Some(
+                        "A failed receipt means that target was unreachable or backpressured — move on."
+                            .to_string(),
+                    ),
+                }],
+                errors: vec![denied_error_doc()],
+                grants: vec![agents_grant_doc()],
+                sensitive: false,
+                approval: "none".to_string(),
+                since: "P3-plus".to_string(),
+                stability: "experimental".to_string(),
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl HostFn for AgentsBroadcastFn {
+    fn docs(&self) -> &ToolDocs {
+        &self.docs
+    }
+
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
+        check_grant!(ctx, caps::AGENTS_BROADCAST);
+
+        let text = args["text"]
+            .as_str()
+            .ok_or_else(|| HostError::InvalidArgs("text must be a string".to_string()))?
+            .to_string();
+        let from = caller_actor_id(ctx)?;
+
+        let mut targets: Vec<_> = self
+            .roster
+            .list()
+            .await
+            .into_iter()
+            .filter(|record| record.status != ActorStatus::Terminated)
+            .filter(|record| match record.parent.as_ref() {
+                Some(parent) => parent == &from,
+                None => from.as_str() == "Root",
+            })
+            .collect();
+        targets.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let mut receipts = Vec::with_capacity(targets.len());
+        for target in targets {
+            let message = ActorMessage {
+                from: from.clone(),
+                to: target.id.clone(),
+                text: text.clone(),
+                reply_to: None,
+                sent_at: Utc::now(),
+            };
+            let receipt = self.roster.send_message(message.clone()).await;
+            maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
+            receipts.push(json!({
+                "actorId": target.id.as_str(),
+                "status": match receipt {
+                    Receipt::Delivered => "delivered",
+                    Receipt::Failed => "failed",
+                },
+            }));
+        }
+
+        Ok(Value::Array(receipts))
+    }
+}
+
 // ─── agents.send ──────────────────────────────────────────────────────────────
 
 pub struct AgentsSendFn {

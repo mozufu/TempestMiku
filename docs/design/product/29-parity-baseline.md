@@ -14,8 +14,8 @@ Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
 |---|---|---|
 | `SOUL.md` | identity, modes, boundaries | §21 |
 | `skills/miku-voice` | voice overlay (喵 density, honorifics, lines) | §21.1 |
-| `skills/ambiguity-grill` | mode 2 | §21.2 |
-| `skills/negative-state-grounding` | mode 3 | §21.2 |
+| `skills/ambiguity-grill` | mode 2 in the source Hermes deployment; a layered skill in TempestMiku | §21.3 |
+| `skills/negative-state-grounding` | mode 3 in the source Hermes deployment; a layered skill in TempestMiku | §21.3 |
 | `skills/oh-my-pi-handoff` | mode 5 + handoff brief template | §21.2, §23 |
 | `skills/personal-assistant-state-capture` | memory discipline | §22.8 |
 | `skills/scope-guard` | pushback / anti-new-pit | §21.3 |

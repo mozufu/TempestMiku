@@ -32,18 +32,19 @@ use tm_host::{
 };
 
 use crate::{
-    ApprovalBroker, ApprovalStatus, AuthConfig, ChatRunner, ChatTurn, CodingBackend, CodingTurn,
-    MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus,
-    ModeCatalog, ModeId, ModeProfile, NewProjectItem, NewSession, PersistingEventSink,
-    ModesConfig, ProjectItemKind, ProjectItemRecord, ResolveApprovalRequest, Result, ServerError,
-    SessionEvent, Store, StoreCodingEventSink, StoreEvent, store::ModeState,
-    store::RecallChunkRecord,
+    ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig, ChatRunner,
+    ChatTurn, CodingBackend, CodingEventSink, CodingTurn, MemoryProvider, MemoryRecordRef,
+    MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, ModeCatalog, ModeId, ModeProfile,
+    ModesConfig, NewProjectItem, NewSession, PersistingEventSink, ProjectItemKind,
+    ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent, Store,
+    StoreCodingEventSink, StoreEvent, store::ModeState, store::RecallChunkRecord,
 };
 
 const SESSION_RESOURCE_PREVIEW_BYTES: usize = 512;
 
 mod approvals;
 mod events;
+mod mode_suggest;
 mod modes;
 mod projects;
 mod resources;
@@ -52,10 +53,8 @@ mod sessions;
 #[cfg(test)]
 mod tests;
 
-use modes::{
-    active_skills, build_turn_prompt, commit_mode_state, mode_changed_payload, mode_profile,
-    route_mode_for_prompt,
-};
+use mode_suggest::{MODE_SUGGEST_APPROVAL_TIMEOUT, ModeSuggestMediator};
+use modes::{active_skills, build_turn_prompt, mode_changed_payload, mode_profile};
 use projects::{build_project_overview, project_id_from_scope, record_project_observations};
 use resources::validate_relative_path;
 use sessions::default_subject;

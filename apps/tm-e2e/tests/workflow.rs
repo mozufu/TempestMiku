@@ -41,7 +41,7 @@ async fn scripted_workflow_drives_miku_public_api() {
     assert!(report.promoted_count >= 4);
     assert_eq!(report.rounds.len(), 2);
     assert_eq!(report.rounds[0].index, 1);
-    assert_eq!(report.rounds[0].mode, "personal_assistant");
+    assert_eq!(report.rounds[0].mode, "general");
     assert!(
         report.rounds[0]
             .event_types
@@ -91,7 +91,7 @@ async fn bearer_token_is_sent_when_configured() {
     })
     .unwrap();
     let session = authenticated.create_session(None).await.unwrap();
-    assert_eq!(session.mode, "personal_assistant");
+    assert_eq!(session.mode, "general");
 
     server.abort();
 }

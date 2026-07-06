@@ -8,6 +8,7 @@
 mod agent;
 mod error;
 mod llm;
+mod mediator;
 mod message;
 mod prompt;
 mod sandbox;
@@ -18,6 +19,7 @@ mod stream;
 pub use agent::{Agent, AgentConfig, InboxDrain, Protocol};
 pub use error::{Error, Result};
 pub use llm::{ChatRequest, LlmClient, Usage};
+pub use mediator::ToolMediator;
 pub use message::{FunctionSpec, Message, Role, ToolCall, ToolChoice, ToolSpec};
 pub use prompt::DEFAULT_SYSTEM_PROMPT;
 pub use sandbox::{CellBudget, EvalOutput, Sandbox, Session, SessionConfig};

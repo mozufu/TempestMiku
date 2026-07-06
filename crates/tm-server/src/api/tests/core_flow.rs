@@ -22,7 +22,7 @@ async fn session_creation_message_append_event_append_and_replay_work() {
     assert_eq!(res.status(), StatusCode::OK);
     let reused = response_json(res).await;
     assert_eq!(reused["id"], session.id.to_string());
-    assert_eq!(reused["mode"], json!("personal_assistant"));
+    assert_eq!(reused["mode"], json!("general"));
 
     let res = app
         .clone()
@@ -314,7 +314,9 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
 
     let turns = turns.lock();
     assert_eq!(turns.len(), 3);
-    assert_eq!(turns[0].mode, ModeId::from("personal_assistant"));
+    // All three turns stay in `general` mode now: ambiguity-grill and negative-state-grounding
+    // are triggered layered skills, not separate modes, so they never change turns[*].mode.
+    assert_eq!(turns[0].mode, ModeId::from("general"));
     assert!(turns[0].system_prompt.contains("Fixture SOUL"));
     assert!(turns[0].system_prompt.contains("miku-voice fixture body"));
     assert!(
@@ -322,20 +324,42 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
             .system_prompt
             .contains("personal-assistant-state-capture fixture body")
     );
+    // scope-guard is always-on: it composes into every turn regardless of message content.
+    assert!(turns[0].system_prompt.contains("scope-guard fixture body"));
+    assert!(
+        !turns[0]
+            .system_prompt
+            .contains("ambiguity-grill fixture body")
+    );
+    assert!(
+        !turns[0]
+            .system_prompt
+            .contains("negative-state-grounding fixture body")
+    );
 
-    assert_eq!(turns[1].mode, ModeId::from("ambiguity_grill"));
-    assert!(turns[1].system_prompt.contains("ambiguity-grill fixture body"));
+    assert_eq!(turns[1].mode, ModeId::from("general"));
+    assert!(
+        turns[1]
+            .system_prompt
+            .contains("ambiguity-grill fixture body")
+    );
+    assert!(turns[1].system_prompt.contains("scope-guard fixture body"));
     assert!(
         !turns[1]
             .system_prompt
             .contains("negative-state-grounding fixture body")
     );
 
-    assert_eq!(turns[2].mode, ModeId::from("negative_state_grounding"));
+    assert_eq!(turns[2].mode, ModeId::from("general"));
     assert!(
         turns[2]
             .system_prompt
             .contains("negative-state-grounding fixture body")
+    );
+    assert!(
+        !turns[2]
+            .system_prompt
+            .contains("ambiguity-grill fixture body")
     );
     assert_eq!(turns[2].scope, "global");
 }
@@ -392,10 +416,18 @@ async fn coding_turn_prompt_uses_active_mode_bundle() {
     assert!(!turns[0].system_prompt.contains("miku-voice fixture body"));
 
     assert_eq!(turns[1].mode, ModeId::from("handoff"));
-    assert!(turns[1].system_prompt.contains("oh-my-pi-handoff fixture body"));
-    assert!(!turns[1].system_prompt.contains("miku-voice fixture body"),
-        "handoff mode must not inject miku-voice skill");
+    assert!(
+        turns[1]
+            .system_prompt
+            .contains("oh-my-pi-handoff fixture body")
+    );
+    assert!(
+        !turns[1].system_prompt.contains("miku-voice fixture body"),
+        "handoff mode must not inject miku-voice skill"
+    );
     assert_eq!(turns[1].scope, "project:tempestmiku");
-    assert!(turns[1].capabilities.iter().any(|c| c == "agents.*"),
-        "handoff mode must declare agents.* capability");
+    assert!(
+        turns[1].capabilities.iter().any(|c| c == "agents.*"),
+        "handoff mode must declare agents.* capability"
+    );
 }

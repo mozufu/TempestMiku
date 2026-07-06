@@ -11,8 +11,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 
 use tm_core::{
-    Agent, AgentConfig, CellBudget, ChatRequest, Error, EvalOutput, EventSink, InboxDrain,
-    LlmClient, Message, Protocol, Result, Role, Sandbox, Session, SessionConfig, StreamEvent,
+    Agent, AgentConfig, CellBudget, ChatRequest, Error, EvalOutput, EventSink, FunctionSpec,
+    InboxDrain, LlmClient, Message, Protocol, Result, Role, Sandbox, Session, SessionConfig,
+    StreamEvent, ToolMediator, ToolSpec,
 };
 
 /// An `LlmClient` that replays a fixed script of stream events per turn and records every
@@ -260,7 +261,7 @@ async fn run_with_inbox_drains_before_model_turn() {
     let inbox = StaticInbox::new(vec!["from: Worker\ntext: done"]);
 
     let answer = agent
-        .run_with_inbox("wait for worker", &sink, Some(&inbox))
+        .run_with_inbox("wait for worker", &sink, Some(&inbox), None)
         .await
         .unwrap();
     assert_eq!(answer, "I saw the inbox.");
@@ -272,4 +273,162 @@ async fn run_with_inbox_drains_before_model_turn() {
         .expect("inbox message should be appended before the first turn");
     assert!(inbox_msg.content.contains("from: Worker"));
     assert!(inbox_msg.content.contains("text: done"));
+}
+
+/// A [`ToolMediator`] that advertises one tool, records every call it handles, and returns a
+/// canned result — enough to prove the loop's mediated-tool-call seam without a real product
+/// implementation (e.g. `ModeSuggestMediator` in tm-server).
+#[derive(Default)]
+struct MockMediator {
+    calls: Mutex<Vec<(String, Value)>>,
+}
+
+#[async_trait]
+impl ToolMediator for MockMediator {
+    fn tool_specs(&self) -> Vec<ToolSpec> {
+        vec![ToolSpec {
+            kind: "function".into(),
+            function: FunctionSpec {
+                name: "mode_suggest".into(),
+                description: "propose a mode switch".into(),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+            },
+        }]
+    }
+
+    async fn handle(&self, name: &str, arguments: &Value) -> Result<String> {
+        self.calls
+            .lock()
+            .push((name.to_string(), arguments.clone()));
+        Ok("switched".to_string())
+    }
+}
+
+#[tokio::test]
+async fn mediated_tool_call_feeds_back_result_and_continues_to_final() {
+    // Turn 1: the model calls the mediator's tool instead of `execute`. Turn 2: final answer.
+    let scripts = vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_ms".into()),
+                name: Some("mode_suggest".into()),
+                arguments: Some(
+                    r#"{"target_mode":"serious_engineer","reason":"fix a bug"}"#.into(),
+                ),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("Done.".into()),
+            StreamEvent::Finish {
+                reason: Some("stop".into()),
+            },
+        ],
+    ];
+
+    let llm = Arc::new(FakeLlm::new(scripts));
+    let agent = Agent::new(
+        llm.clone(),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let mediator = MockMediator::default();
+
+    let answer = agent
+        .run_with_inbox("please fix the bug", &sink, None, Some(&mediator))
+        .await
+        .unwrap();
+    assert_eq!(answer, "Done.");
+
+    // The seam fired exactly once, with the model's exact arguments.
+    let calls = mediator.calls.lock();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "mode_suggest");
+    assert_eq!(calls[0].1["target_mode"], "serious_engineer");
+    assert_eq!(calls[0].1["reason"], "fix a bug");
+
+    // A `Role::Tool` message keyed to the mediated call's id was appended before turn 2.
+    let requests = llm.requests.lock();
+    assert_eq!(requests.len(), 2, "two turns => two requests");
+    let tool_msg = requests[1]
+        .iter()
+        .find(|m| m.role == Role::Tool)
+        .expect("tool result appended before turn 2");
+    assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_ms"));
+    assert_eq!(tool_msg.content, "switched");
+
+    // No sandbox cell ever ran — this call never reached `execute`.
+    assert!(!sink.events().contains(&"cell_start".to_string()));
+}
+
+#[tokio::test]
+async fn mediator_error_becomes_a_tool_result_not_an_aborted_turn() {
+    struct FailingMediator;
+
+    #[async_trait]
+    impl ToolMediator for FailingMediator {
+        fn tool_specs(&self) -> Vec<ToolSpec> {
+            vec![ToolSpec {
+                kind: "function".into(),
+                function: FunctionSpec {
+                    name: "mode_suggest".into(),
+                    description: "propose a mode switch".into(),
+                    parameters: serde_json::json!({"type": "object", "properties": {}}),
+                },
+            }]
+        }
+
+        async fn handle(&self, _name: &str, _arguments: &Value) -> Result<String> {
+            Err(Error::Sandbox("broker unavailable".into()))
+        }
+    }
+
+    let scripts = vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_ms".into()),
+                name: Some("mode_suggest".into()),
+                arguments: Some(r#"{"target_mode":"serious_engineer"}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("Continuing anyway.".into()),
+            StreamEvent::Finish {
+                reason: Some("stop".into()),
+            },
+        ],
+    ];
+
+    let llm = Arc::new(FakeLlm::new(scripts));
+    let agent = Agent::new(
+        llm.clone(),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let mediator = FailingMediator;
+
+    let answer = agent
+        .run_with_inbox("please fix the bug", &sink, None, Some(&mediator))
+        .await
+        .unwrap();
+    assert_eq!(
+        answer, "Continuing anyway.",
+        "one failed mediated call must not abort the turn"
+    );
+
+    let requests = llm.requests.lock();
+    let tool_msg = requests[1]
+        .iter()
+        .find(|m| m.role == Role::Tool)
+        .expect("a tool result was still appended after the mediator error");
+    assert!(tool_msg.content.contains("broker unavailable"));
 }

@@ -1,6 +1,6 @@
 use chrono::Utc;
 use serde_json::json;
-use tm_modes::{ModeId, AssetStatus};
+use tm_modes::{AssetStatus, ModeId};
 use uuid::Uuid;
 
 use super::*;
@@ -23,7 +23,7 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
     let store = PostgresStore::connect(&dsn).await.unwrap();
     let session = store
         .create_session(NewSession {
-            mode: ModeId::from("personal_assistant"),
+            mode: ModeId::from("general"),
             persona_status: AssetStatus::Degraded {
                 warning: "test".to_string(),
             },
@@ -46,7 +46,7 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
             session.id,
             "mode",
             serde_json::to_value(StoreEvent::ModeChanged {
-                from: Some(ModeId::from("personal_assistant")),
+                from: Some(ModeId::from("general")),
                 mode: ModeId::from("serious_engineer"),
                 label: "Serious Engineer".to_string(),
                 voice_cap: "off".to_string(),

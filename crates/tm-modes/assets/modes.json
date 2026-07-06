@@ -1,9 +1,9 @@
 {
-  "defaultMode": "personal_assistant",
+  "defaultMode": "general",
   "modes": [
     {
-      "mode": "personal_assistant",
-      "label": "Personal Assistant",
+      "mode": "general",
+      "label": "General",
       "description": "Planning, reminders, writing, open loops, and decision cleanup.",
       "voiceCap": "medium",
       "defaultScope": "global",
@@ -14,54 +14,6 @@
         "isDefault": true,
         "priority": 0,
         "triggers": []
-      }
-    },
-    {
-      "mode": "ambiguity_grill",
-      "label": "Ambiguity Grill",
-      "description": "Vague or contradictory prompts become sharp clarification before planning.",
-      "voiceCap": "high",
-      "defaultScope": "global",
-      "activeSkills": ["miku-voice", "ambiguity-grill"],
-      "capabilities": [],
-      "capabilityClass": "conversation",
-      "route": {
-        "priority": 90,
-        "triggers": ["燒烤", "grill me", "ambiguous"]
-      }
-    },
-    {
-      "mode": "negative_state_grounding",
-      "label": "Negative-State Grounding",
-      "description": "Overwhelm, exhaustion, spiraling, or self-attack gets stabilized first.",
-      "voiceCap": "high",
-      "defaultScope": "global",
-      "activeSkills": ["miku-voice", "negative-state-grounding"],
-      "capabilities": [],
-      "capabilityClass": "conversation",
-      "route": {
-        "priority": 80,
-        "triggers": [
-          "overwhelmed",
-          "exhausted",
-          "spiraling",
-          "stuck",
-          "panic",
-          "anxious",
-          "burned out",
-          "burnt out",
-          "can't do this",
-          "cannot do this",
-          "i am useless",
-          "i'm useless",
-          "i hate myself",
-          "我不行",
-          "我好爛",
-          "撐不住",
-          "崩潰",
-          "焦慮",
-          "累爆"
-        ]
       }
     },
     {
@@ -110,6 +62,56 @@
         "priority": 100,
         "triggers": ["handoff", "delegate"]
       }
+    }
+  ],
+  "skills": [
+    {
+      "name": "scope-guard",
+      "activation": "always"
+    },
+    {
+      "name": "ambiguity-grill",
+      "activation": "triggered",
+      "triggers": ["燒烤", "grill me", "ambiguous"]
+    },
+    {
+      "name": "negative-state-grounding",
+      "activation": "triggered",
+      "triggers": [
+        "overwhelmed",
+        "exhausted",
+        "spiraling",
+        "stuck",
+        "panic",
+        "anxious",
+        "burned out",
+        "burnt out",
+        "can't do this",
+        "cannot do this",
+        "i am useless",
+        "i'm useless",
+        "i hate myself",
+        "我不行",
+        "我好爛",
+        "撐不住",
+        "崩潰",
+        "焦慮",
+        "累爆"
+      ]
+    },
+    {
+      "name": "weekly-ship-ledger",
+      "activation": "triggered",
+      "triggers": [
+        "ship this week",
+        "what did i ship",
+        "shipped anything",
+        "no output",
+        "not productive",
+        "沒有生產力",
+        "這週有做什麼",
+        "本週產出"
+      ]
     }
   ]
 }

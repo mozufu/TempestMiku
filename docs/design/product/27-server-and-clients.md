@@ -89,7 +89,7 @@ HTTP approval route.
 
 ## 27.2 Scheduler & proactivity
 
-P2 implements bounded proactivity without a scheduler: Personal Assistant turns can propose reminder
+P2 implements bounded proactivity without a scheduler: General-mode turns can propose reminder
 and open-loop recall chunks through the existing `write_proposal` + approval path. Approved entries are
 memory records visible through `memory://`; they are not background jobs and never push on their own.
 
@@ -189,7 +189,7 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
   text/fact fields; the shared approval broker then emits `approval` and `approval_resolved`. Approved
   writes upsert one durable record by dedupe key, while denied, cancelled, and timed-out proposals emit a
   resolved `write_proposal` status without writing.
-- **Personal-assistant state capture:** normal Personal Assistant turns may enqueue the same memory
+- **Personal-assistant state capture:** normal General-mode turns may enqueue the same memory
   write flow in the background when `personal-assistant-state-capture` finds stable state (§22.8).
   Message POSTs do not block on approval; clients see pending `write_proposal` / `approval` events and
   resolve them through the same approval route. Skipped transient, sensitive, or raw-log content emits no

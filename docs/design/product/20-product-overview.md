@@ -22,9 +22,10 @@ Brian is low).
 
 - **Identity is constant; voice intensity floats** by context (miku-voice skill: 喵 density high in
   light/emotional, off in serious) (§21).
-- **Modes underneath.** A **5-mode router** — Personal Assistant / Ambiguity Grill / Negative-State
-  Grounding / Serious Engineer / Handoff — changes *capabilities and register*, never the identity
-  (§21).
+- **Modes underneath.** **Three capability-mode envelopes** — General / Serious Engineer / Handoff —
+  change what's *possible*, never the identity; conversational postures like Ambiguity Grill and
+  Negative-State Grounding are layered skills on top of whichever mode is active, not modes
+  themselves (§21).
 - **Built on the bet.** Still "one `execute` tool; capabilities are SDK functions the code calls"
   (§01, §03).
 

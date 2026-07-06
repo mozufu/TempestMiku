@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use serde_json::json;
 use tm_artifacts::ArtifactStore;
-use tm_core::{Agent, AgentConfig, EventSink, InboxDrain, LlmClient, Sandbox};
+use tm_core::{Agent, AgentConfig, EventSink, InboxDrain, LlmClient, Sandbox, ToolMediator};
 use tm_host::CapabilityGrants;
 use tm_modes::ModeId;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
@@ -29,10 +29,13 @@ pub struct ChatTurn {
 
 #[async_trait]
 pub trait ChatRunner: Send + Sync + 'static {
+    /// `mediator`, when present, lets the model propose a mid-turn action (e.g. a mode
+    /// switch) through a second tool alongside `execute`; see [`tm_core::ToolMediator`].
     async fn run_turn(
         &self,
         turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
+        mediator: Option<Arc<dyn ToolMediator>>,
     ) -> Result<String>;
 }
 
@@ -42,14 +45,16 @@ impl<T: ChatRunner + ?Sized> ChatRunner for Arc<T> {
         &self,
         turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
+        mediator: Option<Arc<dyn ToolMediator>>,
     ) -> Result<String> {
-        (**self).run_turn(turn, sink).await
+        (**self).run_turn(turn, sink, mediator).await
     }
 }
 
 struct AgentRequest {
     turn: ChatTurn,
     sink: Arc<dyn EventSink + Send + Sync>,
+    mediator: Option<Arc<dyn ToolMediator>>,
     reply: tokio::sync::oneshot::Sender<Result<String>>,
 }
 
@@ -67,7 +72,12 @@ impl AgentChatRunner {
                 .expect("agent worker runtime builds");
             for request in receiver {
                 let result = runtime
-                    .block_on(agent.run(&request.turn.user_prompt, request.sink.as_ref()))
+                    .block_on(agent.run_with_inbox(
+                        &request.turn.user_prompt,
+                        request.sink.as_ref(),
+                        None,
+                        request.mediator.as_deref(),
+                    ))
                     .map_err(|err| ServerError::Store(err.to_string()));
                 let _ = request.reply.send(result);
             }
@@ -107,7 +117,12 @@ impl AgentChatRunner {
                 cfg.system_prompt = request.turn.system_prompt.clone();
                 let agent = Agent::new(Arc::clone(&llm), sandbox, cfg);
                 let result = runtime
-                    .block_on(agent.run(&request.turn.user_prompt, request.sink.as_ref()))
+                    .block_on(agent.run_with_inbox(
+                        &request.turn.user_prompt,
+                        request.sink.as_ref(),
+                        None,
+                        request.mediator.as_deref(),
+                    ))
                     .map_err(|err| ServerError::Store(err.to_string()));
                 let _ = request.reply.send(result);
             }
@@ -170,6 +185,7 @@ impl ChatRunner for AgentChatRunner {
         &self,
         turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
+        mediator: Option<Arc<dyn ToolMediator>>,
     ) -> Result<String> {
         let (reply, response) = tokio::sync::oneshot::channel();
         {
@@ -178,7 +194,12 @@ impl ChatRunner for AgentChatRunner {
                 .lock()
                 .map_err(|_| ServerError::Store("agent sender lock poisoned".to_string()))?;
             sender
-                .send(AgentRequest { turn, sink, reply })
+                .send(AgentRequest {
+                    turn,
+                    sink,
+                    mediator,
+                    reply,
+                })
                 .map_err(|_| ServerError::Store("agent worker stopped".to_string()))?;
         }
         response
@@ -196,6 +217,7 @@ impl ChatRunner for EchoChatRunner {
         &self,
         turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
+        _mediator: Option<Arc<dyn ToolMediator>>,
     ) -> Result<String> {
         let text = format!("Miku heard: {}", turn.user_prompt);
         sink.on_text(&text);
@@ -217,10 +239,11 @@ impl ChatRunner for ServerChatRunner {
         &self,
         turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
+        mediator: Option<Arc<dyn ToolMediator>>,
     ) -> Result<String> {
         match self {
-            Self::Echo(r) => r.run_turn(turn, sink).await,
-            Self::Agent(r) => r.run_turn(turn, sink).await,
+            Self::Echo(r) => r.run_turn(turn, sink, mediator).await,
+            Self::Agent(r) => r.run_turn(turn, sink, mediator).await,
         }
     }
 }
@@ -504,6 +527,9 @@ impl ActorExecutor for ChatActorExecutor {
                     &task,
                     &sink,
                     inbox.as_ref().map(|inbox| inbox as &dyn InboxDrain),
+                    // Sub-agents run scoped tasks, not the top-level conversation; they
+                    // don't get a mode-suggest (or any other) mediator.
+                    None,
                 ))
                 .map_err(|e| ActorError::Execution(e.to_string()));
             let transcript = sink.into_transcript();

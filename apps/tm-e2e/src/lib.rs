@@ -98,6 +98,14 @@ impl MikuClient {
         Ok(())
     }
 
+    pub async fn override_mode(&self, session_id: &str, mode: &str, reason: &str) -> Result<Value> {
+        self.post_json(
+            &format!("/sessions/{session_id}/mode/override"),
+            json!({ "mode": mode, "reason": reason }),
+        )
+        .await
+    }
+
     pub async fn resolve_approval(
         &self,
         session_id: &str,
@@ -692,11 +700,11 @@ pub async fn run_workflow(
 ) -> Result<WorkflowReport> {
     let session = client.create_session(None).await?;
     ensure!(
-        session.mode == "personal_assistant",
-        "new session should start as personal_assistant, got {}",
+        session.mode == "general",
+        "new session should start as general, got {}",
         session.mode
     );
-    ensure!(session.label == "Personal Assistant");
+    ensure!(session.label == "General");
     ensure!(session.voice_cap == "medium");
     ensure!(
         session
@@ -708,7 +716,7 @@ pub async fn run_workflow(
     let (created_events, created_mode) = client
         .wait_for_event(&session.id, Some(0), |event| event.event_type == "mode")
         .await?;
-    ensure!(created_mode.data["mode"] == json!("personal_assistant"));
+    ensure!(created_mode.data["mode"] == json!("general"));
     let mut last_event_id = max_event_id(0, &created_events);
 
     let mut rounds = Vec::new();
@@ -731,7 +739,7 @@ pub async fn run_workflow(
         1,
         personal_step,
         &personal_message,
-        "personal_assistant",
+        "general",
         &personal_events,
         &personal_final,
     )?);
@@ -761,6 +769,12 @@ pub async fn run_workflow(
     };
     let coding_step = WorkflowStep::CodingModeProbe;
     let coding_message = speaker.message(coding_step, &context).await?;
+    // Modes no longer auto-switch from message keywords (they're sticky capability envelopes
+    // now); the workflow drives the same explicit override a client's mode picker would use.
+    client
+        .override_mode(&session.id, "serious_engineer", "coding mode probe")
+        .await
+        .context("switching to Serious Engineer via mode override")?;
     client.send_message(&session.id, &coding_message).await?;
     let coding_events = client
         .read_until_final(&session.id, Some(last_event_id))
@@ -1217,7 +1231,7 @@ mod tests {
             1,
             WorkflowStep::PersonalAssistantGreeting,
             "status please",
-            "personal_assistant",
+            "general",
             &events,
             "hello artifact://0",
         )
@@ -1228,7 +1242,7 @@ mod tests {
         assert_eq!(round.user_message, "status please");
         assert_eq!(round.assistant_streamed_text, "hello artifact://0");
         assert_eq!(round.assistant_final_text, "hello artifact://0");
-        assert_eq!(round.mode, "personal_assistant");
+        assert_eq!(round.mode, "general");
         assert_eq!(round.event_id_start, Some(3));
         assert_eq!(round.event_id_end, Some(6));
         assert_eq!(round.event_types, vec!["text", "artifact", "final"]);

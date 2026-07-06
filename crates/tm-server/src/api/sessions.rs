@@ -1,6 +1,7 @@
 use super::*;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
+use tm_core::ToolMediator;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct CreateSessionRequest {
@@ -402,32 +403,16 @@ where
     C: ChatRunner,
 {
     state.auth.authorize(&headers)?;
-    let mut session = state.store.get_session(session_id).await?;
-    let assets = state.persona.load_assets();
-    let (suggested, reason) = route_mode_for_prompt(&assets.modes, &payload.content);
-    let current_profile = assets.profile_or_unknown(&session.mode_state.mode);
-    let suggested_profile = assets.profile_or_unknown(&suggested);
-    let preserves_coding_override = current_profile.has_capability("backend.coding")
-        && session.mode_state.override_source.is_some()
-        && suggested_profile.route.is_default;
-    if session.mode_state.lock_source.is_none()
-        && suggested != session.mode_state.mode
-        && !preserves_coding_override
-    {
-        let mut next = session.mode_state.clone();
-        next.mode = suggested.clone();
-        next.router_reason = Some(reason);
-        next.override_source = None;
-        next.updated_at = Utc::now();
-        let (updated, _) = commit_mode_state(&state, session.clone(), next).await?;
-        session = updated;
-    }
+    let session = state.store.get_session(session_id).await?;
+    // Mode changes are no longer silently auto-applied from keyword matches: they come only
+    // from the user's picker (apply/override/lock) or, once wired, a model-proposed and
+    // user-confirmed `mode_suggest`. This keeps capability modes sticky across turns.
     let turn_profile = mode_profile(&state.persona, &session.mode_state.mode);
     let scope = payload
         .scope
         .clone()
         .unwrap_or_else(|| turn_profile.default_scope.clone());
-    let persona_prompt = build_turn_prompt(&state, &session.mode_state.mode);
+    let persona_prompt = build_turn_prompt(&state, &session.mode_state.mode, &payload.content);
     state
         .store
         .append_message(session_id, "user", &payload.content)
@@ -445,6 +430,24 @@ where
             memory.render_prompt_block()
         )
     };
+    // The model can propose a mode switch mid-turn (`mode_suggest`) whenever a turn actually
+    // runs through the ChatRunner path (i.e. not the native coding backend, which has no
+    // mediator seam in v1 — see §21.4 / ModeSuggestMediator docs). Built once and shared by
+    // both ChatRunner call sites below.
+    let mode_suggest_mediator = || -> Arc<dyn ToolMediator> {
+        let mode_sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+            session_id,
+            Arc::clone(&state.store),
+            state.sender(session_id),
+        ));
+        Arc::new(ModeSuggestMediator::new(
+            state.clone(),
+            session_id,
+            mode_sink,
+            MODE_SUGGEST_APPROVAL_TIMEOUT,
+        ))
+    };
+
     let response = if turn_profile.has_capability("backend.coding") {
         if let Some(backend) = &state.coding_backend {
             let sink = Arc::new(StoreCodingEventSink::new(
@@ -483,6 +486,7 @@ where
                         scope: scope.clone(),
                     },
                     sink.clone(),
+                    Some(mode_suggest_mediator()),
                 )
                 .await?;
             sink.flush().await?;
@@ -505,6 +509,7 @@ where
                     scope: scope.clone(),
                 },
                 sink.clone(),
+                Some(mode_suggest_mediator()),
             )
             .await?;
         sink.flush().await?;

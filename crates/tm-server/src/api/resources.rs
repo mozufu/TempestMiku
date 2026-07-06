@@ -173,17 +173,25 @@ where
     C: ChatRunner,
 {
     let Some(uri) = uri.filter(|uri| !uri.is_empty()) else {
-        return Ok(["artifact", "linked", "workspace", "project", "memory", "agent", "history"]
-            .into_iter()
-            .map(|scheme| ResourceEntry {
-                uri: format!("{scheme}://"),
-                name: scheme.to_string(),
-                kind: "scheme".to_string(),
-                title: None,
-                size_bytes: None,
-                modified_at: None,
-            })
-            .collect());
+        return Ok([
+            "artifact",
+            "linked",
+            "workspace",
+            "project",
+            "memory",
+            "agent",
+            "history",
+        ]
+        .into_iter()
+        .map(|scheme| ResourceEntry {
+            uri: format!("{scheme}://"),
+            name: scheme.to_string(),
+            kind: "scheme".to_string(),
+            title: None,
+            size_bytes: None,
+            modified_at: None,
+        })
+        .collect());
     };
     match resource_scheme(uri).as_deref() {
         Some("artifact") => {
@@ -329,8 +337,7 @@ where
     registry.register(Arc::new(AgentResourceHandler::new(Arc::clone(
         &state.actor_roster,
     ))));
-    let ctx =
-        InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
     registry
         .read(uri, selector, &ctx)
         .await
@@ -351,8 +358,7 @@ where
     registry.register(Arc::new(HistoryResourceHandler::new(Arc::clone(
         &state.actor_roster,
     ))));
-    let ctx =
-        InvocationCtx::new(CapabilityGrants::default().allow("resources.read:history"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:history"));
     registry
         .read(uri, selector, &ctx)
         .await
@@ -372,8 +378,7 @@ where
     registry.register(Arc::new(AgentResourceHandler::new(Arc::clone(
         &state.actor_roster,
     ))));
-    let ctx =
-        InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 

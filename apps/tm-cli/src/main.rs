@@ -265,6 +265,9 @@ fn serious_engineer_prompt(_host_config: &P0HostConfig, linked_folders: &LinkedF
             &ModeId::from("serious_engineer"),
             tm_core::DEFAULT_SYSTEM_PROMPT,
             &capability_notes,
+            // No live user message at CLI startup; always-on layered skills (e.g.
+            // scope-guard) still compose, only keyword-triggered ones are skipped.
+            "",
         )
         .system_prompt
 }
@@ -453,7 +456,10 @@ mod tests {
         assert_eq!(cfg.cell_budget.output_bytes, 50_000);
         assert!(cfg.system_prompt.contains("SOUL.md"));
         assert!(cfg.system_prompt.contains("Tempest Miku"));
-        assert!(cfg.system_prompt.contains("Serious Engineer Operating Notes"));
+        assert!(
+            cfg.system_prompt
+                .contains("Serious Engineer Operating Notes")
+        );
         assert!(cfg.system_prompt.contains("proc.run(cmd, args)"));
     }
 }

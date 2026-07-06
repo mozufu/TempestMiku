@@ -328,11 +328,13 @@ pub(super) fn validate_mode(persona: &ModesConfig, mode: ModeId) -> Result<ModeI
 pub(super) fn build_turn_prompt<S, M, C>(
     state: &AppState<S, M, C>,
     mode: &ModeId,
+    message: &str,
 ) -> tm_modes::ComposedPrompt {
     state.persona.build_system_prompt(
         mode,
         DEFAULT_SYSTEM_PROMPT,
         &linked_folder_capability_notes(&state.linked_folders),
+        message,
     )
 }
 
@@ -365,7 +367,7 @@ mod tests {
     #[test]
     fn validate_mode_accepts_known_modes() {
         let persona = ModesConfig::default();
-        for id in ["personal_assistant", "serious_engineer", "handoff"] {
+        for id in ["general", "serious_engineer", "handoff"] {
             assert!(validate_mode(&persona, ModeId::from(id)).is_ok(), "{id}");
         }
     }
@@ -379,32 +381,4 @@ mod tests {
             "expected InvalidRequest with 'unknown mode', got: {err:?}"
         );
     }
-}
-
-pub(super) fn route_mode_for_prompt(catalog: &ModeCatalog, content: &str) -> (ModeId, String) {
-    let lower = content.to_lowercase();
-    let mut profiles = catalog.modes.iter().collect::<Vec<_>>();
-    profiles.sort_by_key(|profile| std::cmp::Reverse(profile.route.priority));
-
-    for profile in profiles {
-        if profile.route.is_default {
-            continue;
-        }
-        if let Some(trigger) = profile
-            .route
-            .triggers
-            .iter()
-            .find(|trigger| lower.contains(&trigger.to_lowercase()))
-        {
-            return (
-                profile.mode.clone(),
-                format!("runtime mode trigger for {}: {trigger}", profile.mode),
-            );
-        }
-    }
-
-    (
-        catalog.default_mode(),
-        "default runtime mode route for unmatched prompt".to_string(),
-    )
 }

@@ -5,7 +5,7 @@ use futures::StreamExt;
 
 use crate::{
     Accumulator, CellBudget, ChatRequest, Error, EventSink, ExecuteCall, LlmClient, Message,
-    Result, Sandbox, SessionConfig, StreamEvent, ToolChoice, ToolSpec,
+    Result, Sandbox, SessionConfig, StreamEvent, ToolChoice, ToolMediator, ToolSpec,
     prompt::DEFAULT_SYSTEM_PROMPT, shape::shape_result,
 };
 
@@ -85,9 +85,14 @@ impl Agent {
         Message::system(prompt)
     }
 
-    fn build_request(&self, messages: &[Message]) -> ChatRequest {
+    fn build_request(&self, messages: &[Message], extra_tools: &[ToolSpec]) -> ChatRequest {
         let (tools, tool_choice) = match self.cfg.protocol {
-            Protocol::NativeTool => (vec![ToolSpec::execute()], ToolChoice::Auto),
+            Protocol::NativeTool => (
+                std::iter::once(ToolSpec::execute())
+                    .chain(extra_tools.iter().cloned())
+                    .collect(),
+                ToolChoice::Auto,
+            ),
             Protocol::FencedBlock => (Vec::new(), ToolChoice::None),
         };
         ChatRequest {
@@ -102,22 +107,29 @@ impl Agent {
 
     /// Run the agent to a final answer, streaming events to `sink` as they arrive.
     pub async fn run(&self, user: &str, sink: &dyn EventSink) -> Result<String> {
-        self.run_with_inbox(user, sink, None).await
+        self.run_with_inbox(user, sink, None, None).await
     }
 
-    /// Run the agent with an optional actor inbox drain.
+    /// Run the agent with an optional actor inbox drain and an optional [`ToolMediator`].
     ///
     /// Pending inbox messages are appended before each model turn, preserving the
     /// existing streaming/tool loop while letting live actor messages wake the
     /// next turn without adding another runtime loop.
+    ///
+    /// A mediator's tool specs are advertised alongside `execute`; when the model calls one
+    /// of them instead of `execute`, the loop hands the call to the mediator and feeds its
+    /// returned string back as that call's tool result, then continues to the next turn —
+    /// `tm-core` never learns what the mediated tool actually does.
     pub async fn run_with_inbox(
         &self,
         user: &str,
         sink: &dyn EventSink,
         inbox: Option<&dyn InboxDrain>,
+        mediator: Option<&dyn ToolMediator>,
     ) -> Result<String> {
         let mut messages = vec![self.system_message(), Message::user(user)];
         let mut session = self.sandbox.open(SessionConfig::default()).await?;
+        let extra_tools = mediator.map(|m| m.tool_specs()).unwrap_or_default();
 
         for _ in 0..self.cfg.max_turns {
             if let Some(inbox) = inbox {
@@ -126,7 +138,7 @@ impl Agent {
                 }
             }
 
-            let request = self.build_request(&messages);
+            let request = self.build_request(&messages, &extra_tools);
 
             // Stream the turn; assistant tokens reach the sink the instant they land.
             let mut stream = self.llm.chat_stream(&request).await?;
@@ -157,8 +169,20 @@ impl Agent {
             };
 
             let Some(call) = call else {
-                sink.on_final(&turn.text);
-                return Ok(turn.text);
+                // No `execute` call this turn. If a mediator is attached and the model
+                // called one of its tools instead, hand it off and keep looping; otherwise
+                // this is the final answer.
+                let mediated = mediator.zip(turn.tool_calls.iter().find(|tc| tc.name != "execute"));
+                let Some((mediator, tool_call)) = mediated else {
+                    sink.on_final(&turn.text);
+                    return Ok(turn.text);
+                };
+                let result = mediator
+                    .handle(&tool_call.name, &tool_call.arguments)
+                    .await
+                    .unwrap_or_else(|err| format!("{} failed: {err}", tool_call.name));
+                messages.push(Message::tool_result(&tool_call.id, result));
+                continue;
             };
 
             sink.on_cell_start(&call.code);

@@ -13,7 +13,7 @@ const MAX_STATE_CAPTURE_PROPOSALS_PER_TURN: usize = 6;
 const STATE_CAPTURE_MAX_TEXT_CHARS: usize = 280;
 pub(crate) const STATE_CAPTURE_PROVENANCE_LABEL: &str = "personal-assistant-state-capture";
 /// The mode id this state capture belongs to; must resolve in the bundled `ModeCatalog`.
-const MODE_ID: &str = "personal_assistant";
+const MODE_ID: &str = "general";
 
 pub fn personal_assistant_state_capture_proposals(
     subject: &str,
@@ -480,6 +480,7 @@ fn contains_transient_mood(text: &str) -> bool {
             "i am tired",
             "i'm exhausted",
             "i am exhausted",
+            "exhausted",
             "overwhelmed",
             "spiraling",
             "self-deprecating",
@@ -487,6 +488,24 @@ fn contains_transient_mood(text: &str) -> bool {
             "i am useless",
             "grumpy",
             "bad mood",
+            // Kept in sync with the negative-state-grounding skill's trigger list
+            // (crates/tm-modes/assets/modes.json) so a pure distress message never produces
+            // a memory-write proposal — this guard is the only safeguard against that now
+            // that distress messages stay in `general` mode instead of a capture-free mode.
+            "stuck",
+            "panic",
+            "anxious",
+            "burned out",
+            "burnt out",
+            "can't do this",
+            "cannot do this",
+            "i hate myself",
+            "我不行",
+            "我好爛",
+            "撐不住",
+            "崩潰",
+            "焦慮",
+            "累爆",
         ],
     )
 }

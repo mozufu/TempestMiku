@@ -40,5 +40,5 @@ pub use store::{
 };
 pub use tm_agents::MailboxRegistry;
 pub use tm_modes::{
-    ModeCatalog, ModeId, ModeProfile, ModeAssets, ModesConfig, ComposedPrompt, AssetStatus,
+    AssetStatus, ComposedPrompt, ModeAssets, ModeCatalog, ModeId, ModeProfile, ModesConfig,
 };

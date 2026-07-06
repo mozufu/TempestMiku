@@ -1,72 +1,63 @@
 use super::*;
 
 #[tokio::test]
-async fn router_defaults_unlocked_non_coding_prompts_to_personal_assistant() {
+async fn general_is_the_session_creation_default() {
+    let (app, _store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    assert_eq!(session.mode, ModeId::from("general"));
+    assert_eq!(session.mode_state.mode, ModeId::from("general"));
+    assert_eq!(session.mode_state.lock_source, None);
+    assert_eq!(session.mode_state.override_source, None);
+}
+
+#[tokio::test]
+async fn posting_a_message_never_auto_switches_the_mode() {
+    // The keyword-substring router used to silently flip modes per turn (and revert them just
+    // as silently on the next non-triggering message). That mechanism is gone: a session's mode
+    // only changes via an explicit user action (lock/apply/override) or, once wired, a
+    // model-proposed and user-confirmed `mode_suggest`. Posting a message alone must never
+    // change it, no matter how code- or distress-flavored the content looks.
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
     post_user_message(&app, session.id, "please fix this Rust code bug").await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
+    assert_eq!(latest.mode_state.mode, ModeId::from("general"));
+    assert_eq!(latest.mode_state.lock_source, None);
+    assert_eq!(latest.mode_state.override_source, None);
+    assert_eq!(latest.mode_state.router_reason, None);
+
+    post_user_message(&app, session.id, "i am overwhelmed and exhausted").await;
+    let latest = store.get_session(session.id).await.unwrap();
+    assert_eq!(latest.mode_state.mode, ModeId::from("general"));
 
     post_user_message(
         &app,
         session.id,
-        "help me plan tomorrow and clean up reminders",
+        "delegate this whole migration to an agent",
     )
     .await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, ModeId::from("personal_assistant"));
-    assert_eq!(latest.mode_state.lock_source, None);
-    assert_eq!(latest.mode_state.override_source, None);
-    assert!(
-        latest
-            .mode_state
-            .router_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("default runtime mode")
-    );
+    assert_eq!(latest.mode_state.mode, ModeId::from("general"));
 
     let events = store.events_after(session.id, None).await.unwrap();
     let mode_events = events
         .iter()
         .filter(|event| event.event_type == "mode")
         .collect::<Vec<_>>();
-    let last_mode = mode_events.last().unwrap();
-    assert_eq!(last_mode.payload_json["from"], json!("serious_engineer"));
-    assert_eq!(last_mode.payload_json["mode"], json!("personal_assistant"));
-    assert_eq!(last_mode.payload_json["voice_cap"], json!("medium"));
     assert_eq!(
-        last_mode.payload_json["activeSkills"],
-        json!(["miku-voice", "personal-assistant-state-capture"])
+        mode_events.len(),
+        1,
+        "only the initial session-creation mode event; no message ever adds another"
     );
-}
-
-#[test]
-fn router_triggers_negative_state_grounding_for_negative_language() {
-    let catalog = ModesConfig::default().load_assets().modes;
-    for (content, trigger) in [
-        ("everything is too much and I am overwhelmed", "overwhelmed"),
-        ("I'm exhausted and have no energy", "exhausted"),
-        ("I'm useless and nothing I do counts", "useless"),
-        ("I am spiraling tonight", "spiraling"),
-        (
-            "I'm stuck on this Rust bug and can't make progress",
-            "stuck",
-        ),
-    ] {
-        let (mode, reason) = route_mode_for_prompt(&catalog, content);
-        assert_eq!(mode, ModeId::from("negative_state_grounding"), "{content}");
-        assert!(
-            reason.contains(trigger),
-            "expected {trigger:?} in reason {reason:?}"
-        );
-    }
 }
 
 #[tokio::test]
 async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
+    // Distress messages now stay in `general` mode (which has personal-assistant-state-capture
+    // active) instead of routing into a capture-free posture mode. The transient-mood guard in
+    // state_capture.rs is the only remaining safeguard against turning a bad moment into a
+    // memory write, so this is the regression test for that guard.
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
@@ -78,19 +69,7 @@ async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
     .await;
 
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(
-        latest.mode_state.mode,
-        ModeId::from("negative_state_grounding")
-    );
-    let profile = ModesConfig::default()
-        .load_assets()
-        .profile_or_unknown(&latest.mode_state.mode);
-    assert_eq!(profile.capability_class, "conversation");
-    assert_eq!(profile.voice_cap, "high");
-    assert_eq!(
-        profile.active_skills,
-        ["miku-voice", "negative-state-grounding"]
-    );
+    assert_eq!(latest.mode_state.mode, ModeId::from("general"));
     let events = store.events_after(session.id, None).await.unwrap();
     assert!(
         events
@@ -109,7 +88,7 @@ async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
 }
 
 #[tokio::test]
-async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route() {
+async fn unlock_removes_the_lock_but_never_reverts_the_mode() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
@@ -150,13 +129,21 @@ async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route()
                 .method(Method::POST)
                 .uri(format!("/sessions/{}/mode/unlock", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"reason":"router may choose again"}"#))
+                .body(Body::from(r#"{"reason":"no longer need the lock"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(unlock.status(), StatusCode::OK);
+    let unlock_json = response_json(unlock).await;
+    assert_eq!(unlock_json["modeState"]["lockSource"], Value::Null);
+    assert_eq!(
+        unlock_json["modeState"]["mode"],
+        json!("serious_engineer"),
+        "unlocking removes the lock but must not itself change or revert the mode"
+    );
 
+    // Sticky: a plain planning message still doesn't move it, locked or not.
     post_user_message(
         &app,
         session.id,
@@ -164,16 +151,27 @@ async fn user_lock_keeps_serious_engineer_until_unlock_reenables_default_route()
     )
     .await;
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, ModeId::from("personal_assistant"));
+    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
     assert_eq!(latest.mode_state.lock_source, None);
-    assert!(
-        latest
-            .mode_state
-            .router_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("default runtime mode")
-    );
+
+    // Returning to General is a deliberate user action (the picker/override), not automatic.
+    let override_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/mode/override", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"mode":"general","reason":"done with the code change"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(override_res.status(), StatusCode::OK);
+    let latest = store.get_session(session.id).await.unwrap();
+    assert_eq!(latest.mode_state.mode, ModeId::from("general"));
 }
 
 #[tokio::test]
@@ -188,9 +186,7 @@ async fn user_override_can_switch_to_serious_engineer_through_lock() {
                 .method(Method::POST)
                 .uri(format!("/sessions/{}/mode/lock", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"mode":"personal_assistant","reason":"stay light"}"#,
-                ))
+                .body(Body::from(r#"{"mode":"general","reason":"stay light"}"#))
                 .unwrap(),
         )
         .await
@@ -238,7 +234,7 @@ async fn user_override_can_switch_to_serious_engineer_through_lock() {
 }
 
 #[tokio::test]
-async fn router_lock_unlock_and_replay_mode_events() {
+async fn mode_events_only_come_from_explicit_actions_not_from_messages() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
@@ -260,6 +256,34 @@ async fn router_lock_unlock_and_replay_mode_events() {
         .iter()
         .filter(|event| event.event_type == "mode")
         .collect::<Vec<_>>();
+    assert_eq!(
+        mode_events.len(),
+        1,
+        "no mode event should be emitted just from posting a message"
+    );
+    let seq_before_override = events.last().map(|event| event.seq).unwrap_or(0);
+
+    let override_res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/mode/override", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"mode":"serious_engineer","reason":"user picked it"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(override_res.status(), StatusCode::OK);
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    let mode_events = events
+        .iter()
+        .filter(|event| event.event_type == "mode")
+        .collect::<Vec<_>>();
     assert_eq!(mode_events.len(), 2);
     assert_eq!(mode_events[1].payload_json["event"], json!("mode_changed"));
     assert_eq!(
@@ -275,10 +299,14 @@ async fn router_lock_unlock_and_replay_mode_events() {
         mode_events[1].payload_json["router_reason"]
             .as_str()
             .unwrap()
-            .contains("serious_engineer")
+            .contains("user picked it")
     );
 
-    let replay = store.events_after(session.id, Some(1)).await.unwrap();
+    let replay = store
+        .events_after(session.id, Some(seq_before_override))
+        .await
+        .unwrap();
+    assert_eq!(replay.len(), 1, "only the override's mode event is new");
     assert_eq!(replay[0].event_type, "mode");
     assert_eq!(replay[0].payload_json["mode"], json!("serious_engineer"));
 
@@ -289,9 +317,7 @@ async fn router_lock_unlock_and_replay_mode_events() {
                 .method(Method::POST)
                 .uri(format!("/sessions/{}/mode/lock", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"mode":"personal_assistant","reason":"stay light"}"#,
-                ))
+                .body(Body::from(r#"{"mode":"general","reason":"stay light"}"#))
                 .unwrap(),
         )
         .await
@@ -319,7 +345,11 @@ async fn router_lock_unlock_and_replay_mode_events() {
         .unwrap();
     assert_eq!(locked_message.status(), StatusCode::OK);
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, ModeId::from("personal_assistant"));
+    assert_eq!(
+        latest.mode_state.mode,
+        ModeId::from("general"),
+        "locked mode must not change even for a code-flavored message"
+    );
 
     let unlock = app
         .clone()
@@ -328,7 +358,7 @@ async fn router_lock_unlock_and_replay_mode_events() {
                 .method(Method::POST)
                 .uri(format!("/sessions/{}/mode/unlock", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"reason":"router may resume"}"#))
+                .body(Body::from(r#"{"reason":"no longer need the lock"}"#))
                 .unwrap(),
         )
         .await
@@ -349,12 +379,9 @@ async fn router_lock_unlock_and_replay_mode_events() {
         .unwrap();
     assert_eq!(reroute.status(), StatusCode::OK);
     let latest = store.get_session(session.id).await.unwrap();
-    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
     assert_eq!(
-        ModesConfig::default()
-            .load_assets()
-            .profile_or_unknown(&latest.mode_state.mode)
-            .voice_cap,
-        "off"
+        latest.mode_state.mode,
+        ModeId::from("general"),
+        "unlocking must not itself trigger a switch; messages never auto-switch anymore"
     );
 }

@@ -258,6 +258,7 @@ impl ChatRunner for RecordingChatRunner {
         &self,
         turn: ChatTurn,
         sink: Arc<dyn tm_core::EventSink + Send + Sync>,
+        _mediator: Option<Arc<dyn tm_core::ToolMediator>>,
     ) -> Result<String> {
         self.turns.lock().push(turn);
         let text = "recorded chat turn".to_string();

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt, fs,
     path::{Path, PathBuf},
 };
@@ -95,6 +95,11 @@ impl From<String> for ModeId {
 pub struct ModeCatalog {
     pub default_mode: ModeId,
     pub modes: Vec<ModeProfile>,
+    /// Layered skills that activate independent of the currently selected mode (always-on or
+    /// keyword-triggered). `#[serde(default)]` so catalogs/fixtures written before this field
+    /// existed still parse.
+    #[serde(default)]
+    pub skills: Vec<SkillTrigger>,
 }
 
 impl ModeCatalog {
@@ -141,6 +146,30 @@ pub struct ModeRoute {
     pub is_default: bool,
     #[serde(default)]
     pub priority: i32,
+    #[serde(default)]
+    pub triggers: Vec<String>,
+}
+
+/// How a layered skill activates, independent of which mode is currently selected.
+///
+/// Modes are capability envelopes; skills are prompt payloads layered on top of whichever
+/// mode is active. `Always` skills load on every turn; `Triggered` skills load only when the
+/// current message matches one of their trigger words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillActivation {
+    Always,
+    Triggered,
+}
+
+/// A skill activation entry in the catalog's top-level `skills` array. Distinct from a mode's
+/// `activeSkills`: these skills are not owned by any single mode and can layer onto any active
+/// mode's prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillTrigger {
+    pub name: String,
+    pub activation: SkillActivation,
     #[serde(default)]
     pub triggers: Vec<String>,
 }
@@ -319,6 +348,7 @@ impl ModesConfig {
         mode: &ModeId,
         base_system_prompt: &str,
         capability_notes: &str,
+        message: &str,
     ) -> ComposedPrompt {
         let assets = self.load_assets();
         let mut warnings = assets.warnings.clone();
@@ -339,11 +369,17 @@ impl ModesConfig {
             None => push_section(&mut prompt, "SOUL.md", BUNDLED_SOUL),
         }
 
-        for skill in &profile.active_skills {
+        for skill in resolve_active_skills(&assets.modes, &profile, message) {
             match assets.skills.get(skill.as_str()) {
                 Some(contents) => push_raw(&mut prompt, strip_frontmatter(contents)),
                 None => {
-                    let warning = missing_skill_reference_warning(&profile.mode, skill);
+                    // Mode-declared skills and catalog-level layered skills get distinct
+                    // wording so the warning correctly names where the reference lives.
+                    let warning = if profile.active_skills.contains(&skill) {
+                        missing_skill_reference_warning(&profile.mode, &skill)
+                    } else {
+                        missing_layered_skill_reference_warning(&skill)
+                    };
                     if !warnings.iter().any(|existing| existing == &warning) {
                         warnings.push(warning);
                     }
@@ -367,6 +403,52 @@ impl ModesConfig {
             warnings,
         }
     }
+}
+
+/// Compose the ordered, deduplicated list of skills active for one turn:
+///
+/// 1. always-on layered skills (`catalog.skills` entries with `activation: always`),
+/// 2. the active mode's own declared skills (`profile.active_skills`, in order),
+/// 3. triggered layered skills whose trigger words appear in `message`.
+///
+/// Modes are capability envelopes; this is the seam that lets conversational postures
+/// (e.g. ambiguity-grill, negative-state-grounding) layer onto whichever mode is active
+/// instead of requiring their own mode switch.
+pub fn resolve_active_skills(
+    catalog: &ModeCatalog,
+    profile: &ModeProfile,
+    message: &str,
+) -> Vec<String> {
+    let lower_message = message.to_lowercase();
+    let mut candidates: Vec<&str> = Vec::new();
+
+    for entry in &catalog.skills {
+        if entry.activation == SkillActivation::Always {
+            candidates.push(entry.name.as_str());
+        }
+    }
+    for skill in &profile.active_skills {
+        candidates.push(skill.as_str());
+    }
+    for entry in &catalog.skills {
+        if entry.activation == SkillActivation::Triggered
+            && entry
+                .triggers
+                .iter()
+                .any(|trigger| lower_message.contains(&trigger.to_lowercase()))
+        {
+            candidates.push(entry.name.as_str());
+        }
+    }
+
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut resolved = Vec::with_capacity(candidates.len());
+    for name in candidates {
+        if seen.insert(name) {
+            resolved.push(name.to_string());
+        }
+    }
+    resolved
 }
 
 fn load_configured_modes(root: &Path, warnings: &mut Vec<String>) -> ModeCatalog {
@@ -459,6 +541,12 @@ fn bundled_catalog_assets() -> (BTreeMap<String, String>, ModeCatalog) {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let missing_layered = missing_layered_skill_references(&modes, &skills);
+    assert!(
+        missing_layered.is_empty(),
+        "bundled modes.json top-level skills array references missing skills: {}",
+        missing_layered.join(", ")
+    );
     (skills, modes)
 }
 
@@ -487,6 +575,9 @@ fn warn_missing_skill_references(
     for (mode, skill) in missing_skill_references(catalog, skills) {
         warnings.push(missing_skill_reference_warning(&mode, &skill));
     }
+    for skill in missing_layered_skill_references(catalog, skills) {
+        warnings.push(missing_layered_skill_reference_warning(&skill));
+    }
 }
 
 fn missing_skill_references(
@@ -504,9 +595,27 @@ fn missing_skill_references(
     missing
 }
 
+fn missing_layered_skill_references(
+    catalog: &ModeCatalog,
+    skills: &BTreeMap<String, String>,
+) -> Vec<String> {
+    catalog
+        .skills
+        .iter()
+        .map(|entry| entry.name.clone())
+        .filter(|name| !skills.contains_key(name.as_str()))
+        .collect()
+}
+
 fn missing_skill_reference_warning(mode: &ModeId, skill: &str) -> String {
     format!(
         "active skill {skill} referenced by mode {mode} is missing at skills/{skill}/SKILL.md; prompt will use the missing-skill fallback"
+    )
+}
+
+fn missing_layered_skill_reference_warning(skill: &str) -> String {
+    format!(
+        "layered skill {skill} referenced by the catalog's top-level skills array is missing at skills/{skill}/SKILL.md; it will be skipped during composition"
     )
 }
 
@@ -553,7 +662,8 @@ mod tests {
     };
 
     use super::{
-        KNOWN_SKILLS, MISSING_SKILL_PROMPT_FALLBACK, ModeId, ModesConfig, AssetStatus,
+        AssetStatus, KNOWN_SKILLS, MISSING_SKILL_PROMPT_FALLBACK, ModeId, ModesConfig,
+        SkillActivation, resolve_active_skills,
     };
 
     static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -561,7 +671,7 @@ mod tests {
     #[test]
     fn bundled_mode_catalog_has_default_and_handoff_profile() {
         let assets = ModesConfig::default().load_assets();
-        assert_eq!(assets.modes.default_mode().as_str(), "personal_assistant");
+        assert_eq!(assets.modes.default_mode().as_str(), "general");
         let handoff = assets
             .modes
             .profile(&ModeId::from("handoff"))
@@ -571,34 +681,74 @@ mod tests {
         assert_eq!(handoff.default_scope, "project:tempestmiku");
         assert_eq!(handoff.active_skills, ["oh-my-pi-handoff"]);
         assert!(handoff.has_capability("backend.coding"));
-        assert!(handoff.has_capability("agents.run"), "agents.* glob must match agents.run");
-        assert!(handoff.has_capability("agents.spawn"), "agents.* glob must match agents.spawn");
+        assert!(
+            handoff.has_capability("agents.run"),
+            "agents.* glob must match agents.run"
+        );
+        assert!(
+            handoff.has_capability("agents.spawn"),
+            "agents.* glob must match agents.spawn"
+        );
     }
 
     #[test]
-    fn bundled_router_modes_have_labels_and_scopes() {
+    fn bundled_catalog_has_exactly_three_capability_modes() {
         let assets = ModesConfig::default().load_assets();
-        let grill = assets
+        let mut ids: Vec<&str> = assets
             .modes
-            .profile(&ModeId::from("ambiguity_grill"))
-            .expect("ambiguity grill profile");
-        assert_eq!(grill.label, "Ambiguity Grill");
-        assert_eq!(grill.active_skills, ["miku-voice", "ambiguity-grill"]);
+            .modes
+            .iter()
+            .map(|profile| profile.mode.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["general", "handoff", "serious_engineer"]);
+    }
 
-        let grounding = assets
-            .modes
-            .profile(&ModeId::from("negative_state_grounding"))
-            .expect("negative-state profile");
-        assert_eq!(grounding.default_scope, "global");
-        assert_eq!(grounding.capability_class, "conversation");
+    #[test]
+    fn bundled_layered_skills_have_expected_activation_and_triggers() {
+        let assets = ModesConfig::default().load_assets();
+        let find = |name: &str| {
+            assets
+                .modes
+                .skills
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap_or_else(|| panic!("layered skill {name} missing from catalog"))
+        };
+
+        let scope_guard = find("scope-guard");
+        assert_eq!(scope_guard.activation, SkillActivation::Always);
+
+        let grill = find("ambiguity-grill");
+        assert_eq!(grill.activation, SkillActivation::Triggered);
+        assert!(grill.triggers.iter().any(|t| t == "grill me"));
+
+        let grounding = find("negative-state-grounding");
+        assert_eq!(grounding.activation, SkillActivation::Triggered);
+        assert!(grounding.triggers.iter().any(|t| t == "overwhelmed"));
+
+        let ledger = find("weekly-ship-ledger");
+        assert_eq!(ledger.activation, SkillActivation::Triggered);
     }
 
     #[test]
     fn composed_prompt_never_leaks_skill_frontmatter_or_mode_metadata() {
         let catalog = ModesConfig::default().load_assets().modes;
         for profile in &catalog.modes {
-            let prompt = ModesConfig::default().build_system_prompt(&profile.mode, "base", "");
-            let leaks = ["description:", "tags:", "hermes:", "category:", "skill://", "Mode id:", "Voice cap:", "Capability class:", "Declared capabilities:"];
+            // Empty message still composes the always-on scope-guard skill, so this also
+            // exercises frontmatter stripping on a layered (not mode-declared) skill.
+            let prompt = ModesConfig::default().build_system_prompt(&profile.mode, "base", "", "");
+            let leaks = [
+                "description:",
+                "tags:",
+                "hermes:",
+                "category:",
+                "skill://",
+                "Mode id:",
+                "Voice cap:",
+                "Capability class:",
+                "Declared capabilities:",
+            ];
             for leak in leaks {
                 assert!(
                     !prompt.system_prompt.contains(leak),
@@ -648,6 +798,14 @@ mod tests {
                 );
             }
         }
+        for entry in &assets.modes.skills {
+            assert!(
+                assets.skills.contains_key(entry.name.as_str()),
+                "bundled layered skill {} references missing skills/{}/SKILL.md",
+                entry.name,
+                entry.name
+            );
+        }
     }
 
     #[test]
@@ -695,14 +853,22 @@ mod tests {
                 .contains("miku-voice")
         );
 
+        // No modes.json in the fixture, so the catalog falls back to bundled (which still
+        // knows "ambiguity-grill" as a triggered layered skill); only the skill file itself
+        // is overridden by the fixture.
         let prompt = ModesConfig::from_path(&root).build_system_prompt(
-            &ModeId::from("ambiguity_grill"),
+            &ModeId::from("general"),
             "base prompt",
             "capability notes",
+            "grill me, I don't know what I want",
         );
         assert!(prompt.system_prompt.contains("SOUL.md"));
         assert!(prompt.system_prompt.contains("語氣層"));
-        assert!(prompt.system_prompt.contains("ambiguity-grill fixture skill body"));
+        assert!(
+            prompt
+                .system_prompt
+                .contains("ambiguity-grill fixture skill body")
+        );
         assert!(!prompt.system_prompt.contains("temporarily unavailable"));
 
         fs::remove_dir_all(root).unwrap();
@@ -727,6 +893,7 @@ mod tests {
             &ModeId::from("custom_runtime_mode"),
             "base prompt",
             "",
+            "",
         );
         assert_eq!(prompt.warnings, [expected_warning]);
         assert!(prompt.system_prompt.contains(MISSING_SKILL_PROMPT_FALLBACK));
@@ -741,8 +908,8 @@ mod tests {
         let assets = ModesConfig::default().load_assets();
         let assistant = assets
             .modes
-            .profile(&ModeId::from("personal_assistant"))
-            .expect("assistant profile");
+            .profile(&ModeId::from("general"))
+            .expect("general profile");
         assert_eq!(
             assistant.active_skills,
             vec!["miku-voice", "personal-assistant-state-capture"]
@@ -766,17 +933,21 @@ mod tests {
     }
 
     #[test]
-    fn negative_state_grounding_prompt_is_health_first_conversational_posture() {
+    fn negative_state_grounding_layers_health_first_posture_onto_general_mode() {
+        // Negative-state-grounding is a triggered layered skill now, not a mode: a distress
+        // message stays in `general` (capabilities unchanged) and the posture layers on top.
         let prompt = ModesConfig::default().build_system_prompt(
-            &ModeId::from("negative_state_grounding"),
+            &ModeId::from("general"),
             "base prompt",
             "",
+            "I'm overwhelmed and exhausted, I can't do this",
         );
 
+        assert_eq!(prompt.profile.mode.as_str(), "general");
         assert_eq!(prompt.profile.capability_class, "conversation");
         assert_eq!(
             prompt.profile.active_skills,
-            vec!["miku-voice", "negative-state-grounding"]
+            vec!["miku-voice", "personal-assistant-state-capture"]
         );
         assert!(prompt.system_prompt.contains("conversational posture"));
         assert!(prompt.system_prompt.contains("Health-over-productivity"));
@@ -787,10 +958,68 @@ mod tests {
                 .system_prompt
                 .contains("Do not propose or request memory writes")
         );
+        // general legitimately loads personal-assistant-state-capture (its heading contains
+        // this string); that is no longer a leak to guard against.
         assert!(
-            !prompt
+            prompt
                 .system_prompt
                 .contains("Personal Assistant State Capture")
+        );
+    }
+
+    #[test]
+    fn negative_state_grounding_does_not_layer_without_a_trigger() {
+        let prompt = ModesConfig::default().build_system_prompt(
+            &ModeId::from("general"),
+            "base prompt",
+            "",
+            "what's the weather like for a walk today?",
+        );
+        assert!(!prompt.system_prompt.contains("Health-over-productivity"));
+    }
+
+    #[test]
+    fn resolve_active_skills_includes_always_on_without_any_trigger() {
+        let assets = ModesConfig::default().load_assets();
+        let profile = assets
+            .modes
+            .profile(&ModeId::from("general"))
+            .expect("general profile");
+        let resolved = resolve_active_skills(&assets.modes, profile, "");
+        assert!(resolved.contains(&"scope-guard".to_string()));
+        assert!(resolved.contains(&"miku-voice".to_string()));
+        assert!(!resolved.contains(&"ambiguity-grill".to_string()));
+        assert!(!resolved.contains(&"negative-state-grounding".to_string()));
+    }
+
+    #[test]
+    fn resolve_active_skills_triggers_only_on_matching_message() {
+        let assets = ModesConfig::default().load_assets();
+        let profile = assets
+            .modes
+            .profile(&ModeId::from("general"))
+            .expect("general profile");
+        let resolved = resolve_active_skills(&assets.modes, profile, "grill me please");
+        assert!(resolved.contains(&"ambiguity-grill".to_string()));
+        assert!(!resolved.contains(&"negative-state-grounding".to_string()));
+    }
+
+    #[test]
+    fn resolve_active_skills_dedupes_and_preserves_order() {
+        let assets = ModesConfig::default().load_assets();
+        let profile = assets
+            .modes
+            .profile(&ModeId::from("general"))
+            .expect("general profile");
+        let resolved = resolve_active_skills(&assets.modes, profile, "grill me");
+        assert_eq!(
+            resolved,
+            vec![
+                "scope-guard",
+                "miku-voice",
+                "personal-assistant-state-capture",
+                "ambiguity-grill",
+            ]
         );
     }
 

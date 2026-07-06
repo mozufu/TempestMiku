@@ -250,6 +250,7 @@ impl CodingBackend for ScriptedBackend {
 #[derive(Default)]
 struct RecordingChatRunner {
     turns: Arc<Mutex<Vec<ChatTurn>>>,
+    mediator_present: Arc<Mutex<Vec<bool>>>,
 }
 
 #[async_trait]
@@ -258,8 +259,9 @@ impl ChatRunner for RecordingChatRunner {
         &self,
         turn: ChatTurn,
         sink: Arc<dyn tm_core::EventSink + Send + Sync>,
-        _mediator: Option<Arc<dyn tm_core::ToolMediator>>,
+        mediator: Option<Arc<dyn tm_core::ToolMediator>>,
     ) -> Result<String> {
+        self.mediator_present.lock().push(mediator.is_some());
         self.turns.lock().push(turn);
         let text = "recorded chat turn".to_string();
         sink.on_text(&text);

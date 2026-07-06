@@ -72,11 +72,7 @@ impl ResourceHandler for AgentResourceHandler {
         })
     }
 
-    async fn list(
-        &self,
-        _uri: Option<&str>,
-        _ctx: &InvocationCtx,
-    ) -> Result<Vec<ResourceEntry>> {
+    async fn list(&self, _uri: Option<&str>, _ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
         let records = self.roster.list().await;
         Ok(records
             .into_iter()
@@ -172,11 +168,7 @@ impl ResourceHandler for HistoryResourceHandler {
         })
     }
 
-    async fn list(
-        &self,
-        _uri: Option<&str>,
-        _ctx: &InvocationCtx,
-    ) -> Result<Vec<ResourceEntry>> {
+    async fn list(&self, _uri: Option<&str>, _ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
         let entries = self
             .roster
             .list()

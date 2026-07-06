@@ -148,6 +148,8 @@ Standing behavior from SOUL.md that isn't a skill file but is still cross-cuttin
   unrelated message).
 - **User is always final.** Brian can **lock** a mode, **override** it directly, or confirm/decline
   any `mode_suggest` — a locked mode suppresses proposals entirely rather than prompting for one.
+  If the session is locked or moved to another mode while a suggestion is pending, the stale
+  suggestion is ignored even if its approval response arrives later.
 - **v1 scoping: `mode_suggest` only runs on the ChatRunner path.** The mediator that offers
   `mode_suggest` is attached to plain chat turns, not to the native coding backend (§25). So once a
   turn is actually dispatched to a configured coding backend (i.e. Serious Engineer or Handoff with

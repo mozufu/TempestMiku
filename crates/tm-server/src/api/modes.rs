@@ -70,6 +70,9 @@ where
 {
     state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
+    if let Some(mode) = payload.mode {
+        validate_mode(&state.persona, mode)?;
+    }
     if session.mode_state.lock_source.is_some() {
         return Ok(Json(mode_response(
             &state.persona,
@@ -78,21 +81,14 @@ where
             Some("mode is locked by user".to_string()),
         )));
     }
-    let mode = match payload.mode {
-        Some(mode) => validate_mode(&state.persona, mode)?,
-        None => session.mode_state.mode.clone(),
-    };
-    let mut next = session.mode_state.clone();
-    next.mode = mode;
-    next.router_reason = payload.reason;
-    next.override_source = None;
-    next.updated_at = Utc::now();
-    let (session, changed) = commit_mode_state(&state, session, next).await?;
     Ok(Json(mode_response(
         &state.persona,
         session.mode_state,
-        changed,
-        None,
+        false,
+        Some(
+            "mode suggestions are approval-backed through the mode_suggest tool; use apply or override for an explicit user switch"
+                .to_string(),
+        ),
     )))
 }
 

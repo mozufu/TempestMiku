@@ -53,6 +53,195 @@ async fn posting_a_message_never_auto_switches_the_mode() {
 }
 
 #[tokio::test]
+async fn legacy_suggest_route_does_not_apply_a_mode_switch() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+
+    let suggest = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/mode/suggest", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"mode":"serious_engineer","reason":"old keyword router hint"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(suggest.status(), StatusCode::OK);
+    let suggest_json = response_json(suggest).await;
+    assert_eq!(suggest_json["changed"], json!(false));
+    assert_eq!(suggest_json["modeState"]["mode"], json!("general"));
+    assert!(
+        suggest_json["ignoredReason"]
+            .as_str()
+            .unwrap()
+            .contains("approval-backed"),
+        "{suggest_json}"
+    );
+
+    let latest = store.get_session(session.id).await.unwrap();
+    assert_eq!(latest.mode_state.mode, ModeId::from("general"));
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "mode")
+            .count(),
+        1,
+        "legacy suggest must not emit a mode event"
+    );
+}
+
+#[tokio::test]
+async fn locked_chat_turns_do_not_advertise_mode_suggest() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(RecordingChatRunner::default());
+    let mediator_present = Arc::clone(&chat.mediator_present);
+    let state = AppState::new(
+        store,
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let app = app(state);
+    let session = create(&app).await;
+
+    post_user_message(&app, session.id, "hello").await;
+    assert_eq!(*mediator_present.lock(), vec![true]);
+
+    let lock = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/mode/lock", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"mode":"general","reason":"stay light"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lock.status(), StatusCode::OK);
+
+    post_user_message(&app, session.id, "this says repo but mode is locked").await;
+    assert_eq!(*mediator_present.lock(), vec![true, false]);
+}
+
+#[tokio::test]
+async fn message_chat_path_applies_approved_model_mode_suggestion() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_mode".to_string()),
+                name: Some("mode_suggest".to_string()),
+                arguments: Some(
+                    r#"{"target_mode":"serious_engineer","reason":"needs repository access"}"#
+                        .to_string(),
+                ),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("Switched; I will handle it in Serious Engineer mode.".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+    ]));
+    let llm_client: Arc<dyn LlmClient> = llm.clone();
+    let chat = Arc::new(AgentChatRunner::new_with_sandbox_factory(
+        llm_client,
+        AgentConfig {
+            model: "fake".to_string(),
+            max_turns: 4,
+            ..AgentConfig::default()
+        },
+        |_session_id| Arc::new(tm_sandbox::StubSandbox) as Arc<dyn tm_core::Sandbox>,
+    ));
+    let state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let app = app(state);
+    let session = create(&app).await;
+    let session_id = session.id;
+
+    let app_for_message = app.clone();
+    let post = tokio::spawn(async move {
+        app_for_message
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{session_id}/messages"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"content":"please switch if this needs repo work"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    });
+
+    let approval = wait_for_event_payload(&store, session_id, "approval").await;
+    assert_eq!(approval["backend"], json!("mode"));
+    assert_eq!(approval["scope"]["targetMode"], json!("serious_engineer"));
+    assert_eq!(approval["scope"]["currentMode"], json!("general"));
+    let approval_id: Uuid = serde_json::from_value(approval["approvalId"].clone()).unwrap();
+
+    resolve_test_approval(&app, session_id, approval_id, "approve").await;
+    let response = post.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let latest = store.get_session(session_id).await.unwrap();
+    assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
+    assert_eq!(
+        latest.mode_state.override_source.as_deref(),
+        Some("model_suggestion")
+    );
+    assert_eq!(
+        latest.mode_state.router_reason.as_deref(),
+        Some("needs repository access")
+    );
+
+    let events = store.events_after(session_id, None).await.unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == "approval_resolved"
+                && event.payload_json["status"] == json!("approved"))
+    );
+    assert!(
+        events.iter().any(|event| {
+            event.event_type == "mode"
+                && event.payload_json["mode"] == json!("serious_engineer")
+                && event.payload_json["override_source"] == json!("model_suggestion")
+        }),
+        "mode change should be persisted as an event: {events:#?}"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event.event_type == "tool_call" && event.payload_json["name"] == json!("mode_suggest")
+        }),
+        "chat sink should record the mediated tool call"
+    );
+}
+
+#[tokio::test]
 async fn negative_state_grounding_chat_does_not_write_memory_unsolicited() {
     // Distress messages now stay in `general` mode (which has personal-assistant-state-capture
     // active) instead of routing into a capture-free posture mode. The transient-mood guard in

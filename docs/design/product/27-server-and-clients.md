@@ -181,9 +181,16 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 
 - **Baseline (parity §29):** `approvals.mode: manual`, `approvals.timeout: 60`, `cron_mode: deny`,
   `mcp_reload_confirm: true`, `skills.write_approval: true`, `memory.write_approval: true`.
-- **Enforced as `ApprovalPolicy`** (§08) for: destructive / external / spend actions, **memory-write**
-  (§22 `memory.note`), **skill-write** (§26), **project promotion** when Miku proposes it, **drive-link**
+- **Enforced as `ApprovalPolicy` / approval-broker prompts** (§08) for: destructive / external /
+  spend actions, **model-proposed mode switches** (§21 `mode_suggest`), **memory-write** (§22
+  `memory.note`), **skill-write** (§26), **project promotion** when Miku proposes it, **drive-link**
   + auto-file (§24), and **MCP reload**.
+- **Mode switches:** a chat-model `mode_suggest(target_mode, reason)` emits an `approval` event with
+  backend `"mode"` and does not change the session until Brian approves. Approved suggestions persist
+  through `ModeState` with `overrideSource: "model_suggestion"` and emit `mode`; denied, timed-out,
+  stale, or locked suggestions leave the current mode unchanged. The legacy `/mode/suggest` route is
+  compatibility-only and never mutates mode state; explicit user switches use `/mode/apply` or
+  `/mode/override`.
 - **Memory writes:** `POST /sessions/:id/memory/proposals` emits `write_proposal` with
   `kind: "memory"`, `memoryKind`, `proposalId`, `status`, `dedupeKey`, provenance, and the candidate
   text/fact fields; the shared approval broker then emits `approval` and `approval_resolved`. Approved

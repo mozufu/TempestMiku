@@ -171,14 +171,36 @@ where
         let current_mode = session.mode_state.mode.clone();
         match approval.status {
             ApprovalStatus::Approved => {
-                let mut next = session.mode_state.clone();
+                let latest = self
+                    .state
+                    .store
+                    .get_session(self.session_id)
+                    .await
+                    .map_err(mediator_error)?;
+                if latest.mode_state.lock_source.is_some() {
+                    return Ok(format!(
+                        "Mode was locked by the user while the proposal was pending; staying in {}.",
+                        latest.mode_state.mode
+                    ));
+                }
+                if latest.mode_state.mode == target_mode {
+                    return Ok(format!("Already in {target_mode}."));
+                }
+                if latest.mode_state.mode != current_mode {
+                    return Ok(format!(
+                        "Mode changed to {} while the proposal was pending; the stale switch to {target_mode} was not applied.",
+                        latest.mode_state.mode
+                    ));
+                }
+
+                let mut next = latest.mode_state.clone();
                 next.mode = target_mode.clone();
                 next.router_reason = Some(reason);
                 // Marks this as a deliberate, user-confirmed switch — distinct from a raw
                 // client `override`, but sticky the same way: nothing auto-reverts it.
                 next.override_source = Some("model_suggestion".to_string());
                 next.updated_at = Utc::now();
-                commit_mode_state(&self.state, session, next)
+                commit_mode_state(&self.state, latest, next)
                     .await
                     .map_err(mediator_error)?;
                 Ok(format!("User confirmed the switch to {target_mode}."))
@@ -379,6 +401,52 @@ mod tests {
         assert!(!events.iter().any(|e| e.event_type == "approval"));
         let session = state.store.get_session(session_id).await.unwrap();
         assert_eq!(session.mode_state.mode, ModeId::from("general"));
+    }
+
+    #[tokio::test]
+    async fn lock_added_while_pending_prevents_approved_switch() {
+        let state = test_state();
+        let session_id = new_general_session(&state).await;
+        let m = mediator(&state, session_id, Duration::from_secs(5));
+
+        let handle = tokio::spawn(async move {
+            m.handle(
+                "mode_suggest",
+                &json!({"target_mode": "serious_engineer", "reason": "fix a bug"}),
+            )
+            .await
+            .unwrap()
+        });
+
+        let approval_id = wait_for_approval_id(&state, session_id).await;
+        let session = state.store.get_session(session_id).await.unwrap();
+        let mut locked = session.mode_state.clone();
+        locked.lock_source = Some("user".to_string());
+        state
+            .store
+            .set_mode_state(session_id, locked)
+            .await
+            .unwrap();
+        state
+            .approval_broker
+            .resolve(
+                session_id,
+                approval_id,
+                ResolveApprovalRequest {
+                    decision: ApprovalResolveDecision::Approve,
+                    option_id: None,
+                },
+            )
+            .unwrap();
+
+        let result = handle.await.unwrap();
+        assert!(result.contains("locked by the user"), "got: {result}");
+
+        let session = state.store.get_session(session_id).await.unwrap();
+        assert_eq!(session.mode_state.mode, ModeId::from("general"));
+        assert_eq!(session.mode_state.lock_source.as_deref(), Some("user"));
+        let events = state.store.events_after(session_id, None).await.unwrap();
+        assert!(!events.iter().any(|e| e.event_type == "mode"));
     }
 
     #[tokio::test]

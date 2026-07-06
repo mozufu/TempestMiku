@@ -434,18 +434,21 @@ where
     // runs through the ChatRunner path (i.e. not the native coding backend, which has no
     // mediator seam in v1 — see §21.4 / ModeSuggestMediator docs). Built once and shared by
     // both ChatRunner call sites below.
-    let mode_suggest_mediator = || -> Arc<dyn ToolMediator> {
+    let mode_suggest_mediator = || -> Option<Arc<dyn ToolMediator>> {
+        if session.mode_state.lock_source.is_some() {
+            return None;
+        }
         let mode_sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
             session_id,
             Arc::clone(&state.store),
             state.sender(session_id),
         ));
-        Arc::new(ModeSuggestMediator::new(
+        Some(Arc::new(ModeSuggestMediator::new(
             state.clone(),
             session_id,
             mode_sink,
             MODE_SUGGEST_APPROVAL_TIMEOUT,
-        ))
+        )))
     };
 
     let response = if turn_profile.has_capability("backend.coding") {
@@ -486,7 +489,7 @@ where
                         scope: scope.clone(),
                     },
                     sink.clone(),
-                    Some(mode_suggest_mediator()),
+                    mode_suggest_mediator(),
                 )
                 .await?;
             sink.flush().await?;
@@ -509,7 +512,7 @@ where
                     scope: scope.clone(),
                 },
                 sink.clone(),
-                Some(mode_suggest_mediator()),
+                mode_suggest_mediator(),
             )
             .await?;
         sink.flush().await?;

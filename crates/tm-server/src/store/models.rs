@@ -52,7 +52,75 @@ pub struct SessionEvent {
     pub seq: i64,
     pub event_type: String,
     pub payload_json: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_uri: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+impl SessionEvent {
+    pub fn new(
+        session_id: Uuid,
+        seq: i64,
+        event_type: impl Into<String>,
+        payload_json: Value,
+        created_at: DateTime<Utc>,
+    ) -> Self {
+        let event_type = event_type.into();
+        let refs = SessionEventOutputRefs::from_payload(&event_type, &payload_json);
+        Self {
+            session_id,
+            seq,
+            event_type,
+            payload_json,
+            actor_id: refs.actor_id,
+            artifact_uri: refs.artifact_uri,
+            history_uri: refs.history_uri,
+            created_at,
+        }
+    }
+
+    pub(crate) fn output_refs(event_type: &str, payload_json: &Value) -> SessionEventOutputRefs {
+        SessionEventOutputRefs::from_payload(event_type, payload_json)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SessionEventOutputRefs {
+    pub actor_id: Option<String>,
+    pub artifact_uri: Option<String>,
+    pub history_uri: Option<String>,
+}
+
+impl SessionEventOutputRefs {
+    fn from_payload(event_type: &str, payload_json: &Value) -> Self {
+        if !matches!(event_type, "actor_completed" | "actor_resources_linked") {
+            return Self::default();
+        }
+
+        let artifact_uri = payload_string(payload_json, "artifact_uri", "artifactUri");
+        let history_uri = payload_string(payload_json, "history_uri", "historyUri");
+        if artifact_uri.is_none() && history_uri.is_none() {
+            return Self::default();
+        }
+
+        Self {
+            actor_id: payload_string(payload_json, "actor_id", "actorId"),
+            artifact_uri,
+            history_uri,
+        }
+    }
+}
+
+fn payload_string(payload_json: &Value, snake_key: &str, camel_key: &str) -> Option<String> {
+    payload_json
+        .get(snake_key)
+        .or_else(|| payload_json.get(camel_key))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

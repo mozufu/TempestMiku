@@ -22,7 +22,7 @@ pub mod supervise;
 
 pub use actor::{
     ActorBudget, ActorCancelToken, ActorDigest, ActorHandle, ActorId, ActorIdError,
-    ActorLifecycleEvent, ActorRecord, ActorSpec, ActorStatus,
+    ActorLifecycleEvent, ActorOutputLink, ActorRecord, ActorSpec, ActorStatus,
 };
 pub use executor::{ActorError, ActorExecutor};
 pub use mailbox::{ActorMessage, MailboxRegistry, Receipt};

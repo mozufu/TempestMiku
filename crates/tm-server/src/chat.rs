@@ -374,13 +374,13 @@ impl CodingEventSink for RosterCodingEventSink {
             )
             .await
             .map_err(ServerError::Store)?;
-        Ok(SessionEvent {
-            session_id: self.session_id,
-            seq: 0,
-            event_type: event_type.to_string(),
+        Ok(SessionEvent::new(
+            self.session_id,
+            0,
+            event_type,
             payload_json,
-            created_at: chrono::Utc::now(),
-        })
+            chrono::Utc::now(),
+        ))
     }
 }
 

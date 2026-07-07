@@ -22,8 +22,8 @@ use crate::supervise::{
 
 /// Capability names for the P3/P3-plus `agents.*` calls (§23.3, ROADMAP authority).
 ///
-/// Active supervision, wall-clock budgets, subtree cancellation, and fuller provenance remain later
-/// P3-plus work.
+/// Active supervision, wall-clock budgets, subtree cancellation, and event-row resource provenance
+/// are live P3-plus behavior.
 pub mod caps {
     pub const AGENTS_RUN: &str = "agents.run";
     pub const AGENTS_SPAWN: &str = "agents.spawn";

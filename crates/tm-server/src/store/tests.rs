@@ -16,6 +16,97 @@ fn postgres_test_dsn() -> Option<String> {
 }
 
 #[tokio::test]
+async fn in_memory_session_events_expose_actor_output_refs() {
+    let store = InMemoryStore::default();
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let non_actor = store
+        .append_event(
+            session.id,
+            "text",
+            json!({"delta": "artifact://not-an-actor-output"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(non_actor.actor_id, None);
+    assert_eq!(non_actor.artifact_uri, None);
+    assert_eq!(non_actor.history_uri, None);
+
+    let completed = store
+        .append_event(
+            session.id,
+            "actor_completed",
+            json!({
+                "kind": "completed",
+                "actor_id": "Worker",
+                "artifact_uri": "artifact://0",
+                "history_uri": "history://Worker",
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.actor_id.as_deref(), Some("Worker"));
+    assert_eq!(completed.artifact_uri.as_deref(), Some("artifact://0"));
+    assert_eq!(completed.history_uri.as_deref(), Some("history://Worker"));
+
+    let linked = store
+        .append_event(
+            session.id,
+            "actor_resources_linked",
+            json!({
+                "kind": "resources_linked",
+                "actor_id": "Worker",
+                "source_event_seq": completed.seq,
+                "artifact_uri": "artifact://0",
+                "history_uri": "history://Worker",
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(linked.actor_id.as_deref(), Some("Worker"));
+    assert_eq!(linked.artifact_uri.as_deref(), Some("artifact://0"));
+    assert_eq!(linked.history_uri.as_deref(), Some("history://Worker"));
+
+    let replay = store
+        .events_after(session.id, Some(completed.seq - 1))
+        .await
+        .unwrap();
+    assert_eq!(
+        replay
+            .iter()
+            .map(|event| (
+                event.event_type.as_str(),
+                event.actor_id.as_deref(),
+                event.artifact_uri.as_deref(),
+                event.history_uri.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "actor_completed",
+                Some("Worker"),
+                Some("artifact://0"),
+                Some("history://Worker")
+            ),
+            (
+                "actor_resources_linked",
+                Some("Worker"),
+                Some("artifact://0"),
+                Some("history://Worker")
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
     let Some(dsn) = postgres_test_dsn() else {
         return;
@@ -90,6 +181,39 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
             .map(|event| event.event_type.as_str())
             .collect::<Vec<_>>(),
         vec!["approval", "approval_resolved"]
+    );
+
+    let completed = store
+        .append_event(
+            session.id,
+            "actor_completed",
+            json!({
+                "kind": "completed",
+                "actor_id": "Worker",
+                "artifact_uri": "artifact://0",
+                "history_uri": "history://Worker",
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.actor_id.as_deref(), Some("Worker"));
+    assert_eq!(completed.artifact_uri.as_deref(), Some("artifact://0"));
+    assert_eq!(completed.history_uri.as_deref(), Some("history://Worker"));
+    let replayed_completed = store
+        .events_after(session.id, Some(completed.seq - 1))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| event.event_type == "actor_completed")
+        .expect("actor_completed replay row");
+    assert_eq!(replayed_completed.actor_id.as_deref(), Some("Worker"));
+    assert_eq!(
+        replayed_completed.artifact_uri.as_deref(),
+        Some("artifact://0")
+    );
+    assert_eq!(
+        replayed_completed.history_uri.as_deref(),
+        Some("history://Worker")
     );
 
     store

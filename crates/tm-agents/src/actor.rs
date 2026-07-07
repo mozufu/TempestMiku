@@ -223,6 +223,14 @@ pub enum ActorLifecycleEvent {
     },
 }
 
+/// Resource handles produced by a completed actor and linked into the parent session log.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActorOutputLink {
+    pub actor_id: ActorId,
+    pub artifact_uri: Option<String>,
+    pub history_uri: Option<String>,
+}
+
 impl ActorLifecycleEvent {
     /// The `event_type` string written to the session event log.
     pub fn event_type(&self) -> &'static str {
@@ -234,6 +242,23 @@ impl ActorLifecycleEvent {
             Self::Failed { .. } => "actor_failed",
             Self::Supervision { .. } => "actor_supervision",
             Self::Cancelled { .. } => "actor_cancelled",
+        }
+    }
+
+    /// Child output handles that should be queryable from the parent session event log.
+    pub fn output_link(&self) -> Option<ActorOutputLink> {
+        match self {
+            Self::Completed {
+                actor_id,
+                artifact_uri,
+                history_uri,
+                ..
+            } if artifact_uri.is_some() || history_uri.is_some() => Some(ActorOutputLink {
+                actor_id: actor_id.clone(),
+                artifact_uri: artifact_uri.clone(),
+                history_uri: history_uri.clone(),
+            }),
+            _ => None,
         }
     }
 }
@@ -266,6 +291,37 @@ mod tests {
             ActorId::new("My_Worker"),
             Err(ActorIdError::InvalidFormat(_))
         ));
+    }
+
+    #[test]
+    fn completed_lifecycle_event_exposes_output_link() {
+        let actor_id = ActorId::new("Worker").unwrap();
+        let event = ActorLifecycleEvent::Completed {
+            actor_id: actor_id.clone(),
+            completed_at: Utc::now(),
+            summary: Some("done".to_string()),
+            artifact_uri: Some("artifact://0".to_string()),
+            history_uri: Some("history://Worker".to_string()),
+        };
+
+        let link = event.output_link().expect("completed output link");
+
+        assert_eq!(link.actor_id, actor_id);
+        assert_eq!(link.artifact_uri.as_deref(), Some("artifact://0"));
+        assert_eq!(link.history_uri.as_deref(), Some("history://Worker"));
+    }
+
+    #[test]
+    fn lifecycle_event_without_output_has_no_output_link() {
+        let event = ActorLifecycleEvent::Completed {
+            actor_id: ActorId::new("Worker").unwrap(),
+            completed_at: Utc::now(),
+            summary: Some("done".to_string()),
+            artifact_uri: None,
+            history_uri: None,
+        };
+
+        assert_eq!(event.output_link(), None);
     }
 
     #[test]

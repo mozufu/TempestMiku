@@ -527,15 +527,35 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
     );
 
     let events = store.events_after(session.id, None).await.unwrap();
+    let expected_history_uri = format!("history://{actor_id}");
     let kinds = events
         .iter()
         .map(|event| event.event_type.as_str())
         .collect::<Vec<_>>();
-    let completed_seq = events
+    let completed_event = events
         .iter()
         .find(|event| event.event_type == "actor_completed")
-        .map(|event| event.seq)
         .expect("actor_completed should be persisted");
+    let completed_seq = completed_event.seq;
+    assert_eq!(completed_event.actor_id.as_deref(), Some(actor_id.as_str()));
+    assert_eq!(
+        completed_event.artifact_uri.as_deref(),
+        Some("artifact://0")
+    );
+    assert_eq!(
+        completed_event.history_uri.as_deref(),
+        Some(expected_history_uri.as_str())
+    );
+    let linked_event = events
+        .iter()
+        .find(|event| event.event_type == "actor_resources_linked")
+        .expect("actor_resources_linked should be persisted");
+    assert_eq!(linked_event.actor_id.as_deref(), Some(actor_id.as_str()));
+    assert_eq!(linked_event.artifact_uri.as_deref(), Some("artifact://0"));
+    assert_eq!(
+        linked_event.history_uri.as_deref(),
+        Some(expected_history_uri.as_str())
+    );
     assert_eq!(linked["source_event_seq"], json!(completed_seq));
     assert!(kinds.contains(&"actor_spawned"));
     assert!(kinds.contains(&"approval"));

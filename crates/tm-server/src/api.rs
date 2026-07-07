@@ -53,19 +53,12 @@ struct ActorResourceLinkSeed {
 
 impl ActorResourceLinkSeed {
     fn from_lifecycle(event: &ActorLifecycleEvent) -> Option<Self> {
-        match event {
-            ActorLifecycleEvent::Completed {
-                actor_id,
-                artifact_uri,
-                history_uri,
-                ..
-            } if artifact_uri.is_some() || history_uri.is_some() => Some(Self {
-                actor_id: actor_id.as_str().to_string(),
-                artifact_uri: artifact_uri.clone(),
-                history_uri: history_uri.clone(),
-            }),
-            _ => None,
-        }
+        let link = event.output_link()?;
+        Some(Self {
+            actor_id: link.actor_id.as_str().to_string(),
+            artifact_uri: link.artifact_uri,
+            history_uri: link.history_uri,
+        })
     }
 
     fn payload(&self, source_event: &SessionEvent) -> Value {

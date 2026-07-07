@@ -163,13 +163,7 @@ impl Store for InMemoryStore {
         let mut inner = self.inner.lock();
         let events = inner.events.entry(session_id).or_default();
         let seq = events.len() as i64 + 1;
-        let event = SessionEvent {
-            session_id,
-            seq,
-            event_type: event_type.to_string(),
-            payload_json,
-            created_at: Utc::now(),
-        };
+        let event = SessionEvent::new(session_id, seq, event_type, payload_json, Utc::now());
         events.push(event.clone());
         if let Some(session) = inner.sessions.get_mut(&session_id) {
             session.updated_at = event.created_at;

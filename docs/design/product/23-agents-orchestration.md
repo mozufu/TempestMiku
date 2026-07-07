@@ -108,7 +108,8 @@ P3 ships the first concrete slice only:
 > its own descendant. `agents.pipeline` runs staged actor waves with a barrier between stages and
 > feeds compact digest references downstream: `agent://` / `history://` / artifact handles plus a
 > bounded summary, never an upstream transcript. Active restart supervision, wall-clock actor
-> timeouts, fail-fast sibling-group cancellation, status lifecycle events, and
+> timeouts, fail-fast sibling-group cancellation, status lifecycle events,
+> typed parent `SessionEvent` actor/artifact/history links, and
 > `actor_resources_linked` provenance events are live.
 
 The §23 full surface is now split between the P3 MVP calls and the P3-plus mailbox/supervision calls:
@@ -182,7 +183,8 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
   `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, `agents.cancel`, and
   `agents.pipeline`.
 - **P3-plus closeout behavior:** active restart supervision, wall-clock budget enforcement,
-  fail-fast sibling cancellation, status lifecycle events, and parent-event resource provenance.
+  fail-fast sibling cancellation, status lifecycle events, typed parent `SessionEvent`
+  actor/artifact/history links, and parent-event resource provenance.
 - **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
   `history://<id>` (read-only transcript).
   Roster listing is also exposed through `agents.list()`.

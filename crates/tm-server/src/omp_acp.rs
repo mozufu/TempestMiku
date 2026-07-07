@@ -616,13 +616,13 @@ mod tests {
             self.events
                 .lock()
                 .push((event_type.to_string(), payload_json.clone()));
-            Ok(crate::SessionEvent {
-                session_id: Uuid::nil(),
-                seq: self.events.lock().len() as i64,
-                event_type: event_type.to_string(),
+            Ok(crate::SessionEvent::new(
+                Uuid::nil(),
+                self.events.lock().len() as i64,
+                event_type,
                 payload_json,
-                created_at: chrono::Utc::now(),
-            })
+                chrono::Utc::now(),
+            ))
         }
     }
 

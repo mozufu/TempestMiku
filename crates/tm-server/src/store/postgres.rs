@@ -35,7 +35,18 @@ impl PostgresStore {
             .batch_execute(
                 "create table if not exists sessions(id uuid primary key, created_at timestamptz not null, updated_at timestamptz not null, status text not null, mode jsonb not null, mode_state_json jsonb, persona_status jsonb not null);
                  alter table sessions add column if not exists mode_state_json jsonb;
-                 create table if not exists session_events(session_id uuid not null references sessions(id) on delete cascade, seq bigint not null, event_type text not null, payload_json jsonb not null, created_at timestamptz not null, primary key(session_id, seq));
+                 create table if not exists session_events(session_id uuid not null references sessions(id) on delete cascade, seq bigint not null, event_type text not null, payload_json jsonb not null, actor_id text, artifact_uri text, history_uri text, created_at timestamptz not null, primary key(session_id, seq));
+                 alter table session_events add column if not exists actor_id text;
+                 alter table session_events add column if not exists artifact_uri text;
+                 alter table session_events add column if not exists history_uri text;
+                 update session_events
+                    set actor_id = coalesce(actor_id, payload_json ->> 'actor_id', payload_json ->> 'actorId'),
+                        artifact_uri = coalesce(artifact_uri, payload_json ->> 'artifact_uri', payload_json ->> 'artifactUri'),
+                        history_uri = coalesce(history_uri, payload_json ->> 'history_uri', payload_json ->> 'historyUri')
+                  where event_type in ('actor_completed', 'actor_resources_linked')
+                    and ((actor_id is null and coalesce(payload_json ->> 'actor_id', payload_json ->> 'actorId') is not null)
+                      or (artifact_uri is null and coalesce(payload_json ->> 'artifact_uri', payload_json ->> 'artifactUri') is not null)
+                      or (history_uri is null and coalesce(payload_json ->> 'history_uri', payload_json ->> 'historyUri') is not null));
                  create table if not exists messages(session_id uuid not null references sessions(id) on delete cascade, seq bigint not null, role text not null, content text not null, created_at timestamptz not null, primary key(session_id, seq));
                  create table if not exists profile_facts(id uuid primary key, subject text not null, predicate text not null, object text not null, confidence real not null, provenance text not null, valid_from timestamptz not null, valid_to timestamptz);
                  create table if not exists recall_chunks(id uuid primary key, scope text not null, text text not null, source text not null, created_at timestamptz not null);
@@ -44,6 +55,7 @@ impl PostgresStore {
                  create index if not exists recall_chunks_scope_created_idx on recall_chunks(scope, created_at desc);
                  create index if not exists project_items_project_kind_idx on project_items(project_id, kind, created_at desc);
                  create index if not exists project_items_source_session_kind_idx on project_items(source_session_id, kind, created_at desc);
+                 create index if not exists session_events_actor_outputs_idx on session_events(session_id, seq) where artifact_uri is not null or history_uri is not null;
                  create index if not exists sessions_updated_at_idx on sessions(updated_at desc);",
             )
             .await
@@ -219,31 +231,40 @@ impl Store for PostgresStore {
     ) -> Result<SessionEvent> {
         self.get_session(session_id).await?;
         let session_key = session_id.to_string();
+        let output_refs = SessionEvent::output_refs(event_type, &payload_json);
         let row = self
             .client
             .query_one(
                 "with lock as (select pg_advisory_xact_lock(hashtext($1))),
                       next_seq as (select coalesce(max(seq) + 1, 1) as seq from session_events, lock where session_id = $2),
                       inserted as (
-                        insert into session_events (session_id, seq, event_type, payload_json, created_at)
-                        select $2, next_seq.seq, $3, $4, now() from next_seq
+                        insert into session_events (session_id, seq, event_type, payload_json, actor_id, artifact_uri, history_uri, created_at)
+                        select $2, next_seq.seq, $3, $4, $5, $6, $7, now() from next_seq
                         returning seq, created_at
                       ),
                       touch as (
                         update sessions set updated_at = (select created_at from inserted) where id = $2
                       )
                  select seq, created_at from inserted",
-                &[&session_key, &session_id, &event_type, &payload_json],
+                &[
+                    &session_key,
+                    &session_id,
+                    &event_type,
+                    &payload_json,
+                    &output_refs.actor_id,
+                    &output_refs.artifact_uri,
+                    &output_refs.history_uri,
+                ],
             )
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
-        Ok(SessionEvent {
+        Ok(SessionEvent::new(
             session_id,
-            seq: row.get("seq"),
-            event_type: event_type.to_string(),
+            row.get("seq"),
+            event_type,
             payload_json,
-            created_at: row.get("created_at"),
-        })
+            row.get("created_at"),
+        ))
     }
 
     async fn events_after(
@@ -254,7 +275,7 @@ impl Store for PostgresStore {
         self.get_session(session_id).await?;
         let min_seq = last_event_id.unwrap_or(0);
         let rows = self.client
-            .query("select session_id, seq, event_type, payload_json, created_at from session_events where session_id = $1 and seq > $2 order by seq asc", &[&session_id, &min_seq])
+            .query("select session_id, seq, event_type, payload_json, actor_id, artifact_uri, history_uri, created_at from session_events where session_id = $1 and seq > $2 order by seq asc", &[&session_id, &min_seq])
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
         Ok(rows
@@ -264,6 +285,9 @@ impl Store for PostgresStore {
                 seq: row.get("seq"),
                 event_type: row.get("event_type"),
                 payload_json: row.get("payload_json"),
+                actor_id: row.get("actor_id"),
+                artifact_uri: row.get("artifact_uri"),
+                history_uri: row.get("history_uri"),
                 created_at: row.get("created_at"),
             })
             .collect())

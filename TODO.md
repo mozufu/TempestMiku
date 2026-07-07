@@ -410,7 +410,10 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 - [x] `agents.inbox()` — drain all pending messages without blocking.
 - [x] `agents.list()` — roster: peer ids, statuses, unread count, last activity timestamp.
 - [x] `agents.broadcast(text)` — deliver a message to all currently live children.
-- [ ] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
+- [x] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
+      **Resolved:** `agents.pipeline` is registered and prelude-backed. It runs ordered actor waves
+      stage-by-stage, waits at each barrier, and feeds only bounded digest JSON into the next stage.
+      The namespace wrapper also supports per-stage task builder functions.
 - [x] Real caller actor-id threading through `InvocationCtx` (top-level orchestrator calls still use
       synthetic `"Root"`; child sandboxes receive their real actor id).
 

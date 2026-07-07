@@ -105,8 +105,9 @@ P3 ships the first concrete slice only:
 > and one replayable `actor_cancelled` event lands in the parent session log. Plain-prose message
 > enforcement rejects control-payload blobs at the `agents.msg` / `agents.send` / `agents.broadcast`
 > boundary. DAG enforcement rejects targeted live waits where a real actor would wait on itself or
-> its own descendant. `pipeline`, active restart supervision, subtree cancellation, and fuller
-> provenance remain later P3-plus work.
+> its own descendant. `agents.pipeline` runs staged actor waves with a barrier between stages and
+> feeds only bounded digest JSON downstream. Active restart supervision, subtree cancellation, and
+> fuller provenance remain later P3-plus work.
 
 The remaining §23 full surface is split across the landed P3-plus foundation and later P3-plus work:
 
@@ -175,8 +176,10 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 
 - **P3 calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
 - **P3-plus foundation calls:** lower-level mailbox primitives `agents.send`,
-  `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, and `agents.cancel`.
-- **Remaining P3-plus calls:** `agents.pipeline`.
+  `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, `agents.cancel`, and
+  `agents.pipeline`.
+- **Remaining P3-plus calls:** none in the basic SDK surface; remaining work is supervision,
+  budget enforcement, subtree cancellation, and fuller provenance.
 - **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
   `history://<id>` (read-only transcript).
   Roster listing is also exposed through `agents.list()`.
@@ -186,8 +189,8 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 - `actor` — identity, lifecycle (spawn / run / park / terminate), behavior binding (mode + grant); each a
   recursive runtime session (§05/§06).
 - `mailbox` — async queue, addressing, delivery + receipts.
-- `orchestrate` — P3/P3-plus `agents.*` constructors (run / spawn / parallel / msg / send / wait /
-  broadcast / inbox / list / cancel); later P3-plus adds pipeline helpers.
+- `orchestrate` — P3/P3-plus `agents.*` constructors (run / spawn / parallel / pipeline / msg /
+  send / wait / broadcast / inbox / list / cancel).
 - `supervise` — supervision tree, restart strategies, budgets, depth cap, cost rollup.
 - `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry;
   P3 roster/resource discovery goes through the resource gateway; the first P3-plus foundation

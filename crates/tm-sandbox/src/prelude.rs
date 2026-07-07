@@ -113,6 +113,27 @@ const __tm_wait_args = (from = undefined, timeoutMs = undefined) => {
     ...(timeoutMs == null ? {} : { timeoutMs: Number(timeoutMs) }),
   };
 };
+const __tm_pipeline_stage = async (items, stage, stageIndex) => {
+  if (!stage || typeof stage !== "object" || stage.role == null) {
+    throw new TypeError("agents.pipeline stage.role is required");
+  }
+  const role = String(stage.role);
+  if (typeof stage.task === "function") {
+    const tasks = [];
+    for (let index = 0; index < items.length; index++) {
+      tasks.push(String(await stage.task(items[index], index, stageIndex)));
+    }
+    return { role, tasks };
+  }
+  if (Array.isArray(stage.tasks)) {
+    if (stage.tasks.length !== items.length) {
+      throw new TypeError("agents.pipeline stage.tasks length must match current item count");
+    }
+    return { role, tasks: stage.tasks.map((task) => String(task)) };
+  }
+  if (stage.task != null) return { role, task: String(stage.task) };
+  throw new TypeError("agents.pipeline stage.task or stage.tasks is required");
+};
 globalThis.agents = {
   run: async (role, task, opts = undefined) =>
     __tm_host_call("agents.run", { role: String(role), task: String(task), ...(opts != null ? { opts } : {}) }),
@@ -120,6 +141,20 @@ globalThis.agents = {
     __tm_host_call("agents.spawn", { role: String(role), task: String(task) }),
   parallel: async (tasks) =>
     __tm_host_call("agents.parallel", { tasks }),
+  pipeline: async (items, ...stages) => {
+    let current = Array.from(items ?? []);
+    const waves = [];
+    for (let stageIndex = 0; stageIndex < stages.length; stageIndex++) {
+      const stage = await __tm_pipeline_stage(current, stages[stageIndex], stageIndex);
+      const result = await __tm_host_call("agents.pipeline", { items: current, stages: [stage] });
+      current = result[0] ?? [];
+      waves.push(current);
+    }
+    if (stages.length === 0) {
+      await __tm_host_call("agents.pipeline", { items: current, stages: [] });
+    }
+    return waves;
+  },
   msg: async (handle, text, opts = undefined) =>
     __tm_host_call("agents.msg", { handle, text: String(text), ...(opts != null ? { opts } : {}) }),
   send: async (to, text, opts = undefined) =>

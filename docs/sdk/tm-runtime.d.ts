@@ -501,7 +501,7 @@ interface HttpNamespace {
  *
  * P3 surface: run, spawn, parallel, msg.
  * P3-plus foundation: live per-actor inbox delivery through send, broadcast,
- * wait, inbox, list, and cancel. Stretch/full surface still deferred: pipeline.
+ * wait, inbox, list, cancel, and pipeline.
  */
 interface AgentsNamespace {
   /**
@@ -530,6 +530,16 @@ interface AgentsNamespace {
    * Requires agents.parallel grant.
    */
   parallel(tasks: AgentTask[]): Promise<AgentDigest[]>;
+
+  /**
+   * agents.pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>
+   *
+   * Run a staged map pipeline. Each stage fans out one actor per current item,
+   * waits for the full wave to finish, then feeds only bounded digest JSON into
+   * the next stage. Returns one ordered digest array per stage. Requires
+   * agents.pipeline grant.
+   */
+  pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>;
 
   /**
    * agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>
@@ -639,6 +649,22 @@ interface AgentTask {
   role: string;
   /** Plain-prose task description. */
   task: string;
+}
+
+/** Stage descriptor passed to agents.pipeline. */
+type AgentPipelineTaskFn = (
+  item: JsonValue | AgentDigest,
+  index: number,
+  stageIndex: number,
+) => string | Promise<string>;
+
+interface AgentPipelineStage {
+  /** Mode/role for this stage's actors. */
+  role: string;
+  /** Task prompt applied to each current input, or a task builder function. */
+  task?: string | AgentPipelineTaskFn;
+  /** Per-input task prompts for the current wave. */
+  tasks?: string[];
 }
 
 /** Plain-prose message delivered through a bounded actor inbox. */

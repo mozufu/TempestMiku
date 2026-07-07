@@ -722,9 +722,12 @@ fn agents_namespace_types_declared_in_sdk() {
         "interface AgentDigest",
         "interface AgentHandle",
         "interface AgentTask",
+        "type AgentPipelineTaskFn",
+        "interface AgentPipelineStage",
         "interface AgentMessage",
         "interface AgentReceipt",
         "interface AgentBroadcastReceipt",
+        "interface AgentCancelReceipt",
         "interface AgentRosterEntry",
         "interface MsgOpts",
         "interface SendOpts",
@@ -733,9 +736,11 @@ fn agents_namespace_types_declared_in_sdk() {
         "agents.run(role: string, task: string, opts?: AgentRunOpts): Promise<AgentDigest>",
         "agents.spawn(role: string, task: string): Promise<AgentHandle>",
         "agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>",
+        "agents.pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>",
         "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>",
         "agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>",
         "agents.broadcast(text: string): Promise<AgentBroadcastReceipt[]>",
+        "agents.cancel(target: AgentHandle | string): Promise<AgentCancelReceipt>",
         "agents.wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>",
         "agents.inbox(): Promise<AgentMessage[]>",
         "agents.list(): Promise<AgentRosterEntry[]>",
@@ -774,7 +779,7 @@ async fn deno_agents_namespace_wired_when_granted() {
     let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
     let out = session
         .eval(
-            "({ agentsType: typeof agents, runType: typeof agents?.run, spawnType: typeof agents?.spawn, parallelType: typeof agents?.parallel, msgType: typeof agents?.msg, sendType: typeof agents?.send, broadcastType: typeof agents?.broadcast, waitType: typeof agents?.wait, inboxType: typeof agents?.inbox, listType: typeof agents?.list })",
+            "({ agentsType: typeof agents, runType: typeof agents?.run, spawnType: typeof agents?.spawn, parallelType: typeof agents?.parallel, pipelineType: typeof agents?.pipeline, msgType: typeof agents?.msg, sendType: typeof agents?.send, broadcastType: typeof agents?.broadcast, cancelType: typeof agents?.cancel, waitType: typeof agents?.wait, inboxType: typeof agents?.inbox, listType: typeof agents?.list })",
             CellBudget::default(),
         )
         .await
@@ -784,9 +789,11 @@ async fn deno_agents_namespace_wired_when_granted() {
     assert_eq!(result["runType"], Value::String("function".into()));
     assert_eq!(result["spawnType"], Value::String("function".into()));
     assert_eq!(result["parallelType"], Value::String("function".into()));
+    assert_eq!(result["pipelineType"], Value::String("function".into()));
     assert_eq!(result["msgType"], Value::String("function".into()));
     assert_eq!(result["sendType"], Value::String("function".into()));
     assert_eq!(result["broadcastType"], Value::String("function".into()));
+    assert_eq!(result["cancelType"], Value::String("function".into()));
     assert_eq!(result["waitType"], Value::String("function".into()));
     assert_eq!(result["inboxType"], Value::String("function".into()));
     assert_eq!(result["listType"], Value::String("function".into()));

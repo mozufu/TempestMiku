@@ -9,6 +9,12 @@ use crate::{Message, Role, ToolCall, Usage};
 /// [`Accumulator`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
+    /// A fragment of private assistant reasoning (chain-of-thought). Some OpenAI-compatible
+    /// providers surface reasoning tokens separately from the visible answer via
+    /// `delta.reasoning` / `delta.reasoning_content`; we forward them so a UI can render a
+    /// collapsible "thinking" trace when the provider returns one. The fragments concatenate
+    /// like [`StreamEvent::Text`] do.
+    Reasoning(String),
     /// A fragment of assistant text.
     Text(String),
     /// A fragment of a tool call. `id`/`name` arrive once (usually first); `arguments`
@@ -36,6 +42,7 @@ struct PartialToolCall {
 #[derive(Debug, Default)]
 pub struct Accumulator {
     text: String,
+    reasoning: String,
     calls: BTreeMap<usize, PartialToolCall>,
     finish_reason: Option<String>,
     usage: Option<Usage>,
@@ -49,6 +56,7 @@ impl Accumulator {
     /// Fold one event into the in-progress turn.
     pub fn push(&mut self, ev: StreamEvent) {
         match ev {
+            StreamEvent::Reasoning(r) => self.reasoning.push_str(&r),
             StreamEvent::Text(t) => self.text.push_str(&t),
             StreamEvent::ToolCall {
                 index,
@@ -99,6 +107,7 @@ impl Accumulator {
 
         AssistantTurn {
             text: self.text,
+            reasoning: self.reasoning,
             tool_calls,
             finish_reason: self.finish_reason,
             usage: self.usage,
@@ -110,6 +119,9 @@ impl Accumulator {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssistantTurn {
     pub text: String,
+    /// Private chain-of-thought the provider returned alongside `text`. Never re-sent to the
+    /// model; surfaced to the UI only.
+    pub reasoning: String,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: Option<String>,
     pub usage: Option<Usage>,

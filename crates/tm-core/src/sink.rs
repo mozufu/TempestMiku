@@ -3,6 +3,10 @@
 ///
 /// Every method has a no-op default; implement only what you render.
 pub trait EventSink: Send + Sync {
+    /// A fragment of private assistant reasoning (chain-of-thought) just arrived. Providers
+    /// that stream `reasoning` / `reasoning_content` deltas produce these; they are never
+    /// sent back to the model. Default drops them so existing sinks keep compiling.
+    fn on_reasoning(&self, _delta: &str) {}
     /// A fragment of assistant text just arrived.
     fn on_text(&self, _delta: &str) {}
     /// The model began a tool call with this name.

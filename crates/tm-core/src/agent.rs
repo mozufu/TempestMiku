@@ -170,6 +170,7 @@ impl Agent {
                 check_cancelled(cancellation)?;
                 let ev = ev?;
                 match &ev {
+                    StreamEvent::Reasoning(r) => sink.on_reasoning(r),
                     StreamEvent::Text(t) => sink.on_text(t),
                     StreamEvent::ToolCall {
                         name: Some(name), ..

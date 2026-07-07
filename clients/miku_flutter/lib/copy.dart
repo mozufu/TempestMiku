@@ -108,6 +108,12 @@ class _UiCopy {
   String get closeActivitySheet => pick('Close activity sheet', '關閉活動面板');
   String get status => pick('Status', '狀態');
   String get promptActivity => pick('Prompt / Activity', '提示 / 活動');
+  String get thinking => pick('Thinking', '思考過程');
+  String get thinkingTrace =>
+      pick('Private chain-of-thought from the model. Tap to expand or collapse.',
+          '模型的私密思考過程。點擊展開或收合。');
+  String get reasoningHidden =>
+      pick('Reasoning hidden by the provider', '提供者未回傳推理過程');
 
   String get historyHelper =>
       pick('Switch history or start fresh', '切換歷史對話或建立新 session');

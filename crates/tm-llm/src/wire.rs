@@ -115,6 +115,13 @@ pub struct Choice {
 pub struct Delta {
     #[serde(default)]
     pub content: Option<String>,
+    /// Private chain-of-thought. OpenAI reasoning models use `reasoning`; DeepSeek R1 and
+    /// several OpenAI-compatible bridges use `reasoning_content`. We accept either and
+    /// forward whichever the provider sends.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallDelta>,
 }

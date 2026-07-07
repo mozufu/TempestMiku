@@ -898,6 +898,159 @@ class _AgentStatusBar extends StatelessWidget {
   }
 }
 
+// ─── Reasoning / chain-of-thought trace ───────────────────────────────────────
+
+/// A collapsible rendering of the private chain-of-thought a provider returned
+/// alongside the answer. Hidden by default once the turn finishes; tap to reveal.
+class _ThinkingTrace extends StatefulWidget {
+  const _ThinkingTrace({
+    required this.tok,
+    required this.copy,
+    required this.accent,
+    required this.text,
+    required this.expanded,
+    required this.isStreaming,
+  });
+
+  final _Tok tok;
+  final _UiCopy copy;
+  final Color accent;
+  final String text;
+  final bool expanded;
+  final bool isStreaming;
+
+  @override
+  State<_ThinkingTrace> createState() => _ThinkingTraceState();
+}
+
+class _ThinkingTraceState extends State<_ThinkingTrace> {
+  late bool _expanded = widget.expanded;
+  bool _userToggled = false;
+
+  @override
+  void didUpdateWidget(covariant _ThinkingTrace oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Follow the parent's expanded state for live open/close, unless the user has
+    // manually toggled this trace.
+    if (!_userToggled && oldWidget.expanded != widget.expanded) {
+      _expanded = widget.expanded;
+    }
+  }
+
+  void _toggle() {
+    setState(() {
+      _expanded = !_expanded;
+      _userToggled = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tok = widget.tok;
+    final accent = widget.accent;
+    return Semantics(
+      button: true,
+      label: widget.copy.thinkingTrace,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _toggle,
+          borderRadius: BorderRadius.circular(10),
+          focusColor: tok.focus.withOpacity(0.18),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: tok.surface,
+                  border: Border.all(color: tok.border),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(
+                  Icons.psychology_outlined,
+                  color: accent,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+                  decoration: BoxDecoration(
+                    color: tok.surface.withOpacity(0.78),
+                    border: Border.all(color: tok.border.withOpacity(0.82)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.psychology_outlined,
+                              color: accent, size: 14),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              widget.copy.thinking,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: tok.muted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                          if (widget.isStreaming) ...[
+                            _PulsingDot(color: accent),
+                            const SizedBox(width: 6),
+                          ],
+                          Icon(
+                            _expanded
+                                ? Icons.expand_less
+                                : Icons.expand_more,
+                            color: tok.muted,
+                            size: 16,
+                          ),
+                        ],
+                      ),
+                      if (_expanded) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          height: 0.5,
+                          color: tok.border.withOpacity(0.72),
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 240),
+                          child: SingleChildScrollView(
+                            child: SelectableText(
+                              widget.text,
+                              style: TextStyle(
+                                color: tok.muted,
+                                fontSize: 12.5,
+                                height: 1.55,
+                                fontFamily: 'monospace',
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AgentStatusLine extends StatelessWidget {
   const _AgentStatusLine({
     required this.tok,

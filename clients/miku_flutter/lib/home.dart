@@ -14,14 +14,19 @@ class _ConversationRound {
   final List<_ActivityItem> activities = [];
   String assistantStreamedText = '';
   String assistantFinalText = '';
+  /// Private chain-of-thought the provider returned alongside the answer. Streamed in
+  /// `reasoning` events; persists so the user can expand it after the turn completes.
+  String reasoningText = '';
   bool isStreaming;
   bool activityExpanded = false;
+  bool reasoningExpanded = false;
 
   String get assistantText => assistantFinalText.isNotEmpty
       ? assistantFinalText
       : assistantStreamedText;
 
   bool get isComplete => assistantFinalText.isNotEmpty && !isStreaming;
+  bool get hasReasoning => reasoningText.trim().isNotEmpty;
 }
 
 enum _ActivityState { running, done, failed, info }
@@ -277,7 +282,6 @@ class _MikuHomePageState extends State<MikuHomePage>
       }
     }
   }
-
   void _applyEvent(MikuEvent e) {
     final activity = _activityFromEvent(e);
     if (activity != null) {
@@ -286,6 +290,15 @@ class _MikuHomePageState extends State<MikuHomePage>
     switch (e.type) {
       case 'connection':
         _status = e.data['status'] as String? ?? _status;
+      case 'reasoning':
+        final delta = e.data['delta'] as String? ?? '';
+        if (delta.isNotEmpty) {
+          final round = _ensureAssistantRound();
+          round.reasoningText += delta;
+          round.isStreaming = true;
+          round.reasoningExpanded = true;
+          _status = 'streaming';
+        }
       case 'text':
         final delta = e.data['delta'] as String? ?? '';
         if (delta.isNotEmpty) {
@@ -301,6 +314,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         round.assistantStreamedText = '';
         round.isStreaming = false;
         round.activityExpanded = false;
+        round.reasoningExpanded = false;
         _status = 'connected';
         _loadProject();
       case 'mode':
@@ -1111,6 +1125,22 @@ class _MikuHomePageState extends State<MikuHomePage>
             expanded: round.activityExpanded,
             onTap: () => _showActivitySheet(round),
             onOpenResource: _openResource,
+          ),
+        );
+        items.add(const SizedBox(height: 10));
+      }
+
+      if (round.hasReasoning) {
+        items.add(
+          _ThinkingTrace(
+            tok: tok,
+            copy: copy,
+            accent: accent,
+            text: round.reasoningText,
+            expanded: round.reasoningExpanded,
+            isStreaming: round.assistantFinalText.isEmpty &&
+                round.isStreaming &&
+                round.assistantStreamedText.isEmpty,
           ),
         );
         items.add(const SizedBox(height: 10));

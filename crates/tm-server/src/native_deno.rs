@@ -236,6 +236,7 @@ fn host_decision(
 }
 
 enum NativeEvent {
+    Reasoning(String),
     Text(String),
     ToolCall(String),
     CellStart(String),
@@ -256,6 +257,10 @@ impl ForwardingEventSink {
 impl EventSink for ForwardingEventSink {
     fn on_text(&self, delta: &str) {
         self.send(NativeEvent::Text(delta.to_string()));
+    }
+
+    fn on_reasoning(&self, delta: &str) {
+        self.send(NativeEvent::Reasoning(delta.to_string()));
     }
 
     fn on_tool_call(&self, name: &str) {
@@ -281,6 +286,7 @@ async fn forward_events(
 ) -> Result<()> {
     while let Some(event) = events.recv().await {
         let (event_type, payload): (&str, Value) = match event {
+            NativeEvent::Reasoning(delta) => ("reasoning", json!({ "delta": delta })),
             NativeEvent::Text(delta) => (
                 "text",
                 serde_json::to_value(StoreEvent::Text { delta })

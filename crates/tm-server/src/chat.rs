@@ -298,6 +298,10 @@ where
         );
     }
 
+    fn on_reasoning(&self, delta: &str) {
+        self.push_event("reasoning", json!({ "delta": delta }));
+    }
+
     fn on_tool_call(&self, name: &str) {
         self.push_event("tool_call", json!({ "name": name }));
     }

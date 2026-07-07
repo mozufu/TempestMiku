@@ -69,6 +69,19 @@ fn parse_chunk(payload: &str) -> Vec<StreamEvent> {
         {
             out.push(StreamEvent::Text(content));
         }
+        // Reasoning tokens are separate from the visible answer; prefer `reasoning`, fall
+        // back to `reasoning_content` (DeepSeek R1 and some bridges). Merge both if a
+        // provider emits them together.
+        if let Some(r) = choice.delta.reasoning
+            && !r.is_empty()
+        {
+            out.push(StreamEvent::Reasoning(r));
+        }
+        if let Some(r) = choice.delta.reasoning_content
+            && !r.is_empty()
+        {
+            out.push(StreamEvent::Reasoning(r));
+        }
         for tc in choice.delta.tool_calls {
             let (name, arguments) = match tc.function {
                 Some(f) => (f.name, f.arguments),
@@ -167,6 +180,27 @@ mod tests {
                 StreamEvent::Finish {
                     reason: Some("tool_calls".into()),
                 },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn parses_reasoning_then_text() {
+        // A reasoning model streams private chain-of-thought via `reasoning`, then the
+        // visible answer via `content`; some providers use `reasoning_content` instead.
+        let evs = collect(vec![
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"think \"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hard\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        ])
+        .await;
+        assert_eq!(
+            evs,
+            vec![
+                StreamEvent::Reasoning("think ".into()),
+                StreamEvent::Reasoning("hard".into()),
+                StreamEvent::Text("answer".into()),
             ]
         );
     }

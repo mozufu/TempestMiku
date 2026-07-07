@@ -91,13 +91,33 @@ pub struct ActorMessage {
 
 /// Delivery confirmation for a sent message (§23.2).
 ///
-/// A `Failed` receipt means the actor is unreachable — sender moves on, no retry-loop.
+/// A failed receipt means the message was not enqueued — sender moves on, no retry-loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Receipt {
     Delivered,
-    /// Actor unreachable. Sender must not retry-loop.
-    Failed,
+    /// Actor unknown, dead, or otherwise unreachable.
+    Unreachable,
+    /// Recipient inbox is full; this send is dropped rather than silently accepted.
+    Backpressured,
+}
+
+impl Receipt {
+    pub fn is_delivered(self) -> bool {
+        self == Self::Delivered
+    }
+
+    pub fn is_failed(self) -> bool {
+        !self.is_delivered()
+    }
+
+    pub fn failure_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Delivered => None,
+            Self::Unreachable => Some("unreachable"),
+            Self::Backpressured => Some("backpressured"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,11 +521,12 @@ impl MailboxRegistry {
 
     /// Deliver a message to the recipient's live inbox and append it to the bounded log.
     ///
-    /// Unknown or terminated actors return [`Receipt::Failed`]. The synthetic `Root`
+    /// Unknown or terminated actors return [`Receipt::Unreachable`]. Full inboxes return
+    /// [`Receipt::Backpressured`] and drop the message. The synthetic `Root`
     /// actor is always reachable so child actors can reply to the top-level orchestrator.
     pub async fn send_message(&self, msg: ActorMessage) -> Receipt {
         if !self.is_reachable(&msg.to).await {
-            return Receipt::Failed;
+            return Receipt::Unreachable;
         }
 
         let inbox = self.ensure_inbox(&msg.to).await;
@@ -516,7 +537,8 @@ impl MailboxRegistry {
                 self.record_message(msg).await;
                 Receipt::Delivered
             }
-            Err(_) => Receipt::Failed,
+            Err(mpsc::error::TrySendError::Full(_)) => Receipt::Backpressured,
+            Err(mpsc::error::TrySendError::Closed(_)) => Receipt::Unreachable,
         }
     }
 
@@ -825,6 +847,23 @@ impl MailboxRegistry {
         self.actors.read().await.values().cloned().collect()
     }
 
+    pub async fn live_direct_children(&self, parent_id: &ActorId) -> Vec<ActorRecord> {
+        let actors = self.actors.read().await;
+        actors
+            .values()
+            .filter(|record| Self::is_live_status(record.status))
+            .filter(|record| match record.parent.as_ref() {
+                Some(parent) => parent == parent_id,
+                None => parent_id.as_str() == "Root",
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn is_live_status(status: ActorStatus) -> bool {
+        status != ActorStatus::Terminated
+    }
+
     async fn ensure_inbox(&self, actor_id: &ActorId) -> Arc<ActorInbox> {
         if let Some(inbox) = self.inboxes.read().await.get(actor_id).cloned() {
             return inbox;
@@ -852,7 +891,7 @@ impl MailboxRegistry {
             .read()
             .await
             .get(actor_id)
-            .is_some_and(|record| record.status != ActorStatus::Terminated)
+            .is_some_and(|record| Self::is_live_status(record.status))
     }
 
     async fn mark_complete_record(
@@ -1259,7 +1298,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_message_to_terminated_actor_fails() {
+    async fn send_message_to_terminated_actor_returns_unreachable() {
         let registry = MailboxRegistry::new();
         let to = ActorId::new("Worker").unwrap();
         registry.track(test_record("Worker")).await;
@@ -1275,8 +1314,91 @@ mod tests {
             })
             .await;
 
-        assert_eq!(receipt, Receipt::Failed);
+        assert_eq!(receipt, Receipt::Unreachable);
         assert!(registry.drain_inbox(&to, None).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_message_to_full_inbox_returns_backpressured_and_drops() {
+        let registry = MailboxRegistry::new();
+        let to = ActorId::new("Worker").unwrap();
+        registry.track(test_record("Worker")).await;
+
+        for index in 0..MAX_INBOX_MESSAGES {
+            let receipt = registry
+                .send_message(ActorMessage {
+                    from: ActorId::new("Root").unwrap(),
+                    to: to.clone(),
+                    text: format!("queued {index}"),
+                    reply_to: None,
+                    sent_at: Utc::now(),
+                })
+                .await;
+            assert_eq!(receipt, Receipt::Delivered);
+        }
+
+        let receipt = registry
+            .send_message(ActorMessage {
+                from: ActorId::new("Root").unwrap(),
+                to: to.clone(),
+                text: "overflow".to_string(),
+                reply_to: None,
+                sent_at: Utc::now(),
+            })
+            .await;
+
+        assert_eq!(receipt, Receipt::Backpressured);
+        assert_eq!(registry.unread_count(&to).await, MAX_INBOX_MESSAGES);
+        assert_eq!(registry.messages().await.len(), MAX_INBOX_MESSAGES);
+        let drained = registry.drain_inbox(&to, None).await;
+        assert_eq!(drained.len(), MAX_INBOX_MESSAGES);
+        assert!(!drained.iter().any(|message| message.text == "overflow"));
+    }
+
+    #[tokio::test]
+    async fn live_direct_children_excludes_terminated_only() {
+        let registry = MailboxRegistry::new();
+        let root = ActorId::new("Root").unwrap();
+        registry.track(test_record("RunningChild")).await;
+        registry
+            .track(ActorRecord {
+                status: ActorStatus::Idle,
+                ..test_record("IdleChild")
+            })
+            .await;
+        registry
+            .track(ActorRecord {
+                status: ActorStatus::Parked,
+                ..test_record("ParkedChild")
+            })
+            .await;
+        registry
+            .track(ActorRecord {
+                status: ActorStatus::Terminated,
+                completed_at: Some(Utc::now()),
+                ..test_record("DoneChild")
+            })
+            .await;
+        registry
+            .track(test_record_with_parent("NestedChild", "RunningChild"))
+            .await;
+
+        let mut ids: Vec<_> = registry
+            .live_direct_children(&root)
+            .await
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        ids.sort();
+
+        assert_eq!(
+            ids,
+            vec![
+                ActorId::new("IdleChild").unwrap(),
+                ActorId::new("ParkedChild").unwrap(),
+                ActorId::new("RunningChild").unwrap(),
+            ]
+        );
     }
 
     #[tokio::test]

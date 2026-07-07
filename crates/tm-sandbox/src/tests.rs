@@ -739,7 +739,7 @@ fn agents_namespace_types_declared_in_sdk() {
         "agents.spawn(role: string, task: string, opts?: AgentSpawnOpts): Promise<AgentHandle>",
         "agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>",
         "agents.pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>",
-        "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>",
+        "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<AgentReceipt | string | null>",
         "agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>",
         "agents.broadcast(text: string): Promise<AgentBroadcastReceipt[]>",
         "agents.cancel(target: AgentHandle | string): Promise<AgentCancelReceipt>",

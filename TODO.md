@@ -412,7 +412,8 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 - [x] Live MPSC delivery: per-actor bounded inbox queue, `Agent::run` inbox draining loop,
       and request/reply waits. Required before any other item in this section.
       **Resolved:** `MailboxRegistry` creates bounded `tokio::mpsc` inboxes per actor, keeps a
-      compatibility message log, returns failed receipts for unreachable/full inboxes, and `tm-core`
+      compatibility message log, returns failed receipts with `unreachable` / `backpressured`
+      reasons for unreachable/full inboxes, and `tm-core`
       exposes an `InboxDrain` hook used by `ChatActorExecutor`.
 - [x] `agents.send(to, text, opts?)` — fire-and-forget or request/reply to a live sibling.
 - [x] `agents.wait(from?, timeout)` — block until a matching message arrives in the inbox.
@@ -476,9 +477,10 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
       edges with `InvalidArgsError`; synthetic top-level `Root` waits remain allowed.
 - [x] Bounded mailbox + backpressure: drop or back-pressure senders when the inbox is full;
       `agents.broadcast` targets only currently live peers.
-      **Resolved:** actor inboxes are bounded `tokio::mpsc` queues; `try_send` returns failed
-      receipts instead of blocking or growing unbounded, and broadcast filters to direct live
-      children with ordered failed receipts for backpressure.
+      **Resolved:** actor inboxes are bounded `tokio::mpsc` queues; `try_send` drops full-inbox
+      sends with `failed` / `reason: "backpressured"` receipts instead of silently succeeding,
+      unreachable targets use `reason: "unreachable"`, and broadcast filters through the registry's
+      direct-live-children helper with ordered failed receipts for backpressure.
 
 ### Provenance
 

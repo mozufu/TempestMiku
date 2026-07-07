@@ -53,8 +53,8 @@ message send through `agents.msg`; the rest of this table is the P3-plus/full ma
 
 | Primitive | Semantics |
 |---|---|
-| `send(to, text)` | fire-and-forget to one id; per-recipient receipt (`delivered` / `failed`) |
-| `send(to, text, await)` | request / reply: block for the recipient's reply |
+| `send(to, text)` | fire-and-forget to one id; per-recipient receipt (`delivered` / `failed`, with `reason` on failure) |
+| `send(to, text, await)` | request / reply: block for the recipient's reply, or return an immediate failed receipt when live delivery fails |
 | `broadcast(text)` (`to: children`) | to direct live children; no replies expected |
 | `wait(from?, timeout)` | block for a message (optionally from one id); timeout = clean "none" |
 | `inbox()` | drain pending without blocking |
@@ -67,7 +67,7 @@ message send through `agents.msg`; the rest of this table is the P3-plus/full ma
 - **One ask per message**; lead with the answer when replying; set `replyTo`.
 - **Pass big payloads by reference** (`local://`, `artifact://`, `memory://`), never inline — bandwidth
   discipline mirrors the context budget (principle #3).
-- A `failed` receipt means unreachable → move on; **never** retry-loop.
+- A `failed` receipt includes `reason: "unreachable" | "backpressured"` → move on; **never** retry-loop.
 
 ```mermaid
 flowchart LR
@@ -205,10 +205,12 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
   shows `terminated` + `cancelled`, and reconnect replay includes `actor_cancelled`.
 - **Child crash** — supervisor restarts / escalates / degrades the subtree; siblings unaffected ("let it crash").
 - **Message to a dead actor** — `failed` receipt; sender moves on, no retry-loop.
+- **Message to a full inbox** — message is dropped and the caller receives
+  `failed` with `reason: "backpressured"`; no silent success.
 - **Deadlock** (A waits on B waits on A) — forbidden by the **acyclic** rule; async messaging + `wait`
   timeouts prevent indefinite blocking.
 - **Runaway recursion / cost** — depth cap + per-actor budgets + rollup; conservative defaults (§15).
-- **Mailbox storm** — bounded mailbox + backpressure; broadcast targets direct live children only.
+- **Mailbox storm** — bounded mailbox + explicit drop/backpressure receipts; broadcast targets direct live children only.
 
 ## 23.10 Mechanism provenance
 

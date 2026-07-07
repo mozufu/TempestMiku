@@ -39,7 +39,8 @@ impl AgentsBroadcastFn {
                         "type": "object",
                         "properties": {
                             "actorId": { "type": "string" },
-                            "status": { "type": "string" }
+                            "status": { "type": "string" },
+                            "reason": { "type": "string", "enum": ["unreachable", "backpressured"] }
                         }
                     }
                 })),
@@ -75,17 +76,7 @@ impl HostFn for AgentsBroadcastFn {
         let text = parse_plain_prose_text(&args, "text")?;
         let from = caller_actor_id(ctx)?;
 
-        let mut targets: Vec<_> = self
-            .roster
-            .list()
-            .await
-            .into_iter()
-            .filter(|record| record.status != ActorStatus::Terminated)
-            .filter(|record| match record.parent.as_ref() {
-                Some(parent) => parent == &from,
-                None => from.as_str() == "Root",
-            })
-            .collect();
+        let mut targets = self.roster.live_direct_children(&from).await;
         targets.sort_by(|a, b| a.id.cmp(&b.id));
 
         let mut receipts = Vec::with_capacity(targets.len());
@@ -99,13 +90,11 @@ impl HostFn for AgentsBroadcastFn {
             };
             let receipt = self.roster.send_message(message.clone()).await;
             maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
-            receipts.push(json!({
-                "actorId": target.id.as_str(),
-                "status": match receipt {
-                    Receipt::Delivered => "delivered",
-                    Receipt::Failed => "failed",
-                },
-            }));
+            let mut receipt_value = receipt_json(receipt);
+            if let Some(object) = receipt_value.as_object_mut() {
+                object.insert("actorId".to_string(), json!(target.id.as_str()));
+            }
+            receipts.push(receipt_value);
         }
 
         Ok(Value::Array(receipts))
@@ -235,8 +224,8 @@ impl AgentsSendFn {
                     "Sends a plain-prose message to a live actor id or handle through the \
                      bounded per-actor inbox. Fire-and-forget returns a delivered/failed \
                      receipt. With opts.await = true, waits for the recipient to reply to \
-                     the caller inbox and returns the reply message, or null on timeout or \
-                     unreachable target. Awaiting a real actor's own descendant is rejected \
+                     the caller inbox and returns the reply message, returns a failed receipt \
+                     on unreachable/backpressured delivery, or null on timeout. Awaiting a real actor's own descendant is rejected \
                      to keep the actor DAG acyclic. Messages are plain prose; JSON control \
                      payloads are rejected. Pass large payloads by reference. \
                      Requires agents.send grant."
@@ -262,7 +251,7 @@ impl AgentsSendFn {
                 }),
                 result_schema: Some(json!({
                     "oneOf": [
-                        { "type": "object", "properties": { "status": { "type": "string" } } },
+                        { "type": "object", "properties": { "status": { "type": "string" }, "reason": { "type": "string", "enum": ["unreachable", "backpressured"] } } },
                         { "type": "object", "properties": { "from": { "type": "string" }, "to": { "type": "string" }, "text": { "type": "string" } } },
                         { "type": "null" }
                     ]
@@ -271,7 +260,10 @@ impl AgentsSendFn {
                     title: Some("Send a live actor message".to_string()),
                     code: "const receipt = await agents.send(worker, 'Please send your status when ready.');"
                         .to_string(),
-                    notes: Some("A failed receipt means unreachable — move on.".to_string()),
+                    notes: Some(
+                        "A failed receipt means unreachable or backpressured — move on."
+                            .to_string(),
+                    ),
                 }],
                 errors: vec![denied_error_doc(), timeout_error_doc()],
                 grants: vec![agents_grant_doc()],
@@ -318,8 +310,8 @@ impl HostFn for AgentsSendFn {
         if !do_await {
             return Ok(receipt_json(receipt));
         }
-        if receipt == Receipt::Failed {
-            return Ok(Value::Null);
+        if receipt.is_failed() {
+            return Ok(receipt_json(receipt));
         }
 
         let timeout_ms = parse_timeout_ms(&args, 30_000)?;

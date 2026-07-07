@@ -414,12 +414,14 @@ fn message_json(message: ActorMessage) -> Value {
 }
 
 fn receipt_json(receipt: Receipt) -> Value {
-    json!({
-        "status": match receipt {
-            Receipt::Delivered => "delivered",
-            Receipt::Failed => "failed",
-        }
-    })
+    if receipt.is_delivered() {
+        json!({ "status": "delivered" })
+    } else {
+        json!({
+            "status": "failed",
+            "reason": receipt.failure_reason().unwrap_or("unknown"),
+        })
+    }
 }
 
 async fn wait_for_actor_message_or_cancel(
@@ -451,7 +453,7 @@ fn maybe_emit_message(
     message: &ActorMessage,
     receipt: Receipt,
 ) {
-    if receipt == Receipt::Delivered {
+    if receipt.is_delivered() {
         roster.emit_lifecycle(
             session_id,
             ActorLifecycleEvent::MessageSent {

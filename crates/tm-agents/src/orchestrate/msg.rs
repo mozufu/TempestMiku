@@ -18,12 +18,13 @@ impl AgentsMsgFn {
                 description: Some(
                     "Sends a plain-prose message to a spawned actor handle. \
                      Fire-and-forget (default): delivers to a running actor's live bounded inbox \
-                     and returns null immediately. \
+                     and returns a delivered/failed receipt. \
                      Request/reply (opts.await = true): for running actors, delivers to the live \
-                     inbox and waits for a reply to the caller inbox. For already completed actors, \
+                     inbox and waits for a reply to the caller inbox. If live delivery fails, \
+                     returns a failed receipt instead of waiting. For already completed actors, \
                      keeps the P3 compatibility behavior: a one-shot seeded continuation from the \
                      target's last digest summary + the new text. \
-                     A null reply means the actor is unreachable — do not retry-loop (§23.9). \
+                     A failed receipt means the actor is unreachable or backpressured — do not retry-loop (§23.9). \
                      Live request/reply from a real actor to its own descendant is rejected to keep \
                      the actor DAG acyclic. \
                      Messages are plain prose — never control-payload blobs. \
@@ -31,7 +32,7 @@ impl AgentsMsgFn {
                      Requires agents.msg grant."
                         .to_string(),
                 ),
-                signature: "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>"
+                signature: "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<AgentReceipt | string | null>"
                     .to_string(),
                 args_schema: json!({
                     "type": "object",
@@ -51,7 +52,13 @@ impl AgentsMsgFn {
                         }
                     }
                 }),
-                result_schema: Some(json!({ "type": ["string", "null"] })),
+                result_schema: Some(json!({
+                    "oneOf": [
+                        { "type": "object", "properties": { "status": { "type": "string" }, "reason": { "type": "string", "enum": ["unreachable", "backpressured"] } } },
+                        { "type": "string" },
+                        { "type": "null" }
+                    ]
+                })),
                 examples: vec![ToolExample {
                     title: Some("Request a status update".to_string()),
                     code: "const reply = await agents.msg(handle, 'What is your current status?', { await: true });\nif (reply) display(reply);"
@@ -109,12 +116,12 @@ impl HostFn for AgentsMsgFn {
             };
             let receipt = self.roster.send_message(message.clone()).await;
             maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
-            return Ok(Value::Null);
+            return Ok(receipt_json(receipt));
         }
 
         // Live request/reply for running actors: deliver to the target inbox, then
         // wait for a plain-prose reply back to the caller inbox.
-        if target_record.status != ActorStatus::Terminated {
+        if MailboxRegistry::is_live_status(target_record.status) {
             reject_descendant_wait(&self.roster, &from_id, &target_id, "handle").await?;
             let timeout_ms = parse_timeout_ms(&args, 30_000)?;
             let message = ActorMessage {
@@ -126,8 +133,8 @@ impl HostFn for AgentsMsgFn {
             };
             let receipt = self.roster.send_message(message.clone()).await;
             maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
-            if receipt == Receipt::Failed {
-                return Ok(Value::Null);
+            if receipt.is_failed() {
+                return Ok(receipt_json(receipt));
             }
             return Ok(wait_for_actor_message_or_cancel(
                 &self.roster,

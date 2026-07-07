@@ -678,7 +678,7 @@ async fn agents_msg_unknown_handle_returns_null() {
 }
 
 #[tokio::test]
-async fn agents_msg_fire_and_forget_records_and_returns_null() {
+async fn agents_msg_fire_and_forget_returns_delivered_receipt() {
     use crate::actor::{ActorBudget, ActorId, ActorRecord, ActorStatus};
     let roster = make_roster();
     // Pre-populate a tracked actor
@@ -706,13 +706,51 @@ async fn agents_msg_fire_and_forget_records_and_returns_null() {
         .call(json!({"handle": {"id": "Worker"}, "text": "status?"}), &ctx)
         .await
         .unwrap();
-    assert_eq!(result, Value::Null);
+    assert_eq!(result, json!({"status": "delivered"}));
 
     let messages = roster.messages().await;
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].from.as_str(), "Root");
     assert_eq!(messages[0].to.as_str(), "Worker");
     assert_eq!(messages[0].text, "status?");
+}
+
+#[tokio::test]
+async fn agents_msg_fire_and_forget_reports_full_inbox() {
+    let roster = make_roster();
+    track_running(&roster, "Worker").await;
+
+    for index in 0..64 {
+        let receipt = roster
+            .send_message(ActorMessage {
+                from: ActorId::new("Root").unwrap(),
+                to: ActorId::new("Worker").unwrap(),
+                text: format!("queued {index}"),
+                reply_to: None,
+                sent_at: Utc::now(),
+            })
+            .await;
+        assert_eq!(receipt, Receipt::Delivered);
+    }
+
+    let f = AgentsMsgFn::new(Arc::clone(&roster));
+    let ctx = ctx_with(caps::AGENTS_MSG);
+    let result = f
+        .call(
+            json!({"handle": {"id": "Worker"}, "text": "overflow"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        json!({"status": "failed", "reason": "backpressured"})
+    );
+    let drained = roster
+        .drain_inbox(&ActorId::new("Worker").unwrap(), None)
+        .await;
+    assert!(!drained.iter().any(|message| message.text == "overflow"));
 }
 
 #[tokio::test]
@@ -873,7 +911,7 @@ async fn agents_cancel_root_child_marks_terminal_and_emits_once() {
             sent_at: Utc::now(),
         })
         .await;
-    assert_eq!(receipt, Receipt::Failed);
+    assert_eq!(receipt, Receipt::Unreachable);
 
     let second = f.call(json!({"target": "Worker"}), &ctx).await.unwrap();
     assert_eq!(second["status"], Value::String("already_cancelled".into()));
@@ -932,7 +970,41 @@ async fn agents_send_to_unknown_actor_returns_failed_receipt() {
         .await
         .unwrap();
 
-    assert_eq!(result["status"], Value::String("failed".into()));
+    assert_eq!(result, json!({"status": "failed", "reason": "unreachable"}));
+}
+
+#[tokio::test]
+async fn agents_send_await_reports_full_inbox_without_waiting() {
+    let roster = make_roster();
+    track_running(&roster, "Worker").await;
+
+    for index in 0..64 {
+        let receipt = roster
+            .send_message(ActorMessage {
+                from: ActorId::new("Root").unwrap(),
+                to: ActorId::new("Worker").unwrap(),
+                text: format!("queued {index}"),
+                reply_to: None,
+                sent_at: Utc::now(),
+            })
+            .await;
+        assert_eq!(receipt, Receipt::Delivered);
+    }
+
+    let f = AgentsSendFn::new(Arc::clone(&roster));
+    let ctx = ctx_with(caps::AGENTS_SEND);
+    let result = f
+        .call(
+            json!({"to": "Worker", "text": "overflow", "opts": {"await": true, "timeoutMs": 1000}}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        json!({"status": "failed", "reason": "backpressured"})
+    );
 }
 
 #[tokio::test]
@@ -1007,6 +1079,8 @@ async fn agents_broadcast_root_targets_live_root_children_only() {
     track_actor(&roster, "Beta", None, ActorStatus::Running).await;
     track_actor(&roster, "Nested", Some("Alpha"), ActorStatus::Running).await;
     track_actor(&roster, "Done", None, ActorStatus::Terminated).await;
+    track_actor(&roster, "Idle", None, ActorStatus::Idle).await;
+    track_actor(&roster, "Parked", None, ActorStatus::Parked).await;
     track_actor(&roster, "Alpha", None, ActorStatus::Running).await;
     let (events, hook) = lifecycle_hook();
     roster.set_lifecycle_hook(hook);
@@ -1021,6 +1095,8 @@ async fn agents_broadcast_root_targets_live_root_children_only() {
         &vec![
             json!({"actorId": "Alpha", "status": "delivered"}),
             json!({"actorId": "Beta", "status": "delivered"}),
+            json!({"actorId": "Idle", "status": "delivered"}),
+            json!({"actorId": "Parked", "status": "delivered"}),
         ]
     );
 
@@ -1032,6 +1108,20 @@ async fn agents_broadcast_root_targets_live_root_children_only() {
         .await;
     assert_eq!(alpha_messages[0].text, "status?");
     assert_eq!(beta_messages[0].text, "status?");
+    assert_eq!(
+        roster
+            .drain_inbox(&ActorId::new("Idle").unwrap(), None)
+            .await[0]
+            .text,
+        "status?"
+    );
+    assert_eq!(
+        roster
+            .drain_inbox(&ActorId::new("Parked").unwrap(), None)
+            .await[0]
+            .text,
+        "status?"
+    );
     assert!(
         roster
             .drain_inbox(&ActorId::new("Nested").unwrap(), None)
@@ -1053,7 +1143,7 @@ async fn agents_broadcast_root_targets_live_root_children_only() {
             _ => None,
         })
         .collect();
-    assert_eq!(messages, vec!["Alpha", "Beta"]);
+    assert_eq!(messages, vec!["Alpha", "Beta", "Idle", "Parked"]);
 }
 
 #[tokio::test]
@@ -1136,7 +1226,7 @@ async fn agents_broadcast_reports_backpressure_failed_receipt_in_order() {
         receipts,
         &vec![
             json!({"actorId": "Alpha", "status": "delivered"}),
-            json!({"actorId": "Beta", "status": "failed"}),
+            json!({"actorId": "Beta", "status": "failed", "reason": "backpressured"}),
         ]
     );
 }

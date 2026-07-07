@@ -43,7 +43,7 @@ declare global {
    * - Messages are plain prose — never control-payload blobs (`{"type":"done"}` is banned).
    * - One ask per message; lead with the answer when replying.
    * - Large payloads pass by reference (artifact://, memory://), never inline.
-   * - A `null` or void reply means unreachable — do not retry-loop.
+   * - A failed receipt means unreachable or backpressured — do not retry-loop.
    * - The agent DAG must be acyclic; a real actor never waits on itself or its
    *   own descendant. Synthetic Root may await root-level workers.
    */
@@ -543,32 +543,34 @@ interface AgentsNamespace {
   pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>;
 
   /**
-   * agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>
+   * agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<AgentReceipt | string | null>
    *
    * Send a plain-prose message to a spawned actor.
    *
    * Fire-and-forget (default): delivers to the actor's bounded live inbox and
-   * returns undefined immediately.
+   * returns a delivered/failed receipt.
    *
    * Request/reply (opts.await = true): for running actors, delivers to the live
-   * inbox and waits for the actor to reply to the caller. For already completed
+   * inbox and waits for the actor to reply to the caller. If live delivery
+   * fails, returns a failed receipt instead of waiting. For already completed
    * actors, this remains a compatibility one-shot seeded from the target actor's
    * last digest summary + the new text.
    *
-   * A null/void reply means the actor is unreachable — do not retry-loop (§23.9).
+   * A failed receipt means the actor is unreachable or backpressured — do not retry-loop (§23.9).
    * Request/reply from a real actor to itself or its own descendant is rejected
    * to keep the DAG acyclic. Messages must be plain prose — never
    * control-payload blobs. Pass large payloads by reference (artifact://,
    * memory://). Requires agents.msg grant.
    */
-  msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>;
+  msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<AgentReceipt | string | null>;
 
   /**
    * agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>
    *
    * Deliver a plain-prose message to one live actor inbox. Fire-and-forget
    * returns a delivered/failed receipt. With opts.await = true, waits for a
-   * matching reply message in the caller inbox and returns it, or null on timeout.
+   * matching reply message in the caller inbox and returns it, returns a failed
+   * receipt if live delivery fails, or null on timeout.
    * Awaiting a real actor's own descendant is rejected to keep the DAG acyclic.
    * Requires agents.send grant.
    */
@@ -680,12 +682,16 @@ interface AgentMessage {
 /** Delivery receipt for fire-and-forget sends. */
 interface AgentReceipt {
   status: "delivered" | "failed";
+  /** Present when status is "failed". */
+  reason?: "unreachable" | "backpressured";
 }
 
 /** Per-target receipt returned by agents.broadcast(). */
 interface AgentBroadcastReceipt {
   actorId: string;
   status: "delivered" | "failed";
+  /** Present when status is "failed". */
+  reason?: "unreachable" | "backpressured";
 }
 
 /** Receipt returned by agents.cancel(). */

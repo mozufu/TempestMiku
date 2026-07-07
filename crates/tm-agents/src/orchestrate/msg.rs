@@ -83,10 +83,7 @@ impl HostFn for AgentsMsgFn {
         let target_id = ActorId::new(id_str)
             .map_err(|e| HostError::InvalidArgs(format!("handle.id invalid: {e}")))?;
 
-        let text = args["text"]
-            .as_str()
-            .ok_or_else(|| HostError::InvalidArgs("text must be a string".to_string()))?
-            .to_string();
+        let text = parse_plain_prose_text(&args, "text")?;
 
         let do_await = args["opts"]["await"].as_bool().unwrap_or(false);
 
@@ -129,16 +126,15 @@ impl HostFn for AgentsMsgFn {
             if receipt == Receipt::Failed {
                 return Ok(Value::Null);
             }
-            return Ok(self
-                .roster
-                .wait_for_message(
-                    &from_id,
-                    Some(&target_id),
-                    Duration::from_millis(timeout_ms),
-                )
-                .await
-                .map(|message| Value::String(message.text))
-                .unwrap_or(Value::Null));
+            return Ok(wait_for_actor_message_or_cancel(
+                &self.roster,
+                &from_id,
+                Some(&target_id),
+                Duration::from_millis(timeout_ms),
+            )
+            .await?
+            .map(|message| Value::String(message.text))
+            .unwrap_or(Value::Null));
         }
 
         // ── Request/reply ─────────────────────────────────────────────────────
@@ -185,6 +181,7 @@ impl HostFn for AgentsMsgFn {
             budget,
             parent: Some(target_id),
             depth: 0,
+            cancellation: crate::actor::ActorCancelToken::default(),
         };
 
         // Continuation actors are ephemeral — NOT tracked in the roster.

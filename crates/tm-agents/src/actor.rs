@@ -1,9 +1,37 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tm_core::CancellationToken;
 use tm_host::CapabilityGrants;
 
 use crate::supervise::FailureReason;
+
+/// Shareable cancellation token for a single actor run.
+#[derive(Debug, Clone, Default)]
+pub struct ActorCancelToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl ActorCancelToken {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+impl CancellationToken for ActorCancelToken {
+    fn is_cancelled(&self) -> bool {
+        ActorCancelToken::is_cancelled(self)
+    }
+}
 
 /// Stable actor identity. CamelCase (starts with uppercase, alphanumeric only), ≤32 chars (§23.1).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -94,6 +122,8 @@ pub struct ActorSpec {
     pub parent: Option<ActorId>,
     /// Current recursion depth from the root session (enforced against budget.max_depth).
     pub depth: u32,
+    /// Token shared between parent cancellation, the actor loop, and the sandbox backend.
+    pub cancellation: ActorCancelToken,
 }
 
 /// Full lifecycle record persisted in the session event log (§23.4, P3.1).

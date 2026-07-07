@@ -27,6 +27,7 @@ pub mod caps {
     pub const AGENTS_MSG: &str = "agents.msg";
     pub const AGENTS_SEND: &str = "agents.send";
     pub const AGENTS_BROADCAST: &str = "agents.broadcast";
+    pub const AGENTS_CANCEL: &str = "agents.cancel";
     pub const AGENTS_WAIT: &str = "agents.wait";
     pub const AGENTS_INBOX: &str = "agents.inbox";
     pub const AGENTS_LIST: &str = "agents.list";
@@ -49,7 +50,9 @@ mod spawn;
 #[cfg(test)]
 mod tests;
 
-use mailbox_fns::{AgentsBroadcastFn, AgentsInboxFn, AgentsListFn, AgentsSendFn, AgentsWaitFn};
+use mailbox_fns::{
+    AgentsBroadcastFn, AgentsCancelFn, AgentsInboxFn, AgentsListFn, AgentsSendFn, AgentsWaitFn,
+};
 use msg::AgentsMsgFn;
 use parallel::AgentsParallelFn;
 use run::AgentsRunFn;
@@ -72,6 +75,7 @@ pub fn register(
     host_registry.register(Arc::new(AgentsMsgFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsSendFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsBroadcastFn::new(Arc::clone(&roster))));
+    host_registry.register(Arc::new(AgentsCancelFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsWaitFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsInboxFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsListFn::new(Arc::clone(&roster))));
@@ -116,6 +120,36 @@ fn map_actor_error(err: &ActorError) -> FailureReason {
             message: msg.clone(),
         },
         ActorError::DepthExceeded(_) => FailureReason::DepthExceeded,
+        ActorError::Cancelled => FailureReason::Cancelled,
+    }
+}
+
+async fn mark_actor_error(
+    roster: &MailboxRegistry,
+    session_id: &str,
+    actor_id: &ActorId,
+    reason: FailureReason,
+) {
+    if !roster.mark_failed(actor_id, reason.clone()).await {
+        return;
+    }
+
+    match reason {
+        FailureReason::Cancelled => roster.emit_lifecycle(
+            session_id,
+            ActorLifecycleEvent::Cancelled {
+                actor_id: actor_id.clone(),
+                cancelled_at: Utc::now(),
+            },
+        ),
+        reason => roster.emit_lifecycle(
+            session_id,
+            ActorLifecycleEvent::Failed {
+                actor_id: actor_id.clone(),
+                failed_at: Utc::now(),
+                reason,
+            },
+        ),
     }
 }
 
@@ -149,6 +183,35 @@ fn parse_actor_ref(value: &Value, field: &str) -> Result<ActorId> {
             HostError::InvalidArgs(format!("{field} must be an actor id string or handle"))
         })?;
     ActorId::new(id).map_err(|err| HostError::InvalidArgs(format!("{field} invalid: {err}")))
+}
+
+fn parse_plain_prose_text(args: &Value, field: &str) -> Result<String> {
+    let text = args
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| HostError::InvalidArgs(format!("{field} must be a string")))?;
+    validate_plain_prose_text(text, field)?;
+    Ok(text.to_string())
+}
+
+fn validate_plain_prose_text(text: &str, field: &str) -> Result<()> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(HostError::InvalidArgs(format!(
+            "{field} must be non-empty plain prose"
+        )));
+    }
+
+    if matches!(
+        serde_json::from_str::<Value>(trimmed),
+        Ok(Value::Object(_)) | Ok(Value::Array(_))
+    ) {
+        return Err(HostError::InvalidArgs(format!(
+            "{field} must be plain prose, not a JSON control payload"
+        )));
+    }
+
+    Ok(())
 }
 
 fn parse_timeout_ms(args: &Value, default_ms: u64) -> Result<u64> {
@@ -193,6 +256,29 @@ fn receipt_json(receipt: Receipt) -> Value {
             Receipt::Failed => "failed",
         }
     })
+}
+
+async fn wait_for_actor_message_or_cancel(
+    roster: &MailboxRegistry,
+    actor_id: &ActorId,
+    from: Option<&ActorId>,
+    timeout: Duration,
+) -> Result<Option<ActorMessage>> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if roster.is_cancelled(actor_id).await {
+            return Err(HostError::HostCall("actor cancelled".to_string()));
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Ok(None);
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let slice = remaining.min(Duration::from_millis(50));
+        if let Some(message) = roster.wait_for_message(actor_id, from, slice).await {
+            return Ok(Some(message));
+        }
+    }
 }
 
 fn maybe_emit_message(

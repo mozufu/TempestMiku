@@ -12,6 +12,8 @@ pub enum ActorError {
     InvalidSpec(String),
     #[error("actor depth limit {0} exceeded")]
     DepthExceeded(u32),
+    #[error("actor cancelled")]
+    Cancelled,
 }
 
 /// Runs an actor spec to completion and returns a bounded digest (§23.3, P3.2).

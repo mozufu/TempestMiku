@@ -19,6 +19,14 @@ pub trait InboxDrain: Send + Sync {
     async fn drain(&self) -> Result<Vec<String>>;
 }
 
+/// Optional cancellation check for long-running agent loops.
+///
+/// Product layers can provide their own token implementation while `tm-core`
+/// only observes whether the current run should stop.
+pub trait CancellationToken: Send + Sync {
+    fn is_cancelled(&self) -> bool;
+}
+
 /// How the model is asked to run code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Protocol {
@@ -127,13 +135,28 @@ impl Agent {
         inbox: Option<&dyn InboxDrain>,
         mediator: Option<&dyn ToolMediator>,
     ) -> Result<String> {
+        self.run_with_controls(user, sink, inbox, mediator, None)
+            .await
+    }
+
+    /// Run the agent with optional product-layer controls.
+    pub async fn run_with_controls(
+        &self,
+        user: &str,
+        sink: &dyn EventSink,
+        inbox: Option<&dyn InboxDrain>,
+        mediator: Option<&dyn ToolMediator>,
+        cancellation: Option<&dyn CancellationToken>,
+    ) -> Result<String> {
         let mut messages = vec![self.system_message(), Message::user(user)];
         let mut session = self.sandbox.open(SessionConfig::default()).await?;
         let extra_tools = mediator.map(|m| m.tool_specs()).unwrap_or_default();
 
         for _ in 0..self.cfg.max_turns {
+            check_cancelled(cancellation)?;
             if let Some(inbox) = inbox {
                 for message in inbox.drain().await? {
+                    check_cancelled(cancellation)?;
                     messages.push(Message::user(format!("[actor inbox]\n{message}")));
                 }
             }
@@ -144,6 +167,7 @@ impl Agent {
             let mut stream = self.llm.chat_stream(&request).await?;
             let mut acc = Accumulator::new();
             while let Some(ev) = stream.next().await {
+                check_cancelled(cancellation)?;
                 let ev = ev?;
                 match &ev {
                     StreamEvent::Text(t) => sink.on_text(t),
@@ -185,8 +209,10 @@ impl Agent {
                 continue;
             };
 
+            check_cancelled(cancellation)?;
             sink.on_cell_start(&call.code);
             let out = session.eval(&call.code, self.cfg.cell_budget).await?;
+            check_cancelled(cancellation)?;
             let shaped = shape_result(&out);
             sink.on_cell_result(&shaped);
 
@@ -199,6 +225,14 @@ impl Agent {
         }
 
         Err(Error::TurnBudget(self.cfg.max_turns))
+    }
+}
+
+fn check_cancelled(cancellation: Option<&dyn CancellationToken>) -> Result<()> {
+    if cancellation.is_some_and(CancellationToken::is_cancelled) {
+        Err(Error::Cancelled)
+    } else {
+        Ok(())
     }
 }
 

@@ -19,8 +19,8 @@ impl AgentsBroadcastFn {
                     "Broadcasts a plain-prose message to the caller's direct live children \
                      through bounded per-actor inboxes. Top-level sessions use the synthetic \
                      Root actor, so they target root-level live children. Broadcast is \
-                     fire-and-forget only; no replies are awaited. Returns one receipt per \
-                     target. Requires agents.broadcast grant."
+                     fire-and-forget only; no replies are awaited. JSON control payloads \
+                     are rejected. Returns one receipt per target. Requires agents.broadcast grant."
                         .to_string(),
                 ),
                 signature:
@@ -72,10 +72,7 @@ impl HostFn for AgentsBroadcastFn {
     async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_BROADCAST);
 
-        let text = args["text"]
-            .as_str()
-            .ok_or_else(|| HostError::InvalidArgs("text must be a string".to_string()))?
-            .to_string();
+        let text = parse_plain_prose_text(&args, "text")?;
         let from = caller_actor_id(ctx)?;
 
         let mut targets: Vec<_> = self
@@ -115,6 +112,110 @@ impl HostFn for AgentsBroadcastFn {
     }
 }
 
+// ─── agents.cancel ───────────────────────────────────────────────────────────
+
+pub struct AgentsCancelFn {
+    docs: ToolDocs,
+    roster: Arc<MailboxRegistry>,
+}
+
+impl AgentsCancelFn {
+    pub fn new(roster: Arc<MailboxRegistry>) -> Self {
+        Self {
+            roster,
+            docs: ToolDocs {
+                name: caps::AGENTS_CANCEL.to_string(),
+                namespace: "agents".to_string(),
+                summary: "Cancel a direct child actor".to_string(),
+                description: Some(
+                    "Requests cancellation for a direct child actor. The actor record is \
+                     marked terminal immediately, the child cancellation token is tripped, \
+                     and a replayable actor_cancelled lifecycle event is emitted once. \
+                     Only the direct parent, or the synthetic top-level Root for root-level \
+                     children, may cancel an actor. Requires agents.cancel grant."
+                        .to_string(),
+                ),
+                signature:
+                    "agents.cancel(target: AgentHandle | string): Promise<AgentCancelReceipt>"
+                        .to_string(),
+                args_schema: json!({
+                    "type": "object",
+                    "required": ["target"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "target": { "description": "Actor id string or AgentHandle." }
+                    }
+                }),
+                result_schema: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "actorId": { "type": "string" },
+                        "status": {
+                            "type": "string",
+                            "enum": ["cancelled", "already_cancelled", "already_terminated", "not_found"]
+                        }
+                    }
+                })),
+                examples: vec![ToolExample {
+                    title: Some("Cancel a child worker".to_string()),
+                    code: "const worker = await agents.spawn('worker', 'Monitor the queue');\nconst receipt = await agents.cancel(worker);\ndisplay(receipt);"
+                        .to_string(),
+                    notes: Some(
+                        "A cancelled actor is terminal; future sends to it return failed receipts."
+                            .to_string(),
+                    ),
+                }],
+                errors: vec![denied_error_doc()],
+                grants: vec![agents_grant_doc()],
+                sensitive: false,
+                approval: "none".to_string(),
+                since: "P3-plus".to_string(),
+                stability: "experimental".to_string(),
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl HostFn for AgentsCancelFn {
+    fn docs(&self) -> &ToolDocs {
+        &self.docs
+    }
+
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
+        check_grant!(ctx, caps::AGENTS_CANCEL);
+
+        let target = parse_actor_ref(
+            args.get("target")
+                .ok_or_else(|| HostError::InvalidArgs("target is required".to_string()))?,
+            "target",
+        )?;
+        let Some(record) = self.roster.get(&target).await else {
+            return Ok(json!({
+                "actorId": target.as_str(),
+                "status": "not_found",
+            }));
+        };
+
+        let caller = caller_actor_id(ctx)?;
+        let is_direct_child = match record.parent.as_ref() {
+            Some(parent) => parent == &caller,
+            None => caller.as_str() == "Root",
+        };
+        if !is_direct_child {
+            return Err(HostError::InvalidArgs(
+                "target must be a direct child of the caller".to_string(),
+            ));
+        }
+
+        let result = self.roster.cancel_actor(&ctx.session_id, &target).await;
+        Ok(json!({
+            "actorId": target.as_str(),
+            "status": result.as_str(),
+        }))
+    }
+}
+
 // ─── agents.send ──────────────────────────────────────────────────────────────
 
 pub struct AgentsSendFn {
@@ -135,8 +236,8 @@ impl AgentsSendFn {
                      bounded per-actor inbox. Fire-and-forget returns a delivered/failed \
                      receipt. With opts.await = true, waits for the recipient to reply to \
                      the caller inbox and returns the reply message, or null on timeout or \
-                     unreachable target. Messages are plain prose; pass large payloads by \
-                     reference. Requires agents.send grant."
+                     unreachable target. Messages are plain prose; JSON control payloads are \
+                     rejected. Pass large payloads by reference. Requires agents.send grant."
                         .to_string(),
                 ),
                 signature: "agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>"
@@ -195,10 +296,7 @@ impl HostFn for AgentsSendFn {
                 .ok_or_else(|| HostError::InvalidArgs("to is required".to_string()))?,
             "to",
         )?;
-        let text = args["text"]
-            .as_str()
-            .ok_or_else(|| HostError::InvalidArgs("text must be a string".to_string()))?
-            .to_string();
+        let text = parse_plain_prose_text(&args, "text")?;
         let do_await = args["opts"]["await"].as_bool().unwrap_or(false);
         let from = caller_actor_id(ctx)?;
 
@@ -220,12 +318,15 @@ impl HostFn for AgentsSendFn {
         }
 
         let timeout_ms = parse_timeout_ms(&args, 30_000)?;
-        Ok(self
-            .roster
-            .wait_for_message(&from, Some(&to), Duration::from_millis(timeout_ms))
-            .await
-            .map(message_json)
-            .unwrap_or(Value::Null))
+        Ok(wait_for_actor_message_or_cancel(
+            &self.roster,
+            &from,
+            Some(&to),
+            Duration::from_millis(timeout_ms),
+        )
+        .await?
+        .map(message_json)
+        .unwrap_or(Value::Null))
     }
 }
 
@@ -303,12 +404,15 @@ impl HostFn for AgentsWaitFn {
         };
         let timeout_ms = parse_timeout_ms(&args, 30_000)?;
 
-        Ok(self
-            .roster
-            .wait_for_message(&actor_id, from.as_ref(), Duration::from_millis(timeout_ms))
-            .await
-            .map(message_json)
-            .unwrap_or(Value::Null))
+        Ok(wait_for_actor_message_or_cancel(
+            &self.roster,
+            &actor_id,
+            from.as_ref(),
+            Duration::from_millis(timeout_ms),
+        )
+        .await?
+        .map(message_json)
+        .unwrap_or(Value::Null))
     }
 }
 

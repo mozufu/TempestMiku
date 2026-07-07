@@ -152,10 +152,12 @@ fn build_runtime(
             cfg.clone(),
             move |session_id: uuid::Uuid,
                   actor_id: Option<&str>,
-                  grants: &tm_host::CapabilityGrants| {
+                  grants: &tm_host::CapabilityGrants,
+                  cancellation: Option<Arc<dyn tm_core::CancellationToken>>| {
                 let mut opts = executor_options.clone();
                 opts.session_id = session_id.to_string();
                 opts.actor_id = actor_id.map(str::to_string);
+                opts.cancellation = cancellation;
                 opts.grants = opts
                     .grants
                     .clone()

@@ -143,7 +143,7 @@ impl HostFn for AgentsParallelFn {
             actor_specs.push((
                 actor_id.clone(),
                 ActorSpec {
-                    id: actor_id,
+                    id: actor_id.clone(),
                     session_id: session_id.clone(),
                     role,
                     task: task_str,
@@ -152,6 +152,7 @@ impl HostFn for AgentsParallelFn {
                     budget,
                     parent: parent_id.clone(),
                     depth: 0,
+                    cancellation: self.roster.cancel_token(&actor_id).await,
                 },
             ));
         }
@@ -169,7 +170,7 @@ impl HostFn for AgentsParallelFn {
                             if let Some(content) = digest.history_content.clone() {
                                 roster.store_transcript(&actor_id, content).await;
                             }
-                            roster
+                            let completed = roster
                                 .mark_complete_with_digest(
                                     &actor_id,
                                     digest.summary.clone(),
@@ -177,17 +178,19 @@ impl HostFn for AgentsParallelFn {
                                     digest.history_uri.clone(),
                                 )
                                 .await;
-                            roster.emit_lifecycle(
-                                &session_id,
-                                ActorLifecycleEvent::Completed {
-                                    actor_id: actor_id.clone(),
-                                    completed_at: Utc::now(),
-                                    summary: Some(digest.summary.clone()),
-                                    artifact_uri: digest.artifact_uri.clone(),
-                                    history_uri: digest.history_uri.clone(),
-                                },
-                            );
-                            tracing::debug!(actor_id = %actor_id, "parallel actor completed");
+                            if completed {
+                                roster.emit_lifecycle(
+                                    &session_id,
+                                    ActorLifecycleEvent::Completed {
+                                        actor_id: actor_id.clone(),
+                                        completed_at: Utc::now(),
+                                        summary: Some(digest.summary.clone()),
+                                        artifact_uri: digest.artifact_uri.clone(),
+                                        history_uri: digest.history_uri.clone(),
+                                    },
+                                );
+                                tracing::debug!(actor_id = %actor_id, "parallel actor completed");
+                            }
                             Ok(json!({
                                 "actorId": digest.actor_id.as_str(),
                                 "summary": digest.summary,
@@ -198,15 +201,7 @@ impl HostFn for AgentsParallelFn {
                         Err(err) => {
                             let reason = map_actor_error(&err);
                             tracing::warn!(actor_id = %actor_id, error = %err, "parallel actor failed");
-                            roster.emit_lifecycle(
-                                &session_id,
-                                ActorLifecycleEvent::Failed {
-                                    actor_id: actor_id.clone(),
-                                    failed_at: Utc::now(),
-                                    reason: reason.clone(),
-                                },
-                            );
-                            roster.mark_failed(&actor_id, reason).await;
+                            mark_actor_error(&roster, &session_id, &actor_id, reason).await;
                             Err(HostError::HostCall(format!("actor {actor_id} failed: {err}")))
                         }
                     }

@@ -2,7 +2,8 @@
 //!
 //! P3/P3-plus implementation — `agents.run`, `agents.spawn`, `agents.parallel`, `agents.msg`,
 //! and the live mailbox primitives (`agents.send`, `agents.broadcast`, `agents.wait`,
-//! `agents.inbox`, `agents.list`) are live when an `ActorExecutor` is injected at startup.
+//! `agents.inbox`, `agents.list`, `agents.cancel`) are live when an `ActorExecutor`
+//! is injected at startup.
 //!
 //! Crate layout (§23.8):
 //! - [`actor`]      — identity, lifecycle, status, handle, budget, digest, lifecycle events
@@ -20,8 +21,8 @@ pub mod resources;
 pub mod supervise;
 
 pub use actor::{
-    ActorBudget, ActorDigest, ActorHandle, ActorId, ActorIdError, ActorLifecycleEvent, ActorRecord,
-    ActorSpec, ActorStatus,
+    ActorBudget, ActorCancelToken, ActorDigest, ActorHandle, ActorId, ActorIdError,
+    ActorLifecycleEvent, ActorRecord, ActorSpec, ActorStatus,
 };
 pub use executor::{ActorError, ActorExecutor};
 pub use mailbox::{ActorMessage, MailboxRegistry, Receipt};

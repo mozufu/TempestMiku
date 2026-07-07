@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, mpsc};
 
-use crate::actor::{ActorId, ActorLifecycleEvent, ActorRecord, ActorStatus};
+use crate::actor::{ActorCancelToken, ActorId, ActorLifecycleEvent, ActorRecord, ActorStatus};
 use crate::executor::ActorExecutor;
 use crate::supervise::FailureReason;
 
@@ -45,6 +45,25 @@ pub enum Receipt {
     Delivered,
     /// Actor unreachable. Sender must not retry-loop.
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelActorResult {
+    Cancelled,
+    AlreadyCancelled,
+    AlreadyTerminated,
+    NotFound,
+}
+
+impl CancelActorResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::AlreadyCancelled => "already_cancelled",
+            Self::AlreadyTerminated => "already_terminated",
+            Self::NotFound => "not_found",
+        }
+    }
 }
 
 /// Maximum number of messages retained in the in-memory log.
@@ -188,6 +207,7 @@ fn message_matches_from(message: &ActorMessage, from: Option<&ActorId>) -> bool 
 pub struct MailboxRegistry {
     actors: RwLock<HashMap<ActorId, ActorRecord>>,
     inboxes: RwLock<HashMap<ActorId, Arc<ActorInbox>>>,
+    cancel_tokens: RwLock<HashMap<ActorId, ActorCancelToken>>,
     executor: std::sync::OnceLock<Arc<dyn ActorExecutor>>,
     next_seq: AtomicU64,
     messages: RwLock<Vec<ActorMessage>>,
@@ -212,6 +232,7 @@ impl MailboxRegistry {
         Self {
             actors: RwLock::new(HashMap::new()),
             inboxes: RwLock::new(HashMap::new()),
+            cancel_tokens: RwLock::new(HashMap::new()),
             executor: std::sync::OnceLock::new(),
             next_seq: AtomicU64::new(0),
             messages: RwLock::new(Vec::new()),
@@ -297,6 +318,7 @@ impl MailboxRegistry {
     /// Register an actor in the roster.
     pub async fn track(&self, record: ActorRecord) {
         self.ensure_inbox(&record.id).await;
+        self.ensure_cancel_token(&record.id).await;
         self.actors.write().await.insert(record.id.clone(), record);
     }
 
@@ -313,11 +335,16 @@ impl MailboxRegistry {
     }
 
     /// Mark an actor as successfully terminated.
-    pub async fn mark_complete(&self, id: &ActorId) {
+    pub async fn mark_complete(&self, id: &ActorId) -> bool {
         if let Some(rec) = self.actors.write().await.get_mut(id) {
+            if rec.cancelled || rec.failure_reason.is_some() {
+                return false;
+            }
             rec.status = ActorStatus::Terminated;
             rec.completed_at = Some(Utc::now());
+            return true;
         }
+        false
     }
 
     /// Mark an actor as successfully terminated and store its full digest (P3.3).
@@ -329,14 +356,19 @@ impl MailboxRegistry {
         summary: String,
         artifact_uri: Option<String>,
         history_uri: Option<String>,
-    ) {
+    ) -> bool {
         if let Some(rec) = self.actors.write().await.get_mut(id) {
+            if rec.cancelled || rec.failure_reason.is_some() {
+                return false;
+            }
             rec.status = ActorStatus::Terminated;
             rec.completed_at = Some(Utc::now());
             rec.last_summary = Some(summary);
             rec.artifact_uri = artifact_uri;
             rec.history_uri = history_uri;
+            return true;
         }
+        false
     }
 
     /// Store the full transcript for an actor (P3.3).
@@ -426,13 +458,75 @@ impl MailboxRegistry {
     }
 
     /// Mark an actor as terminated due to a failure.
-    pub async fn mark_failed(&self, id: &ActorId, reason: FailureReason) {
-        if let Some(rec) = self.actors.write().await.get_mut(id) {
-            rec.status = ActorStatus::Terminated;
-            rec.completed_at = Some(Utc::now());
-            rec.cancelled = matches!(reason, FailureReason::Cancelled);
-            rec.failure_reason = Some(reason);
+    pub async fn mark_failed(&self, id: &ActorId, reason: FailureReason) -> bool {
+        let should_cancel_token = {
+            if let Some(rec) = self.actors.write().await.get_mut(id) {
+                if rec.cancelled {
+                    return false;
+                }
+                rec.status = ActorStatus::Terminated;
+                rec.completed_at = Some(Utc::now());
+                rec.cancelled = matches!(reason, FailureReason::Cancelled);
+                rec.failure_reason = Some(reason);
+                rec.cancelled
+            } else {
+                return false;
+            }
+        };
+        if should_cancel_token {
+            self.cancel_token(id).await.cancel();
         }
+        true
+    }
+
+    pub async fn cancel_actor(&self, session_id: &str, id: &ActorId) -> CancelActorResult {
+        let cancelled_at = Utc::now();
+        let result = {
+            let mut actors = self.actors.write().await;
+            match actors.get_mut(id) {
+                Some(rec) if rec.cancelled => CancelActorResult::AlreadyCancelled,
+                Some(rec) if rec.status == ActorStatus::Terminated => {
+                    CancelActorResult::AlreadyTerminated
+                }
+                Some(rec) => {
+                    rec.status = ActorStatus::Terminated;
+                    rec.completed_at = Some(cancelled_at);
+                    rec.cancelled = true;
+                    rec.failure_reason = Some(FailureReason::Cancelled);
+                    CancelActorResult::Cancelled
+                }
+                None => CancelActorResult::NotFound,
+            }
+        };
+
+        if matches!(
+            result,
+            CancelActorResult::Cancelled | CancelActorResult::AlreadyCancelled
+        ) {
+            self.cancel_token(id).await.cancel();
+        }
+        if result == CancelActorResult::Cancelled {
+            self.emit_lifecycle(
+                session_id,
+                ActorLifecycleEvent::Cancelled {
+                    actor_id: id.clone(),
+                    cancelled_at,
+                },
+            );
+        }
+        result
+    }
+
+    pub async fn cancel_token(&self, actor_id: &ActorId) -> ActorCancelToken {
+        self.ensure_cancel_token(actor_id).await
+    }
+
+    pub async fn is_cancelled(&self, actor_id: &ActorId) -> bool {
+        self.cancel_tokens
+            .read()
+            .await
+            .get(actor_id)
+            .is_some_and(ActorCancelToken::is_cancelled)
     }
 
     /// Snapshot of all tracked actor records.
@@ -449,6 +543,14 @@ impl MailboxRegistry {
             .entry(actor_id.clone())
             .or_insert_with(ActorInbox::new)
             .clone()
+    }
+
+    async fn ensure_cancel_token(&self, actor_id: &ActorId) -> ActorCancelToken {
+        if let Some(token) = self.cancel_tokens.read().await.get(actor_id).cloned() {
+            return token;
+        }
+        let mut tokens = self.cancel_tokens.write().await;
+        tokens.entry(actor_id.clone()).or_default().clone()
     }
 
     async fn is_reachable(&self, actor_id: &ActorId) -> bool {

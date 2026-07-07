@@ -40,7 +40,7 @@ character + mode, budget, and capability grant. Cast as an actor:
 | **Behavior** | current **mode** (§21) + **role** + capability grant; resolved per message (late binding) |
 | **Designate next behavior** | mode switch / scope update between messages (persona self-edit, §21) |
 | **Create** | P3 MVP: `agents.spawn` / `agents.run` |
-| **Send** | P3 MVP: `agents.msg`; P3-plus foundation: `agents.send/broadcast/wait/inbox/list` (§23.2) |
+| **Send** | P3 MVP: `agents.msg`; P3-plus foundation: `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
 
 Encapsulation is hard: one actor **never** reaches into another's context or transcript. `history://<id>`
 is **read-only** observation, not state access; coordination is by message, not by shared memory.
@@ -100,8 +100,12 @@ P3 ships the first concrete slice only:
 > Lower-level `send`/`broadcast`/`wait`/`inbox`/`list` are live. Child approval requests now route through the
 > parent session's live `HttpApprovalPolicy` + `ApprovalBroker`, so approval-gated effects inside
 > child actors emit replayable SSE `approval` / `approval_resolved` events and resolve through the
-> same UI/API path as top-level coding turns. `pipeline`, active supervision, cancel, and stricter
-> protocol enforcement remain later P3-plus work.
+> same UI/API path as top-level coding turns. The cancel-token slice adds `agents.cancel` plus per-actor
+> cancellation tokens: a direct parent can trip a running child, the actor record becomes terminal,
+> and one replayable `actor_cancelled` event lands in the parent session log. Plain-prose message
+> enforcement rejects control-payload blobs at the `agents.msg` / `agents.send` / `agents.broadcast`
+> boundary. `pipeline`, active restart supervision, subtree cancellation, DAG enforcement, and fuller
+> provenance remain later P3-plus work.
 
 The remaining §23 full surface is split across the landed P3-plus foundation and later P3-plus work:
 
@@ -109,6 +113,7 @@ The remaining §23 full surface is split across the landed P3-plus foundation an
 |---|---|
 | `agents.send(to, text, opts?)` | lower-level send to one actor id |
 | `agents.broadcast(text)` | message direct live children |
+| `agents.cancel(to)` | direct parent cancels one running child; emits replayable `actor_cancelled` |
 | `agents.wait(from?, timeout)` | block for a message |
 | `agents.inbox()` | drain pending messages without blocking |
 | `agents.list()` | roster: peers, status, unread, last activity |
@@ -168,7 +173,7 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 
 - **P3 calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
 - **P3-plus foundation calls:** lower-level mailbox primitives `agents.send`,
-  `agents.broadcast`, `agents.wait`, `agents.inbox`, and `agents.list`.
+  `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, and `agents.cancel`.
 - **Remaining P3-plus calls:** `agents.pipeline`.
 - **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
   `history://<id>` (read-only transcript).
@@ -180,7 +185,7 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
   recursive runtime session (§05/§06).
 - `mailbox` — async queue, addressing, delivery + receipts.
 - `orchestrate` — P3/P3-plus `agents.*` constructors (run / spawn / parallel / msg / send / wait /
-  broadcast / inbox / list); later P3-plus adds pipeline helpers.
+  broadcast / inbox / list / cancel); later P3-plus adds pipeline helpers.
 - `supervise` — supervision tree, restart strategies, budgets, depth cap, cost rollup.
 - `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry;
   P3 roster/resource discovery goes through the resource gateway; the first P3-plus foundation
@@ -188,6 +193,8 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 
 ## 23.9 Failure modes & degradation
 
+- **Child cancel** — direct parent trips the actor token; late completion is ignored, `agent://<id>`
+  shows `terminated` + `cancelled`, and reconnect replay includes `actor_cancelled`.
 - **Child crash** — supervisor restarts / escalates / degrades the subtree; siblings unaffected ("let it crash").
 - **Message to a dead actor** — `failed` receipt; sender moves on, no retry-loop.
 - **Deadlock** (A waits on B waits on A) — forbidden by the **acyclic** rule; async messaging + `wait`

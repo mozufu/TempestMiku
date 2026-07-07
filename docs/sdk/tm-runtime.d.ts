@@ -15,7 +15,7 @@
  * between actors are always plain prose — never control-payload blobs.
  * Large payloads pass by reference (artifact://, memory://), never inline.
  * P3 shipped run/spawn/parallel/msg; P3-plus adds live inbox delivery through
- * send/broadcast/wait/inbox/list.
+ * send/broadcast/wait/inbox/list plus parent-driven actor cancellation.
  */
 
 export {};
@@ -500,7 +500,7 @@ interface HttpNamespace {
  *
  * P3 surface: run, spawn, parallel, msg.
  * P3-plus foundation: live per-actor inbox delivery through send, broadcast,
- * wait, inbox, and list. Stretch/full surface still deferred: pipeline.
+ * wait, inbox, list, and cancel. Stretch/full surface still deferred: pipeline.
  */
 interface AgentsNamespace {
   /**
@@ -574,6 +574,17 @@ interface AgentsNamespace {
   broadcast(text: string): Promise<AgentBroadcastReceipt[]>;
 
   /**
+   * agents.cancel(target: AgentHandle | string): Promise<AgentCancelReceipt>
+   *
+   * Request cancellation for a direct child actor. The actor record becomes
+   * terminal immediately, its cancellation token is tripped, and one replayable
+   * actor_cancelled session event is emitted. Only the direct parent, or the
+   * synthetic top-level Root for root-level children, may cancel an actor.
+   * Requires agents.cancel grant.
+   */
+  cancel(target: AgentHandle | string): Promise<AgentCancelReceipt>;
+
+  /**
    * agents.wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>
    *
    * Block until the current actor inbox receives a matching message. Top-level
@@ -643,6 +654,12 @@ interface AgentReceipt {
 interface AgentBroadcastReceipt {
   actorId: string;
   status: "delivered" | "failed";
+}
+
+/** Receipt returned by agents.cancel(). */
+interface AgentCancelReceipt {
+  actorId: string;
+  status: "cancelled" | "already_cancelled" | "already_terminated" | "not_found";
 }
 
 /** Roster row returned by agents.list(). */

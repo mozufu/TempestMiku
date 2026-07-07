@@ -119,6 +119,7 @@ impl HostFn for AgentsSpawnFn {
             budget,
             parent: parent_id,
             depth: 0,
+            cancellation: self.roster.cancel_token(&actor_id).await,
         };
 
         // Background thread: actor runs in its own current_thread runtime so it
@@ -136,36 +137,30 @@ impl HostFn for AgentsSpawnFn {
                     if let Some(content) = digest.history_content {
                         rt.block_on(roster.store_transcript(&actor_id_bg, content));
                     }
-                    rt.block_on(roster.mark_complete_with_digest(
+                    let completed = rt.block_on(roster.mark_complete_with_digest(
                         &actor_id_bg,
                         digest.summary.clone(),
                         digest.artifact_uri.clone(),
                         digest.history_uri.clone(),
                     ));
-                    roster.emit_lifecycle(
-                        &session_id,
-                        ActorLifecycleEvent::Completed {
-                            actor_id: actor_id_bg.clone(),
-                            completed_at: Utc::now(),
-                            summary: Some(digest.summary),
-                            artifact_uri: digest.artifact_uri,
-                            history_uri: digest.history_uri,
-                        },
-                    );
-                    tracing::debug!(actor_id = %actor_id_bg, "spawned actor completed");
+                    if completed {
+                        roster.emit_lifecycle(
+                            &session_id,
+                            ActorLifecycleEvent::Completed {
+                                actor_id: actor_id_bg.clone(),
+                                completed_at: Utc::now(),
+                                summary: Some(digest.summary),
+                                artifact_uri: digest.artifact_uri,
+                                history_uri: digest.history_uri,
+                            },
+                        );
+                        tracing::debug!(actor_id = %actor_id_bg, "spawned actor completed");
+                    }
                 }
                 Err(err) => {
                     let reason = map_actor_error(&err);
                     tracing::warn!(actor_id = %actor_id_bg, error = %err, "spawned actor failed");
-                    roster.emit_lifecycle(
-                        &session_id,
-                        ActorLifecycleEvent::Failed {
-                            actor_id: actor_id_bg.clone(),
-                            failed_at: Utc::now(),
-                            reason: reason.clone(),
-                        },
-                    );
-                    rt.block_on(roster.mark_failed(&actor_id_bg, reason));
+                    rt.block_on(mark_actor_error(&roster, &session_id, &actor_id_bg, reason));
                 }
             }
         });

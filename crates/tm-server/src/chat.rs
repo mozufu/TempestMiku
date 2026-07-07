@@ -8,7 +8,9 @@ use std::{
 use async_trait::async_trait;
 use serde_json::json;
 use tm_artifacts::ArtifactStore;
-use tm_core::{Agent, AgentConfig, EventSink, InboxDrain, LlmClient, Sandbox, ToolMediator};
+use tm_core::{
+    Agent, AgentConfig, CancellationToken, EventSink, InboxDrain, LlmClient, Sandbox, ToolMediator,
+};
 use tm_host::CapabilityGrants;
 use tm_modes::ModeId;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
@@ -151,7 +153,7 @@ impl ChatActorExecutor {
         Self {
             llm,
             cfg,
-            sandbox_factory: Arc::new(move |session_id, _actor_id, _grants| {
+            sandbox_factory: Arc::new(move |session_id, _actor_id, _grants, _cancellation| {
                 sandbox_factory(session_id)
             }),
             artifact_root,
@@ -162,7 +164,12 @@ impl ChatActorExecutor {
     pub fn with_actor_context(
         llm: Arc<dyn LlmClient>,
         cfg: AgentConfig,
-        sandbox_factory: impl Fn(Uuid, Option<&str>, &CapabilityGrants) -> Arc<dyn Sandbox>
+        sandbox_factory: impl Fn(
+            Uuid,
+            Option<&str>,
+            &CapabilityGrants,
+            Option<Arc<dyn CancellationToken>>,
+        ) -> Arc<dyn Sandbox>
         + Send
         + Sync
         + 'static,
@@ -430,8 +437,16 @@ impl EventSink for CollectingSink {
 pub struct ChatActorExecutor {
     llm: Arc<dyn LlmClient>,
     cfg: AgentConfig,
-    sandbox_factory:
-        Arc<dyn Fn(Uuid, Option<&str>, &CapabilityGrants) -> Arc<dyn Sandbox> + Send + Sync>,
+    sandbox_factory: Arc<
+        dyn Fn(
+                Uuid,
+                Option<&str>,
+                &CapabilityGrants,
+                Option<Arc<dyn CancellationToken>>,
+            ) -> Arc<dyn Sandbox>
+            + Send
+            + Sync,
+    >,
     /// Artifact root for reading child cell-spills and writing transcripts (P3.3).
     artifact_root: Option<PathBuf>,
     actor_roster: Option<Arc<tm_agents::MailboxRegistry>>,
@@ -474,6 +489,9 @@ impl ActorExecutor for ChatActorExecutor {
         if spec.depth >= spec.budget.max_depth {
             return Err(ActorError::DepthExceeded(spec.depth));
         }
+        if spec.cancellation.is_cancelled() {
+            return Err(ActorError::Cancelled);
+        }
 
         // DenoSandbox sessions are !Send (Deno JS runtime is single-threaded), so we
         // cannot await agent.run() directly in an async_trait Send future. Spawn a
@@ -490,6 +508,7 @@ impl ActorExecutor for ChatActorExecutor {
         );
         let task = spec.task.clone();
         let actor_id = spec.id.clone();
+        let cancellation: Arc<dyn CancellationToken> = Arc::new(spec.cancellation.clone());
         let artifact_root = self.artifact_root.clone();
         let owner_session_id = spec
             .session_id
@@ -506,12 +525,17 @@ impl ActorExecutor for ChatActorExecutor {
                     .collect::<BTreeSet<_>>()
             })
             .unwrap_or_default();
-        let sandbox =
-            (self.sandbox_factory)(owner_session_id, Some(actor_id.as_str()), &spec.grants);
+        let sandbox = (self.sandbox_factory)(
+            owner_session_id,
+            Some(actor_id.as_str()),
+            &spec.grants,
+            Some(Arc::clone(&cancellation)),
+        );
         let inbox = self.actor_roster.as_ref().map(|roster| ActorMailboxDrain {
             roster: Arc::clone(roster),
             actor_id: actor_id.clone(),
         });
+        let cancellation_for_loop = Arc::clone(&cancellation);
 
         let (tx, rx) =
             tokio::sync::oneshot::channel::<std::result::Result<(String, String), ActorError>>();
@@ -523,15 +547,19 @@ impl ActorExecutor for ChatActorExecutor {
             let agent = Agent::new(llm, sandbox, cfg);
             let sink = CollectingSink::new();
             let result = runtime
-                .block_on(agent.run_with_inbox(
+                .block_on(agent.run_with_controls(
                     &task,
                     &sink,
                     inbox.as_ref().map(|inbox| inbox as &dyn InboxDrain),
                     // Sub-agents run scoped tasks, not the top-level conversation; they
                     // don't get a mode-suggest (or any other) mediator.
                     None,
+                    Some(cancellation_for_loop.as_ref()),
                 ))
-                .map_err(|e| ActorError::Execution(e.to_string()));
+                .map_err(|e| match e {
+                    tm_core::Error::Cancelled => ActorError::Cancelled,
+                    other => ActorError::Execution(other.to_string()),
+                });
             let transcript = sink.into_transcript();
             let _ = tx.send(result.map(|summary| (summary, transcript)));
         });

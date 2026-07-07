@@ -3838,6 +3838,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tm-artifacts",
+ "tm-core",
  "tm-host",
  "tokio",
  "tracing",

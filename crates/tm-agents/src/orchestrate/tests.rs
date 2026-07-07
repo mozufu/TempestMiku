@@ -298,6 +298,22 @@ async fn agents_msg_invalid_args() {
 }
 
 #[tokio::test]
+async fn agents_msg_rejects_json_control_payload() {
+    let f = AgentsMsgFn::new(make_roster());
+    let ctx = ctx_with(caps::AGENTS_MSG);
+
+    let err = f
+        .call(
+            json!({"handle": {"id": "Worker"}, "text": "{\"type\":\"done\"}"}),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+}
+
+#[tokio::test]
 async fn agents_msg_unknown_handle_returns_null() {
     let f = AgentsMsgFn::new(make_roster());
     let ctx = ctx_with(caps::AGENTS_MSG);
@@ -459,9 +475,75 @@ fn caps_module_defines_mvp_set() {
     assert_eq!(caps::AGENTS_MSG, "agents.msg");
     assert_eq!(caps::AGENTS_SEND, "agents.send");
     assert_eq!(caps::AGENTS_BROADCAST, "agents.broadcast");
+    assert_eq!(caps::AGENTS_CANCEL, "agents.cancel");
     assert_eq!(caps::AGENTS_WAIT, "agents.wait");
     assert_eq!(caps::AGENTS_INBOX, "agents.inbox");
     assert_eq!(caps::AGENTS_LIST, "agents.list");
+}
+
+#[tokio::test]
+async fn agents_cancel_denied_without_grant() {
+    let f = AgentsCancelFn::new(make_roster());
+    let ctx = ctx_without_agents();
+    let err = f.call(json!({"target": "Worker"}), &ctx).await.unwrap_err();
+    assert!(matches!(err, HostError::CapabilityDenied(ref s) if s == caps::AGENTS_CANCEL));
+}
+
+#[tokio::test]
+async fn agents_cancel_root_child_marks_terminal_and_emits_once() {
+    let roster = make_roster();
+    track_running(&roster, "Worker").await;
+    let (events, hook) = lifecycle_hook();
+    roster.set_lifecycle_hook(hook);
+
+    let f = AgentsCancelFn::new(Arc::clone(&roster));
+    let ctx = ctx_with(caps::AGENTS_CANCEL);
+    let result = f
+        .call(json!({"target": {"id": "Worker"}}), &ctx)
+        .await
+        .unwrap();
+
+    assert_eq!(result["actorId"], Value::String("Worker".into()));
+    assert_eq!(result["status"], Value::String("cancelled".into()));
+    let rec = roster.get(&ActorId::new("Worker").unwrap()).await.unwrap();
+    assert_eq!(rec.status, ActorStatus::Terminated);
+    assert!(rec.cancelled);
+    assert!(matches!(rec.failure_reason, Some(FailureReason::Cancelled)));
+    assert!(roster.is_cancelled(&ActorId::new("Worker").unwrap()).await);
+
+    let receipt = roster
+        .send_message(ActorMessage {
+            from: ActorId::new("Root").unwrap(),
+            to: ActorId::new("Worker").unwrap(),
+            text: "status?".to_string(),
+            reply_to: None,
+            sent_at: Utc::now(),
+        })
+        .await;
+    assert_eq!(receipt, Receipt::Failed);
+
+    let second = f.call(json!({"target": "Worker"}), &ctx).await.unwrap();
+    assert_eq!(second["status"], Value::String("already_cancelled".into()));
+
+    let evs = events.lock().unwrap();
+    let cancelled: Vec<_> = evs
+        .iter()
+        .filter(|event| matches!(event, ActorLifecycleEvent::Cancelled { .. }))
+        .collect();
+    assert_eq!(cancelled.len(), 1, "expected one Cancelled event");
+}
+
+#[tokio::test]
+async fn agents_cancel_rejects_non_child_target() {
+    let roster = make_roster();
+    track_actor(&roster, "Parent", None, ActorStatus::Running).await;
+    track_actor(&roster, "Child", Some("Parent"), ActorStatus::Running).await;
+    let f = AgentsCancelFn::new(roster);
+    let ctx = ctx_with_actor(caps::AGENTS_CANCEL, "Sibling");
+
+    let err = f.call(json!({"target": "Child"}), &ctx).await.unwrap_err();
+
+    assert!(matches!(err, HostError::InvalidArgs(_)));
 }
 
 #[tokio::test]
@@ -501,6 +583,19 @@ async fn agents_send_to_unknown_actor_returns_failed_receipt() {
 }
 
 #[tokio::test]
+async fn agents_send_rejects_json_control_payload() {
+    let f = AgentsSendFn::new(make_roster());
+    let ctx = ctx_with(caps::AGENTS_SEND);
+
+    let err = f
+        .call(json!({"to": "Worker", "text": "{\"type\":\"done\"}"}), &ctx)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+}
+
+#[tokio::test]
 async fn agents_broadcast_denied_without_grant() {
     let f = AgentsBroadcastFn::new(make_roster());
     let ctx = ctx_without_agents();
@@ -517,6 +612,19 @@ async fn agents_broadcast_invalid_args_returns_invalid_args_error() {
     assert!(matches!(err, HostError::InvalidArgs(_)));
 
     let err = f.call(json!({"text": 42}), &ctx).await.unwrap_err();
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+}
+
+#[tokio::test]
+async fn agents_broadcast_rejects_json_control_payload() {
+    let f = AgentsBroadcastFn::new(make_roster());
+    let ctx = ctx_with(caps::AGENTS_BROADCAST);
+
+    let err = f
+        .call(json!({"text": "[{\"type\":\"done\"}]"}), &ctx)
+        .await
+        .unwrap_err();
+
     assert!(matches!(err, HostError::InvalidArgs(_)));
 }
 

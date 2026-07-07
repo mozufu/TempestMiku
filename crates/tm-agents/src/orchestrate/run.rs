@@ -131,6 +131,7 @@ impl HostFn for AgentsRunFn {
             budget,
             parent: parent_id,
             depth: 0,
+            cancellation: self.roster.cancel_token(&actor_id).await,
         };
 
         match executor.run_to_digest(spec).await {
@@ -138,7 +139,8 @@ impl HostFn for AgentsRunFn {
                 if let Some(content) = digest.history_content.clone() {
                     self.roster.store_transcript(&actor_id, content).await;
                 }
-                self.roster
+                let completed = self
+                    .roster
                     .mark_complete_with_digest(
                         &actor_id,
                         digest.summary.clone(),
@@ -146,17 +148,19 @@ impl HostFn for AgentsRunFn {
                         digest.history_uri.clone(),
                     )
                     .await;
-                self.roster.emit_lifecycle(
-                    &session_id,
-                    ActorLifecycleEvent::Completed {
-                        actor_id: actor_id.clone(),
-                        completed_at: Utc::now(),
-                        summary: Some(digest.summary.clone()),
-                        artifact_uri: digest.artifact_uri.clone(),
-                        history_uri: digest.history_uri.clone(),
-                    },
-                );
-                tracing::debug!(actor_id = %actor_id, "actor completed");
+                if completed {
+                    self.roster.emit_lifecycle(
+                        &session_id,
+                        ActorLifecycleEvent::Completed {
+                            actor_id: actor_id.clone(),
+                            completed_at: Utc::now(),
+                            summary: Some(digest.summary.clone()),
+                            artifact_uri: digest.artifact_uri.clone(),
+                            history_uri: digest.history_uri.clone(),
+                        },
+                    );
+                    tracing::debug!(actor_id = %actor_id, "actor completed");
+                }
                 Ok(json!({
                     "actorId": digest.actor_id.as_str(),
                     "summary": digest.summary,
@@ -167,15 +171,7 @@ impl HostFn for AgentsRunFn {
             Err(err) => {
                 let reason = map_actor_error(&err);
                 tracing::warn!(actor_id = %actor_id, error = %err, "actor failed");
-                self.roster.emit_lifecycle(
-                    &session_id,
-                    ActorLifecycleEvent::Failed {
-                        actor_id: actor_id.clone(),
-                        failed_at: Utc::now(),
-                        reason: reason.clone(),
-                    },
-                );
-                self.roster.mark_failed(&actor_id, reason).await;
+                mark_actor_error(&self.roster, &session_id, &actor_id, reason).await;
                 Err(HostError::HostCall(err.to_string()))
             }
         }

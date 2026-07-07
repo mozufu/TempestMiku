@@ -1,6 +1,6 @@
 # TODO
 
-Last aligned: **2026-07-05**.
+Last aligned: **2026-07-06**.
 
 Active milestone: **P3-plus** (P3 MVP is closed; see `## P3-plus` for the remaining work).
 
@@ -67,7 +67,7 @@ reintroduce hardcoded mode prompts, hidden capability grants, or chat-native too
       stays external-service-free.
 - [x] P3-plus foundation slice: `MailboxRegistry` now has bounded per-actor inbox queues,
       `Agent::run` can drain actor inbox messages into the next model turn, `InvocationCtx` carries
-      live actor ids, and `agents.send/wait/inbox/list` are registered SDK calls.
+      live actor ids, and `agents.send/wait/inbox/list/cancel` are registered SDK calls.
 
 ## P3 catalog preflight
 
@@ -150,7 +150,7 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       writes to an artifact URI. Test: `agents_parallel_runs_all_and_returns_ordered_digests`.
 - [x] Sibling agents can coordinate through explicit messages.
       **P3-plus update:** live resident delivery now uses per-actor bounded inbox queues plus
-      `Agent::run` inbox draining. `agents.send/wait/inbox/list` are live; broadcast/pipeline and
+      `Agent::run` inbox draining. `agents.send/broadcast/wait/inbox/list/cancel` are live; pipeline and
       stricter protocol enforcement remain open P3-plus items.
 - [x] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
       replayable events.
@@ -177,7 +177,7 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       **Resolved:** `agents.run` is live end-to-end (`ChatActorExecutor` → `Agent::run`).
 - [x] `tm-agents` module layout per §23.8: `actor` (identity, lifecycle, behavior binding), `mailbox`
       (async queue, addressing, delivery + receipts, broadcast, wait/inbox), `orchestrate`
-      (`agents.*` constructors, DAG handles wired by reference), `supervise` (supervision tree,
+      (`agents.*` constructors, DAG handles wired by reference, cancel token entry point), `supervise` (supervision tree,
       restart strategies, budgets, depth cap, cost rollup), `resources` (`agent://` + `history://`
       handler registration).
 - [x] Keep the existing agent loop as the single owner of message accumulation, tool-call execution,
@@ -217,11 +217,12 @@ Acceptance:
       **Resolved (P3.5):** `ActorLifecycleEvent` types defined and emitted (Spawned/Completed/Failed)
       from all three actor functions; `AppState::wire_lifecycle_sink` routes events through
       `store.append_event` + SSE broadcast. **P3-plus update:** `MessageSent` now emits for delivered
-      live mailbox messages. StatusChanged/Cancelled remain P3-plus.
+      live mailbox messages. `Cancelled` is now emitted by `agents.cancel`; StatusChanged remains P3-plus.
 - [x] Add cancellation and timeout handling that leaves a replayable terminal state.
       **Resolved:** Failure paths in `agents.run` call `mark_failed` with structured `FailureReason`;
-      `actor_failed` events now reach the SSE log (P3.5). Wall-clock timer and cancel token deferred
-      to P3-plus.
+      `actor_failed` events now reach the SSE log (P3.5). **P3-plus update:** `agents.cancel`
+      now trips per-actor cancellation tokens and emits replayable `actor_cancelled`; wall-clock
+      budget enforcement remains deferred.
 - [x] Add supervision defaults for crash, timeout, approval denial, and quota exhaustion, with restart
       strategies: `one_for_one` (default — restart only the dead child), `one_for_all` (restart a
       coupled group), `rest_for_one` (restart the dead child and those started after it).
@@ -243,7 +244,7 @@ Acceptance:
 - [x] A parent session can spawn an actor, observe progress, cancel it, and replay the outcome after
       reconnect.
       **Resolved:** spawn, observe (`agent://` gateway), and replay (P3.5 lifecycle events in SSE)
-      all work. Cancel token deferred to P3-plus.
+      all work. `agents.cancel` now covers parent-driven child cancellation and replay.
 - [x] Actor failure is visible but does not corrupt the parent session.
       **Resolved:** `agents.run` catches executor errors, marks actor failed with `FailureReason`,
       and returns `HostError::HostCall` — parent session is unaffected.
@@ -408,7 +409,7 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 - [x] `agents.wait(from?, timeout)` — block until a matching message arrives in the inbox.
 - [x] `agents.inbox()` — drain all pending messages without blocking.
 - [x] `agents.list()` — roster: peer ids, statuses, unread count, last activity timestamp.
-- [ ] `agents.broadcast(text)` — deliver a message to all currently live children.
+- [x] `agents.broadcast(text)` — deliver a message to all currently live children.
 - [ ] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
 - [x] Real caller actor-id threading through `InvocationCtx` (top-level orchestrator calls still use
       synthetic `"Root"`; child sandboxes receive their real actor id).
@@ -419,8 +420,12 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
       Types exist in `supervise.rs`; no respawn logic implemented yet.
 - [ ] Wall-clock budget enforcement per actor. `ActorBudget.wall_ms` is tracked but the
       timer that interrupts a running actor is not wired.
-- [ ] Cancel token: parent can cancel a running child and receive a replayable `Cancelled`
+- [x] Cancel token: parent can cancel a running child and receive a replayable `Cancelled`
       terminal event in the SSE stream.
+      **Resolved:** `agents.cancel(target)` is registered and prelude-backed. Direct parents
+      mark child actor records `terminated` + `cancelled`, trip the shared token used by
+      `ChatActorExecutor` and child Deno sandboxes, suppress late completion events, and emit
+      one replayable `actor_cancelled` event. `agent://<id>` exposes the terminal state on reconnect.
 - [ ] Subtree cancel-on-sibling-failure for `agents.spawn` / `agents.parallel`
       ("let it crash" — a failing child aborts its whole sibling group, not just itself).
 
@@ -436,8 +441,10 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 
 ### Messaging protocol invariants
 
-- [ ] Enforce plain-prose-only messages at the `agents.msg` / `agents.send` boundary;
+- [x] Enforce plain-prose-only messages at the `agents.msg` / `agents.send` boundary;
       reject control-payload blobs (`{"type":"done"}` and similar) with `InvalidArgsError`.
+      **Resolved:** `agents.msg`, `agents.send`, and `agents.broadcast` now share a plain-prose
+      validator that rejects empty messages and complete JSON object/array payloads before delivery.
 - [ ] DAG acyclicity check: detect and reject actor specs that would cause an actor to
       wait on its own descendant (structural deadlock prevention, not just timeout).
 - [ ] Bounded mailbox + backpressure: drop or back-pressure senders when the inbox is full;

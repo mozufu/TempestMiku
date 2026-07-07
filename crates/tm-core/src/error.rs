@@ -23,6 +23,10 @@ pub enum Error {
     #[error("turn budget exhausted after {0} turns")]
     TurnBudget(usize),
 
+    /// The caller cancelled this run.
+    #[error("run cancelled")]
+    Cancelled,
+
     /// JSON (de)serialization failed.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),

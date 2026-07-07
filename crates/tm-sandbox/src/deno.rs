@@ -3,14 +3,14 @@ use std::{
     path::PathBuf,
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions, serde_v8, v8};
 use serde_json::{Value, json};
 use tm_artifacts::ArtifactStore;
-use tm_core::{CellBudget, EvalOutput, Result, Sandbox, Session, SessionConfig};
+use tm_core::{CancellationToken, CellBudget, EvalOutput, Result, Sandbox, Session, SessionConfig};
 use tm_host::{
     ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy,
     HostRegistry, InvocationCtx, LinkedFolders, ResourceRegistry,
@@ -36,6 +36,7 @@ pub struct DenoSandboxOptions {
     pub linked_folders: Option<LinkedFolders>,
     pub approval_policy: Arc<dyn ApprovalPolicy>,
     pub approval_timeout: Duration,
+    pub cancellation: Option<Arc<dyn CancellationToken>>,
 }
 
 impl Default for DenoSandboxOptions {
@@ -53,6 +54,7 @@ impl Default for DenoSandboxOptions {
             linked_folders: None,
             approval_policy: Arc::new(DefaultDenyApprovalPolicy),
             approval_timeout: Duration::from_secs(60),
+            cancellation: None,
         }
     }
 }
@@ -168,6 +170,13 @@ impl DenoSession {
 #[async_trait(?Send)]
 impl Session for DenoSession {
     async fn eval(&mut self, code: &str, budget: CellBudget) -> Result<EvalOutput> {
+        if self.cancelled() {
+            return Ok(EvalOutput {
+                stdout: String::new(),
+                result: None,
+                error: Some("CancellationError: cell cancelled".to_string()),
+            });
+        }
         if budget.wall_ms == 0 {
             return Ok(EvalOutput {
                 stdout: String::new(),
@@ -195,15 +204,34 @@ impl Session for DenoSession {
                 });
             }
         };
-        let (timeout_cancel_tx, timeout_cancel_rx) = mpsc::channel();
+        let (watchdog_stop_tx, watchdog_stop_rx) = mpsc::channel();
         let isolate_handle = self.runtime().v8_isolate().thread_safe_handle();
         let wall_ms = budget.wall_ms;
+        let cancellation = self.options.cancellation.clone();
         thread::spawn(move || {
-            if timeout_cancel_rx
-                .recv_timeout(Duration::from_millis(wall_ms))
-                .is_err()
-            {
-                isolate_handle.terminate_execution();
+            let deadline = Instant::now() + Duration::from_millis(wall_ms);
+            loop {
+                if watchdog_stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                if cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                {
+                    isolate_handle.terminate_execution();
+                    break;
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    isolate_handle.terminate_execution();
+                    break;
+                }
+                let sleep_for = deadline
+                    .saturating_duration_since(now)
+                    .min(Duration::from_millis(10));
+                if watchdog_stop_rx.recv_timeout(sleep_for).is_ok() {
+                    break;
+                }
             }
         });
 
@@ -218,12 +246,12 @@ impl Session for DenoSession {
                     {
                         Ok(global) => self.global_to_json(global)?,
                         Err(err) => {
-                            let _ = timeout_cancel_tx.send(());
+                            let _ = watchdog_stop_tx.send(());
                             let _ = self.runtime().v8_isolate().cancel_terminate_execution();
                             return Ok(EvalOutput {
                                 stdout: self.take_stdout()?,
                                 result: None,
-                                error: Some(err.to_string()),
+                                error: Some(self.terminated_error_or(err.to_string())),
                             });
                         }
                     }
@@ -232,13 +260,9 @@ impl Session for DenoSession {
                 }
             }
             Err(err) => {
-                let _ = timeout_cancel_tx.send(());
+                let _ = watchdog_stop_tx.send(());
                 let _ = self.runtime().v8_isolate().cancel_terminate_execution();
-                let error = if err.to_string().contains("execution terminated") {
-                    "TimeoutError: cell exceeded wall-clock budget".to_string()
-                } else {
-                    err.to_string()
-                };
+                let error = self.terminated_error_or(err.to_string());
                 return Ok(EvalOutput {
                     stdout: self.take_stdout()?,
                     result: None,
@@ -246,7 +270,7 @@ impl Session for DenoSession {
                 });
             }
         };
-        let _ = timeout_cancel_tx.send(());
+        let _ = watchdog_stop_tx.send(());
         let _ = self.runtime().v8_isolate().cancel_terminate_execution();
 
         let mut stdout = self.take_stdout()?;
@@ -352,6 +376,25 @@ impl DenoSession {
         let local = v8::Local::new(scope, value);
         serde_v8::from_v8::<Vec<Value>>(scope, local)
             .map_err(|err| tm_core::Error::Sandbox(err.to_string()))
+    }
+
+    fn cancelled(&self) -> bool {
+        self.options
+            .cancellation
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    }
+
+    fn terminated_error_or(&self, error: String) -> String {
+        if error.contains("execution terminated") {
+            if self.cancelled() {
+                "CancellationError: cell cancelled".to_string()
+            } else {
+                "TimeoutError: cell exceeded wall-clock budget".to_string()
+            }
+        } else {
+            error
+        }
     }
 }
 

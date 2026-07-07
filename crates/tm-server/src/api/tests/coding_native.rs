@@ -441,10 +441,11 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
         Arc::new(crate::ChatActorExecutor::with_actor_context(
             llm_for_executor,
             cfg.clone(),
-            move |session_id, actor_id, grants| {
+            move |session_id, actor_id, grants, cancellation| {
                 let mut opts = executor_options.clone();
                 opts.session_id = session_id.to_string();
                 opts.actor_id = actor_id.map(str::to_string);
+                opts.cancellation = cancellation;
                 opts.grants = opts
                     .grants
                     .clone()
@@ -558,6 +559,73 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
             .unwrap_or_default()
             .contains("[cell_result]")
     );
+}
+
+#[tokio::test]
+async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let roster = Arc::new(tm_agents::MailboxRegistry::new());
+    let state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_actor_roster(Arc::clone(&roster));
+    state.wire_lifecycle_sink();
+    let app = app(state);
+    let session = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
+
+    let actor_id = tm_agents::ActorId::new("Worker").unwrap();
+    roster
+        .track(tm_agents::ActorRecord {
+            id: actor_id.clone(),
+            parent: None,
+            status: tm_agents::ActorStatus::Running,
+            mode: Some("worker".to_string()),
+            budget: tm_agents::ActorBudget::default(),
+            spawned_at: Utc::now(),
+            completed_at: None,
+            cancelled: false,
+            failure_reason: None,
+            last_summary: None,
+            artifact_uri: None,
+            history_uri: None,
+        })
+        .await;
+
+    let result = roster
+        .cancel_actor(&session.id.to_string(), &actor_id)
+        .await;
+    assert_eq!(result.as_str(), "cancelled");
+
+    let cancelled = wait_for_event_payload(&store, session.id, "actor_cancelled").await;
+    assert_eq!(cancelled["actor_id"], json!("Worker"));
+    assert_eq!(cancelled["kind"], json!("cancelled"));
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    let cancelled_seq = events
+        .iter()
+        .find(|event| event.event_type == "actor_cancelled")
+        .and_then(|event| event.seq.checked_sub(1));
+    let replay = store.events_after(session.id, cancelled_seq).await.unwrap();
+    assert!(
+        replay
+            .iter()
+            .any(|event| event.event_type == "actor_cancelled"),
+        "Last-Event-ID replay should include actor_cancelled"
+    );
+
+    let resource = get_session_resource_json(&app, session.id, "resolve", "agent://Worker").await;
+    assert_eq!(resource["uri"], json!("agent://Worker"));
+    let record: serde_json::Value =
+        serde_json::from_str(resource["content"].as_str().unwrap()).unwrap();
+    assert_eq!(record["status"], json!("terminated"));
+    assert_eq!(record["cancelled"], json!(true));
+    assert_eq!(record["failure_reason"]["kind"], json!("cancelled"));
 }
 
 #[tokio::test]

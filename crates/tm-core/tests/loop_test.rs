@@ -3,7 +3,10 @@
 //! the `tool_call -> tool_result -> final` sequence for both protocols.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
@@ -11,9 +14,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 
 use tm_core::{
-    Agent, AgentConfig, CellBudget, ChatRequest, Error, EvalOutput, EventSink, FunctionSpec,
-    InboxDrain, LlmClient, Message, Protocol, Result, Role, Sandbox, Session, SessionConfig,
-    StreamEvent, ToolMediator, ToolSpec,
+    Agent, AgentConfig, CancellationToken, CellBudget, ChatRequest, Error, EvalOutput, EventSink,
+    FunctionSpec, InboxDrain, LlmClient, Message, Protocol, Result, Role, Sandbox, Session,
+    SessionConfig, StreamEvent, ToolMediator, ToolSpec,
 };
 
 /// An `LlmClient` that replays a fixed script of stream events per turn and records every
@@ -90,6 +93,20 @@ impl StaticInbox {
 impl InboxDrain for StaticInbox {
     async fn drain(&self) -> Result<Vec<String>> {
         Ok(self.messages.lock().drain(..).collect())
+    }
+}
+
+struct FlagCancellation(AtomicBool);
+
+impl FlagCancellation {
+    fn cancelled() -> Self {
+        Self(AtomicBool::new(true))
+    }
+}
+
+impl CancellationToken for FlagCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
     }
 }
 
@@ -273,6 +290,32 @@ async fn run_with_inbox_drains_before_model_turn() {
         .expect("inbox message should be appended before the first turn");
     assert!(inbox_msg.content.contains("from: Worker"));
     assert!(inbox_msg.content.contains("text: done"));
+}
+
+#[tokio::test]
+async fn run_with_controls_stops_before_model_turn_when_cancelled() {
+    let llm = Arc::new(FakeLlm::new(vec![vec![
+        StreamEvent::Text("should not stream".into()),
+        StreamEvent::Finish {
+            reason: Some("stop".into()),
+        },
+    ]]));
+    let agent = Agent::new(
+        llm.clone(),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let cancellation = FlagCancellation::cancelled();
+
+    let err = agent
+        .run_with_controls("please do work", &sink, None, None, Some(&cancellation))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, Error::Cancelled));
+    assert!(llm.requests.lock().is_empty());
+    assert!(sink.events().is_empty());
 }
 
 /// A [`ToolMediator`] that advertises one tool, records every call it handles, and returns a

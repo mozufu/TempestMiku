@@ -115,9 +115,10 @@ impl ToolSpec {
             kind: "function".into(),
             function: FunctionSpec {
                 name: "execute".into(),
-                description: "Run code in your persistent REPL session. Variables persist across \
-                    calls. Only what you display()/return reaches you; everything else stays in the \
-                    sandbox. Discover capabilities with tools.search()/tools.docs()."
+                description: "Run JavaScript/TypeScript in your persistent sandbox REPL. \
+                    Variables persist across calls and top-level await is supported. Only what you \
+                    display()/return reaches you; everything else stays in the sandbox. Discover \
+                    capabilities with await tools.search()/tools.docs()."
                     .into(),
                 parameters: serde_json::json!({
                     "type": "object",

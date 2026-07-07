@@ -14,9 +14,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 
 use tm_core::{
-    Agent, AgentConfig, CancellationToken, CellBudget, ChatRequest, Error, EvalOutput, EventSink,
-    FunctionSpec, InboxDrain, LlmClient, Message, Protocol, Result, Role, Sandbox, Session,
-    SessionConfig, StreamEvent, ToolMediator, ToolSpec,
+    Agent, AgentConfig, CancellationToken, CellBudget, ChatRequest, DEFAULT_SYSTEM_PROMPT, Error,
+    EvalOutput, EventSink, FunctionSpec, InboxDrain, LlmClient, Message, Protocol, Result, Role,
+    Sandbox, Session, SessionConfig, StreamEvent, ToolMediator, ToolSpec,
 };
 
 /// An `LlmClient` that replays a fixed script of stream events per turn and records every
@@ -75,6 +75,20 @@ impl Session for EchoSession {
     async fn reset(&mut self) -> Result<()> {
         Ok(())
     }
+}
+
+#[test]
+fn default_prompt_teaches_js_ts_repl_discovery_contract() {
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("JavaScript/TypeScript"));
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("Top-level `await`"));
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("await tools.search"));
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("await tools.docs"));
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("agents.parallel"));
+
+    let description = ToolSpec::execute().function.description;
+    assert!(description.contains("JavaScript/TypeScript"));
+    assert!(description.contains("top-level await"));
+    assert!(description.contains("await tools.search"));
 }
 
 struct StaticInbox {

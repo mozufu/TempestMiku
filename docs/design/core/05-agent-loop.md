@@ -31,7 +31,7 @@ loop ends when the model stops calling `execute` (it has its answer) or a budget
   "type": "function",
   "function": {
     "name": "execute",
-    "description": "Run code in your persistent REPL session. Variables persist across calls. Only what you display()/return reaches you; everything else stays in the sandbox. Discover capabilities with tools.search()/tools.docs().",
+    "description": "Run JavaScript/TypeScript in your persistent sandbox REPL. Variables persist across calls and top-level await is supported. Only what you display()/return reaches you; everything else stays in the sandbox. Discover capabilities with await tools.search()/tools.docs().",
     "parameters": {
       "type": "object",
       "properties": {
@@ -69,7 +69,11 @@ Some OpenAI-compatible servers don't support `tools`. Provide a `Protocol` switc
   audit log — know what happened.
 
 The system prompt teaches the model the rule: **compute and filter in code; return only what you
-need; park big data as an artifact.**
+need; park big data as an artifact.** It also carries the minimal runtime primer required for
+self-discovery: the REPL is JavaScript/TypeScript on the sandboxed Deno/V8 backend, supports
+top-level `await`, persists state across cells, and expects capability lookup through
+`await tools.search(...)` followed by `await tools.docs(...)` before calling newly discovered SDK
+namespaces.
 
 ### 5.5 Streaming (day 1)
 

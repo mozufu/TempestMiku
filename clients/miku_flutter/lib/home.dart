@@ -617,7 +617,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     final last = _rounds
         .where((round) => round.assistantFinalText.isNotEmpty)
         .lastOrNull;
-    final resources = _extractResources(last?.assistantFinalText ?? '');
+    final resources = _promotionResources(last?.assistantFinalText ?? '');
     try {
       final p = await widget.client.promoteSession(
         _sessionId!,
@@ -640,6 +640,31 @@ class _MikuHomePageState extends State<MikuHomePage>
         .map((m) => m.group(0)!.replaceAll(RegExp(r'[.。]+$'), ''))
         .toSet()
         .toList();
+  }
+
+  List<String> _promotionResources(String finalText) {
+    final resources = <String>[];
+    void add(String uri) {
+      final normalized = _normalizeResourceUri(uri);
+      if (normalized.isEmpty || resources.contains(normalized)) return;
+      resources.add(normalized);
+    }
+
+    for (final uri in _extractResources(finalText)) {
+      add(uri);
+    }
+    for (final round in _rounds) {
+      for (final activity in round.activities) {
+        for (final uri in activity.resourceUris) {
+          add(uri);
+        }
+      }
+    }
+    return resources;
+  }
+
+  String _normalizeResourceUri(String uri) {
+    return uri.trim().replaceAll(RegExp(r'[.。]+$'), '');
   }
 
   Future<void> _openResource(String uri) async {

@@ -19,6 +19,8 @@ class ScriptedMikuClient implements MikuSessionClient {
   final List<String> resolvedApprovals = [];
   final List<String> lockedModes = [];
   final List<String> overriddenModes = [];
+  final List<List<String>> promotedResources = [];
+  final List<String?> promotedSummaries = [];
   int unlockCount = 0;
   int _nextId = 0;
   int _nextEventId = 1;
@@ -493,6 +495,8 @@ class ScriptedMikuClient implements MikuSessionClient {
     List<String> decisions = const [],
     List<String> resources = const [],
   }) async {
+    promotedSummaries.add(summary);
+    promotedResources.add(List<String>.from(resources));
     return ProjectPromotion(
       projectUri: 'project://tempestmiku',
       promotedCount: resources.length + (summary == null ? 0 : 1),

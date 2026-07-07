@@ -292,7 +292,7 @@ void main() {
     expect(find.text('Memory proposal'), findsNothing);
   });
 
-  testWidgets('opens actor completion resources from activity feed',
+  testWidgets('promotes actor completion resources from activity feed',
       (WidgetTester tester) async {
     final client = ScriptedMikuClient();
     await tester.pumpWidget(MikuApp(client: client));
@@ -346,6 +346,34 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('Scripted resource'), findsOneWidget);
     expect(find.text('Preview for history://Worker0'), findsOneWidget);
+
+    await tester.tap(find.byType(ModalBarrier).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.text('Promote Session'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(client.promotedSummaries.single,
+        'Actor Worker0 completed child resource artifact://0');
+    expect(client.promotedResources.single, [
+      'artifact://0',
+      'history://Worker0',
+    ]);
+
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('project://tempestmiku · 3 promoted'), findsOneWidget);
   });
 
   testWidgets('handles actor approval, child resource, and reconnect cursor',

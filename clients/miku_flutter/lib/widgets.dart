@@ -746,7 +746,9 @@ class _AgentStatusBar extends StatelessWidget {
     required this.anim,
     required this.agents,
     required this.activities,
+    required this.expanded,
     required this.onTap,
+    required this.onOpenResource,
   });
 
   final _Tok tok;
@@ -755,7 +757,9 @@ class _AgentStatusBar extends StatelessWidget {
   final AnimationController anim;
   final List<_AgentStatus> agents;
   final List<_ActivityItem> activities;
+  final bool expanded;
   final VoidCallback onTap;
+  final void Function(String) onOpenResource;
 
   @override
   Widget build(BuildContext context) {
@@ -850,6 +854,31 @@ class _AgentStatusBar extends StatelessWidget {
                           anim: anim,
                           item: fallback,
                         ),
+                      if (expanded) ...[
+                        const SizedBox(height: 9),
+                        Container(
+                          height: 0.5,
+                          color: tok.border.withOpacity(0.72),
+                        ),
+                        const SizedBox(height: 9),
+                        for (var i = 0; i < activities.length; i++) ...[
+                          _ActivityRow(
+                            tok: tok,
+                            copy: copy,
+                            accent: accent,
+                            item: activities[i],
+                            onOpenResource: onOpenResource,
+                          ),
+                          if (i != activities.length - 1) ...[
+                            const SizedBox(height: 8),
+                            Container(
+                              height: 0.5,
+                              color: tok.border.withOpacity(0.55),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                        ],
+                      ],
                     ],
                   ),
                 ),

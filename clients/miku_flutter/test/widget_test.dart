@@ -376,6 +376,45 @@ void main() {
     expect(find.text('project://tempestmiku · 3 promoted'), findsOneWidget);
   });
 
+  testWidgets('expands activity trace until final then collapses it',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient(pauseBeforeFinal: true);
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(
+        find.byType(EditableText), 'handoff actor live trace');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('呼叫工具 execute'), findsOneWidget);
+    expect(find.text('執行程式'), findsOneWidget);
+    expect(find.text('完成 Worker0'), findsOneWidget);
+
+    client.completePausedTurn();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Agents · 0 running / 1 stopped'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsNothing);
+    expect(find.text('執行程式'), findsNothing);
+    expect(find.text('完成 Worker0'), findsNothing);
+    expect(find.textContaining('Actor Worker0 completed', skipOffstage: false),
+        findsOneWidget);
+
+    await tester.tap(find.text('Agents · 0 running / 1 stopped'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Prompt / Activity'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsOneWidget);
+    expect(find.text('執行程式'), findsOneWidget);
+    expect(find.text('完成 Worker0'), findsOneWidget);
+  });
+
   testWidgets('handles actor approval, child resource, and reconnect cursor',
       (WidgetTester tester) async {
     final client = ScriptedMikuClient();

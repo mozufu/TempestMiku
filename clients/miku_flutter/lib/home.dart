@@ -15,6 +15,7 @@ class _ConversationRound {
   String assistantStreamedText = '';
   String assistantFinalText = '';
   bool isStreaming;
+  bool activityExpanded = false;
 
   String get assistantText => assistantFinalText.isNotEmpty
       ? assistantFinalText
@@ -299,6 +300,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         round.assistantFinalText = text;
         round.assistantStreamedText = '';
         round.isStreaming = false;
+        round.activityExpanded = false;
         _status = 'connected';
         _loadProject();
       case 'mode':
@@ -496,6 +498,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       round.activities.removeRange(0, round.activities.length - 16);
     }
     round.isStreaming = true;
+    round.activityExpanded = true;
     _status = 'streaming';
   }
 
@@ -1105,7 +1108,9 @@ class _MikuHomePageState extends State<MikuHomePage>
             anim: _dotAnim,
             agents: _agentStatuses(round.activities),
             activities: round.activities,
+            expanded: round.activityExpanded,
             onTap: () => _showActivitySheet(round),
+            onOpenResource: _openResource,
           ),
         );
         items.add(const SizedBox(height: 10));

@@ -5,6 +5,9 @@ import 'session_models.dart';
 MikuSessionClient createClient() => ScriptedMikuClient();
 
 class ScriptedMikuClient implements MikuSessionClient {
+  ScriptedMikuClient({this.pauseBeforeFinal = false});
+
+  final bool pauseBeforeFinal;
   final Map<String, StreamController<MikuEvent>> _controllers = {};
   final Map<String, MikuSession> _sessions = {};
   final Map<String, DateTime> _updatedAt = {};
@@ -21,6 +24,7 @@ class ScriptedMikuClient implements MikuSessionClient {
   final List<String> overriddenModes = [];
   final List<List<String>> promotedResources = [];
   final List<String?> promotedSummaries = [];
+  final Map<String, String> _pausedFinalTexts = {};
   int unlockCount = 0;
   int _nextId = 0;
   int _nextEventId = 1;
@@ -287,10 +291,11 @@ class ScriptedMikuClient implements MikuSessionClient {
     controller.add(MikuEvent(type: 'text', id: _eventId(), data: {
       'delta': text,
     }));
-    controller.add(MikuEvent(type: 'final', id: _eventId(), data: {
-      'text': text,
-    }));
-    _appendMessage(sessionId, 'assistant', text);
+    if (pauseBeforeFinal) {
+      _pausedFinalTexts[sessionId] = text;
+      return;
+    }
+    _emitFinal(sessionId, text);
     if (content.toLowerCase().contains('remember')) {
       final proposalId = 'proposal-${_nextEventId++}';
       final approvalId = 'approval-${_nextEventId++}';
@@ -351,6 +356,22 @@ class ScriptedMikuClient implements MikuSessionClient {
       controller.add(approvalEvent);
       _pendingEvents.putIfAbsent(sessionId, () => []).add(approvalEvent);
     }
+  }
+
+  void completePausedTurn({String? sessionId}) {
+    final id = sessionId ?? _currentId;
+    if (id == null) return;
+    final text = _pausedFinalTexts.remove(id);
+    if (text == null) return;
+    _emitFinal(id, text);
+  }
+
+  void _emitFinal(String sessionId, String text) {
+    _controllers[sessionId]
+        ?.add(MikuEvent(type: 'final', id: _eventId(), data: {
+      'text': text,
+    }));
+    _appendMessage(sessionId, 'assistant', text);
   }
 
   @override

@@ -530,85 +530,257 @@ class _TypingIndicator extends StatelessWidget {
   }
 }
 
-class _ActivityTimeline extends StatelessWidget {
-  const _ActivityTimeline({
+class _AgentStatusBar extends StatelessWidget {
+  const _AgentStatusBar({
     required this.tok,
     required this.accent,
+    required this.anim,
+    required this.agents,
     required this.activities,
+    required this.onTap,
   });
 
   final _Tok tok;
   final Color accent;
+  final AnimationController anim;
+  final List<_AgentStatus> agents;
   final List<_ActivityItem> activities;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final visible = activities.length > 6
-        ? activities.sublist(activities.length - 6)
-        : activities;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 30,
-          height: 30,
-          decoration: BoxDecoration(
-            color: tok.surface,
-            border: Border.all(color: tok.border),
-            borderRadius: BorderRadius.circular(9),
-          ),
-          child: Icon(Icons.terminal, color: accent, size: 16),
-        ),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(11, 10, 11, 11),
+    final running = agents.where((agent) => agent.isRunning).length;
+    final stopped = agents.length - running;
+    final visibleAgents =
+        agents.length > 4 ? agents.sublist(agents.length - 4) : agents;
+    final fallback = _runtimeFallback();
+    return GestureDetector(
+      onTap: onTap,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
             decoration: BoxDecoration(
-              color: tok.surface.withOpacity(0.78),
-              border: Border.all(color: tok.border.withOpacity(0.82)),
-              borderRadius: BorderRadius.circular(10),
+              color: tok.surface,
+              border: Border.all(color: tok.border),
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.route_outlined, color: accent, size: 14),
-                    const SizedBox(width: 6),
-                    Text(
-                      '執行動態',
-                      style: TextStyle(
-                        color: tok.text,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
+            child: Icon(Icons.account_tree_outlined, color: accent, size: 16),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+              decoration: BoxDecoration(
+                color: tok.surface.withOpacity(0.78),
+                border: Border.all(color: tok.border.withOpacity(0.82)),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.route_outlined, color: accent, size: 14),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          agents.isEmpty
+                              ? 'Runtime 狀態'
+                              : 'Agents · $running running / $stopped stopped',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: tok.text,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '${activities.length}',
-                      style: TextStyle(
-                        color: tok.muted,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
+                      const SizedBox(width: 8),
+                      Text(
+                        '${activities.length} events',
+                        style: TextStyle(
+                          color: tok.muted,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                for (var i = 0; i < visible.length; i++) ...[
-                  _ActivityRow(
-                    tok: tok,
-                    accent: accent,
-                    item: visible[i],
+                      const SizedBox(width: 4),
+                      Icon(Icons.open_in_full, color: tok.muted, size: 12),
+                    ],
                   ),
-                  if (i != visible.length - 1) const SizedBox(height: 7),
+                  const SizedBox(height: 7),
+                  if (visibleAgents.isNotEmpty)
+                    for (final agent in visibleAgents) ...[
+                      _AgentStatusLine(
+                        tok: tok,
+                        accent: accent,
+                        anim: anim,
+                        agent: agent,
+                      ),
+                      if (agent != visibleAgents.last)
+                        const SizedBox(height: 5),
+                    ]
+                  else
+                    _RuntimeStatusLine(
+                      tok: tok,
+                      accent: accent,
+                      anim: anim,
+                      item: fallback,
+                    ),
                 ],
-              ],
+              ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  _ActivityItem _runtimeFallback() {
+    for (final item in activities.reversed) {
+      if (item.kind == 'cell' || item.kind == 'tool') return item;
+    }
+    return activities.last;
+  }
+}
+
+class _AgentStatusLine extends StatelessWidget {
+  const _AgentStatusLine({
+    required this.tok,
+    required this.accent,
+    required this.anim,
+    required this.agent,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final AnimationController anim;
+  final _AgentStatus agent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _StatusGlyph(tok: tok, accent: accent, anim: anim, state: agent.state),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            '${agent.role} agent · ${agent.id}',
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: tok.text,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        Text(
+          _stateLabel(agent.state),
+          style: TextStyle(
+            color: agent.isRunning ? accent : tok.muted,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
           ),
         ),
       ],
     );
+  }
+}
+
+class _RuntimeStatusLine extends StatelessWidget {
+  const _RuntimeStatusLine({
+    required this.tok,
+    required this.accent,
+    required this.anim,
+    required this.item,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final AnimationController anim;
+  final _ActivityItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _StatusGlyph(tok: tok, accent: accent, anim: anim, state: item.state),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            item.title,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: tok.text,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        Text(
+          _stateLabel(item.state),
+          style: TextStyle(
+            color: item.state == _ActivityState.running ? accent : tok.muted,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatusGlyph extends StatelessWidget {
+  const _StatusGlyph({
+    required this.tok,
+    required this.accent,
+    required this.anim,
+    required this.state,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final AnimationController anim;
+  final _ActivityState state;
+
+  @override
+  Widget build(BuildContext context) {
+    if (state == _ActivityState.running) {
+      return AnimatedBuilder(
+        animation: anim,
+        builder: (_, __) {
+          final opacity = (math.sin(anim.value * math.pi * 2) * 0.34 + 0.66)
+              .clamp(0.34, 1.0);
+          return Opacity(
+            opacity: opacity,
+            child: Container(
+              width: 14,
+              height: 14,
+              decoration: BoxDecoration(
+                color: accent,
+                shape: BoxShape.circle,
+              ),
+            ),
+          );
+        },
+      );
+    }
+    final icon = switch (state) {
+      _ActivityState.failed => Icons.error_outline,
+      _ActivityState.done => Icons.stop_circle_outlined,
+      _ActivityState.info => Icons.info_outline,
+      _ActivityState.running => Icons.circle,
+    };
+    final color = switch (state) {
+      _ActivityState.failed => const Color(0xFFB84A30),
+      _ActivityState.done => tok.muted,
+      _ActivityState.info => tok.muted,
+      _ActivityState.running => accent,
+    };
+    return Icon(icon, color: color, size: 15);
   }
 }
 
@@ -683,6 +855,13 @@ class _ActivityRow extends StatelessWidget {
         _ActivityState.info => tok.muted,
       };
 }
+
+String _stateLabel(_ActivityState state) => switch (state) {
+      _ActivityState.running => 'running',
+      _ActivityState.done => 'stopped',
+      _ActivityState.failed => 'failed',
+      _ActivityState.info => 'updated',
+    };
 
 String _trimActivityDetail(String detail) {
   final cleaned = detail

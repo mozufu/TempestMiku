@@ -203,6 +203,222 @@ class _ModeSheet extends StatelessWidget {
   }
 }
 
+class _AgentActivitySheet extends StatelessWidget {
+  const _AgentActivitySheet({
+    required this.tok,
+    required this.accent,
+    required this.roundIndex,
+    required this.agents,
+    required this.activities,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final int roundIndex;
+  final List<_AgentStatus> agents;
+  final List<_ActivityItem> activities;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(15, 9, 15, 18),
+      children: [
+        Center(
+          child: Container(
+            width: 38,
+            height: 5,
+            decoration: BoxDecoration(
+              color: tok.border,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: accent,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.account_tree_outlined,
+                color: _textOn(accent),
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Agents · 回合 $roundIndex',
+                    style: TextStyle(
+                      color: tok.text,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${agents.length} agents · ${activities.length} events',
+                    style: TextStyle(
+                      color: tok.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _TokIconBtn(
+              tok: tok,
+              icon: Icons.close,
+              onTap: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+        if (agents.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text(
+            '狀態',
+            style: TextStyle(
+              color: tok.text,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final agent in agents) ...[
+            _AgentSheetRow(tok: tok, accent: accent, agent: agent),
+            if (agent != agents.last) const SizedBox(height: 7),
+          ],
+        ],
+        const SizedBox(height: 14),
+        Text(
+          'Prompt / Activity',
+          style: TextStyle(
+            color: tok.text,
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.fromLTRB(11, 10, 11, 11),
+          decoration: BoxDecoration(
+            color: tok.bg,
+            border: Border.all(color: tok.border),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            children: [
+              for (var i = 0; i < activities.length; i++) ...[
+                _ActivityRow(
+                  tok: tok,
+                  accent: accent,
+                  item: activities[i],
+                ),
+                if (i != activities.length - 1) ...[
+                  const SizedBox(height: 9),
+                  Container(height: 0.5, color: tok.border.withOpacity(0.7)),
+                  const SizedBox(height: 9),
+                ],
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AgentSheetRow extends StatelessWidget {
+  const _AgentSheetRow({
+    required this.tok,
+    required this.accent,
+    required this.agent,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final _AgentStatus agent;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = agent.isRunning ? accent : tok.muted;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+      decoration: BoxDecoration(
+        color: tok.bg,
+        border: Border.all(color: tok.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            agent.isRunning
+                ? Icons.radio_button_checked
+                : Icons.stop_circle_outlined,
+            color: color,
+            size: 16,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${agent.role} agent · ${agent.id}',
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: tok.text,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      _stateLabel(agent.state),
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+                if (agent.detail.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    agent.detail,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: tok.muted,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.36,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SessionHistorySheet extends StatefulWidget {
   const _SessionHistorySheet({
     required this.tok,

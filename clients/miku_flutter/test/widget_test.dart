@@ -246,12 +246,27 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Handoff'), findsOneWidget);
-    expect(find.text('執行動態'), findsOneWidget);
+    expect(find.text('Agents · 0 running / 1 stopped'), findsOneWidget);
+    expect(find.text('worker agent · Worker0'), findsOneWidget);
+    expect(find.text('stopped'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsNothing);
+
+    await tester.tap(find.text('Agents · 0 running / 1 stopped'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Agents · 回合 1'), findsOneWidget);
+    expect(find.text('Prompt / Activity'), findsOneWidget);
     expect(find.text('呼叫工具 execute'), findsOneWidget);
     expect(find.text('執行程式'), findsOneWidget);
     expect(find.text('啟動 worker · Worker0'), findsOneWidget);
     expect(find.text('完成 Worker0'), findsOneWidget);
     expect(find.text('程式結果'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.close).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
     final actorReply =
         find.textContaining('Actor Worker0 completed', skipOffstage: false);
     expect(actorReply, findsOneWidget);

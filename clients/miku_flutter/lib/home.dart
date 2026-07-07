@@ -32,6 +32,9 @@ class _ActivityItem {
     required this.detail,
     required this.state,
     this.monospace = false,
+    this.kind = 'event',
+    this.actorId,
+    this.role,
   });
 
   final IconData icon;
@@ -39,6 +42,25 @@ class _ActivityItem {
   final String detail;
   final _ActivityState state;
   final bool monospace;
+  final String kind;
+  final String? actorId;
+  final String? role;
+}
+
+class _AgentStatus {
+  const _AgentStatus({
+    required this.id,
+    required this.role,
+    required this.state,
+    required this.detail,
+  });
+
+  final String id;
+  final String role;
+  final _ActivityState state;
+  final String detail;
+
+  bool get isRunning => state == _ActivityState.running;
 }
 
 // ─── Home page ─────────────────────────────────────────────────────────────────
@@ -343,6 +365,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           detail: _eventText(data, 'arguments'),
           state: _ActivityState.running,
           monospace: true,
+          kind: 'tool',
         );
       case 'tool_call_update':
         final name = _eventText(data, 'name', fallback: 'execute');
@@ -352,6 +375,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           detail: _eventText(data, 'arguments'),
           state: _ActivityState.running,
           monospace: true,
+          kind: 'tool',
         );
       case 'cell_start':
         return _ActivityItem(
@@ -360,6 +384,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           detail: _eventText(data, 'code'),
           state: _ActivityState.running,
           monospace: true,
+          kind: 'cell',
         );
       case 'cell_result':
         final shaped = _eventText(data, 'shaped');
@@ -373,6 +398,7 @@ class _MikuHomePageState extends State<MikuHomePage>
               ? _ActivityState.failed
               : _ActivityState.done,
           monospace: true,
+          kind: 'cell',
         );
       case 'actor_spawned':
         final actorId = _eventText(data, 'actor_id',
@@ -383,6 +409,9 @@ class _MikuHomePageState extends State<MikuHomePage>
           title: '啟動 $role · $actorId',
           detail: _eventText(data, 'task'),
           state: _ActivityState.running,
+          kind: 'actor',
+          actorId: actorId,
+          role: role,
         );
       case 'actor_status':
         final actorId = _eventText(data, 'actor_id',
@@ -395,6 +424,8 @@ class _MikuHomePageState extends State<MikuHomePage>
           state: status == 'terminated'
               ? _ActivityState.done
               : _ActivityState.running,
+          kind: 'actor',
+          actorId: actorId,
         );
       case 'actor_message':
         final actorId = _eventText(data, 'actor_id',
@@ -405,6 +436,8 @@ class _MikuHomePageState extends State<MikuHomePage>
           detail:
               _eventText(data, 'text', fallback: _eventText(data, 'message')),
           state: _ActivityState.info,
+          kind: 'actor',
+          actorId: actorId,
         );
       case 'actor_completed':
         final actorId = _eventText(data, 'actor_id',
@@ -420,6 +453,8 @@ class _MikuHomePageState extends State<MikuHomePage>
           detail:
               [summary, resources].where((part) => part.isNotEmpty).join('\n'),
           state: _ActivityState.done,
+          kind: 'actor',
+          actorId: actorId,
         );
       case 'actor_failed':
         final actorId = _eventText(data, 'actor_id',
@@ -431,6 +466,8 @@ class _MikuHomePageState extends State<MikuHomePage>
               fallback: _eventText(data, 'failure_reason',
                   camelKey: 'failureReason')),
           state: _ActivityState.failed,
+          kind: 'actor',
+          actorId: actorId,
         );
       case 'actor_cancelled':
         final actorId = _eventText(data, 'actor_id',
@@ -440,6 +477,8 @@ class _MikuHomePageState extends State<MikuHomePage>
           title: '取消 $actorId',
           detail: _eventText(data, 'reason'),
           state: _ActivityState.failed,
+          kind: 'actor',
+          actorId: actorId,
         );
     }
     return null;
@@ -778,6 +817,30 @@ class _MikuHomePageState extends State<MikuHomePage>
     );
   }
 
+  void _showActivitySheet(_ConversationRound round) {
+    final tok = _tok;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: tok.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
+        ),
+        child: _AgentActivitySheet(
+          tok: tok,
+          accent: _accent,
+          roundIndex: round.index,
+          agents: _agentStatuses(round.activities),
+          activities: List<_ActivityItem>.from(round.activities),
+        ),
+      ),
+    );
+  }
+
   void _showOverflowSheet() {
     final tok = _tok;
     showModalBottomSheet<void>(
@@ -945,10 +1008,13 @@ class _MikuHomePageState extends State<MikuHomePage>
 
       if (round.activities.isNotEmpty) {
         items.add(
-          _ActivityTimeline(
+          _AgentStatusBar(
             tok: tok,
             accent: accent,
+            anim: _dotAnim,
+            agents: _agentStatuses(round.activities),
             activities: round.activities,
+            onTap: () => _showActivitySheet(round),
           ),
         );
         items.add(const SizedBox(height: 10));
@@ -1073,4 +1139,44 @@ String _eventText(
   final value = data[key] ?? (camelKey == null ? null : data[camelKey]);
   final text = value?.toString() ?? '';
   return text.isEmpty ? fallback : text;
+}
+
+List<_AgentStatus> _agentStatuses(List<_ActivityItem> activities) {
+  final ordered = <String>[];
+  final roles = <String, String>{};
+  final states = <String, _ActivityState>{};
+  final details = <String, String>{};
+
+  for (final item in activities) {
+    final id = item.actorId;
+    if (item.kind != 'actor' || id == null || id.isEmpty) continue;
+    if (!ordered.contains(id)) ordered.add(id);
+    final role = item.role;
+    if (role != null && role.isNotEmpty) {
+      roles[id] = role;
+    }
+    states[id] = item.state;
+    if (item.detail.trim().isNotEmpty) {
+      details[id] = item.detail.trim();
+    } else {
+      details[id] = item.title;
+    }
+  }
+
+  return ordered
+      .map(
+        (id) => _AgentStatus(
+          id: id,
+          role: roles[id] ?? _roleFromActorId(id),
+          state: states[id] ?? _ActivityState.info,
+          detail: details[id] ?? '',
+        ),
+      )
+      .toList();
+}
+
+String _roleFromActorId(String id) {
+  final match = RegExp(r'^([A-Za-z_ -]+)').firstMatch(id);
+  final role = match?.group(1)?.trim() ?? '';
+  return role.isEmpty ? 'agent' : role.toLowerCase();
 }

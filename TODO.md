@@ -1,6 +1,6 @@
 # TODO
 
-Last aligned: **2026-07-06**.
+Last aligned: **2026-07-07**.
 
 Active milestone: **P4** (P3-plus actor/mailbox/supervision/provenance closeout is complete;
 see deferred catalog work at the end for post-P3+ scope).
@@ -231,8 +231,8 @@ Acceptance:
       coupled group), `rest_for_one` (restart the dead child and those started after it).
       **Resolved:** `FailureReason` and `RestartStrategy` types defined in `supervise.rs`.
       **P3-plus update:** supervisor state now computes and emits strategy decisions, and `Cancel`
-      actions are applied to siblings. `Restart` actions now respawn actors from stored restart
-      templates with fresh cancellation/inbox state.
+      actions expand through sibling subtrees before tripping cancellation tokens. `Restart`
+      actions now respawn actors from stored restart templates with fresh cancellation/inbox state.
 - [x] Enforce a depth limit to bound recursion; cost accounting rolls up to the parent session.
       **Resolved:** `ChatActorExecutor` checks `spec.depth >= spec.budget.max_depth` and returns
       `DepthExceeded`. **P3-plus update:** real caller-id threading is now in `InvocationCtx` and
@@ -257,8 +257,8 @@ Acceptance:
 - [x] "Let it crash" — a failing child aborts only its subtree; siblings continue.
       **Resolved:** isolation holds — each actor runs in a dedicated thread, failures are caught and
       marked via `mark_failed`; no parent corruption. **P3-plus update:** supervision `Cancel`
-      actions now trip sibling tokens, and restart actions respawn actors from stored templates with
-      fresh cancellation/inbox state.
+      actions now trip sibling-subtree tokens, and restart actions respawn actors from stored
+      templates with fresh cancellation/inbox state.
 
 ## P3.2 Agent SDK surface
 
@@ -434,9 +434,9 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
       **Resolved:** `supervise.rs` computes replayable supervision decisions for restartable
       crashes/timeouts, max-restart escalation, terminal cancellation, and strategy-specific
       cancel/restart target sets. `MailboxRegistry` tracks parent supervisor state, stores restart
-      templates, emits replayable `actor_supervision` decisions after `actor_failed`, applies
-      `Cancel` actions to sibling tokens, and respawns `Restart` actions with fresh cancellation
-      and inbox state.
+      templates, emits replayable `actor_supervision` decisions after `actor_failed`, expands
+      `Cancel` actions through sibling subtrees, and respawns `Restart` actions with fresh
+      cancellation and inbox state.
 - [x] Wall-clock budget enforcement per actor.
       **Resolved:** all `agents.run` / `spawn` / `parallel` / `pipeline` executor calls now pass
       through a shared `ActorBudget.wall_ms` timeout wrapper. Timeout trips the actor cancellation
@@ -450,9 +450,11 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 - [x] Subtree cancel-on-sibling-failure for `agents.spawn` / `agents.parallel`
       ("let it crash" — a failing child aborts its whole sibling group, not just itself).
       **Resolved:** `agents.parallel` waves run under an isolated `one_for_all` / zero-restart
-      supervision group, so a failing branch cancels sibling wave members without restarting the
-      whole wave. `agents.spawn` accepts `opts.supervision.group`, letting spawned siblings share
-      the same fail-fast supervision group.
+      supervision group, so a failing branch cancels sibling wave members and their live
+      descendants without restarting the whole wave. `agents.spawn` accepts
+      `opts.supervision.group`, letting spawned siblings share the same fail-fast supervision
+      group; supervised cancel actions emit replayable `actor_cancelled` lifecycle events for
+      every newly terminated actor in the sibling subtree.
 
 ### Child actor approvals
 

@@ -155,7 +155,9 @@ async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
     use crate::actor::{ActorDigest, ActorId, ActorSpec};
     use crate::executor::{ActorError, ActorExecutor};
 
-    struct FailAndWaitExecutor;
+    struct FailAndWaitExecutor {
+        roster: Arc<MailboxRegistry>,
+    }
 
     #[async_trait::async_trait]
     impl ActorExecutor for FailAndWaitExecutor {
@@ -164,8 +166,24 @@ async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
             spec: ActorSpec,
         ) -> std::result::Result<ActorDigest, ActorError> {
             if spec.task == "fail" {
+                let child = ActorId::new("WaiterChild").unwrap();
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+                while tokio::time::Instant::now() < deadline {
+                    if self.roster.get(&child).await.is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
                 return Err(ActorError::Execution("spawn branch failed".to_string()));
             }
+
+            track_actor(
+                &self.roster,
+                "WaiterChild",
+                Some(spec.id.as_str()),
+                ActorStatus::Running,
+            )
+            .await;
 
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
             while tokio::time::Instant::now() < deadline {
@@ -186,7 +204,9 @@ async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
     }
 
     let roster = Arc::new(MailboxRegistry::new());
-    roster.set_executor(Arc::new(FailAndWaitExecutor));
+    roster.set_executor(Arc::new(FailAndWaitExecutor {
+        roster: Arc::clone(&roster),
+    }));
     let (events, hook) = lifecycle_hook();
     roster.set_lifecycle_hook(hook);
 
@@ -199,6 +219,17 @@ async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
     )
     .await
     .unwrap();
+    let waiter_child = ActorId::new("WaiterChild").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if roster.get(&waiter_child).await.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("waiter child should be tracked before failing sibling");
     f.call(
         json!({"role": "failer", "task": "fail", "opts": opts}),
         &ctx,
@@ -212,8 +243,15 @@ async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
             let waiter_rec = roster.get(&waiter).await.expect("waiter record exists");
+            let waiter_child_rec = roster
+                .get(&waiter_child)
+                .await
+                .expect("waiter child record exists");
             let failer_rec = roster.get(&failer).await.expect("failer record exists");
-            if waiter_rec.cancelled && failer_rec.failure_reason.is_some() {
+            if waiter_rec.cancelled
+                && waiter_child_rec.cancelled
+                && failer_rec.failure_reason.is_some()
+            {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -225,6 +263,9 @@ async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
     let waiter_rec = roster.get(&waiter).await.unwrap();
     assert_eq!(waiter_rec.status, ActorStatus::Terminated);
     assert!(waiter_rec.cancelled);
+    let waiter_child_rec = roster.get(&waiter_child).await.unwrap();
+    assert_eq!(waiter_child_rec.status, ActorStatus::Terminated);
+    assert!(waiter_child_rec.cancelled);
     let failer_rec = roster.get(&failer).await.unwrap();
     assert!(matches!(
         failer_rec.failure_reason,
@@ -243,6 +284,10 @@ async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
                 action,
                 SupervisionAction::Cancel { actor_id } if actor_id == &waiter
             ))
+    )));
+    assert!(evs.iter().any(|event| matches!(
+        event,
+        ActorLifecycleEvent::Cancelled { actor_id, .. } if actor_id == &waiter_child
     )));
 }
 
@@ -352,7 +397,9 @@ async fn agents_parallel_failure_cancels_sibling_wave_members() {
     use crate::actor::{ActorDigest, ActorId, ActorSpec};
     use crate::executor::{ActorError, ActorExecutor};
 
-    struct FailAndWaitExecutor;
+    struct FailAndWaitExecutor {
+        roster: Arc<MailboxRegistry>,
+    }
 
     #[async_trait::async_trait]
     impl ActorExecutor for FailAndWaitExecutor {
@@ -361,8 +408,24 @@ async fn agents_parallel_failure_cancels_sibling_wave_members() {
             spec: ActorSpec,
         ) -> std::result::Result<ActorDigest, ActorError> {
             if spec.task == "fail" {
+                let child = ActorId::new("WaiterChild").unwrap();
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+                while tokio::time::Instant::now() < deadline {
+                    if self.roster.get(&child).await.is_some() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
                 return Err(ActorError::Execution("parallel branch failed".to_string()));
             }
+
+            track_actor(
+                &self.roster,
+                "WaiterChild",
+                Some(spec.id.as_str()),
+                ActorStatus::Running,
+            )
+            .await;
 
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
             while tokio::time::Instant::now() < deadline {
@@ -383,7 +446,9 @@ async fn agents_parallel_failure_cancels_sibling_wave_members() {
     }
 
     let roster = Arc::new(MailboxRegistry::new());
-    roster.set_executor(Arc::new(FailAndWaitExecutor));
+    roster.set_executor(Arc::new(FailAndWaitExecutor {
+        roster: Arc::clone(&roster),
+    }));
     let (events, hook) = lifecycle_hook();
     roster.set_lifecycle_hook(hook);
 
@@ -403,11 +468,16 @@ async fn agents_parallel_failure_cancels_sibling_wave_members() {
     assert!(matches!(err, HostError::HostCall(_)));
     let failed = ActorId::new("Failer0").unwrap();
     let sibling = ActorId::new("Waiter1").unwrap();
+    let sibling_child = ActorId::new("WaiterChild").unwrap();
 
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
             let rec = roster.get(&sibling).await.expect("sibling record exists");
-            if rec.cancelled {
+            let child_rec = roster
+                .get(&sibling_child)
+                .await
+                .expect("sibling child record exists");
+            if rec.cancelled && child_rec.cancelled {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -424,6 +494,9 @@ async fn agents_parallel_failure_cancels_sibling_wave_members() {
     let sibling_rec = roster.get(&sibling).await.unwrap();
     assert_eq!(sibling_rec.status, ActorStatus::Terminated);
     assert!(sibling_rec.cancelled);
+    let sibling_child_rec = roster.get(&sibling_child).await.unwrap();
+    assert_eq!(sibling_child_rec.status, ActorStatus::Terminated);
+    assert!(sibling_child_rec.cancelled);
 
     let evs = events.lock().unwrap();
     assert!(evs.iter().any(|event| matches!(
@@ -441,6 +514,10 @@ async fn agents_parallel_failure_cancels_sibling_wave_members() {
                 action,
                 SupervisionAction::Escalate { actor_id, .. } if actor_id == &failed
             ))
+    )));
+    assert!(evs.iter().any(|event| matches!(
+        event,
+        ActorLifecycleEvent::Cancelled { actor_id, .. } if actor_id == &sibling_child
     )));
 }
 

@@ -793,6 +793,20 @@ impl MailboxRegistry {
         result
     }
 
+    pub async fn cancel_actor_subtree(
+        &self,
+        session_id: &str,
+        root: &ActorId,
+    ) -> Vec<(ActorId, CancelActorResult)> {
+        let actor_ids = self.actor_subtree_ids(root).await;
+        let mut results = Vec::with_capacity(actor_ids.len());
+        for actor_id in actor_ids {
+            let result = self.cancel_actor(session_id, &actor_id).await;
+            results.push((actor_id, result));
+        }
+        results
+    }
+
     pub async fn cancel_token(&self, actor_id: &ActorId) -> ActorCancelToken {
         self.ensure_cancel_token(actor_id).await
     }
@@ -944,9 +958,40 @@ impl MailboxRegistry {
     async fn apply_supervision_actions(&self, session_id: &str, decision: &SupervisionDecision) {
         for action in &decision.actions {
             if let SupervisionAction::Cancel { actor_id } = action {
-                let _ = self.cancel_actor(session_id, actor_id).await;
+                let _ = self.cancel_actor_subtree(session_id, actor_id).await;
             }
         }
+    }
+
+    async fn actor_subtree_ids(&self, root: &ActorId) -> Vec<ActorId> {
+        let actors = self.actors.read().await;
+        if !actors.contains_key(root) {
+            return vec![root.clone()];
+        }
+
+        let mut ordered = Vec::new();
+        let mut pending = VecDeque::new();
+        let mut seen = HashSet::new();
+        pending.push_back(root.clone());
+
+        while let Some(current) = pending.pop_front() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            ordered.push(current.clone());
+
+            let mut children = actors
+                .values()
+                .filter(|record| record.parent.as_ref() == Some(&current))
+                .map(|record| (record.spawned_at, record.id.clone()))
+                .collect::<Vec<_>>();
+            children.sort_by(|(left_at, left_id), (right_at, right_id)| {
+                left_at.cmp(right_at).then_with(|| left_id.cmp(right_id))
+            });
+            pending.extend(children.into_iter().map(|(_, child)| child));
+        }
+
+        ordered
     }
 
     async fn supervisor_id_for_actor(
@@ -1138,6 +1183,12 @@ mod tests {
         registry.track(test_record("Alpha")).await;
         registry.track(test_record("Beta")).await;
         registry.track(test_record("Gamma")).await;
+        registry
+            .track(test_record_with_parent("AlphaChild", "Alpha"))
+            .await;
+        registry
+            .track(test_record_with_parent("GammaChild", "Gamma"))
+            .await;
 
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_for_hook = Arc::clone(&events);
@@ -1183,13 +1234,37 @@ mod tests {
         );
         assert!(
             registry
+                .get(&ActorId::new("AlphaChild").unwrap())
+                .await
+                .unwrap()
+                .cancelled
+        );
+        assert!(
+            registry
                 .get(&ActorId::new("Gamma").unwrap())
                 .await
                 .unwrap()
                 .cancelled
         );
+        assert!(
+            registry
+                .get(&ActorId::new("GammaChild").unwrap())
+                .await
+                .unwrap()
+                .cancelled
+        );
         assert!(registry.is_cancelled(&ActorId::new("Alpha").unwrap()).await);
+        assert!(
+            registry
+                .is_cancelled(&ActorId::new("AlphaChild").unwrap())
+                .await
+        );
         assert!(registry.is_cancelled(&ActorId::new("Gamma").unwrap()).await);
+        assert!(
+            registry
+                .is_cancelled(&ActorId::new("GammaChild").unwrap())
+                .await
+        );
 
         let events = events.lock().unwrap();
         assert!(matches!(
@@ -1201,7 +1276,7 @@ mod tests {
                 .iter()
                 .filter(|event| matches!(event, ActorLifecycleEvent::Cancelled { .. }))
                 .count(),
-            2
+            4
         );
     }
 

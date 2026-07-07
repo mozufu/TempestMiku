@@ -113,6 +113,12 @@ Each turn, only a small block is auto-injected; everything else is pull-on-deman
 
 There is no external deriver/dreamer to depend on or fall behind: steps 2–6 *are* the dream.
 
+**Implemented P4.0 slice:** `tm-memory` now owns the dream queue record shape
+(`DreamQueueRecord`, `DreamReason`, `DreamStatus`) and the explicit no-op worker contract.
+`tm-server` persists a `dream_queue` row when `POST /sessions/:id/end` ends a session, emits
+replayable `session_end` + `dream_queued` events, and keeps extraction / reflection / summary /
+skill-proposal work intentionally stubbed for the next P4 slices.
+
 ## 22.6 Storage substrate & embeddings (decisions)
 
 - **Spine: PostgreSQL + `pgvector`** (self-hosted on `lumo`) — `pgvector` (HNSW index) for dense ANN;
@@ -140,10 +146,13 @@ engine while preserving project continuity:
 - `profile_facts(id, subject, predicate, object, confidence, provenance, valid_from, valid_to)`
 - `recall_chunks(id, scope, text, source, created_at, embedding?)` — project summaries, decisions,
   open loops, and profile/user recall
+- `dream_queue(id, session_id, subject, scope, reason, status, dedupe_key, source_event_seq,
+  attempts, enqueued_at, available_at, locked_at, last_error)` — P4.0 session-end dream requests;
+  status stays `queued` until the real worker/extraction path ships
 
 P0/P1 recall is profile facts + scoped recall chunks, enough to remember what changed, why it changed,
-and what remains open between coding sessions and promoted projects. Full dreaming, graph, RRF fusion,
-and skill generation remain later §22 work.
+and what remains open between coding sessions and promoted projects. P4.0 adds the durable queue
+contract only; full dreaming, graph, RRF fusion, and skill generation remain later §22 work.
 
 ## 22.7 honcho.json behavior → `tm-memory` config
 
@@ -214,6 +223,8 @@ under `skill://<name>` labels today, but those labels are not registered resourc
 
 ## 22.10 Crate layout (`tm-memory`, §28)
 
+- P4.0 landed the narrow ownership crate with `dream` queue types and `NoopDreamWorker`; the richer
+  modules below remain the target layout.
 - `store` — Postgres + `pgvector` spine: `episodic`, `vector` (pgvector), `lexical` (Postgres FTS),
   `facts`, `summaries`, `graph` (`nodes` / `edges`); migrations; `scope`-column isolation.
 - `recall` — candidate generation, RRF fusion, memory-stream re-score, budgeter, rerank?

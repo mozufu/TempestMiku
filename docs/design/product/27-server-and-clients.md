@@ -98,6 +98,10 @@ In P4, a **scheduler** (cron lineage) will start sessions on a schedule: the **w
 **organizer** (§24.3). Until that lands, `cron://` is a reserved resource shape and scheduled jobs are
 not part of the live server surface.
 
+- **P4.0 session-end queue:** before cron lands, `POST /sessions/:id/end` marks a session `ended`,
+  writes a durable `dream_queue` record, and emits `session_end` + `dream_queued` events through the
+  same replay log. The worker is a no-op stub, so this slice does not yet extract facts, write
+  summaries, propose skills, or run on a schedule.
 - **P4 bounds.** Scheduled runs honor `goals.max_turns` (baseline **8**), the proactivity bounds (§21.3),
   and `cron_mode: deny` — a scheduled run that hits an approval gate **defers** (queues for Brian),
   never auto-acts. `cron.wrap_response: true`, `script_timeout_seconds: 120` (§29).
@@ -150,9 +154,10 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 - **Outbound** (server→LLM): **settled** — OpenAI-compatible chat completions with `stream: true`
   (§11); SSE all the way from the model provider through the loop to the client.
 - **Inbound (client→server):** **custom session API + SSE** is primary: `POST /sessions`,
-  `POST /sessions/:id/messages`, `GET /sessions/:id/events`, `POST /sessions/:id/approvals/:approval_id`,
-  `POST /sessions/:id/memory/proposals`, `POST /sessions/:id/promote`, `GET /modes`, mode lock /
-  override endpoints, session-scoped resource endpoints (§09), and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
+  `POST /sessions/:id/messages`, `POST /sessions/:id/end`, `GET /sessions/:id/events`,
+  `POST /sessions/:id/approvals/:approval_id`, `POST /sessions/:id/memory/proposals`,
+  `POST /sessions/:id/promote`, `GET /modes`, mode lock / override endpoints, session-scoped
+  resource endpoints (§09), and `GET /health`. Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
 
@@ -217,7 +222,7 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
   `project://`, `memory://`, and the other registered schemes (§09), browser feeds; optional
   OpenAI-compatible endpoint (§27.5).
 - `store` — in-memory and Postgres-shaped session storage: sessions, messages, append-only events,
-  approvals, project refs, and replay from `Last-Event-ID`.
+  approvals, project refs, P4.0 dream queue rows, and replay from `Last-Event-ID`.
 - Future `schedule` (P4) — cron-style scheduler, job table, bounds (`max_turns`, `cron_mode`), and
   `cron://` handler (list jobs / a job's def + run history) in the §9.2 registry.
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).

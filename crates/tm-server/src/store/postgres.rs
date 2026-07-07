@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
+use tm_memory::{DreamQueueRecord, DreamReason, DreamStatus, NewDreamQueueRecord};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -51,11 +52,14 @@ impl PostgresStore {
                  create table if not exists profile_facts(id uuid primary key, subject text not null, predicate text not null, object text not null, confidence real not null, provenance text not null, valid_from timestamptz not null, valid_to timestamptz);
                  create table if not exists recall_chunks(id uuid primary key, scope text not null, text text not null, source text not null, created_at timestamptz not null);
                  create table if not exists project_items(id uuid primary key, project_id text not null, kind text not null, text text not null, target_uri text not null, source_session_id uuid not null references sessions(id) on delete cascade, source_event_seq bigint, source_uri text, dedupe_key text not null, provenance_json jsonb not null, created_at timestamptz not null, unique(project_id, kind, dedupe_key));
+                 create table if not exists dream_queue(id uuid primary key, session_id uuid not null references sessions(id) on delete cascade, subject text not null, scope text not null, reason text not null, status text not null, dedupe_key text not null unique, source_event_seq bigint, attempts integer not null default 0, enqueued_at timestamptz not null, available_at timestamptz not null, locked_at timestamptz, last_error text);
                  create index if not exists profile_facts_subject_idx on profile_facts(subject);
                  create index if not exists recall_chunks_scope_created_idx on recall_chunks(scope, created_at desc);
                  create index if not exists project_items_project_kind_idx on project_items(project_id, kind, created_at desc);
                  create index if not exists project_items_source_session_kind_idx on project_items(source_session_id, kind, created_at desc);
                  create index if not exists session_events_actor_outputs_idx on session_events(session_id, seq) where artifact_uri is not null or history_uri is not null;
+                 create index if not exists dream_queue_session_idx on dream_queue(session_id, enqueued_at asc);
+                 create index if not exists dream_queue_ready_idx on dream_queue(status, available_at asc) where status = 'queued';
                  create index if not exists sessions_updated_at_idx on sessions(updated_at desc);",
             )
             .await
@@ -94,6 +98,18 @@ impl Store for PostgresStore {
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
         Ok(session)
+    }
+
+    async fn end_session(&self, session_id: Uuid) -> Result<SessionRecord> {
+        self.get_session(session_id).await?;
+        self.client
+            .execute(
+                "update sessions set status = 'ended', updated_at = now() where id = $1",
+                &[&session_id],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        self.get_session(session_id).await
     }
 
     async fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummaryRecord>> {
@@ -514,6 +530,75 @@ impl Store for PostgresStore {
         .map_err(|err| ServerError::Store(err.to_string()))?;
         rows.into_iter().map(row_to_project_item).collect()
     }
+
+    async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord> {
+        self.get_session(new.session_id).await?;
+        let reason = new.reason.as_str();
+        let status = DreamStatus::Queued.as_str();
+        let row = self
+            .client
+            .query_one(
+                "insert into dream_queue (id, session_id, subject, scope, reason, status, dedupe_key, source_event_seq, attempts, enqueued_at, available_at, locked_at, last_error)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, 0, now(), $9, null, null)
+                 on conflict (dedupe_key) do update
+                   set source_event_seq = coalesce(dream_queue.source_event_seq, excluded.source_event_seq)
+                 returning id, session_id, subject, scope, reason, status, dedupe_key, source_event_seq, attempts, enqueued_at, available_at, locked_at, last_error",
+                &[
+                    &Uuid::new_v4(),
+                    &new.session_id,
+                    &new.subject,
+                    &new.scope,
+                    &reason,
+                    &status,
+                    &new.dedupe_key,
+                    &new.source_event_seq,
+                    &new.available_at,
+                ],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        row_to_dream_record(row)
+    }
+
+    async fn dream_queue_for_session(&self, session_id: Uuid) -> Result<Vec<DreamQueueRecord>> {
+        self.get_session(session_id).await?;
+        let rows = self
+            .client
+            .query(
+                "select id, session_id, subject, scope, reason, status, dedupe_key, source_event_seq, attempts, enqueued_at, available_at, locked_at, last_error
+                   from dream_queue
+                  where session_id = $1
+                  order by enqueued_at asc",
+                &[&session_id],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        rows.into_iter().map(row_to_dream_record).collect()
+    }
+}
+
+fn row_to_dream_record(row: tokio_postgres::Row) -> Result<DreamQueueRecord> {
+    let reason: String = row.get("reason");
+    let status: String = row.get("status");
+    Ok(DreamQueueRecord {
+        id: row.get("id"),
+        session_id: row.get("session_id"),
+        subject: row.get("subject"),
+        scope: row.get("scope"),
+        reason: reason
+            .parse::<DreamReason>()
+            .map_err(|err| ServerError::Store(err.to_string()))?,
+        status: status
+            .parse::<DreamStatus>()
+            .map_err(|err| ServerError::Store(err.to_string()))?,
+        dedupe_key: row.get("dedupe_key"),
+        source_event_seq: row.get("source_event_seq"),
+        attempts: row.get("attempts"),
+        enqueued_at: row.get("enqueued_at"),
+        available_at: row.get("available_at"),
+        locked_at: row.get("locked_at"),
+        last_error: row.get("last_error"),
+    })
 }
 
 fn row_to_project_item(row: tokio_postgres::Row) -> Result<ProjectItemRecord> {

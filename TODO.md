@@ -1,12 +1,12 @@
 # TODO
 
-Last aligned: **2026-07-07**.
+Last aligned: **2026-07-08**.
 
 Active milestone: **P4** (P3-plus actor/mailbox/supervision/provenance closeout is complete;
 see deferred catalog work at the end for post-P3+ scope).
 
 `ROADMAP.md` remains the canonical milestone order. This file is the working execution checklist for
-the next slice after the P2 personal-assistant baseline. Keep it aligned with core docs §07/§09 and
+the P4 slices after the P3-plus closeout. Keep it aligned with core docs §07/§09 and
 product docs §21, §22, §23, §25, §26, §27, and §29.
 
 P2 is closed in the roadmap. New work starts from the runtime catalog system now in the tree; do not
@@ -66,6 +66,11 @@ reintroduce hardcoded mode prompts, hidden capability grants, or chat-native too
       reserved.
 - [x] Gated Postgres coverage exists for the P2 memory approval flow while normal `cargo test`
       stays external-service-free.
+- [x] P4.0 dream queue slice: `tm-memory` owns `DreamQueueRecord` / `DreamReason` /
+      `DreamStatus`, `tm-server` persists `dream_queue` rows in memory/Postgres stores, and
+      `POST /sessions/:id/end` emits replayable `session_end` + `dream_queued` events.
+- [x] P4.0 worker/extraction path is explicitly stubbed with `NoopDreamWorker`; no facts,
+      summaries, skills, cron jobs, or background LLM calls run yet.
 - [x] P3-plus foundation slice: `MailboxRegistry` now has bounded per-actor inbox queues,
       `Agent::run` can drain actor inbox messages into the next model turn, `InvocationCtx` carries
       live actor ids, and `agents.send/wait/inbox/list/cancel` are registered SDK calls.
@@ -511,8 +516,8 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 
 ## Deferred catalog work
 
-- [ ] Full `tm-memory`, pgvector, BM25/RRF, graph recall, dream queue, and skill proposal generation
-      remain P4.
+- [ ] Full `tm-memory` worker extraction, pgvector, BM25/RRF, graph recall, summaries,
+      approval-gated skill proposal generation, and cron scheduling remain P4.
 - [ ] `skills.*` import/version/reload, provenance, audit/replay, MCP import gates, and self-evolution
       tiers remain P7.
 - [ ] `drive.*` remains P5.

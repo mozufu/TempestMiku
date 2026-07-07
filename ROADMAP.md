@@ -59,8 +59,8 @@ tm-e2e/Flutter actor smoke coverage.
 Normal Rust tests pass when local loopback networking is available; managed sandboxes may need
 elevated permissions for tests that bind `127.0.0.1`.
 
-Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, and `tm-drive` crates;
-scheduler/dreaming; product approval surfaces for future drive/skill writes and richer memory APIs;
+Still not production-complete: `tm-mcp`, `tm-trace`, full `tm-memory`, and `tm-drive` crates;
+scheduler/dreaming beyond the P4.0 session-end queue; product approval surfaces for future drive/skill writes and richer memory APIs;
 Android OS packaging; generated SDK docs from the runtime registry; and production egress/secret
 hardening.
 
@@ -78,7 +78,7 @@ each milestone is done only when its acceptance checks pass.
 | 5 | **DONE — P2 personal assistant baseline** | 5–8d | Added the companion baseline: full persona overlay via SOUL + mode skill bundles, configurable Hermes asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminder/open-loop capture through approval-backed memory writes. | Tests cover token/text streaming over SSE, active mode profiles loading SOUL + dedicated skills, profile/recall context injection, characterful non-serious voice caps, approval-gated profile/recall/reminder writes, `memory://` resources, negative-state no-write guardrails, and health-over-productivity/proactivity prompt bounds. |
 | 6 | **DONE — P3: handoff + sub-agent actors** | 6–10d | Added `tm-agents` with actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` + `history://` resources, child artifact spill + transcript history, actor lifecycle events in SSE stream, supervision defaults, Handoff mode wired from catalog, `CapabilityGrants` glob permit. | ✓ Fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ child crash isolated + `actor_failed` in SSE log; ✓ handoff matches `oh-my-pi-handoff`. |
 | 6+ | **DONE — P3+ live actor mailbox + supervision** | 4–8d | Landed per-actor bounded inbox + `Agent::run` inbox draining, `agents.send/broadcast/wait/inbox/list/cancel/pipeline`, child approval routing through the live broker, parent-session child artifacts, parent-driven cancel tokens with replayable `actor_cancelled`, plain-prose enforcement, live-wait DAG acyclicity checks, pipeline digest-reference wiring, active restart strategies (`one_for_one`, `one_for_all`, `rest_for_one`), wall-clock budget enforcement, fail-fast sibling-subtree supervision, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and tm-e2e/Flutter actor smoke coverage. | Tests prove live sibling coordination, cancel/replay, child approval routing, restart decisions, actor timeouts, fail-fast sibling-subtree cancellation, event-log resource provenance, and Flutter attach/approve/reconnect smoke coverage. |
-| 7 | **P4 — dreaming + scheduler** | 6–10d | Expand `tm-memory` to Postgres/pgvector + FTS; async episodic writes; dream queue; extraction, reflection, summaries, skill proposal; add cron scheduler. | Session end enqueues dream; dream writes summary + at least one approval-gated skill proposal; weekly ship ledger runs under cron bounds. |
+| 7 | **P4 — dreaming + scheduler** | 6–10d | P4.0 landed `tm-memory` ownership, durable `dream_queue` records, `POST /sessions/:id/end`, replayable `session_end` / `dream_queued` events, and a no-op worker contract. Remaining: expand to Postgres/pgvector + FTS, async episodic writes, extraction, reflection, summaries, skill proposal, and cron scheduler. | Session end enqueues dream; dream writes summary + at least one approval-gated skill proposal; weekly ship ledger runs under cron bounds. |
 | 8 | **P5 — drive + research workspace** | 5–9d | Add `tm-drive`, `drive.*`, local-first file metadata, transducers, virtual dirs, project memory scopes, drive organizer. | Dropped file auto-files by derived attributes after approval; project link mints `FsPolicy` + memory scope; offline local-first path works. |
 | 9 | **P6 — Android package + OS integrations** | 4–7d | Package the existing Flutter client for Android; add mobile OS integrations such as secure pairing storage, push approval notifications, app links, and reconnect/resume polish. No on-device sandbox. | Android and Web/PWA attach to the same server/session stream; the Android build reuses the same chat, approval, artifact/resource, memory, drive, and agent-browser components rather than duplicating client code. |
 | 10 | **P7 — self-evolution + hardening** | 6–12d | Implement evolution tiers; write-scope switches; audit trail; MCP import/reload gates; egress/isolation hardening; add replay checks. | Tier switch changes allowed writes; conservative writes only memory+skills proposals; audit/replay can explain every gated write. |
@@ -88,8 +88,9 @@ each milestone is done only when its acceptance checks pass.
 1. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
    artifacts, and HTTP-routed manual approvals.
-2. **Begin P4 from the settled actor surface** — scheduler/dreaming and fuller `tm-memory` should build
-   on the P3+ event-log/resource contracts instead of adding a second orchestration path.
+2. **Continue P4 from the settled actor surface** — the session-end dream queue now builds on the
+   P3+ event-log/resource contracts; next slices should attach extraction/summary work and cron
+   without adding a second orchestration path.
 3. **Defer drive, MCP, trace, Android, and self-evolution surfaces until their roadmap stages** —
    `tm-drive`, `tm-mcp`, `tm-trace`, Android packaging, and P7 hardening should layer on the same
    server/resource surface.
@@ -100,7 +101,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 | Namespace / surface | Target milestone | Placement note |
 |---|---|---|
-| `memory.*` | **P2/P4 split** | P2 may expose the minimum profile/user recall and personal-assistant state-capture surface; P4 owns full `tm-memory`, pgvector/FTS, dream queue writes, and richer scoped memory APIs. |
+| `memory.*` | **P2/P4 split** | P2 exposes the minimum profile/user recall and personal-assistant state-capture surface. P4.0 owns `tm-memory` and session-end dream queue writes; fuller pgvector/FTS, graph recall, worker extraction, and richer scoped memory APIs remain P4. |
 | `agents.*` | **P3 ✓ / P3+ ✓** | P3 MVP shipped: `agents.run/spawn/parallel/msg`, actor lifecycle, mailbox/roster, `agent://`+`history://` resources, SSE lifecycle events, Handoff mode. P3+ shipped bounded live inbox delivery plus `send`, `broadcast`, `wait`, `inbox`, `list`, `cancel`, and `pipeline` with digest-reference stage wiring, child approval routing, plain-prose enforcement, live-wait DAG acyclicity checks, active restart supervision, sibling-subtree cancellation policy, wall-clock budgets, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and actor smoke coverage. |
 | `skills.*` / `skill://` reads | **P4/P7 split** | Current `skill://...` use is prompt-composition-only. P4 can emit approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, MCP import gates, and any first-class read/list/preview handler. |
 | `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
@@ -126,12 +127,13 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 ## Crate plan
 
 Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-modes`,
-`tm-agents`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The P0a bridge
-currently lives in `tm-server::omp_acp`; minimal memory lives in `tm-server::memory`; `fs.*` /
+`tm-agents`, `tm-memory`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The P0a bridge
+currently lives in `tm-server::omp_acp`; P2 minimal memory still lives in `tm-server::memory` while
+P4 dream queue ownership lives in `tm-memory`; `fs.*` /
 `code.*` / `proc.*` live in `tm-host`; actor lifecycle, mailbox, orchestration, and resources live
 in `tm-agents`.
 
-Planned product/support crates remain: `tm-memory` (multi-mechanism recall + dreaming),
+Planned product/support crates remain: full `tm-memory` (multi-mechanism recall + dreaming),
 `tm-drive`, `tm-mcp`, and `tm-trace`. Existing core crates (§10.1) keep their contracts; future
 work should extract product storage/orchestration only when the second concrete user exists.
 

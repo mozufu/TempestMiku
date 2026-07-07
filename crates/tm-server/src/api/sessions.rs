@@ -89,6 +89,23 @@ pub struct SessionPendingEventResponse {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndSessionRequest {
+    #[serde(default = "default_subject")]
+    pub subject: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndSessionResponse {
+    pub id: Uuid,
+    pub status: String,
+    pub dream: DreamQueueRecord,
+}
+
 pub(super) async fn list_sessions<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     headers: HeaderMap,
@@ -213,6 +230,87 @@ where
         messages,
         last_event_id,
         pending_events,
+    }))
+}
+
+pub(super) async fn end_session<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    payload: Option<Json<EndSessionRequest>>,
+) -> Result<Json<EndSessionResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    let payload = payload.map(|Json(payload)| payload).unwrap_or_default();
+    let existing = state.store.get_session(session_id).await?;
+    let profile = mode_profile(&state.persona, &existing.mode_state.mode);
+    let subject = payload.subject;
+    let scope = payload
+        .scope
+        .unwrap_or_else(|| profile.default_scope.clone());
+    let was_ended = existing.status == "ended";
+    let session = if was_ended {
+        existing
+    } else {
+        state.store.end_session(session_id).await?
+    };
+    let source_event_seq = if was_ended {
+        None
+    } else {
+        let event = state
+            .store
+            .append_event(
+                session_id,
+                "session_end",
+                json!({
+                    "status": "ended",
+                    "reason": "user_requested",
+                    "subject": subject,
+                    "scope": scope,
+                }),
+            )
+            .await?;
+        let _ = state.sender(session_id).send(event.clone());
+        Some(event.seq)
+    };
+    let dream = state
+        .store
+        .enqueue_dream(NewDreamQueueRecord::session_end(
+            session_id,
+            subject,
+            scope,
+            source_event_seq,
+        ))
+        .await?;
+    if !was_ended {
+        let event = state
+            .store
+            .append_event(
+                session_id,
+                "dream_queued",
+                json!({
+                    "dreamId": dream.id,
+                    "sessionId": dream.session_id,
+                    "reason": dream.reason,
+                    "status": dream.status,
+                    "subject": dream.subject,
+                    "scope": dream.scope,
+                    "dedupeKey": dream.dedupe_key,
+                    "sourceEventSeq": dream.source_event_seq,
+                    "availableAt": dream.available_at,
+                }),
+            )
+            .await?;
+        let _ = state.sender(session_id).send(event);
+    }
+    Ok(Json(EndSessionResponse {
+        id: session.id,
+        status: session.status,
+        dream,
     }))
 }
 

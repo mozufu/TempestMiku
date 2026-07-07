@@ -32,6 +32,7 @@ use tm_host::{
     CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
     ResourceRegistry,
 };
+use tm_memory::{DreamQueueRecord, NewDreamQueueRecord};
 
 use crate::{
     ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig, ChatRunner,
@@ -92,8 +93,9 @@ use sessions::default_subject;
 
 pub use modes::{ModeRequest, ModeResponse};
 pub use sessions::{
-    CreateSessionRequest, CreateSessionResponse, ListSessionsResponse, MemoryWriteProposalResponse,
-    PostMessageRequest, ProposeMemoryWriteRequest, SessionMessagesResponse,
+    CreateSessionRequest, CreateSessionResponse, EndSessionRequest, EndSessionResponse,
+    ListSessionsResponse, MemoryWriteProposalResponse, PostMessageRequest,
+    ProposeMemoryWriteRequest, SessionMessagesResponse,
 };
 
 pub struct AppState<S, M, C> {
@@ -287,6 +289,7 @@ where
             get(sessions::list_sessions::<S, M, C>).post(sessions::create_session::<S, M, C>),
         )
         .route("/sessions/:id", get(sessions::get_session::<S, M, C>))
+        .route("/sessions/:id/end", post(sessions::end_session::<S, M, C>))
         .route(
             "/sessions/:id/events",
             get(events::session_events::<S, M, C>),

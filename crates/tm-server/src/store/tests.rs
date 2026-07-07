@@ -1,5 +1,6 @@
 use chrono::Utc;
 use serde_json::json;
+use tm_memory::{DreamReason, DreamStatus, NewDreamQueueRecord};
 use tm_modes::{AssetStatus, ModeId};
 use uuid::Uuid;
 
@@ -107,6 +108,47 @@ async fn in_memory_session_events_expose_actor_output_refs() {
 }
 
 #[tokio::test]
+async fn in_memory_end_session_enqueue_dream_is_idempotent() {
+    let store = InMemoryStore::default();
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let ended = store.end_session(session.id).await.unwrap();
+    assert_eq!(ended.status, "ended");
+
+    let first = store
+        .enqueue_dream(NewDreamQueueRecord::session_end(
+            session.id, "brian", "global", None,
+        ))
+        .await
+        .unwrap();
+    let duplicate = store
+        .enqueue_dream(NewDreamQueueRecord::session_end(
+            session.id,
+            "brian",
+            "project:tempestmiku",
+            Some(9),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(duplicate.id, first.id);
+    assert_eq!(duplicate.reason, DreamReason::SessionEnded);
+    assert_eq!(duplicate.status, DreamStatus::Queued);
+    assert_eq!(duplicate.source_event_seq, Some(9));
+    let queued = store.dream_queue_for_session(session.id).await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].id, first.id);
+}
+
+#[tokio::test]
 async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
     let Some(dsn) = postgres_test_dsn() else {
         return;
@@ -121,6 +163,37 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
         })
         .await
         .unwrap();
+
+    let ended = store.end_session(session.id).await.unwrap();
+    assert_eq!(ended.status, "ended");
+    let dream = store
+        .enqueue_dream(NewDreamQueueRecord::session_end(
+            session.id,
+            "brian",
+            "global",
+            Some(1),
+        ))
+        .await
+        .unwrap();
+    let duplicate = store
+        .enqueue_dream(NewDreamQueueRecord::session_end(
+            session.id,
+            "brian",
+            "global",
+            Some(2),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.id, dream.id);
+    assert_eq!(duplicate.status, DreamStatus::Queued);
+    assert_eq!(
+        store
+            .dream_queue_for_session(session.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     let mut mode_state = session.mode_state.clone();
     mode_state.mode = ModeId::from("serious_engineer");

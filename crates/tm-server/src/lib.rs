@@ -39,6 +39,10 @@ pub use store::{
     StoreEvent,
 };
 pub use tm_agents::MailboxRegistry;
+pub use tm_memory::{
+    DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport, MemoryError,
+    NewDreamQueueRecord, NoopDreamWorker,
+};
 pub use tm_modes::{
     AssetStatus, ComposedPrompt, ModeAssets, ModeCatalog, ModeId, ModeProfile, ModesConfig,
 };

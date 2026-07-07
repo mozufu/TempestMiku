@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::Value;
+use tm_memory::{DreamQueueRecord, DreamStatus, NewDreamQueueRecord};
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
@@ -26,6 +27,7 @@ struct Inner {
     profile_facts: Vec<ProfileFactRecord>,
     recall_chunks: Vec<RecallChunkRecord>,
     project_items: Vec<ProjectItemRecord>,
+    dream_queue: Vec<DreamQueueRecord>,
 }
 
 #[async_trait]
@@ -44,6 +46,17 @@ impl Store for InMemoryStore {
         let mut inner = self.inner.lock();
         inner.sessions.insert(session.id, session.clone());
         Ok(session)
+    }
+
+    async fn end_session(&self, session_id: Uuid) -> Result<SessionRecord> {
+        let mut inner = self.inner.lock();
+        let session = inner
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| ServerError::NotFound(format!("session {session_id}")))?;
+        session.status = "ended".to_string();
+        session.updated_at = Utc::now();
+        Ok(session.clone())
     }
 
     async fn get_session(&self, session_id: Uuid) -> Result<SessionRecord> {
@@ -329,5 +342,52 @@ impl Store for InMemoryStore {
             .collect::<Vec<_>>();
         items.sort_by_key(|item| item.created_at);
         Ok(items)
+    }
+
+    async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord> {
+        self.get_session(new.session_id).await?;
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .dream_queue
+            .iter_mut()
+            .find(|record| record.dedupe_key == new.dedupe_key)
+        {
+            if existing.source_event_seq.is_none() {
+                existing.source_event_seq = new.source_event_seq;
+            }
+            return Ok(existing.clone());
+        }
+        let now = Utc::now();
+        let record = DreamQueueRecord {
+            id: Uuid::new_v4(),
+            session_id: new.session_id,
+            subject: new.subject,
+            scope: new.scope,
+            reason: new.reason,
+            status: DreamStatus::Queued,
+            dedupe_key: new.dedupe_key,
+            source_event_seq: new.source_event_seq,
+            attempts: 0,
+            enqueued_at: now,
+            available_at: new.available_at,
+            locked_at: None,
+            last_error: None,
+        };
+        inner.dream_queue.push(record.clone());
+        Ok(record)
+    }
+
+    async fn dream_queue_for_session(&self, session_id: Uuid) -> Result<Vec<DreamQueueRecord>> {
+        self.get_session(session_id).await?;
+        let mut dreams = self
+            .inner
+            .lock()
+            .dream_queue
+            .iter()
+            .filter(|record| record.session_id == session_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        dreams.sort_by_key(|record| record.enqueued_at);
+        Ok(dreams)
     }
 }

@@ -63,6 +63,104 @@ async fn session_creation_message_append_event_append_and_replay_work() {
 }
 
 #[tokio::test]
+async fn ending_session_enqueues_one_dream_and_replays_lifecycle_events() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    post_user_message(&app, session.id, "wrap this session").await;
+
+    let ended = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/end", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "subject": "brian",
+                        "scope": "project:tempestmiku"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ended.status(), StatusCode::OK);
+    let ended = response_json(ended).await;
+    assert_eq!(ended["status"], json!("ended"));
+    assert_eq!(ended["dream"]["status"], json!("queued"));
+    assert_eq!(ended["dream"]["reason"], json!("session_ended"));
+    assert_eq!(ended["dream"]["scope"], json!("project:tempestmiku"));
+
+    let session_record = store.get_session(session.id).await.unwrap();
+    assert_eq!(session_record.status, "ended");
+    let dreams = store.dream_queue_for_session(session.id).await.unwrap();
+    assert_eq!(dreams.len(), 1);
+    assert_eq!(ended["dream"]["id"], json!(dreams[0].id));
+    assert_eq!(dreams[0].status, tm_memory::DreamStatus::Queued);
+    assert_eq!(dreams[0].source_event_seq, Some(4));
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mode", "text", "final", "session_end", "dream_queued"]
+    );
+    assert_eq!(
+        events[4].payload_json["sourceEventSeq"],
+        json!(events[3].seq)
+    );
+
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/end", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "subject": "brian",
+                        "scope": "global"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::OK);
+    let duplicate = response_json(duplicate).await;
+    assert_eq!(duplicate["dream"]["id"], ended["dream"]["id"]);
+    assert_eq!(
+        store
+            .dream_queue_for_session(session.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "session_end")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "dream_queued")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn modes_catalog_is_loaded_from_runtime_mode_assets() {
     let temp = tempfile::tempdir().unwrap();
     write_mode_assets_fixture(temp.path());

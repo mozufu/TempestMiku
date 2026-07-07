@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tm_memory::{DreamQueueRecord, NewDreamQueueRecord};
 use tm_modes::{AssetStatus, ModeId};
 use uuid::Uuid;
 
@@ -246,6 +247,7 @@ pub struct NewProjectItem {
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
     async fn create_session(&self, new: NewSession) -> Result<SessionRecord>;
+    async fn end_session(&self, session_id: Uuid) -> Result<SessionRecord>;
     async fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummaryRecord>>;
     async fn get_session(&self, session_id: Uuid) -> Result<SessionRecord>;
     async fn session_messages(&self, session_id: Uuid) -> Result<Vec<MessageRecord>>;
@@ -290,6 +292,8 @@ pub trait Store: Send + Sync + 'static {
         project_id: &str,
         kind: Option<ProjectItemKind>,
     ) -> Result<Vec<ProjectItemRecord>>;
+    async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord>;
+    async fn dream_queue_for_session(&self, session_id: Uuid) -> Result<Vec<DreamQueueRecord>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

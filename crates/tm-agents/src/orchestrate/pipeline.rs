@@ -261,26 +261,39 @@ async fn run_pipeline_wave(
     grants: CapabilityGrants,
     tasks: Vec<(String, String)>,
 ) -> Result<Vec<Value>> {
+    let supervisor_id = roster.next_supervisor_id("PipelineWave");
+    roster
+        .set_supervision_policy(
+            supervisor_id.clone(),
+            SupervisionPolicy {
+                strategy: RestartStrategy::OneForAll,
+                max_restarts: 0,
+            },
+        )
+        .await;
     let mut actor_specs = Vec::with_capacity(tasks.len());
     for (role, task) in tasks {
         let actor_id = roster.next_actor_id(&role);
         let budget = ActorBudget::default();
         let spawned_at = Utc::now();
         roster
-            .track(ActorRecord {
-                id: actor_id.clone(),
-                parent: parent_id.clone(),
-                status: ActorStatus::Running,
-                mode: Some(role.clone()),
-                budget: budget.clone(),
-                spawned_at,
-                completed_at: None,
-                cancelled: false,
-                failure_reason: None,
-                last_summary: None,
-                artifact_uri: None,
-                history_uri: None,
-            })
+            .track_with_supervisor(
+                ActorRecord {
+                    id: actor_id.clone(),
+                    parent: parent_id.clone(),
+                    status: ActorStatus::Running,
+                    mode: Some(role.clone()),
+                    budget: budget.clone(),
+                    spawned_at,
+                    completed_at: None,
+                    cancelled: false,
+                    failure_reason: None,
+                    last_summary: None,
+                    artifact_uri: None,
+                    history_uri: None,
+                },
+                supervisor_id.clone(),
+            )
             .await;
         roster.emit_lifecycle(
             &session_id,
@@ -294,21 +307,20 @@ async fn run_pipeline_wave(
                 spawned_at,
             },
         );
-        actor_specs.push((
-            actor_id.clone(),
-            ActorSpec {
-                id: actor_id.clone(),
-                session_id: session_id.clone(),
-                role,
-                task,
-                mode: None,
-                grants: grants.clone(),
-                budget,
-                parent: parent_id.clone(),
-                depth: 0,
-                cancellation: roster.cancel_token(&actor_id).await,
-            },
-        ));
+        let spec = ActorSpec {
+            id: actor_id.clone(),
+            session_id: session_id.clone(),
+            role,
+            task,
+            mode: None,
+            grants: grants.clone(),
+            budget,
+            parent: parent_id.clone(),
+            depth: 0,
+            cancellation: roster.cancel_token(&actor_id).await,
+        };
+        roster.remember_restart_spec(&spec).await;
+        actor_specs.push((actor_id.clone(), spec));
     }
 
     let handles: Vec<tokio::task::JoinHandle<Result<Value>>> = actor_specs
@@ -318,41 +330,23 @@ async fn run_pipeline_wave(
             let roster = Arc::clone(&roster);
             let session_id = session_id.clone();
             tokio::spawn(async move {
-                match executor.run_to_digest(spec).await {
+                match run_actor_to_digest(executor, spec).await {
                     Ok(digest) => {
-                        if let Some(content) = digest.history_content.clone() {
-                            roster.store_transcript(&actor_id, content).await;
-                        }
-                        let completed = roster
-                            .mark_complete_with_digest(
-                                &actor_id,
-                                digest.summary.clone(),
-                                digest.artifact_uri.clone(),
-                                digest.history_uri.clone(),
-                            )
-                            .await;
-                        if completed {
-                            roster.emit_lifecycle(
-                                &session_id,
-                                ActorLifecycleEvent::Completed {
-                                    actor_id: actor_id.clone(),
-                                    completed_at: Utc::now(),
-                                    summary: Some(digest.summary.clone()),
-                                    artifact_uri: digest.artifact_uri.clone(),
-                                    history_uri: digest.history_uri.clone(),
-                                },
-                            );
+                        let summary = digest.summary.clone();
+                        let artifact_uri = digest.artifact_uri.clone();
+                        let history_uri = digest.history_uri.clone();
+                        if mark_actor_completed(&roster, &session_id, &actor_id, digest).await {
                             tracing::debug!(actor_id = %actor_id, "pipeline actor completed");
                         }
                         Ok(json!({
-                            "actorId": digest.actor_id.as_str(),
-                            "summary": digest.summary,
-                            "artifactUri": digest.artifact_uri,
-                            "historyUri": digest.history_uri,
+                            "actorId": actor_id.as_str(),
+                            "summary": summary,
+                            "artifactUri": artifact_uri,
+                            "historyUri": history_uri,
                         }))
                     }
                     Err(err) => {
-                        let reason = map_actor_error(&err);
+                        let reason = failure_reason_for_error(&err);
                         tracing::warn!(actor_id = %actor_id, error = %err, "pipeline actor failed");
                         mark_actor_error(&roster, &session_id, &actor_id, reason).await;
                         Err(HostError::HostCall(format!(

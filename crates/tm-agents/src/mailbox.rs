@@ -11,13 +11,66 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, mpsc};
 
-use crate::actor::{ActorCancelToken, ActorId, ActorLifecycleEvent, ActorRecord, ActorStatus};
+use tm_host::CapabilityGrants;
+
+use crate::actor::{
+    ActorBudget, ActorCancelToken, ActorId, ActorLifecycleEvent, ActorRecord, ActorSpec,
+    ActorStatus,
+};
 use crate::executor::ActorExecutor;
-use crate::supervise::FailureReason;
+use crate::supervise::{
+    FailureReason, SupervisionAction, SupervisionDecision, SupervisionPolicy, Supervisor,
+};
 
 type RawEventFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type RawEventHook =
     dyn Fn(String, String, serde_json::Value) -> RawEventFuture + Send + Sync + 'static;
+
+#[derive(Debug, Clone)]
+struct ActorRestartTemplate {
+    id: ActorId,
+    session_id: String,
+    role: String,
+    task: String,
+    mode: Option<String>,
+    grants: CapabilityGrants,
+    budget: ActorBudget,
+    parent: Option<ActorId>,
+    supervisor_id: ActorId,
+    depth: u32,
+}
+
+impl ActorRestartTemplate {
+    fn from_spec(spec: &ActorSpec, supervisor_id: ActorId) -> Self {
+        Self {
+            id: spec.id.clone(),
+            session_id: spec.session_id.clone(),
+            role: spec.role.clone(),
+            task: spec.task.clone(),
+            mode: spec.mode.clone(),
+            grants: spec.grants.clone(),
+            budget: spec.budget.clone(),
+            parent: spec.parent.clone(),
+            supervisor_id,
+            depth: spec.depth,
+        }
+    }
+
+    fn to_spec(&self, cancellation: ActorCancelToken) -> ActorSpec {
+        ActorSpec {
+            id: self.id.clone(),
+            session_id: self.session_id.clone(),
+            role: self.role.clone(),
+            task: self.task.clone(),
+            mode: self.mode.clone(),
+            grants: self.grants.clone(),
+            budget: self.budget.clone(),
+            parent: self.parent.clone(),
+            depth: self.depth,
+            cancellation,
+        }
+    }
+}
 
 /// A plain-prose message between actors (§23.2).
 ///
@@ -210,10 +263,14 @@ pub struct MailboxRegistry {
     cancel_tokens: RwLock<HashMap<ActorId, ActorCancelToken>>,
     executor: std::sync::OnceLock<Arc<dyn ActorExecutor>>,
     next_seq: AtomicU64,
+    next_supervisor_seq: AtomicU64,
     messages: RwLock<Vec<ActorMessage>>,
     /// In-memory actor transcripts keyed by actor id (P3.3).
     /// Populated by ChatActorExecutor after each run; served by HistoryResourceHandler.
     transcripts: RwLock<HashMap<ActorId, String>>,
+    restart_templates: RwLock<HashMap<ActorId, ActorRestartTemplate>>,
+    actor_supervisors: RwLock<HashMap<ActorId, ActorId>>,
+    supervisors: RwLock<HashMap<ActorId, Supervisor>>,
     /// Optional lifecycle event hook (P3.5).
     ///
     /// Set once at server startup via `set_lifecycle_hook`. When set, `emit_lifecycle` calls
@@ -235,8 +292,12 @@ impl MailboxRegistry {
             cancel_tokens: RwLock::new(HashMap::new()),
             executor: std::sync::OnceLock::new(),
             next_seq: AtomicU64::new(0),
+            next_supervisor_seq: AtomicU64::new(0),
             messages: RwLock::new(Vec::new()),
             transcripts: RwLock::new(HashMap::new()),
+            restart_templates: RwLock::new(HashMap::new()),
+            actor_supervisors: RwLock::new(HashMap::new()),
+            supervisors: RwLock::new(HashMap::new()),
             lifecycle_hook: std::sync::OnceLock::new(),
             raw_event_hook: std::sync::OnceLock::new(),
         }
@@ -315,11 +376,53 @@ impl MailboxRegistry {
             .unwrap_or_else(|_| ActorId::new(format!("A{seq_str}")).expect("A<seq> always valid"))
     }
 
+    pub fn next_supervisor_id(&self, label: &str) -> ActorId {
+        let seq = self.next_supervisor_seq.fetch_add(1, Ordering::Relaxed);
+        let mut chars = label.chars().filter(|c| c.is_alphanumeric());
+        let first = chars
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "Supervisor".to_string());
+        let rest: String = chars.take(15).collect();
+        ActorId::new(format!("{first}{rest}{seq}")).unwrap_or_else(|_| {
+            ActorId::new(format!("Supervisor{seq}")).expect("valid supervisor id")
+        })
+    }
+
     /// Register an actor in the roster.
     pub async fn track(&self, record: ActorRecord) {
+        let supervisor_id = record
+            .parent
+            .clone()
+            .unwrap_or_else(root_supervisor_actor_id);
+        self.track_with_supervisor(record, supervisor_id).await;
+    }
+
+    pub async fn track_with_supervisor(&self, record: ActorRecord, supervisor_id: ActorId) {
+        let actor_id = record.id.clone();
         self.ensure_inbox(&record.id).await;
         self.ensure_cancel_token(&record.id).await;
         self.actors.write().await.insert(record.id.clone(), record);
+        self.actor_supervisors
+            .write()
+            .await
+            .insert(actor_id.clone(), supervisor_id.clone());
+        self.supervisors
+            .write()
+            .await
+            .entry(supervisor_id)
+            .or_default()
+            .track(actor_id);
+    }
+
+    pub async fn remember_restart_spec(&self, spec: &ActorSpec) {
+        let supervisor_id = self
+            .supervisor_id_for_actor(&spec.id, spec.parent.clone())
+            .await;
+        self.restart_templates.write().await.insert(
+            spec.id.clone(),
+            ActorRestartTemplate::from_spec(spec, supervisor_id),
+        );
     }
 
     /// Look up a single actor record by id.
@@ -334,17 +437,21 @@ impl MailboxRegistry {
         }
     }
 
+    pub async fn set_supervision_policy(&self, supervisor_id: ActorId, policy: SupervisionPolicy) {
+        let mut supervisors = self.supervisors.write().await;
+        let supervisor = supervisors
+            .entry(supervisor_id)
+            .or_insert_with(|| Supervisor::new(policy.clone()));
+        supervisor.policy = policy;
+    }
+
     /// Mark an actor as successfully terminated.
     pub async fn mark_complete(&self, id: &ActorId) -> bool {
-        if let Some(rec) = self.actors.write().await.get_mut(id) {
-            if rec.cancelled || rec.failure_reason.is_some() {
-                return false;
-            }
-            rec.status = ActorStatus::Terminated;
-            rec.completed_at = Some(Utc::now());
-            return true;
-        }
-        false
+        let Some(supervisor_id) = self.mark_complete_record(id, None).await else {
+            return false;
+        };
+        self.record_supervised_success(&supervisor_id, id).await;
+        true
     }
 
     /// Mark an actor as successfully terminated and store its full digest (P3.3).
@@ -357,18 +464,14 @@ impl MailboxRegistry {
         artifact_uri: Option<String>,
         history_uri: Option<String>,
     ) -> bool {
-        if let Some(rec) = self.actors.write().await.get_mut(id) {
-            if rec.cancelled || rec.failure_reason.is_some() {
-                return false;
-            }
-            rec.status = ActorStatus::Terminated;
-            rec.completed_at = Some(Utc::now());
-            rec.last_summary = Some(summary);
-            rec.artifact_uri = artifact_uri;
-            rec.history_uri = history_uri;
-            return true;
-        }
-        false
+        let Some(supervisor_id) = self
+            .mark_complete_record(id, Some((summary, artifact_uri, history_uri)))
+            .await
+        else {
+            return false;
+        };
+        self.record_supervised_success(&supervisor_id, id).await;
+        true
     }
 
     /// Store the full transcript for an actor (P3.3).
@@ -459,24 +562,167 @@ impl MailboxRegistry {
 
     /// Mark an actor as terminated due to a failure.
     pub async fn mark_failed(&self, id: &ActorId, reason: FailureReason) -> bool {
-        let should_cancel_token = {
-            if let Some(rec) = self.actors.write().await.get_mut(id) {
-                if rec.cancelled {
-                    return false;
-                }
-                rec.status = ActorStatus::Terminated;
-                rec.completed_at = Some(Utc::now());
-                rec.cancelled = matches!(reason, FailureReason::Cancelled);
-                rec.failure_reason = Some(reason);
-                rec.cancelled
-            } else {
-                return false;
-            }
+        self.mark_failed_record(id, reason).await.is_some()
+    }
+
+    pub async fn mark_failed_with_supervision(
+        &self,
+        id: &ActorId,
+        reason: FailureReason,
+    ) -> Option<(ActorId, SupervisionDecision)> {
+        let supervisor_id = self.mark_failed_record(id, reason.clone()).await?;
+        let decision = {
+            let mut supervisors = self.supervisors.write().await;
+            supervisors
+                .entry(supervisor_id.clone())
+                .or_default()
+                .record_failure(id, reason)
         };
-        if should_cancel_token {
-            self.cancel_token(id).await.cancel();
+
+        Some((supervisor_id, decision))
+    }
+
+    pub async fn record_actor_error(
+        &self,
+        session_id: &str,
+        actor_id: &ActorId,
+        reason: FailureReason,
+    ) -> Option<SupervisionDecision> {
+        let (supervisor_id, decision) = self
+            .mark_failed_with_supervision(actor_id, reason.clone())
+            .await?;
+
+        self.emit_lifecycle(
+            session_id,
+            ActorLifecycleEvent::StatusChanged {
+                actor_id: actor_id.clone(),
+                status: ActorStatus::Terminated,
+                at: Utc::now(),
+            },
+        );
+
+        match reason {
+            FailureReason::Cancelled => self.emit_lifecycle(
+                session_id,
+                ActorLifecycleEvent::Cancelled {
+                    actor_id: actor_id.clone(),
+                    cancelled_at: Utc::now(),
+                },
+            ),
+            reason => self.emit_lifecycle(
+                session_id,
+                ActorLifecycleEvent::Failed {
+                    actor_id: actor_id.clone(),
+                    failed_at: Utc::now(),
+                    reason,
+                },
+            ),
         }
-        true
+
+        self.emit_and_apply_supervision_decision(session_id, supervisor_id, decision.clone())
+            .await;
+        Some(decision)
+    }
+
+    pub async fn emit_and_apply_supervision_decision(
+        &self,
+        session_id: &str,
+        supervisor_id: ActorId,
+        decision: SupervisionDecision,
+    ) {
+        if !decision.actions.is_empty() {
+            self.emit_lifecycle(
+                session_id,
+                ActorLifecycleEvent::Supervision {
+                    supervisor_id,
+                    failed_actor_id: decision.failed_actor_id.clone(),
+                    decision: decision.clone(),
+                    decided_at: Utc::now(),
+                },
+            );
+            self.apply_supervision_actions(session_id, &decision).await;
+        }
+    }
+
+    pub async fn prepare_actor_restart(&self, actor_id: &ActorId) -> Option<ActorSpec> {
+        let template = self.restart_templates.read().await.get(actor_id).cloned()?;
+        let cancellation = ActorCancelToken::default();
+        {
+            self.cancel_tokens
+                .write()
+                .await
+                .insert(actor_id.clone(), cancellation.clone());
+            self.actor_supervisors
+                .write()
+                .await
+                .insert(actor_id.clone(), template.supervisor_id.clone());
+            self.inboxes
+                .write()
+                .await
+                .insert(actor_id.clone(), ActorInbox::new());
+        }
+
+        let spawned_at = Utc::now();
+        {
+            let mut actors = self.actors.write().await;
+            let record = actors
+                .entry(actor_id.clone())
+                .or_insert_with(|| ActorRecord {
+                    id: actor_id.clone(),
+                    parent: template.parent.clone(),
+                    status: ActorStatus::Running,
+                    mode: Some(template.role.clone()),
+                    budget: template.budget.clone(),
+                    spawned_at,
+                    completed_at: None,
+                    cancelled: false,
+                    failure_reason: None,
+                    last_summary: None,
+                    artifact_uri: None,
+                    history_uri: None,
+                });
+            record.parent = template.parent.clone();
+            record.status = ActorStatus::Running;
+            record.mode = Some(template.role.clone());
+            record.budget = template.budget.clone();
+            record.spawned_at = spawned_at;
+            record.completed_at = None;
+            record.cancelled = false;
+            record.failure_reason = None;
+            record.last_summary = None;
+            record.artifact_uri = None;
+            record.history_uri = None;
+        }
+
+        self.supervisors
+            .write()
+            .await
+            .entry(template.supervisor_id.clone())
+            .or_default()
+            .track(actor_id.clone());
+
+        self.emit_lifecycle(
+            &template.session_id,
+            ActorLifecycleEvent::StatusChanged {
+                actor_id: actor_id.clone(),
+                status: ActorStatus::Running,
+                at: spawned_at,
+            },
+        );
+        self.emit_lifecycle(
+            &template.session_id,
+            ActorLifecycleEvent::Spawned {
+                actor_id: actor_id.clone(),
+                parent_id: template.parent.clone(),
+                role: template.role.clone(),
+                task: template.task.clone(),
+                depth: template.depth,
+                budget: template.budget.clone(),
+                spawned_at,
+            },
+        );
+
+        Some(template.to_spec(cancellation))
     }
 
     pub async fn cancel_actor(&self, session_id: &str, id: &ActorId) -> CancelActorResult {
@@ -506,6 +752,14 @@ impl MailboxRegistry {
             self.cancel_token(id).await.cancel();
         }
         if result == CancelActorResult::Cancelled {
+            self.emit_lifecycle(
+                session_id,
+                ActorLifecycleEvent::StatusChanged {
+                    actor_id: id.clone(),
+                    status: ActorStatus::Terminated,
+                    at: cancelled_at,
+                },
+            );
             self.emit_lifecycle(
                 session_id,
                 ActorLifecycleEvent::Cancelled {
@@ -600,6 +854,79 @@ impl MailboxRegistry {
             .get(actor_id)
             .is_some_and(|record| record.status != ActorStatus::Terminated)
     }
+
+    async fn mark_complete_record(
+        &self,
+        id: &ActorId,
+        digest: Option<(String, Option<String>, Option<String>)>,
+    ) -> Option<ActorId> {
+        let mut actors = self.actors.write().await;
+        let rec = actors.get_mut(id)?;
+        if rec.cancelled || rec.failure_reason.is_some() {
+            return None;
+        }
+        rec.status = ActorStatus::Terminated;
+        rec.completed_at = Some(Utc::now());
+        if let Some((summary, artifact_uri, history_uri)) = digest {
+            rec.last_summary = Some(summary);
+            rec.artifact_uri = artifact_uri;
+            rec.history_uri = history_uri;
+        }
+        let fallback = rec.parent.clone();
+        drop(actors);
+        Some(self.supervisor_id_for_actor(id, fallback).await)
+    }
+
+    async fn mark_failed_record(&self, id: &ActorId, reason: FailureReason) -> Option<ActorId> {
+        let (fallback_supervisor, should_cancel_token) = {
+            let mut actors = self.actors.write().await;
+            let rec = actors.get_mut(id)?;
+            if rec.cancelled {
+                return None;
+            }
+            rec.status = ActorStatus::Terminated;
+            rec.completed_at = Some(Utc::now());
+            rec.cancelled = matches!(reason, FailureReason::Cancelled);
+            rec.failure_reason = Some(reason);
+            (rec.parent.clone(), rec.cancelled)
+        };
+        if should_cancel_token {
+            self.cancel_token(id).await.cancel();
+        }
+        Some(self.supervisor_id_for_actor(id, fallback_supervisor).await)
+    }
+
+    async fn record_supervised_success(&self, supervisor_id: &ActorId, id: &ActorId) {
+        if let Some(supervisor) = self.supervisors.write().await.get_mut(supervisor_id) {
+            supervisor.record_success(id);
+        }
+    }
+
+    async fn apply_supervision_actions(&self, session_id: &str, decision: &SupervisionDecision) {
+        for action in &decision.actions {
+            if let SupervisionAction::Cancel { actor_id } = action {
+                let _ = self.cancel_actor(session_id, actor_id).await;
+            }
+        }
+    }
+
+    async fn supervisor_id_for_actor(
+        &self,
+        actor_id: &ActorId,
+        fallback_parent: Option<ActorId>,
+    ) -> ActorId {
+        self.actor_supervisors
+            .read()
+            .await
+            .get(actor_id)
+            .cloned()
+            .or(fallback_parent)
+            .unwrap_or_else(root_supervisor_actor_id)
+    }
+}
+
+fn root_supervisor_actor_id() -> ActorId {
+    ActorId::new("Root").expect("Root is always valid")
 }
 
 impl Default for MailboxRegistry {
@@ -621,6 +948,7 @@ impl std::fmt::Debug for MailboxRegistry {
 mod tests {
     use super::*;
     use crate::actor::{ActorBudget, ActorId};
+    use crate::supervise::RestartStrategy;
 
     fn test_record(id: &str) -> ActorRecord {
         ActorRecord {
@@ -729,6 +1057,113 @@ mod tests {
         registry.mark_failed(&id, FailureReason::Cancelled).await;
         let rec = registry.get(&id).await.unwrap();
         assert!(rec.cancelled);
+    }
+
+    #[tokio::test]
+    async fn mark_failed_with_supervision_returns_default_restart_decision() {
+        let registry = MailboxRegistry::new();
+        let id = ActorId::new("Worker").unwrap();
+        registry.track(test_record("Worker")).await;
+
+        let (supervisor_id, decision) = registry
+            .mark_failed_with_supervision(&id, FailureReason::Timeout)
+            .await
+            .expect("tracked actor failure has a supervisor decision");
+
+        assert_eq!(supervisor_id, ActorId::new("Root").unwrap());
+        assert_eq!(decision.restart_attempt, Some(1));
+        assert_eq!(
+            decision.actions,
+            vec![SupervisionAction::Restart {
+                actor_id: id.clone()
+            }]
+        );
+        let rec = registry.get(&id).await.unwrap();
+        assert_eq!(rec.status, ActorStatus::Terminated);
+        assert!(matches!(rec.failure_reason, Some(FailureReason::Timeout)));
+    }
+
+    #[tokio::test]
+    async fn one_for_all_supervision_cancels_siblings_and_emits_decision() {
+        let registry = MailboxRegistry::new();
+        let root = ActorId::new("Root").unwrap();
+        registry
+            .set_supervision_policy(
+                root.clone(),
+                SupervisionPolicy {
+                    strategy: RestartStrategy::OneForAll,
+                    max_restarts: 1,
+                },
+            )
+            .await;
+        registry.track(test_record("Alpha")).await;
+        registry.track(test_record("Beta")).await;
+        registry.track(test_record("Gamma")).await;
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_for_hook = Arc::clone(&events);
+        registry.set_lifecycle_hook(move |_session_id, event| {
+            events_for_hook.lock().unwrap().push(event);
+        });
+
+        let beta = ActorId::new("Beta").unwrap();
+        let (supervisor_id, decision) = registry
+            .mark_failed_with_supervision(&beta, FailureReason::Timeout)
+            .await
+            .expect("tracked actor failure has a supervisor decision");
+        registry
+            .emit_and_apply_supervision_decision("session-1", supervisor_id, decision.clone())
+            .await;
+
+        assert_eq!(
+            decision.actions,
+            vec![
+                SupervisionAction::Cancel {
+                    actor_id: ActorId::new("Alpha").unwrap()
+                },
+                SupervisionAction::Cancel {
+                    actor_id: ActorId::new("Gamma").unwrap()
+                },
+                SupervisionAction::Restart {
+                    actor_id: ActorId::new("Alpha").unwrap()
+                },
+                SupervisionAction::Restart {
+                    actor_id: ActorId::new("Beta").unwrap()
+                },
+                SupervisionAction::Restart {
+                    actor_id: ActorId::new("Gamma").unwrap()
+                },
+            ]
+        );
+        assert!(
+            registry
+                .get(&ActorId::new("Alpha").unwrap())
+                .await
+                .unwrap()
+                .cancelled
+        );
+        assert!(
+            registry
+                .get(&ActorId::new("Gamma").unwrap())
+                .await
+                .unwrap()
+                .cancelled
+        );
+        assert!(registry.is_cancelled(&ActorId::new("Alpha").unwrap()).await);
+        assert!(registry.is_cancelled(&ActorId::new("Gamma").unwrap()).await);
+
+        let events = events.lock().unwrap();
+        assert!(matches!(
+            events.first(),
+            Some(ActorLifecycleEvent::Supervision { .. })
+        ));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, ActorLifecycleEvent::Cancelled { .. }))
+                .count(),
+            2
+        );
     }
 
     #[test]

@@ -28,4 +28,7 @@ pub use executor::{ActorError, ActorExecutor};
 pub use mailbox::{ActorMessage, MailboxRegistry, Receipt};
 pub use orchestrate::{caps, register};
 pub use resources::{AgentResourceHandler, HistoryResourceHandler};
-pub use supervise::{FailureReason, RestartStrategy, SupervisionPolicy, Supervisor};
+pub use supervise::{
+    FailureReason, RestartStrategy, SupervisionAction, SupervisionDecision, SupervisionPolicy,
+    Supervisor,
+};

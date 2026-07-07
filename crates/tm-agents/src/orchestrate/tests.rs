@@ -1,4 +1,5 @@
 use super::*;
+use crate::supervise::SupervisionAction;
 use tm_host::{CapabilityGrants, InvocationCtx};
 
 fn make_roster() -> Arc<MailboxRegistry> {
@@ -150,6 +151,102 @@ async fn agents_spawn_returns_handle_actor_runs_in_background() {
 }
 
 #[tokio::test]
+async fn agents_spawn_supervision_group_cancels_sibling_on_failure() {
+    use crate::actor::{ActorDigest, ActorId, ActorSpec};
+    use crate::executor::{ActorError, ActorExecutor};
+
+    struct FailAndWaitExecutor;
+
+    #[async_trait::async_trait]
+    impl ActorExecutor for FailAndWaitExecutor {
+        async fn run_to_digest(
+            &self,
+            spec: ActorSpec,
+        ) -> std::result::Result<ActorDigest, ActorError> {
+            if spec.task == "fail" {
+                return Err(ActorError::Execution("spawn branch failed".to_string()));
+            }
+
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+            while tokio::time::Instant::now() < deadline {
+                if spec.cancellation.is_cancelled() {
+                    return Err(ActorError::Cancelled);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+
+            Ok(ActorDigest {
+                actor_id: spec.id,
+                summary: "unexpected completion".to_string(),
+                artifact_uri: None,
+                history_uri: None,
+                history_content: None,
+            })
+        }
+    }
+
+    let roster = Arc::new(MailboxRegistry::new());
+    roster.set_executor(Arc::new(FailAndWaitExecutor));
+    let (events, hook) = lifecycle_hook();
+    roster.set_lifecycle_hook(hook);
+
+    let f = AgentsSpawnFn::new(Arc::clone(&roster));
+    let ctx = ctx_with(caps::AGENTS_SPAWN);
+    let opts = json!({"supervision": {"group": "batch"}});
+    f.call(
+        json!({"role": "waiter", "task": "wait for cancellation", "opts": opts.clone()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    f.call(
+        json!({"role": "failer", "task": "fail", "opts": opts}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let waiter = ActorId::new("Waiter0").unwrap();
+    let failer = ActorId::new("Failer1").unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let waiter_rec = roster.get(&waiter).await.expect("waiter record exists");
+            let failer_rec = roster.get(&failer).await.expect("failer record exists");
+            if waiter_rec.cancelled && failer_rec.failure_reason.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("spawn group failure should cancel sibling");
+
+    let waiter_rec = roster.get(&waiter).await.unwrap();
+    assert_eq!(waiter_rec.status, ActorStatus::Terminated);
+    assert!(waiter_rec.cancelled);
+    let failer_rec = roster.get(&failer).await.unwrap();
+    assert!(matches!(
+        failer_rec.failure_reason,
+        Some(FailureReason::Crash { .. })
+    ));
+
+    let evs = events.lock().unwrap();
+    assert!(evs.iter().any(|event| matches!(
+        event,
+        ActorLifecycleEvent::Supervision {
+            failed_actor_id,
+            decision,
+            ..
+        } if failed_actor_id == &failer
+            && decision.actions.iter().any(|action| matches!(
+                action,
+                SupervisionAction::Cancel { actor_id } if actor_id == &waiter
+            ))
+    )));
+}
+
+#[tokio::test]
 async fn agents_parallel_denied_without_grant() {
     let f = AgentsParallelFn::new(make_roster());
     let ctx = ctx_without_agents();
@@ -248,6 +345,103 @@ async fn agents_parallel_runs_all_and_returns_ordered_digests() {
         let rec = roster.get(&actor_id).await.unwrap();
         assert_eq!(rec.status, ActorStatus::Terminated);
     }
+}
+
+#[tokio::test]
+async fn agents_parallel_failure_cancels_sibling_wave_members() {
+    use crate::actor::{ActorDigest, ActorId, ActorSpec};
+    use crate::executor::{ActorError, ActorExecutor};
+
+    struct FailAndWaitExecutor;
+
+    #[async_trait::async_trait]
+    impl ActorExecutor for FailAndWaitExecutor {
+        async fn run_to_digest(
+            &self,
+            spec: ActorSpec,
+        ) -> std::result::Result<ActorDigest, ActorError> {
+            if spec.task == "fail" {
+                return Err(ActorError::Execution("parallel branch failed".to_string()));
+            }
+
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+            while tokio::time::Instant::now() < deadline {
+                if spec.cancellation.is_cancelled() {
+                    return Err(ActorError::Cancelled);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+
+            Ok(ActorDigest {
+                actor_id: spec.id,
+                summary: "unexpected completion".to_string(),
+                artifact_uri: None,
+                history_uri: None,
+                history_content: None,
+            })
+        }
+    }
+
+    let roster = Arc::new(MailboxRegistry::new());
+    roster.set_executor(Arc::new(FailAndWaitExecutor));
+    let (events, hook) = lifecycle_hook();
+    roster.set_lifecycle_hook(hook);
+
+    let f = AgentsParallelFn::new(Arc::clone(&roster));
+    let ctx = ctx_with(caps::AGENTS_PARALLEL);
+    let err = f
+        .call(
+            json!({"tasks": [
+                {"role": "failer", "task": "fail"},
+                {"role": "waiter", "task": "wait for cancellation"}
+            ]}),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, HostError::HostCall(_)));
+    let failed = ActorId::new("Failer0").unwrap();
+    let sibling = ActorId::new("Waiter1").unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let rec = roster.get(&sibling).await.expect("sibling record exists");
+            if rec.cancelled {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("sibling should be cancelled by wave supervision");
+
+    let failed_rec = roster.get(&failed).await.unwrap();
+    assert!(matches!(
+        failed_rec.failure_reason,
+        Some(FailureReason::Crash { .. })
+    ));
+    let sibling_rec = roster.get(&sibling).await.unwrap();
+    assert_eq!(sibling_rec.status, ActorStatus::Terminated);
+    assert!(sibling_rec.cancelled);
+
+    let evs = events.lock().unwrap();
+    assert!(evs.iter().any(|event| matches!(
+        event,
+        ActorLifecycleEvent::Supervision {
+            failed_actor_id,
+            decision,
+            ..
+        } if failed_actor_id == &failed
+            && decision.actions.iter().any(|action| matches!(
+                action,
+                SupervisionAction::Cancel { actor_id } if actor_id == &sibling
+            ))
+            && decision.actions.iter().any(|action| matches!(
+                action,
+                SupervisionAction::Escalate { actor_id, .. } if actor_id == &failed
+            ))
+    )));
 }
 
 #[tokio::test]
@@ -1205,10 +1399,21 @@ async fn agents_run_emits_spawned_and_completed_lifecycle_events() {
         .unwrap();
 
     let evs = events.lock().unwrap();
-    assert_eq!(evs.len(), 2, "expected Spawned + Completed, got {evs:?}");
+    assert_eq!(
+        evs.len(),
+        3,
+        "expected Spawned + StatusChanged + Completed, got {evs:?}"
+    );
     assert!(matches!(&evs[0], ActorLifecycleEvent::Spawned { role, .. } if role == "worker"));
+    assert!(matches!(
+        &evs[1],
+        ActorLifecycleEvent::StatusChanged {
+            status: ActorStatus::Terminated,
+            ..
+        }
+    ));
     assert!(
-        matches!(&evs[1], ActorLifecycleEvent::Completed { summary, .. } if summary.as_deref() == Some("echo: do it"))
+        matches!(&evs[2], ActorLifecycleEvent::Completed { summary, .. } if summary.as_deref() == Some("echo: do it"))
     );
 }
 
@@ -1238,9 +1443,166 @@ async fn agents_run_emits_failed_lifecycle_event_on_error() {
         .await;
 
     let evs = events.lock().unwrap();
-    assert_eq!(evs.len(), 2, "expected Spawned + Failed, got {evs:?}");
+    assert!(
+        evs.len() >= 4,
+        "expected at least Spawned + StatusChanged + Failed + Supervision, got {evs:?}"
+    );
     assert!(matches!(&evs[0], ActorLifecycleEvent::Spawned { .. }));
-    assert!(matches!(&evs[1], ActorLifecycleEvent::Failed { .. }));
+    assert!(matches!(
+        &evs[1],
+        ActorLifecycleEvent::StatusChanged {
+            status: ActorStatus::Terminated,
+            ..
+        }
+    ));
+    assert!(matches!(&evs[2], ActorLifecycleEvent::Failed { .. }));
+    assert!(matches!(
+        &evs[3],
+        ActorLifecycleEvent::Supervision { decision, .. }
+            if matches!(
+                decision.actions.as_slice(),
+                [SupervisionAction::Restart { .. }]
+            )
+    ));
+}
+
+#[tokio::test]
+async fn agents_run_failure_respawns_actor_from_supervision_restart_action() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::actor::{ActorDigest, ActorSpec};
+    use crate::executor::{ActorError, ActorExecutor};
+
+    struct FlakyExecutor {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ActorExecutor for FlakyExecutor {
+        async fn run_to_digest(
+            &self,
+            spec: ActorSpec,
+        ) -> std::result::Result<ActorDigest, ActorError> {
+            let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                return Err(ActorError::Execution("first attempt failed".to_string()));
+            }
+            Ok(ActorDigest {
+                actor_id: spec.id,
+                summary: format!("restarted attempt {attempt}"),
+                artifact_uri: None,
+                history_uri: Some("history://Worker0".to_string()),
+                history_content: Some("restart transcript".to_string()),
+            })
+        }
+    }
+
+    let roster = Arc::new(MailboxRegistry::new());
+    roster.set_executor(Arc::new(FlakyExecutor {
+        calls: AtomicUsize::new(0),
+    }));
+    let (events, hook) = lifecycle_hook();
+    roster.set_lifecycle_hook(hook);
+
+    let f = AgentsRunFn::new(Arc::clone(&roster));
+    let ctx = ctx_with(caps::AGENTS_RUN);
+    let err = f
+        .call(json!({"role": "worker", "task": "recover"}), &ctx)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, HostError::HostCall(_)));
+
+    let actor_id = ActorId::new("Worker0").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let rec = roster.get(&actor_id).await.expect("actor record exists");
+            if rec.status == ActorStatus::Terminated
+                && rec.failure_reason.is_none()
+                && rec.last_summary.as_deref() == Some("restarted attempt 1")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("restart should complete");
+
+    let rec = roster.get(&actor_id).await.unwrap();
+    assert!(!rec.cancelled);
+    assert_eq!(rec.history_uri.as_deref(), Some("history://Worker0"));
+    assert_eq!(
+        roster.get_transcript(&actor_id).await.as_deref(),
+        Some("restart transcript")
+    );
+
+    let evs = events.lock().unwrap();
+    assert!(matches!(&evs[0], ActorLifecycleEvent::Spawned { .. }));
+    assert!(matches!(
+        &evs[1],
+        ActorLifecycleEvent::StatusChanged {
+            status: ActorStatus::Terminated,
+            ..
+        }
+    ));
+    assert!(matches!(&evs[2], ActorLifecycleEvent::Failed { .. }));
+    assert!(matches!(&evs[3], ActorLifecycleEvent::Supervision { .. }));
+    assert!(evs.iter().any(|event| matches!(
+        event,
+        ActorLifecycleEvent::Completed {
+            actor_id: completed_id,
+            summary,
+            ..
+        } if completed_id == &actor_id && summary.as_deref() == Some("restarted attempt 1")
+    )));
+}
+
+#[tokio::test]
+async fn actor_wall_clock_timeout_trips_cancellation_token() {
+    use crate::actor::{ActorCancelToken, ActorDigest, ActorSpec};
+    use crate::executor::{ActorError, ActorExecutor};
+
+    struct SlowExecutor;
+    #[async_trait::async_trait]
+    impl ActorExecutor for SlowExecutor {
+        async fn run_to_digest(
+            &self,
+            spec: ActorSpec,
+        ) -> std::result::Result<ActorDigest, ActorError> {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            Ok(ActorDigest {
+                actor_id: spec.id,
+                summary: "late".to_string(),
+                artifact_uri: None,
+                history_uri: None,
+                history_content: None,
+            })
+        }
+    }
+
+    let cancellation = ActorCancelToken::default();
+    let spec = ActorSpec {
+        id: ActorId::new("SlowWorker").unwrap(),
+        session_id: "session-1".to_string(),
+        role: "worker".to_string(),
+        task: "sleep".to_string(),
+        mode: None,
+        grants: CapabilityGrants::default(),
+        budget: ActorBudget {
+            wall_ms: 1,
+            max_depth: 4,
+        },
+        parent: None,
+        depth: 0,
+        cancellation: cancellation.clone(),
+    };
+
+    let err = run_actor_to_digest(Arc::new(SlowExecutor), spec)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ActorError::Timeout));
+    assert!(cancellation.is_cancelled());
 }
 
 #[tokio::test]
@@ -1301,10 +1663,17 @@ async fn agents_spawn_emits_spawned_and_eventually_completed() {
     let evs = events.lock().unwrap();
     assert_eq!(
         evs.len(),
-        2,
-        "expected Spawned + Completed after background completion, got {evs:?}"
+        3,
+        "expected Spawned + StatusChanged + Completed after background completion, got {evs:?}"
     );
-    assert!(matches!(&evs[1], ActorLifecycleEvent::Completed { .. }));
+    assert!(matches!(
+        &evs[1],
+        ActorLifecycleEvent::StatusChanged {
+            status: ActorStatus::Terminated,
+            ..
+        }
+    ));
+    assert!(matches!(&evs[2], ActorLifecycleEvent::Completed { .. }));
 }
 
 #[tokio::test]

@@ -9,7 +9,7 @@ use thiserror::Error;
 use tm_core::CancellationToken;
 use tm_host::CapabilityGrants;
 
-use crate::supervise::FailureReason;
+use crate::supervise::{FailureReason, SupervisionDecision};
 
 /// Shareable cancellation token for a single actor run.
 #[derive(Debug, Clone, Default)]
@@ -211,6 +211,12 @@ pub enum ActorLifecycleEvent {
         failed_at: DateTime<Utc>,
         reason: FailureReason,
     },
+    Supervision {
+        supervisor_id: ActorId,
+        failed_actor_id: ActorId,
+        decision: SupervisionDecision,
+        decided_at: DateTime<Utc>,
+    },
     Cancelled {
         actor_id: ActorId,
         cancelled_at: DateTime<Utc>,
@@ -226,6 +232,7 @@ impl ActorLifecycleEvent {
             Self::MessageSent { .. } => "actor_message",
             Self::Completed { .. } => "actor_completed",
             Self::Failed { .. } => "actor_failed",
+            Self::Supervision { .. } => "actor_supervision",
             Self::Cancelled { .. } => "actor_cancelled",
         }
     }

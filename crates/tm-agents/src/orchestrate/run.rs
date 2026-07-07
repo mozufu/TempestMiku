@@ -133,43 +133,25 @@ impl HostFn for AgentsRunFn {
             depth: 0,
             cancellation: self.roster.cancel_token(&actor_id).await,
         };
+        self.roster.remember_restart_spec(&spec).await;
 
-        match executor.run_to_digest(spec).await {
+        match run_actor_to_digest(executor, spec).await {
             Ok(digest) => {
-                if let Some(content) = digest.history_content.clone() {
-                    self.roster.store_transcript(&actor_id, content).await;
-                }
-                let completed = self
-                    .roster
-                    .mark_complete_with_digest(
-                        &actor_id,
-                        digest.summary.clone(),
-                        digest.artifact_uri.clone(),
-                        digest.history_uri.clone(),
-                    )
-                    .await;
-                if completed {
-                    self.roster.emit_lifecycle(
-                        &session_id,
-                        ActorLifecycleEvent::Completed {
-                            actor_id: actor_id.clone(),
-                            completed_at: Utc::now(),
-                            summary: Some(digest.summary.clone()),
-                            artifact_uri: digest.artifact_uri.clone(),
-                            history_uri: digest.history_uri.clone(),
-                        },
-                    );
+                let summary = digest.summary.clone();
+                let artifact_uri = digest.artifact_uri.clone();
+                let history_uri = digest.history_uri.clone();
+                if mark_actor_completed(&self.roster, &session_id, &actor_id, digest).await {
                     tracing::debug!(actor_id = %actor_id, "actor completed");
                 }
                 Ok(json!({
-                    "actorId": digest.actor_id.as_str(),
-                    "summary": digest.summary,
-                    "artifactUri": digest.artifact_uri,
-                    "historyUri": digest.history_uri,
+                    "actorId": actor_id.as_str(),
+                    "summary": summary,
+                    "artifactUri": artifact_uri,
+                    "historyUri": history_uri,
                 }))
             }
             Err(err) => {
-                let reason = map_actor_error(&err);
+                let reason = failure_reason_for_error(&err);
                 tracing::warn!(actor_id = %actor_id, error = %err, "actor failed");
                 mark_actor_error(&self.roster, &session_id, &actor_id, reason).await;
                 Err(HostError::HostCall(err.to_string()))

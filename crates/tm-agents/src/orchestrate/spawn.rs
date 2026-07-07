@@ -21,7 +21,7 @@ impl AgentsSpawnFn {
                      Requires agents.spawn grant."
                         .to_string(),
                 ),
-                signature: "agents.spawn(role: string, task: string): Promise<AgentHandle>"
+                signature: "agents.spawn(role: string, task: string, opts?: AgentSpawnOpts): Promise<AgentHandle>"
                     .to_string(),
                 args_schema: json!({
                     "type": "object",
@@ -29,7 +29,23 @@ impl AgentsSpawnFn {
                     "additionalProperties": false,
                     "properties": {
                         "role": { "type": "string" },
-                        "task": { "type": "string" }
+                        "task": { "type": "string" },
+                        "opts": {
+                            "type": "object",
+                            "properties": {
+                                "supervision": {
+                                    "type": "object",
+                                    "properties": {
+                                        "group": { "type": "string" },
+                                        "strategy": {
+                                            "type": "string",
+                                            "enum": ["one_for_one", "one_for_all", "rest_for_one"]
+                                        },
+                                        "maxRestarts": { "type": "integer", "minimum": 0 }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }),
                 result_schema: Some(json!({
@@ -70,6 +86,10 @@ impl HostFn for AgentsSpawnFn {
             .as_str()
             .ok_or_else(|| HostError::InvalidArgs("task must be a string".to_string()))?
             .to_string();
+        let opts = args.get("opts");
+        if opts.is_some_and(|opts| !opts.is_object()) {
+            return Err(HostError::InvalidArgs("opts must be an object".to_string()));
+        }
 
         let executor = self.roster.executor().ok_or_else(|| {
             HostError::NotImplemented("agents.spawn — executor not configured".to_string())
@@ -78,6 +98,8 @@ impl HostFn for AgentsSpawnFn {
         let session_id = ctx.session_id.clone();
         let actor_id = self.roster.next_actor_id(&role);
         let parent_id = caller_parent_id(ctx)?;
+        let supervisor_id =
+            configure_supervision_from_opts(&self.roster, parent_id.as_ref(), opts).await?;
         let budget = ActorBudget::default();
         let spawned_at = Utc::now();
 
@@ -95,7 +117,14 @@ impl HostFn for AgentsSpawnFn {
             artifact_uri: None,
             history_uri: None,
         };
-        self.roster.track(record).await;
+        match supervisor_id {
+            Some(supervisor_id) => {
+                self.roster
+                    .track_with_supervisor(record, supervisor_id)
+                    .await
+            }
+            None => self.roster.track(record).await,
+        }
         self.roster.emit_lifecycle(
             &session_id,
             ActorLifecycleEvent::Spawned {
@@ -121,6 +150,7 @@ impl HostFn for AgentsSpawnFn {
             depth: 0,
             cancellation: self.roster.cancel_token(&actor_id).await,
         };
+        self.roster.remember_restart_spec(&spec).await;
 
         // Background thread: actor runs in its own current_thread runtime so it
         // survives past the parent cell's await and doesn't block the caller.
@@ -132,33 +162,20 @@ impl HostFn for AgentsSpawnFn {
                 .build()
                 .expect("spawn worker runtime");
             tracing::debug!(actor_id = %actor_id_bg, "spawned actor started");
-            match rt.block_on(executor.run_to_digest(spec)) {
+            match rt.block_on(run_actor_to_digest(executor, spec)) {
                 Ok(digest) => {
-                    if let Some(content) = digest.history_content {
-                        rt.block_on(roster.store_transcript(&actor_id_bg, content));
-                    }
-                    let completed = rt.block_on(roster.mark_complete_with_digest(
+                    let completed = rt.block_on(mark_actor_completed(
+                        &roster,
+                        &session_id,
                         &actor_id_bg,
-                        digest.summary.clone(),
-                        digest.artifact_uri.clone(),
-                        digest.history_uri.clone(),
+                        digest,
                     ));
                     if completed {
-                        roster.emit_lifecycle(
-                            &session_id,
-                            ActorLifecycleEvent::Completed {
-                                actor_id: actor_id_bg.clone(),
-                                completed_at: Utc::now(),
-                                summary: Some(digest.summary),
-                                artifact_uri: digest.artifact_uri,
-                                history_uri: digest.history_uri,
-                            },
-                        );
                         tracing::debug!(actor_id = %actor_id_bg, "spawned actor completed");
                     }
                 }
                 Err(err) => {
-                    let reason = map_actor_error(&err);
+                    let reason = failure_reason_for_error(&err);
                     tracing::warn!(actor_id = %actor_id_bg, error = %err, "spawned actor failed");
                     rt.block_on(mark_actor_error(&roster, &session_id, &actor_id_bg, reason));
                 }

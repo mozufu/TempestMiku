@@ -517,16 +517,31 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
         completed["history_uri"],
         json!(format!("history://{actor_id}"))
     );
+    let linked = wait_for_event_payload(&store, session.id, "actor_resources_linked").await;
+    assert_eq!(linked["actor_id"], json!(actor_id));
+    assert_eq!(linked["source_event_type"], json!("actor_completed"));
+    assert_eq!(linked["artifact_uri"], json!("artifact://0"));
+    assert_eq!(
+        linked["history_uri"],
+        json!(format!("history://{actor_id}"))
+    );
 
     let events = store.events_after(session.id, None).await.unwrap();
     let kinds = events
         .iter()
         .map(|event| event.event_type.as_str())
         .collect::<Vec<_>>();
+    let completed_seq = events
+        .iter()
+        .find(|event| event.event_type == "actor_completed")
+        .map(|event| event.seq)
+        .expect("actor_completed should be persisted");
+    assert_eq!(linked["source_event_seq"], json!(completed_seq));
     assert!(kinds.contains(&"actor_spawned"));
     assert!(kinds.contains(&"approval"));
     assert!(kinds.contains(&"approval_resolved"));
     assert!(kinds.contains(&"actor_completed"));
+    assert!(kinds.contains(&"actor_resources_linked"));
     assert!(kinds.contains(&"final"));
 
     let replay_after_spawn = events

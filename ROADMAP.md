@@ -27,7 +27,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **P1 — project manager + remote control** | Chief-of-staff layer over the coding loop: mode router, project plans/open loops/decisions, session event log, SSE/API project surface, project promotion, and Flutter Web/PWA remote-control client | 1/2/4 | M1–M2 | router fires; user can lock; badge + voice cap work; project status survives reconnect; Miku can turn a coding session into next actions without losing provenance; a phone/browser can attach to the same session stream, send a message, resolve an approval, open resource links, promote session workspace/artifacts into `project://`, and resume via `Last-Event-ID` |
 | **P2 — personal assistant** | Full companion baseline: Miku voice, profile/user memory, personal-assistant state capture, negative-state grounding, bounded proactivity | 1–3 | M1–M2 | replies in Miku voice when appropriate; memory context + user profile load; personal reminders/open loops are captured with approval; grounding mode preserves the health-over-productivity rule |
 | **P3 — handoff + orchestration** ✓ | P3 MVP `agents.run/spawn/parallel/msg` (§23): actor sessions + message passing + supervision; Handoff mode + brief template; actor lifecycle events in SSE stream | 5 | M2 | ✓ fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ crashing sub-agent isolated + `actor_failed` in SSE; ✓ handoff matches `oh-my-pi-handoff` |
-| **P3+ — live actor mailbox** | Live MPSC resident delivery (`agents.send/wait/inbox/list/broadcast/cancel/pipeline`); active supervision (restart/subtree cancel); child approval routing through `ApprovalBroker`; DAG acyclicity + protocol invariants; Flutter smoke coverage | 5 | M2 | live siblings coordinate via `send`/`wait`; child cancel yields replayable `Cancelled` event; child approval requests reach the user; Flutter attach/approve/reconnect pass |
+| **P3+ — live actor mailbox** ✓ | Live MPSC resident delivery (`agents.send/wait/inbox/list/broadcast/cancel/pipeline`); active supervision (restart/subtree cancel); child approval routing through `ApprovalBroker`; DAG acyclicity + protocol invariants; Flutter smoke coverage | 5 | M2 | live siblings coordinate via `send`/`wait`; child cancel yields replayable `Cancelled` event; child approval requests reach the user; restart/timeout/subtree-failure decisions are replayable; Flutter attach/approve/reconnect pass |
 | **P4 — dreaming + proactivity** | consolidation + `skills/` generation (§22/§26); scheduler/cron (§27.2) | all | — | post-session dream writes summary + ≥1 self-verified skill (approval-gated); weekly ship ledger runs on cron |
 | **P5 — drive + research** | `drive.*` + auto-organizer (§24): transducers + virtual dirs; deep-research workspace (P3+P4+P5) | 4/5 | — | dropped file auto-filed by derived attributes; sandbox-default; a link mints `FsPolicy` + per-project memory scope; local-first offline |
 | **P6 — Android package + OS integrations** | Ship the Android target of the existing Flutter client after the server API and product surfaces stabilize | all | — | Android + Web/PWA both connect to the same server/session; Android adds native packaging, secure pairing storage, push approval notifications, app links, and reconnect/resume polish without a second execution path |
@@ -36,7 +36,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
 
-## Execution plan from current workspace (2026-07-05)
+## Execution plan from current workspace (2026-07-07)
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
 `tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
@@ -47,20 +47,21 @@ linked-repo edit/run/artifact workflows, native Deno HTTP approvals for the Seri
 the P1 project-manager remote-control surface, the P2 personal-assistant baseline, and the full P3
 actor orchestration surface. P3 ships `agents.run/spawn/parallel/msg`, the `agent://` + `history://`
 resource handlers, child artifact spill + transcript history, actor lifecycle events in the SSE
-stream, Handoff mode wired from the mode catalog, and `CapabilityGrants` glob permit support. The
-first P3+ foundation slice is also in place: bounded per-actor inbox queues, `Agent::run` inbox
-draining, live `agents.send/wait/inbox/list/cancel`, delivered-message lifecycle events, actor-id
-threading through `InvocationCtx`, child approvals routed through the live `HttpApprovalPolicy` /
-`ApprovalBroker`, parent-session child artifacts, parent-driven actor cancel tokens with replayable
-`actor_cancelled` events, and tm-e2e/Flutter actor smoke coverage.
+stream, Handoff mode wired from the mode catalog, and `CapabilityGrants` glob permit support. P3+
+is also closed: bounded per-actor inbox queues, `Agent::run` inbox draining,
+`agents.send/broadcast/wait/inbox/list/cancel/pipeline`, delivered-message and status lifecycle
+events, actor-id threading through `InvocationCtx`, child approvals routed through the live
+`HttpApprovalPolicy` / `ApprovalBroker`, parent-session child artifacts, parent-driven actor cancel
+tokens with replayable `actor_cancelled` events, active restart supervision (`one_for_one`,
+`one_for_all`, `rest_for_one`), wall-clock actor timeouts, fail-fast sibling supervision groups,
+resource-link provenance events, and tm-e2e/Flutter actor smoke coverage.
 Normal Rust tests pass when local loopback networking is available; managed sandboxes may need
 elevated permissions for tests that bind `127.0.0.1`.
 
 Still not production-complete: `tm-mcp`, `tm-trace`, dedicated `tm-memory`, and `tm-drive` crates;
-scheduler/dreaming; the remaining P3+ actor surface (active restart strategies,
-wall-clock budgets, subtree cancel-on-sibling-failure, fuller provenance); product approval surfaces for
-future drive/skill writes and richer memory APIs; Android OS packaging; generated SDK docs from the
-runtime registry; and production egress/secret hardening.
+scheduler/dreaming; product approval surfaces for future drive/skill writes and richer memory APIs;
+Android OS packaging; generated SDK docs from the runtime registry; and production egress/secret
+hardening.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -75,7 +76,7 @@ each milestone is done only when its acceptance checks pass.
 | 4 | **DONE — P1 project manager + remote control** | 4–7d | Added the project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Tests and smoke coverage prove reconnect replay from event id, router lock/unlock, project status and decisions across sessions, `POST /sessions/:id/promote` to `project://` resources with provenance, approval/resource workflows, and Flutter Web/PWA attach/send/watch/resume behavior. |
 | 5 | **DONE — P2 personal assistant baseline** | 5–8d | Added the companion baseline: full persona overlay via SOUL + mode skill bundles, configurable Hermes asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminder/open-loop capture through approval-backed memory writes. | Tests cover token/text streaming over SSE, active mode profiles loading SOUL + dedicated skills, profile/recall context injection, characterful non-serious voice caps, approval-gated profile/recall/reminder writes, `memory://` resources, negative-state no-write guardrails, and health-over-productivity/proactivity prompt bounds. |
 | 6 | **DONE — P3: handoff + sub-agent actors** | 6–10d | Added `tm-agents` with actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` + `history://` resources, child artifact spill + transcript history, actor lifecycle events in SSE stream, supervision defaults, Handoff mode wired from catalog, `CapabilityGrants` glob permit. | ✓ Fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ child crash isolated + `actor_failed` in SSE log; ✓ handoff matches `oh-my-pi-handoff`. |
-| 6+ | **P3+ — live actor mailbox + supervision** | 4–8d | Foundation landed: per-actor bounded inbox + `Agent::run` inbox draining, `agents.send/broadcast/wait/inbox/list/cancel/pipeline`, child approval routing through the live broker, parent-session child artifacts, parent-driven cancel tokens with replayable `actor_cancelled`, plain-prose enforcement, current live-wait DAG acyclicity checks, pipeline digest-reference wiring, and tm-e2e/Flutter actor smoke coverage. Remaining: active restart strategies (`one_for_one`, `one_for_all`, `rest_for_one`); wall-clock budget enforcement; subtree cancel-on-sibling-failure; fuller provenance. | Live siblings coordinate via `send`/`wait`; child cancel yields replayable `Cancelled` event; child approval requests resolve through the live broker; Flutter attach/approve/reconnect smoke tests pass. |
+| 6+ | **DONE — P3+ live actor mailbox + supervision** | 4–8d | Landed per-actor bounded inbox + `Agent::run` inbox draining, `agents.send/broadcast/wait/inbox/list/cancel/pipeline`, child approval routing through the live broker, parent-session child artifacts, parent-driven cancel tokens with replayable `actor_cancelled`, plain-prose enforcement, live-wait DAG acyclicity checks, pipeline digest-reference wiring, active restart strategies (`one_for_one`, `one_for_all`, `rest_for_one`), wall-clock budget enforcement, fail-fast sibling supervision groups, status lifecycle events, resource-link provenance, and tm-e2e/Flutter actor smoke coverage. | Tests prove live sibling coordination, cancel/replay, child approval routing, restart decisions, actor timeouts, fail-fast sibling cancellation, event-log provenance, and Flutter attach/approve/reconnect smoke coverage. |
 | 7 | **P4 — dreaming + scheduler** | 6–10d | Expand `tm-memory` to Postgres/pgvector + FTS; async episodic writes; dream queue; extraction, reflection, summaries, skill proposal; add cron scheduler. | Session end enqueues dream; dream writes summary + at least one approval-gated skill proposal; weekly ship ledger runs under cron bounds. |
 | 8 | **P5 — drive + research workspace** | 5–9d | Add `tm-drive`, `drive.*`, local-first file metadata, transducers, virtual dirs, project memory scopes, drive organizer. | Dropped file auto-files by derived attributes after approval; project link mints `FsPolicy` + memory scope; offline local-first path works. |
 | 9 | **P6 — Android package + OS integrations** | 4–7d | Package the existing Flutter client for Android; add mobile OS integrations such as secure pairing storage, push approval notifications, app links, and reconnect/resume polish. No on-device sandbox. | Android and Web/PWA attach to the same server/session stream; the Android build reuses the same chat, approval, artifact/resource, memory, drive, and agent-browser components rather than duplicating client code. |
@@ -83,15 +84,13 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Continue P3+** — the live inbox foundation, child approval routing, pipeline digest-reference
-   wiring, and actor smoke coverage are in place; next tackle restart strategies, wall-clock budgets, subtree cancellation,
-   and fuller provenance.
-   See `## P3-plus` in `TODO.md`.
-2. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
+1. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
    artifacts, and HTTP-routed manual approvals.
-3. **Defer expansion crates until the P3+ actor surface is stable** — `tm-memory`,
-   `tm-drive`, `tm-mcp`, scheduler/dreaming, and Android OS packaging should build on the settled
+2. **Begin P4 from the settled actor surface** — scheduler/dreaming and fuller `tm-memory` should build
+   on the P3+ event-log/resource contracts instead of adding a second orchestration path.
+3. **Defer drive, MCP, trace, Android, and self-evolution surfaces until their roadmap stages** —
+   `tm-drive`, `tm-mcp`, `tm-trace`, Android packaging, and P7 hardening should layer on the same
    server/resource surface.
 
 ### Deferred SDK namespace placement
@@ -101,7 +100,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 | Namespace / surface | Target milestone | Placement note |
 |---|---|---|
 | `memory.*` | **P2/P4 split** | P2 may expose the minimum profile/user recall and personal-assistant state-capture surface; P4 owns full `tm-memory`, pgvector/FTS, dream queue writes, and richer scoped memory APIs. |
-| `agents.*` | **P3 ✓ / P3+** | P3 MVP shipped: `agents.run/spawn/parallel/msg`, actor lifecycle, mailbox/roster, `agent://`+`history://` resources, SSE lifecycle events, Handoff mode. P3+ foundation shipped: bounded live inbox delivery plus `send`, `broadcast`, `wait`, `inbox`, `list`, `cancel`, and `pipeline` with digest-reference stage wiring, child approval routing, plain-prose enforcement, current live-wait DAG acyclicity checks, and actor smoke coverage. Remaining P3+ owns active restart strategies, subtree cancellation policy, wall-clock budgets, and fuller provenance. |
+| `agents.*` | **P3 ✓ / P3+ ✓** | P3 MVP shipped: `agents.run/spawn/parallel/msg`, actor lifecycle, mailbox/roster, `agent://`+`history://` resources, SSE lifecycle events, Handoff mode. P3+ shipped bounded live inbox delivery plus `send`, `broadcast`, `wait`, `inbox`, `list`, `cancel`, and `pipeline` with digest-reference stage wiring, child approval routing, plain-prose enforcement, live-wait DAG acyclicity checks, active restart supervision, subtree cancellation policy, wall-clock budgets, status lifecycle events, resource-link provenance, and actor smoke coverage. |
 | `skills.*` / `skill://` reads | **P4/P7 split** | Current `skill://...` use is prompt-composition-only. P4 can emit approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, MCP import gates, and any first-class read/list/preview handler. |
 | `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
 | `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as the deterministic allowlist helper until P7 hardening. |

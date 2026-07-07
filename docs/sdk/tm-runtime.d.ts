@@ -514,13 +514,13 @@ interface AgentsNamespace {
   run(role: string, task: string, opts?: AgentRunOpts): Promise<AgentDigest>;
 
   /**
-   * agents.spawn(role: string, task: string): Promise<AgentHandle>
+   * agents.spawn(role: string, task: string, opts?: AgentSpawnOpts): Promise<AgentHandle>
    *
    * Non-blocking spawn; returns a handle for later coordination via agents.msg.
    * Requires agents.spawn grant. The actor runs in the background and is
    * tracked through the agent:// roster.
    */
-  spawn(role: string, task: string): Promise<AgentHandle>;
+  spawn(role: string, task: string, opts?: AgentSpawnOpts): Promise<AgentHandle>;
 
   /**
    * agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>
@@ -709,6 +709,25 @@ interface AgentRosterEntry {
 /** Optional options for agents.run (reserved; fields added in P3.2). */
 interface AgentRunOpts {
   [key: string]: unknown;
+}
+
+/** Optional options for agents.spawn. */
+interface AgentSpawnOpts {
+  /**
+   * Group-scoped supervision for sibling spawned actors. Actors using the same
+   * group share a supervisor; by default, a failing group member cancels the
+   * sibling group without restart.
+   */
+  supervision?: AgentSupervisionOpts;
+}
+
+interface AgentSupervisionOpts {
+  /** Stable caller-chosen sibling group label. */
+  group?: string;
+  /** Restart/cancel strategy for this supervisor group. */
+  strategy?: "one_for_one" | "one_for_all" | "rest_for_one";
+  /** Maximum restart attempts before escalation. Group default is 0. */
+  maxRestarts?: number;
 }
 
 /** Options for agents.msg. */

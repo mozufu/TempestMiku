@@ -40,7 +40,7 @@ character + mode, budget, and capability grant. Cast as an actor:
 | **Behavior** | current **mode** (§21) + **role** + capability grant; resolved per message (late binding) |
 | **Designate next behavior** | mode switch / scope update between messages (persona self-edit, §21) |
 | **Create** | P3 MVP: `agents.spawn` / `agents.run` |
-| **Send** | P3 MVP: `agents.msg`; P3-plus foundation: `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
+| **Send** | P3 MVP: `agents.msg`; P3-plus: `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
 
 Encapsulation is hard: one actor **never** reaches into another's context or transcript. `history://<id>`
 is **read-only** observation, not state access; coordination is by message, not by shared memory.
@@ -93,8 +93,8 @@ P3 ships the first concrete slice only:
 | `agents.parallel([{role, task}, …])` | fan-out, bounded pool, **one wave**, ordered results |
 | `agents.msg(handle, text, opts?)` | send to a spawned actor (request / reply or fire-and-forget) |
 
-> **P3-plus foundation update.** P3 shipped `agents.msg` as a one-shot compatibility primitive.
-> The first P3-plus slice replaces message-log-only delivery with bounded per-actor inbox queues:
+> **P3-plus closeout update.** P3 shipped `agents.msg` as a one-shot compatibility primitive.
+> P3-plus replaces message-log-only delivery with bounded per-actor inbox queues:
 > fire-and-forget now reaches a live actor inbox, `opts.await = true` waits for a live reply when
 > the target is still running, and already completed actors keep the old seeded-continuation fallback.
 > Lower-level `send`/`broadcast`/`wait`/`inbox`/`list` are live. Child approval requests now route through the
@@ -107,10 +107,11 @@ P3 ships the first concrete slice only:
 > boundary. DAG enforcement rejects targeted live waits where a real actor would wait on itself or
 > its own descendant. `agents.pipeline` runs staged actor waves with a barrier between stages and
 > feeds compact digest references downstream: `agent://` / `history://` / artifact handles plus a
-> bounded summary, never an upstream transcript. Active restart supervision, subtree cancellation,
-> and fuller provenance remain later P3-plus work.
+> bounded summary, never an upstream transcript. Active restart supervision, wall-clock actor
+> timeouts, fail-fast sibling-group cancellation, status lifecycle events, and
+> `actor_resources_linked` provenance events are live.
 
-The remaining §23 full surface is split across the landed P3-plus foundation and later P3-plus work:
+The §23 full surface is now split between the P3 MVP calls and the P3-plus mailbox/supervision calls:
 
 | P3-plus call | Effect |
 |---|---|
@@ -177,11 +178,11 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 ## 23.7 `agents.*` capability + `agent://` resources
 
 - **P3 calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
-- **P3-plus foundation calls:** lower-level mailbox primitives `agents.send`,
+- **P3-plus mailbox calls:** lower-level mailbox primitives `agents.send`,
   `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, `agents.cancel`, and
   `agents.pipeline`.
-- **Remaining P3-plus calls:** none in the basic SDK surface; remaining work is supervision,
-  budget enforcement, subtree cancellation, and fuller provenance.
+- **P3-plus closeout behavior:** active restart supervision, wall-clock budget enforcement,
+  fail-fast sibling cancellation, status lifecycle events, and parent-event resource provenance.
 - **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
   `history://<id>` (read-only transcript).
   Roster listing is also exposed through `agents.list()`.
@@ -195,8 +196,8 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
   send / wait / broadcast / inbox / list / cancel).
 - `supervise` — supervision tree, restart strategies, budgets, depth cap, cost rollup.
 - `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry;
-  P3 roster/resource discovery goes through the resource gateway; the first P3-plus foundation
-  slice also exposes roster metadata through `agents.list()`.
+  P3 roster/resource discovery goes through the resource gateway; P3-plus also exposes roster
+  metadata through `agents.list()`.
 
 ## 23.9 Failure modes & degradation
 

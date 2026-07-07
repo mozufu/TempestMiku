@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,11 +12,13 @@ use tm_host::{
 };
 
 use crate::actor::{
-    ActorBudget, ActorId, ActorLifecycleEvent, ActorRecord, ActorSpec, ActorStatus,
+    ActorBudget, ActorDigest, ActorId, ActorLifecycleEvent, ActorRecord, ActorSpec, ActorStatus,
 };
-use crate::executor::ActorError;
+use crate::executor::{ActorError, failure_reason_for_error, run_to_digest_with_budget};
 use crate::mailbox::{ActorMessage, MailboxRegistry, Receipt};
-use crate::supervise::FailureReason;
+use crate::supervise::{
+    FailureReason, RestartStrategy, SupervisionAction, SupervisionDecision, SupervisionPolicy,
+};
 
 /// Capability names for the P3/P3-plus `agents.*` calls (§23.3, ROADMAP authority).
 ///
@@ -115,46 +119,109 @@ fn timeout_error_doc() -> ToolErrorDoc {
     }
 }
 
-fn map_actor_error(err: &ActorError) -> FailureReason {
-    match err {
-        ActorError::Execution(msg) => FailureReason::Crash {
-            message: msg.clone(),
-        },
-        ActorError::InvalidSpec(msg) => FailureReason::Crash {
-            message: msg.clone(),
-        },
-        ActorError::DepthExceeded(_) => FailureReason::DepthExceeded,
-        ActorError::Cancelled => FailureReason::Cancelled,
-    }
+async fn run_actor_to_digest(
+    executor: Arc<dyn crate::executor::ActorExecutor>,
+    spec: ActorSpec,
+) -> std::result::Result<crate::actor::ActorDigest, ActorError> {
+    run_to_digest_with_budget(executor, spec).await
 }
 
 async fn mark_actor_error(
-    roster: &MailboxRegistry,
+    roster: &Arc<MailboxRegistry>,
     session_id: &str,
     actor_id: &ActorId,
     reason: FailureReason,
 ) {
-    if !roster.mark_failed(actor_id, reason.clone()).await {
+    let Some(decision) = roster
+        .record_actor_error(session_id, actor_id, reason)
+        .await
+    else {
         return;
-    }
+    };
+    spawn_restart_actions(Arc::clone(roster), decision).await;
+}
 
-    match reason {
-        FailureReason::Cancelled => roster.emit_lifecycle(
-            session_id,
-            ActorLifecycleEvent::Cancelled {
-                actor_id: actor_id.clone(),
-                cancelled_at: Utc::now(),
-            },
-        ),
-        reason => roster.emit_lifecycle(
-            session_id,
-            ActorLifecycleEvent::Failed {
-                actor_id: actor_id.clone(),
-                failed_at: Utc::now(),
-                reason,
-            },
-        ),
+async fn spawn_restart_actions(roster: Arc<MailboxRegistry>, decision: SupervisionDecision) {
+    for action in decision.actions {
+        if let SupervisionAction::Restart { actor_id } = action {
+            spawn_restarted_actor(Arc::clone(&roster), actor_id).await;
+        }
     }
+}
+
+async fn spawn_restarted_actor(roster: Arc<MailboxRegistry>, actor_id: ActorId) {
+    let Some(executor) = roster.executor() else {
+        return;
+    };
+    let Some(spec) = roster.prepare_actor_restart(&actor_id).await else {
+        return;
+    };
+    let session_id = spec.session_id.clone();
+    let actor_id_bg = actor_id.clone();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("restart worker runtime");
+        rt.block_on(async move {
+            match run_actor_to_digest(executor, spec).await {
+                Ok(digest) => {
+                    mark_actor_completed(&roster, &session_id, &actor_id_bg, digest).await;
+                    tracing::debug!(actor_id = %actor_id_bg, "restarted actor completed");
+                }
+                Err(err) => {
+                    let reason = failure_reason_for_error(&err);
+                    tracing::warn!(
+                        actor_id = %actor_id_bg,
+                        error = %err,
+                        "restarted actor failed"
+                    );
+                    mark_actor_error(&roster, &session_id, &actor_id_bg, reason).await;
+                }
+            }
+        });
+    });
+}
+
+async fn mark_actor_completed(
+    roster: &MailboxRegistry,
+    session_id: &str,
+    actor_id: &ActorId,
+    digest: ActorDigest,
+) -> bool {
+    if let Some(content) = digest.history_content.clone() {
+        roster.store_transcript(actor_id, content).await;
+    }
+    let completed = roster
+        .mark_complete_with_digest(
+            actor_id,
+            digest.summary.clone(),
+            digest.artifact_uri.clone(),
+            digest.history_uri.clone(),
+        )
+        .await;
+    if completed {
+        roster.emit_lifecycle(
+            session_id,
+            ActorLifecycleEvent::StatusChanged {
+                actor_id: actor_id.clone(),
+                status: ActorStatus::Terminated,
+                at: Utc::now(),
+            },
+        );
+        roster.emit_lifecycle(
+            session_id,
+            ActorLifecycleEvent::Completed {
+                actor_id: actor_id.clone(),
+                completed_at: Utc::now(),
+                summary: Some(digest.summary),
+                artifact_uri: digest.artifact_uri,
+                history_uri: digest.history_uri,
+            },
+        );
+    }
+    completed
 }
 
 fn root_actor_id() -> ActorId {
@@ -243,6 +310,85 @@ async fn reject_descendant_wait(
         )));
     }
     Ok(())
+}
+
+async fn configure_supervision_from_opts(
+    roster: &MailboxRegistry,
+    parent_id: Option<&ActorId>,
+    opts: Option<&Value>,
+) -> Result<Option<ActorId>> {
+    let Some(supervision) = opts.and_then(|opts| opts.get("supervision")) else {
+        return Ok(None);
+    };
+    let object = supervision
+        .as_object()
+        .ok_or_else(|| HostError::InvalidArgs("opts.supervision must be an object".to_string()))?;
+
+    let group = object.get("group").and_then(Value::as_str);
+    let strategy = object
+        .get("strategy")
+        .and_then(Value::as_str)
+        .map(parse_restart_strategy)
+        .transpose()?
+        .unwrap_or_else(|| {
+            if group.is_some() {
+                RestartStrategy::OneForAll
+            } else {
+                RestartStrategy::OneForOne
+            }
+        });
+    let default_max_restarts = if group.is_some() { 0 } else { 3 };
+    let max_restarts = object
+        .get("maxRestarts")
+        .map(parse_u32_value)
+        .transpose()?
+        .unwrap_or(default_max_restarts);
+
+    let supervisor_id = match group {
+        Some(group) => spawn_group_supervisor_id(parent_id, group)?,
+        None => parent_id.cloned().unwrap_or_else(root_actor_id),
+    };
+    roster
+        .set_supervision_policy(
+            supervisor_id.clone(),
+            SupervisionPolicy {
+                strategy,
+                max_restarts,
+            },
+        )
+        .await;
+    Ok(Some(supervisor_id))
+}
+
+fn parse_restart_strategy(value: &str) -> Result<RestartStrategy> {
+    match value {
+        "one_for_one" => Ok(RestartStrategy::OneForOne),
+        "one_for_all" => Ok(RestartStrategy::OneForAll),
+        "rest_for_one" => Ok(RestartStrategy::RestForOne),
+        _ => Err(HostError::InvalidArgs(format!(
+            "unknown supervision strategy: {value}"
+        ))),
+    }
+}
+
+fn parse_u32_value(value: &Value) -> Result<u32> {
+    let raw = value.as_u64().ok_or_else(|| {
+        HostError::InvalidArgs("maxRestarts must be a non-negative integer".to_string())
+    })?;
+    u32::try_from(raw).map_err(|_| HostError::InvalidArgs("maxRestarts is too large".to_string()))
+}
+
+fn spawn_group_supervisor_id(parent_id: Option<&ActorId>, group: &str) -> Result<ActorId> {
+    if group.trim().is_empty() {
+        return Err(HostError::InvalidArgs(
+            "opts.supervision.group must not be empty".to_string(),
+        ));
+    }
+    let mut hasher = DefaultHasher::new();
+    parent_id.map(ActorId::as_str).hash(&mut hasher);
+    group.hash(&mut hasher);
+    ActorId::new(format!("Supervisor{:016x}", hasher.finish()))
+        .map_err(|err| HostError::InvalidArgs(format!("invalid supervision group: {err}")))
 }
 
 fn child_agent_grants(ctx: &InvocationCtx) -> CapabilityGrants {

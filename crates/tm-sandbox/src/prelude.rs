@@ -137,8 +137,8 @@ const __tm_pipeline_stage = async (items, stage, stageIndex) => {
 globalThis.agents = {
   run: async (role, task, opts = undefined) =>
     __tm_host_call("agents.run", { role: String(role), task: String(task), ...(opts != null ? { opts } : {}) }),
-  spawn: async (role, task) =>
-    __tm_host_call("agents.spawn", { role: String(role), task: String(task) }),
+  spawn: async (role, task, opts = undefined) =>
+    __tm_host_call("agents.spawn", { role: String(role), task: String(task), ...(opts != null ? { opts } : {}) }),
   parallel: async (tasks) =>
     __tm_host_call("agents.parallel", { tasks }),
   pipeline: async (items, ...stages) => {

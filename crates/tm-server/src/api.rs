@@ -23,7 +23,9 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use tm_agents::{AgentResourceHandler, HistoryResourceHandler, MailboxRegistry};
+use tm_agents::{
+    ActorLifecycleEvent, AgentResourceHandler, HistoryResourceHandler, MailboxRegistry,
+};
 use tm_artifacts::{ResourceContent, preview};
 use tm_core::DEFAULT_SYSTEM_PROMPT;
 use tm_host::{
@@ -41,6 +43,42 @@ use crate::{
 };
 
 const SESSION_RESOURCE_PREVIEW_BYTES: usize = 512;
+
+#[derive(Debug, Clone)]
+struct ActorResourceLinkSeed {
+    actor_id: String,
+    artifact_uri: Option<String>,
+    history_uri: Option<String>,
+}
+
+impl ActorResourceLinkSeed {
+    fn from_lifecycle(event: &ActorLifecycleEvent) -> Option<Self> {
+        match event {
+            ActorLifecycleEvent::Completed {
+                actor_id,
+                artifact_uri,
+                history_uri,
+                ..
+            } if artifact_uri.is_some() || history_uri.is_some() => Some(Self {
+                actor_id: actor_id.as_str().to_string(),
+                artifact_uri: artifact_uri.clone(),
+                history_uri: history_uri.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    fn payload(&self, source_event: &SessionEvent) -> Value {
+        json!({
+            "kind": "resources_linked",
+            "actor_id": self.actor_id,
+            "source_event_type": source_event.event_type,
+            "source_event_seq": source_event.seq,
+            "artifact_uri": self.artifact_uri,
+            "history_uri": self.history_uri,
+        })
+    }
+}
 
 mod approvals;
 mod events;
@@ -177,6 +215,7 @@ impl<S, M, C> AppState<S, M, C> {
                     return;
                 };
                 let event_type = event.event_type().to_string();
+                let resource_link = ActorResourceLinkSeed::from_lifecycle(&event);
                 let Ok(payload) = serde_json::to_value(&event) else {
                     return;
                 };
@@ -189,7 +228,24 @@ impl<S, M, C> AppState<S, M, C> {
                 handle.spawn(async move {
                     match store.append_event(session_uuid, &event_type, payload).await {
                         Ok(session_event) => {
-                            let _ = sender.send(session_event);
+                            let _ = sender.send(session_event.clone());
+                            if let Some(resource_link) = resource_link {
+                                let payload = resource_link.payload(&session_event);
+                                match store
+                                    .append_event(session_uuid, "actor_resources_linked", payload)
+                                    .await
+                                {
+                                    Ok(link_event) => {
+                                        let _ = sender.send(link_event);
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            error = %err,
+                                            "actor resource link event store write failed"
+                                        )
+                                    }
+                                }
+                            }
                         }
                         Err(err) => {
                             tracing::warn!(error = %err, "lifecycle event store write failed")

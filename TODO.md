@@ -2,7 +2,8 @@
 
 Last aligned: **2026-07-06**.
 
-Active milestone: **P3-plus** (P3 MVP is closed; see `## P3-plus` for the remaining work).
+Active milestone: **P4** (P3-plus actor/mailbox/supervision/provenance closeout is complete;
+see deferred catalog work at the end for post-P3+ scope).
 
 `ROADMAP.md` remains the canonical milestone order. This file is the working execution checklist for
 the next slice after the P2 personal-assistant baseline. Keep it aligned with core docs §07/§09 and
@@ -151,13 +152,13 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
 - [x] Sibling agents can coordinate through explicit messages.
       **P3-plus update:** live resident delivery now uses per-actor bounded inbox queues plus
       `Agent::run` inbox draining. `agents.send/broadcast/wait/inbox/list/cancel/pipeline` are live;
-      fuller supervision/provenance remain open P3-plus items.
+      restart supervision, wall-clock budgets, fail-fast sibling groups, `StatusChanged`, and
+      parent-event provenance links are now covered by the P3-plus closeout.
 - [x] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
       replayable events.
-      **Deferred to P3-plus:** Child failures are isolated today (`mark_failed`, `FailureReason`,
-      per-thread execution). Restart/escalate/degrade supervision strategies and replayable event
-      persistence (`actor_spawned`/`actor_failed` to the session log) are P3-plus. Gate item closes
-      on the isolation guarantee; full supervision policy deferred.
+      **Resolved (P3-plus):** child failures are marked with structured `FailureReason`, persisted as
+      `actor_failed`, followed by replayable `actor_supervision` decisions. Restartable failures use
+      `one_for_one`, `one_for_all`, or `rest_for_one` policy; max-restart exhaustion escalates.
 - [x] `agent://` and `history://` resources resolve through the resource gateway with grants and
       bounded previews.
       **Resolved:** `agent://<id>` returns actor record JSON (including `artifact_uri`/`history_uri`);
@@ -217,24 +218,29 @@ Acceptance:
       **Resolved (P3.5):** `ActorLifecycleEvent` types defined and emitted (Spawned/Completed/Failed)
       from all three actor functions; `AppState::wire_lifecycle_sink` routes events through
       `store.append_event` + SSE broadcast. **P3-plus update:** `MessageSent` now emits for delivered
-      live mailbox messages. `Cancelled` is now emitted by `agents.cancel`; StatusChanged remains P3-plus.
+      live mailbox messages. `Cancelled` is emitted by `agents.cancel`; failure paths now emit
+      replayable `Supervision` decisions after `Failed`; status transitions now emit replayable
+      `actor_status` events.
 - [x] Add cancellation and timeout handling that leaves a replayable terminal state.
       **Resolved:** Failure paths in `agents.run` call `mark_failed` with structured `FailureReason`;
       `actor_failed` events now reach the SSE log (P3.5). **P3-plus update:** `agents.cancel`
-      now trips per-actor cancellation tokens and emits replayable `actor_cancelled`; wall-clock
-      budget enforcement remains deferred.
+      trips per-actor cancellation tokens and emits replayable `actor_cancelled`; wall-clock budget
+      timeouts now trip the same actor cancellation token and record `FailureReason::Timeout`.
 - [x] Add supervision defaults for crash, timeout, approval denial, and quota exhaustion, with restart
       strategies: `one_for_one` (default — restart only the dead child), `one_for_all` (restart a
       coupled group), `rest_for_one` (restart the dead child and those started after it).
-      **Resolved:** `FailureReason` and `RestartStrategy` types defined in `supervise.rs`. Active
-      restart behavior (respawning dead children) deferred to P3-plus.
+      **Resolved:** `FailureReason` and `RestartStrategy` types defined in `supervise.rs`.
+      **P3-plus update:** supervisor state now computes and emits strategy decisions, and `Cancel`
+      actions are applied to siblings. `Restart` actions now respawn actors from stored restart
+      templates with fresh cancellation/inbox state.
 - [x] Enforce a depth limit to bound recursion; cost accounting rolls up to the parent session.
       **Resolved:** `ChatActorExecutor` checks `spec.depth >= spec.budget.max_depth` and returns
       `DepthExceeded`. **P3-plus update:** real caller-id threading is now in `InvocationCtx` and
       Deno child sandbox options; parent depth propagation remains deferred.
 - [x] Apply per-actor budgets: wall-clock, heap, and egress caps with conservative defaults.
-      **Resolved:** `ActorBudget { wall_ms: 120_000, max_depth: 4 }` as defaults. Runtime enforcement
-      of wall_ms beyond the depth check deferred to P3-plus.
+      **Resolved:** `ActorBudget { wall_ms: 120_000, max_depth: 4 }` as defaults.
+      **P3-plus update:** `wall_ms` is enforced around tracked actor executor calls
+      (`run`/`spawn`/`parallel`/`pipeline`). Heap/egress caps remain future hardening work.
 - [x] Keep actor transcript storage out of parent model context by default.
       **Resolved:** `ChatActorExecutor` uses `NullSink` — no transcript reaches the parent context.
       Only the bounded `summary` string is returned to the orchestrator.
@@ -250,8 +256,9 @@ Acceptance:
       and returns `HostError::HostCall` — parent session is unaffected.
 - [x] "Let it crash" — a failing child aborts only its subtree; siblings continue.
       **Resolved:** isolation holds — each actor runs in a dedicated thread, failures are caught and
-      marked via `mark_failed`; no parent corruption. Subtree cancel-on-sibling-failure deferred to
-      P3-plus.
+      marked via `mark_failed`; no parent corruption. **P3-plus update:** supervision `Cancel`
+      actions now trip sibling tokens, and restart actions respawn actors from stored templates with
+      fresh cancellation/inbox state.
 
 ## P3.2 Agent SDK surface
 
@@ -287,7 +294,7 @@ Acceptance:
       **Resolved:** `agents_run_denied_without_grant`, `agents_run_executor_not_configured_returns_not_implemented`,
       `agents_run_invalid_args_returns_invalid_args_error`, `agents_run_with_executor_tracks_and_returns_digest`.
 
-**§23 full surface — see `## P3-plus` for the remaining messaging and protocol items.**
+**§23 full surface — see `## P3-plus` for the closed mailbox, supervision, and protocol checklist.**
 
 Acceptance:
 
@@ -316,7 +323,9 @@ Acceptance:
       stores it via `MailboxRegistry.store_transcript`.
 - [x] Include provenance links from parent events to child resources.
       **Resolved:** `ActorRecord` carries `artifact_uri` and `history_uri`; exposed via `agent://<id>`
-      resource JSON. Full parent-`SessionEvent` linking deferred to P3-plus.
+      resource JSON. **P3-plus update:** `actor_completed` events with child resource URIs are
+      followed by replayable `actor_resources_linked` events carrying `source_event_seq`,
+      `artifact_uri`, and `history_uri`, so audit/replay can recover links from one parent event log.
 - [x] Add bounded preview/list behavior for mobile clients.
       **Resolved:** `HistoryResourceHandler::list` filters to actors with `history_uri` set;
       `HistoryResourceHandler::read` returns selector-bounded content with `has_more` and `preview`.
@@ -420,18 +429,29 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 
 ### Supervision and recovery
 
-- [ ] Active restart behavior: `one_for_one`, `one_for_all`, `rest_for_one` strategies.
-      Types exist in `supervise.rs`; no respawn logic implemented yet.
-- [ ] Wall-clock budget enforcement per actor. `ActorBudget.wall_ms` is tracked but the
-      timer that interrupts a running actor is not wired.
+- [x] Active restart behavior: `one_for_one`, `one_for_all`, `rest_for_one` strategies.
+      **Resolved:** `supervise.rs` computes replayable supervision decisions for restartable
+      crashes/timeouts, max-restart escalation, terminal cancellation, and strategy-specific
+      cancel/restart target sets. `MailboxRegistry` tracks parent supervisor state, stores restart
+      templates, emits replayable `actor_supervision` decisions after `actor_failed`, applies
+      `Cancel` actions to sibling tokens, and respawns `Restart` actions with fresh cancellation
+      and inbox state.
+- [x] Wall-clock budget enforcement per actor.
+      **Resolved:** all `agents.run` / `spawn` / `parallel` / `pipeline` executor calls now pass
+      through a shared `ActorBudget.wall_ms` timeout wrapper. Timeout trips the actor cancellation
+      token and maps to `FailureReason::Timeout` for replayable failure/supervision handling.
 - [x] Cancel token: parent can cancel a running child and receive a replayable `Cancelled`
       terminal event in the SSE stream.
       **Resolved:** `agents.cancel(target)` is registered and prelude-backed. Direct parents
       mark child actor records `terminated` + `cancelled`, trip the shared token used by
       `ChatActorExecutor` and child Deno sandboxes, suppress late completion events, and emit
       one replayable `actor_cancelled` event. `agent://<id>` exposes the terminal state on reconnect.
-- [ ] Subtree cancel-on-sibling-failure for `agents.spawn` / `agents.parallel`
+- [x] Subtree cancel-on-sibling-failure for `agents.spawn` / `agents.parallel`
       ("let it crash" — a failing child aborts its whole sibling group, not just itself).
+      **Resolved:** `agents.parallel` waves run under an isolated `one_for_all` / zero-restart
+      supervision group, so a failing branch cancels sibling wave members without restarting the
+      whole wave. `agents.spawn` accepts `opts.supervision.group`, letting spawned siblings share
+      the same fail-fast supervision group.
 
 ### Child actor approvals
 
@@ -454,16 +474,27 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
       **Resolved:** `MailboxRegistry` exposes actor lineage checks. `agents.msg(..., {await:true})`,
       `agents.send(..., {await:true})`, and targeted `agents.wait(from)` reject descendant wait
       edges with `InvalidArgsError`; synthetic top-level `Root` waits remain allowed.
-- [ ] Bounded mailbox + backpressure: drop or back-pressure senders when the inbox is full;
+- [x] Bounded mailbox + backpressure: drop or back-pressure senders when the inbox is full;
       `agents.broadcast` targets only currently live peers.
+      **Resolved:** actor inboxes are bounded `tokio::mpsc` queues; `try_send` returns failed
+      receipts instead of blocking or growing unbounded, and broadcast filters to direct live
+      children with ordered failed receipts for backpressure.
 
 ### Provenance
 
-- [ ] Full parent-`SessionEvent` linking: `ActorRecord` carries `artifact_uri` /
-      `history_uri`, but no parent event row references them by `session_event_id`.
-      Needed for full audit/replay from a single event log query.
-- [ ] `StatusChanged` lifecycle events wired to SSE (`MessageSent` is now emitted for delivered
+- [x] Full parent-`SessionEvent` linking: `ActorRecord` carries `artifact_uri` /
+      `history_uri`, and parent event rows link those resources back to the producing
+      `actor_completed` `session_event` sequence. Needed for full audit/replay from a single
+      event log query.
+      **Resolved:** `AppState::wire_lifecycle_sink` appends a replayable
+      `actor_resources_linked` event immediately after each resource-bearing `actor_completed`
+      event. The link payload includes `actor_id`, `source_event_type`, `source_event_seq`,
+      `artifact_uri`, and `history_uri`; server smoke tests assert the link points at the
+      persisted `actor_completed` sequence.
+- [x] `StatusChanged` lifecycle events wired to SSE (`MessageSent` is now emitted for delivered
       live mailbox messages; `Spawned` / `Completed` / `Failed` were already live).
+      **Resolved:** actor success, failure, cancellation, and restart paths emit `actor_status`
+      rows through the same lifecycle hook and SSE/event-log path.
 
 ### Client coverage
 

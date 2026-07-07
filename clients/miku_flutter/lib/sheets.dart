@@ -8,6 +8,7 @@ class _ModeSheet extends StatelessWidget {
     required this.currentId,
     required this.locked,
     required this.tok,
+    required this.copy,
     required this.onPick,
     required this.onLockToggle,
   });
@@ -16,6 +17,7 @@ class _ModeSheet extends StatelessWidget {
   final String currentId;
   final bool locked;
   final _Tok tok;
+  final _UiCopy copy;
   final void Function(String) onPick;
   final VoidCallback onLockToggle;
 
@@ -44,17 +46,16 @@ class _ModeSheet extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '模式 / 鎖定',
+                      copy.modeSheetTitle,
                       style: TextStyle(
                         color: tok.text,
                         fontSize: 17,
                         fontWeight: FontWeight.w800,
-                        letterSpacing: -0.3,
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '選模式會手動覆寫；鎖定後不自動切換',
+                      copy.modeSheetHelper,
                       style: TextStyle(
                         color: tok.muted,
                         fontSize: 12,
@@ -67,58 +68,72 @@ class _ModeSheet extends StatelessWidget {
               _TokIconBtn(
                 tok: tok,
                 icon: Icons.close,
+                tooltip: copy.close,
+                semanticLabel: copy.closeModeSheet,
                 onTap: () => Navigator.pop(context),
               ),
             ],
           ),
           const SizedBox(height: 13),
-          GestureDetector(
-            onTap: onLockToggle,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
-              decoration: BoxDecoration(
-                color: locked ? currentAccent.withOpacity(0.1) : tok.bg,
-                border: Border.all(
-                  color: locked ? currentAccent.withOpacity(0.62) : tok.border,
-                ),
+          Semantics(
+            button: true,
+            label: locked ? copy.unlockMode(current) : copy.lockMode(current),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onLockToggle,
                 borderRadius: BorderRadius.circular(13),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    locked ? Icons.lock : Icons.lock_open,
-                    color: locked ? currentAccent : tok.muted,
-                    size: 19,
-                  ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          locked
-                              ? '解除${current.short}鎖定'
-                              : '鎖定${current.short}',
-                          style: TextStyle(
-                            color: tok.text,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 1),
-                        Text(
-                          locked ? '恢復 Miku 自動路由' : '保持目前模式，直到你解除',
-                          style: TextStyle(
-                            color: tok.muted,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
+                focusColor: tok.focus.withOpacity(0.18),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+                  decoration: BoxDecoration(
+                    color: locked ? currentAccent.withOpacity(0.1) : tok.bg,
+                    border: Border.all(
+                      color:
+                          locked ? currentAccent.withOpacity(0.62) : tok.border,
                     ),
+                    borderRadius: BorderRadius.circular(13),
                   ),
-                  _Toggle(on: locked, accent: currentAccent, tok: tok),
-                ],
+                  child: Row(
+                    children: [
+                      Icon(
+                        locked ? Icons.lock : Icons.lock_open,
+                        color: locked ? currentAccent : tok.muted,
+                        size: 19,
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              locked
+                                  ? copy.unlockMode(current)
+                                  : copy.lockMode(current),
+                              style: TextStyle(
+                                color: tok.text,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 1),
+                            Text(
+                              locked
+                                  ? copy.unlockModeHelper
+                                  : copy.lockModeHelper,
+                              style: TextStyle(
+                                color: tok.muted,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _Toggle(on: locked, accent: currentAccent, tok: tok),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
@@ -128,70 +143,85 @@ class _ModeSheet extends StatelessWidget {
             final mAccent = _modeAccent(m.temp, tok);
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: GestureDetector(
-                onTap: () => onPick(m.id),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
-                  decoration: BoxDecoration(
-                    color: isActive ? mAccent.withOpacity(0.08) : tok.bg,
-                    border: Border.all(
-                      color: isActive ? mAccent : tok.border,
-                    ),
+              child: Semantics(
+                button: true,
+                selected: isActive,
+                label: copy.selectMode(m),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => onPick(m.id),
                     borderRadius: BorderRadius.circular(13),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 38,
-                        height: 38,
-                        decoration: BoxDecoration(
-                          color: mAccent,
-                          borderRadius: BorderRadius.circular(10),
+                    focusColor: tok.focus.withOpacity(0.18),
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+                      decoration: BoxDecoration(
+                        color: isActive ? mAccent.withOpacity(0.08) : tok.bg,
+                        border: Border.all(
+                          color: isActive ? mAccent : tok.border,
                         ),
-                        child: Icon(m.icon, color: _textOn(mAccent), size: 20),
+                        borderRadius: BorderRadius.circular(13),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: mAccent,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(
+                              m.icon,
+                              color: _textOn(mAccent),
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
                                   m.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     color: tok.text,
                                     fontSize: 14,
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  m.tip,
+                                  style: TextStyle(
+                                    color: tok.muted,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w500,
+                                    height: 1.4,
+                                  ),
+                                ),
                               ],
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              m.tip,
-                              style: TextStyle(
-                                color: tok.muted,
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w500,
-                                height: 1.4,
+                          ),
+                          if (isActive)
+                            Container(
+                              width: 22,
+                              height: 22,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: mAccent,
+                              ),
+                              child: Icon(
+                                Icons.check,
+                                color: _textOn(mAccent),
+                                size: 14,
                               ),
                             ),
-                          ],
-                        ),
+                        ],
                       ),
-                      if (isActive)
-                        Container(
-                          width: 22,
-                          height: 22,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: mAccent,
-                          ),
-                          child: Icon(Icons.check,
-                              color: _textOn(mAccent), size: 14),
-                        ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -206,6 +236,7 @@ class _ModeSheet extends StatelessWidget {
 class _AgentActivitySheet extends StatelessWidget {
   const _AgentActivitySheet({
     required this.tok,
+    required this.copy,
     required this.accent,
     required this.roundIndex,
     required this.agents,
@@ -214,6 +245,7 @@ class _AgentActivitySheet extends StatelessWidget {
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final Color accent;
   final int roundIndex;
   final List<_AgentStatus> agents;
@@ -257,17 +289,16 @@ class _AgentActivitySheet extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Agents · 回合 $roundIndex',
+                    copy.agentsSheetTitle(roundIndex),
                     style: TextStyle(
                       color: tok.text,
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: -0.3,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${agents.length} agents · ${activities.length} events',
+                    copy.agentCount(agents.length, activities.length),
                     style: TextStyle(
                       color: tok.muted,
                       fontSize: 12,
@@ -280,6 +311,8 @@ class _AgentActivitySheet extends StatelessWidget {
             _TokIconBtn(
               tok: tok,
               icon: Icons.close,
+              tooltip: copy.close,
+              semanticLabel: copy.closeActivitySheet,
               onTap: () => Navigator.pop(context),
             ),
           ],
@@ -287,7 +320,7 @@ class _AgentActivitySheet extends StatelessWidget {
         if (agents.isNotEmpty) ...[
           const SizedBox(height: 14),
           Text(
-            '狀態',
+            copy.status,
             style: TextStyle(
               color: tok.text,
               fontSize: 12,
@@ -296,13 +329,13 @@ class _AgentActivitySheet extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           for (final agent in agents) ...[
-            _AgentSheetRow(tok: tok, accent: accent, agent: agent),
+            _AgentSheetRow(tok: tok, copy: copy, accent: accent, agent: agent),
             if (agent != agents.last) const SizedBox(height: 7),
           ],
         ],
         const SizedBox(height: 14),
         Text(
-          'Prompt / Activity',
+          copy.promptActivity,
           style: TextStyle(
             color: tok.text,
             fontSize: 12,
@@ -322,6 +355,7 @@ class _AgentActivitySheet extends StatelessWidget {
               for (var i = 0; i < activities.length; i++) ...[
                 _ActivityRow(
                   tok: tok,
+                  copy: copy,
                   accent: accent,
                   item: activities[i],
                   onOpenResource: onOpenResource,
@@ -343,11 +377,13 @@ class _AgentActivitySheet extends StatelessWidget {
 class _AgentSheetRow extends StatelessWidget {
   const _AgentSheetRow({
     required this.tok,
+    required this.copy,
     required this.accent,
     required this.agent,
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final Color accent;
   final _AgentStatus agent;
 
@@ -390,7 +426,7 @@ class _AgentSheetRow extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      _stateLabel(agent.state),
+                      copy.stateLabel(agent.state),
                       style: TextStyle(
                         color: color,
                         fontSize: 10.5,
@@ -425,6 +461,7 @@ class _AgentSheetRow extends StatelessWidget {
 class _SessionHistorySheet extends StatefulWidget {
   const _SessionHistorySheet({
     required this.tok,
+    required this.copy,
     required this.currentSessionId,
     required this.loadSessions,
     required this.onSelect,
@@ -432,6 +469,7 @@ class _SessionHistorySheet extends StatefulWidget {
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final String? currentSessionId;
   final Future<List<SessionSummary>> Function() loadSessions;
   final void Function(String sessionId) onSelect;
@@ -457,6 +495,7 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
   @override
   Widget build(BuildContext context) {
     final tok = widget.tok;
+    final copy = widget.copy;
     return Padding(
       padding: const EdgeInsets.fromLTRB(15, 9, 15, 18),
       child: Column(
@@ -478,7 +517,7 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Sessions',
+                      copy.sessions,
                       style: TextStyle(
                         color: tok.text,
                         fontSize: 17,
@@ -487,7 +526,7 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '切換歷史對話或建立新 session',
+                      copy.historyHelper,
                       style: TextStyle(
                         color: tok.muted,
                         fontSize: 12,
@@ -497,17 +536,27 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                   ],
                 ),
               ),
-              _TokIconBtn(tok: tok, icon: Icons.refresh, onTap: _refresh),
+              _TokIconBtn(
+                tok: tok,
+                icon: Icons.refresh,
+                tooltip: copy.refresh,
+                semanticLabel: copy.refreshSessions,
+                onTap: _refresh,
+              ),
               const SizedBox(width: 8),
               _TokIconBtn(
                 tok: tok,
                 icon: Icons.add,
+                tooltip: copy.newSession,
+                semanticLabel: copy.createNewSession,
                 onTap: widget.onNewSession,
               ),
               const SizedBox(width: 8),
               _TokIconBtn(
                 tok: tok,
                 icon: Icons.close,
+                tooltip: copy.close,
+                semanticLabel: copy.closeSessions,
                 onTap: () => Navigator.pop(context),
               ),
             ],
@@ -521,14 +570,14 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                   return _HistoryStateLine(
                     tok: tok,
                     icon: Icons.hourglass_top,
-                    text: '載入 sessions…',
+                    text: copy.loadingSessions,
                   );
                 }
                 if (snapshot.hasError) {
                   return _HistoryStateLine(
                     tok: tok,
                     icon: Icons.error_outline,
-                    text: '讀取失敗：${snapshot.error}',
+                    text: copy.historyLoadFailed(snapshot.error!),
                   );
                 }
                 final sessions = snapshot.data ?? const [];
@@ -536,7 +585,7 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                   return _HistoryStateLine(
                     tok: tok,
                     icon: Icons.chat_bubble_outline,
-                    text: '還沒有歷史 session',
+                    text: copy.noSessions,
                   );
                 }
                 return ListView.separated(
@@ -547,6 +596,7 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                     final session = sessions[index];
                     return _HistorySessionRow(
                       tok: tok,
+                      copy: copy,
                       session: session,
                       selected: session.id == widget.currentSessionId,
                       onTap: () => widget.onSelect(session.id),
@@ -565,12 +615,14 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
 class _HistorySessionRow extends StatelessWidget {
   const _HistorySessionRow({
     required this.tok,
+    required this.copy,
     required this.session,
     required this.selected,
     required this.onTap,
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final SessionSummary session;
   final bool selected;
   final VoidCallback onTap;
@@ -578,91 +630,103 @@ class _HistorySessionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = selected ? tok.accentSoft : tok.cool;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
-        decoration: BoxDecoration(
-          color: selected ? accent.withOpacity(0.11) : tok.bg,
-          border: Border.all(color: selected ? accent : tok.border),
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: copy.openSession(session.title),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(13),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: accent,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                selected ? Icons.radio_button_checked : Icons.history,
-                color: _textOn(accent),
-                size: 19,
-              ),
+          focusColor: tok.focus.withOpacity(0.18),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+            decoration: BoxDecoration(
+              color: selected ? accent.withOpacity(0.11) : tok.bg,
+              border: Border.all(color: selected ? accent : tok.border),
+              borderRadius: BorderRadius.circular(13),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    session.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: tok.text,
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w800,
-                    ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: accent,
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  const SizedBox(height: 3),
-                  Text(
-                    session.preview.isEmpty ? session.label : session.preview,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: tok.muted,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w500,
-                      height: 1.35,
-                    ),
+                  child: Icon(
+                    selected ? Icons.radio_button_checked : Icons.history,
+                    color: _textOn(accent),
+                    size: 19,
                   ),
-                  const SizedBox(height: 7),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _HistoryChip(
-                        tok: tok,
-                        icon: Icons.schedule,
-                        text: _formatUpdatedAt(session.updatedAt),
+                      Text(
+                        session.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: tok.text,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                      _HistoryChip(
-                        tok: tok,
-                        icon: Icons.mode_comment_outlined,
-                        text: '${session.messageCount} messages',
+                      const SizedBox(height: 3),
+                      Text(
+                        session.preview.isEmpty
+                            ? session.label
+                            : session.preview,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: tok.muted,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          height: 1.35,
+                        ),
                       ),
-                      _HistoryChip(
-                        tok: tok,
-                        icon: Icons.tune,
-                        text: session.label,
+                      const SizedBox(height: 7),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _HistoryChip(
+                            tok: tok,
+                            icon: Icons.schedule,
+                            text: _formatUpdatedAt(session.updatedAt),
+                          ),
+                          _HistoryChip(
+                            tok: tok,
+                            icon: Icons.mode_comment_outlined,
+                            text: copy.messages(session.messageCount),
+                          ),
+                          _HistoryChip(
+                            tok: tok,
+                            icon: Icons.tune,
+                            text: session.label,
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  static String _formatUpdatedAt(String value) {
+  String _formatUpdatedAt(String value) {
     final parsed = DateTime.tryParse(value);
-    if (parsed == null) return 'recent';
+    if (parsed == null) return copy.recent;
     final local = parsed.toLocal();
     final month = local.month.toString().padLeft(2, '0');
     final day = local.day.toString().padLeft(2, '0');
@@ -798,6 +862,7 @@ class _ApprovalSheet extends StatefulWidget {
   const _ApprovalSheet({
     required this.approval,
     required this.tok,
+    required this.copy,
     required this.accent,
     required this.onOption,
     required this.onApprove,
@@ -806,6 +871,7 @@ class _ApprovalSheet extends StatefulWidget {
 
   final ApprovalPrompt approval;
   final _Tok tok;
+  final _UiCopy copy;
   final Color accent;
   final void Function(ApprovalOption option) onOption;
   final VoidCallback onApprove, onDeny;
@@ -846,7 +912,9 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
   @override
   Widget build(BuildContext context) {
     final tok = widget.tok;
-    final accent = widget.accent;
+    final copy = widget.copy;
+    final accent = tok.warning;
+    final approveColor = widget.accent;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 9, 16, 18),
       child: SingleChildScrollView(
@@ -883,17 +951,16 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '需要你核可',
+                        copy.approvalNeeded,
                         style: TextStyle(
                           color: tok.text,
                           fontSize: 17,
                           fontWeight: FontWeight.w800,
-                          letterSpacing: -0.3,
                         ),
                       ),
                       const SizedBox(height: 1),
                       Text(
-                        'Miku 想執行操作',
+                        copy.approvalHelper,
                         style: TextStyle(
                           color: tok.muted,
                           fontSize: 12,
@@ -960,7 +1027,7 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  '逾時自動拒絕',
+                  copy.autoDeny,
                   style: TextStyle(
                     color: tok.muted,
                     fontSize: 11.5,
@@ -993,22 +1060,31 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
               Row(
                 children: [
                   Expanded(
-                    child: GestureDetector(
-                      onTap: widget.onDeny,
-                      child: Container(
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: tok.bg,
-                          border: Border.all(color: tok.border),
+                    child: Semantics(
+                      button: true,
+                      label: copy.deny,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: widget.onDeny,
                           borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: Center(
-                          child: Text(
-                            '拒絕',
-                            style: TextStyle(
-                              color: tok.text,
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w700,
+                          focusColor: tok.focus.withOpacity(0.18),
+                          child: Container(
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: tok.bg,
+                              border: Border.all(color: tok.danger),
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: Center(
+                              child: Text(
+                                copy.deny,
+                                style: TextStyle(
+                                  color: tok.text,
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -1018,30 +1094,42 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                   const SizedBox(width: 10),
                   Expanded(
                     flex: 3,
-                    child: GestureDetector(
-                      onTap: widget.onApprove,
-                      child: Container(
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: accent,
+                    child: Semantics(
+                      button: true,
+                      label: copy.approveOnce,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: widget.onApprove,
                           borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: Center(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.check,
-                                  color: _textOn(accent), size: 17),
-                              const SizedBox(width: 7),
-                              Text(
-                                '核可並執行',
-                                style: TextStyle(
-                                  color: _textOn(accent),
-                                  fontSize: 14.5,
-                                  fontWeight: FontWeight.w800,
-                                ),
+                          focusColor: tok.focus.withOpacity(0.18),
+                          child: Container(
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: approveColor,
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: Center(
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.check,
+                                    color: _textOn(approveColor),
+                                    size: 17,
+                                  ),
+                                  const SizedBox(width: 7),
+                                  Text(
+                                    copy.approveOnce,
+                                    style: TextStyle(
+                                      color: _textOn(approveColor),
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
                         ),
                       ),
@@ -1054,29 +1142,45 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                 children: widget.approval.options.map((option) {
                   final isReject = option.kind.startsWith('reject') ||
                       option.kind.startsWith('deny');
-                  final buttonColor = isReject ? tok.bg : accent;
-                  final textColor = isReject ? tok.text : _textOn(accent);
+                  final buttonColor = isReject ? tok.bg : approveColor;
+                  final textColor = isReject ? tok.text : _textOn(approveColor);
+                  final rawLabel =
+                      option.name.isEmpty ? option.optionId : option.name;
+                  final label = isReject
+                      ? copy.deny
+                      : rawLabel.toLowerCase().contains('allow')
+                          ? copy.approveOnce
+                          : rawLabel;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
-                    child: GestureDetector(
-                      onTap: () => widget.onOption(option),
-                      child: Container(
-                        width: double.infinity,
-                        height: 46,
-                        decoration: BoxDecoration(
-                          color: buttonColor,
-                          border: Border.all(
-                            color: isReject ? tok.border : accent,
-                          ),
+                    child: Semantics(
+                      button: true,
+                      label: label,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => widget.onOption(option),
                           borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: Center(
-                          child: Text(
-                            option.name.isEmpty ? option.optionId : option.name,
-                            style: TextStyle(
-                              color: textColor,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
+                          focusColor: tok.focus.withOpacity(0.18),
+                          child: Container(
+                            width: double.infinity,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              color: buttonColor,
+                              border: Border.all(
+                                color: isReject ? tok.danger : approveColor,
+                              ),
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: Center(
+                              child: Text(
+                                label,
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -1095,6 +1199,7 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
 class _OverflowSheet extends StatelessWidget {
   const _OverflowSheet({
     required this.tok,
+    required this.copy,
     required this.projectStatus,
     required this.nextActions,
     required this.isDark,
@@ -1105,6 +1210,7 @@ class _OverflowSheet extends StatelessWidget {
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final String projectStatus;
   final List<String> nextActions;
   final bool isDark;
@@ -1131,7 +1237,7 @@ class _OverflowSheet extends StatelessWidget {
           const SizedBox(height: 14),
           if (projectStatus.isNotEmpty) ...[
             Text(
-              '專案狀態',
+              copy.projectStatus,
               style: TextStyle(
                 color: tok.text,
                 fontSize: 13,
@@ -1182,28 +1288,28 @@ class _OverflowSheet extends StatelessWidget {
           _ActionRow(
             tok: tok,
             icon: isDark ? Icons.wb_sunny_outlined : Icons.nightlight_outlined,
-            label: isDark ? '切換淺色模式' : '切換深色模式',
+            label: isDark ? copy.lightMode : copy.darkMode,
             onTap: onThemeToggle,
           ),
           const SizedBox(height: 8),
           _ActionRow(
             tok: tok,
             icon: Icons.refresh,
-            label: '重新整理專案',
+            label: copy.refreshProject,
             onTap: onRefresh,
           ),
           const SizedBox(height: 8),
           _ActionRow(
             tok: tok,
             icon: Icons.upload_file,
-            label: '推廣 Session',
+            label: copy.promoteSession,
             onTap: onPromote,
           ),
           const SizedBox(height: 8),
           _ActionRow(
             tok: tok,
             icon: Icons.tune,
-            label: '進階：模式與鎖定',
+            label: copy.modeSettings,
             onTap: onModeSettings,
           ),
         ],
@@ -1227,28 +1333,40 @@ class _ActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        decoration: BoxDecoration(
-          color: tok.bg,
-          border: Border.all(color: tok.border),
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: tok.muted, size: 18),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              style: TextStyle(
-                color: tok.text,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
+          focusColor: tok.focus.withOpacity(0.18),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            decoration: BoxDecoration(
+              color: tok.bg,
+              border: Border.all(color: tok.border),
+              borderRadius: BorderRadius.circular(12),
             ),
-          ],
+            child: Row(
+              children: [
+                Icon(icon, color: tok.muted, size: 18),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: tok.text,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1256,10 +1374,15 @@ class _ActionRow extends StatelessWidget {
 }
 
 class _ResourceSheet extends StatelessWidget {
-  const _ResourceSheet({required this.preview, required this.tok});
+  const _ResourceSheet({
+    required this.preview,
+    required this.tok,
+    required this.copy,
+  });
 
   final ResourcePreview preview;
   final _Tok tok;
+  final _UiCopy copy;
 
   @override
   Widget build(BuildContext context) {
@@ -1305,7 +1428,7 @@ class _ResourceSheet extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: SelectableText(
-                  preview.preview.isEmpty ? '(empty preview)' : preview.preview,
+                  preview.preview.isEmpty ? copy.emptyPreview : preview.preview,
                   style: TextStyle(
                     color: tok.text,
                     fontSize: 12,
@@ -1316,7 +1439,7 @@ class _ResourceSheet extends StatelessWidget {
               if (preview.hasMore) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Preview truncated',
+                  copy.previewTruncated,
                   style: TextStyle(color: tok.muted, fontSize: 12),
                 ),
               ],

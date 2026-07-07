@@ -8,6 +8,7 @@ import 'session_client.dart';
 import 'session_models.dart';
 
 part 'theme.dart';
+part 'copy.dart';
 part 'modes.dart';
 part 'app.dart';
 part 'home.dart';

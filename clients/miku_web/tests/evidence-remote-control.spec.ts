@@ -65,8 +65,11 @@ test('real Flutter UI remote-control flow records user-visible evidence', async 
 
   try {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await enableFlutterAccessibility(page);
     sessionId = await waitForSessionId(page);
+    await waitForFonts(page);
     await page.screenshot({ path: path.join(uiDir, 'ui-loaded.png'), fullPage: true });
+    await setHandoffMode(page, sessionId);
 
     await sendPrompt(
       page,
@@ -74,6 +77,7 @@ test('real Flutter UI remote-control flow records user-visible evidence', async 
     );
 
     const approval = await waitForPendingApproval(page, sessionId);
+    await waitForApprovalPaint(page);
     await page.screenshot({ path: path.join(uiDir, 'ui-approval-visible.png'), fullPage: true });
     const approvalResponse = await page.request.post(
       `/sessions/${sessionId}/approvals/${approval.approvalId}`,
@@ -152,9 +156,39 @@ test('real Flutter UI remote-control flow records user-visible evidence', async 
 });
 
 async function sendPrompt(page: Page, prompt: string) {
-  await page.mouse.click(96, 790);
+  await clickComposer(page);
   await page.keyboard.insertText(prompt);
-  await page.mouse.click(356, 790);
+  await page.waitForTimeout(250);
+  await clickSubmit(page);
+}
+
+async function enableFlutterAccessibility(page: Page) {
+  const button = page.getByRole('button', { name: 'Enable accessibility' });
+  if ((await button.count()) === 0) return;
+  await button.click({ force: true, timeout: 5_000 }).catch(() => {});
+  await page.waitForTimeout(250);
+}
+
+async function clickComposer(page: Page) {
+  const textbox = page.getByRole('textbox').first();
+  if ((await textbox.count()) > 0) {
+    await textbox.click({ timeout: 5_000 });
+    return;
+  }
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error('viewport is unavailable');
+  await page.mouse.click(Math.floor(viewport.width * 0.38), viewport.height - 55);
+}
+
+async function clickSubmit(page: Page) {
+  const submit = page.getByRole('button', { name: /submit|send|送出/i }).last();
+  if ((await submit.count()) > 0 && (await submit.isVisible().catch(() => false))) {
+    await submit.click({ timeout: 5_000 });
+    return;
+  }
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error('viewport is unavailable');
+  await page.mouse.click(viewport.width - 38, viewport.height - 55);
 }
 
 async function waitForSessionId(page: Page) {
@@ -166,6 +200,26 @@ async function waitForSessionId(page: Page) {
   const sessionId = await page.evaluate(() => window.localStorage.getItem('tempestmiku.sessionId'));
   if (!sessionId) throw new Error('session id was not persisted by the Flutter UI');
   return sessionId;
+}
+
+async function waitForFonts(page: Page) {
+  await page.evaluate(() => document.fonts?.ready ?? Promise.resolve());
+  await page.waitForTimeout(750);
+}
+
+async function setHandoffMode(page: Page, sessionId: string) {
+  const response = await page.request.post(`/sessions/${sessionId}/mode/override`, {
+    data: {
+      mode: 'handoff',
+      reason: 'UI evidence actor approval flow',
+      source: 'tm-e2e',
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+}
+
+async function waitForApprovalPaint(page: Page) {
+  await page.waitForTimeout(1_000);
 }
 
 type PendingApproval = {

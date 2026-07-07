@@ -42,6 +42,8 @@
               pkgs.pkg-config
               pkgs.flutter
               pkgs.jdk17
+              pkgs.fontconfig
+              pkgs.noto-fonts-cjk-sans
             ]
             # reqwest uses rustls (no OpenSSL); darwin still wants libiconv and these
             # frameworks for linking network-touching crates.

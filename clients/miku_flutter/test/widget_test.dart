@@ -24,6 +24,72 @@ void main() {
     );
   });
 
+  testWidgets('compact mobile chrome stays readable at 390px',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('Miku'), findsOneWidget);
+    expect(find.text('TempestMiku'), findsNothing);
+    expect(find.text('Miku is here'), findsOneWidget);
+    expect(find.text('Miku 在這裡'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('primary chat controls expose selected-language semantics',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.bySemanticsLabel('Open sessions'), findsOneWidget);
+    expect(find.bySemanticsLabel('Open more actions'), findsOneWidget);
+    expect(find.bySemanticsLabel('Send message'), findsOneWidget);
+
+    await tester.enterText(find.byType(EditableText), 'code artifact://0');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const ValueKey('resource:artifact://0')), findsOneWidget);
+  });
+
+  testWidgets('language switch toggles chrome without changing chat content',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('Miku is here'), findsOneWidget);
+    expect(find.text('Miku 在這裡'), findsNothing);
+
+    await tester.tap(find.text('EN'));
+    await tester.pump();
+
+    expect(find.text('Miku 在這裡'), findsOneWidget);
+    expect(find.text('Miku is here'), findsNothing);
+    expect(find.bySemanticsLabel('送出訊息'), findsOneWidget);
+
+    await tester.enterText(find.byType(EditableText), 'hello in any language');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('hello in any language'), findsOneWidget);
+    expect(find.textContaining('Miku heard: hello in any language'),
+        findsOneWidget);
+  });
+
   testWidgets(
       'shows remote control stream, final, hidden mode state, and project state',
       (WidgetTester tester) async {
@@ -57,10 +123,7 @@ void main() {
 
     await tester.ensureVisible(find.text('artifact://0'));
     await tester.pump();
-    await tester.tap(
-      find.widgetWithText(GestureDetector, 'artifact://0'),
-      warnIfMissed: false,
-    );
+    await tester.tap(find.byKey(const ValueKey('resource:artifact://0')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
@@ -74,7 +137,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.more_horiz));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
-    await tester.tap(find.text('推廣 Session'));
+    await tester.tap(find.text('Promote Session'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -104,8 +167,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('回合 1'), findsOneWidget);
-    expect(find.text('回合 2'), findsOneWidget);
+    expect(find.text('Round 1'), findsOneWidget);
+    expect(find.text('Round 2'), findsOneWidget);
     expect(find.text('first status check'), findsOneWidget);
     expect(find.text('second status check'), findsOneWidget);
     expect(find.text('Miku heard: first status check'), findsOneWidget);
@@ -131,11 +194,7 @@ void main() {
     expect(find.text('Sessions'), findsOneWidget);
     expect(find.text('Miku heard: first history check'), findsWidgets);
 
-    final newSessionButton = find.ancestor(
-      of: find.byIcon(Icons.add).last,
-      matching: find.byType(GestureDetector),
-    );
-    await tester.tap(newSessionButton);
+    await tester.tap(find.byIcon(Icons.add).last);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 100));
@@ -171,16 +230,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('個人助理'), findsNothing);
-    expect(find.text('Personal鎖定'), findsNothing);
+    expect(find.text('Personal locked'), findsNothing);
     expect(find.text('Personal'), findsOneWidget);
 
     await tester.tap(find.text('Personal'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('模式 / 鎖定'), findsOneWidget);
+    expect(find.text('Mode / Lock'), findsOneWidget);
     expect(find.text('Personal Assistant'), findsOneWidget);
-    expect(find.text('鎖定Personal'), findsOneWidget);
+    expect(find.text('Lock Personal'), findsOneWidget);
 
     await tester.tap(find.text('Serious Engineer'));
     await tester.pump();
@@ -194,13 +253,13 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('鎖定Serious'), findsOneWidget);
-    await tester.tap(find.text('鎖定Serious'));
+    expect(find.text('Lock Serious'), findsOneWidget);
+    await tester.tap(find.text('Lock Serious'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(client.lockedModes, contains('serious_engineer'));
-    expect(find.text('Serious鎖定'), findsOneWidget);
+    expect(find.text('Serious locked'), findsOneWidget);
   });
 
   testWidgets('renders and resolves memory write proposals',
@@ -221,7 +280,8 @@ void main() {
         findsOneWidget);
     expect(find.text('scope global'), findsOneWidget);
     expect(find.text('provenance scripted chat turn'), findsOneWidget);
-    expect(find.textContaining('待核可 · memory.write'), findsNothing);
+    expect(
+        find.textContaining('Pending approval · memory.write'), findsNothing);
 
     await tester.tap(find.text('Save memory'));
     await tester.pump();
@@ -268,9 +328,8 @@ void main() {
         find.byKey(const ValueKey('activity-resource:history://Worker0'));
     expect(artifactLink, findsOneWidget);
     expect(historyLink, findsOneWidget);
-    expect(find.widgetWithText(GestureDetector, 'artifact://0'), findsWidgets);
-    expect(find.widgetWithText(GestureDetector, 'history://Worker0'),
-        findsOneWidget);
+    expect(find.text('artifact://0'), findsWidgets);
+    expect(find.text('history://Worker0'), findsOneWidget);
 
     await tester.tap(artifactLink);
     await tester.pump();
@@ -312,7 +371,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    expect(find.text('Agents · 回合 1'), findsOneWidget);
+    expect(find.text('Agents · Round 1'), findsOneWidget);
     expect(find.text('Prompt / Activity'), findsOneWidget);
     expect(find.text('呼叫工具 execute'), findsOneWidget);
     expect(find.text('執行程式'), findsOneWidget);
@@ -331,14 +390,12 @@ void main() {
     await tester.pump();
     expect(find.textContaining('Actor Worker0 completed'), findsOneWidget);
     expect(find.text('artifact://0'), findsOneWidget);
-    expect(find.textContaining('待核可 · proc.run cargo clean'), findsOneWidget);
+    expect(find.textContaining('Pending approval · proc.run cargo clean'),
+        findsOneWidget);
 
     await tester.ensureVisible(find.text('artifact://0'));
     await tester.pump();
-    await tester.tap(
-      find.widgetWithText(GestureDetector, 'artifact://0'),
-      warnIfMissed: false,
-    );
+    await tester.tap(find.byKey(const ValueKey('resource:artifact://0')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
@@ -349,18 +406,21 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    await tester.tap(find.textContaining('待核可 · proc.run cargo clean'));
+    await tester.tap(
+      find.textContaining('Pending approval · proc.run cargo clean'),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('actorId: Worker0'), findsOneWidget);
-    await tester.tap(find.text('Allow once'));
+    await tester.tap(find.text('Approve once'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(client.resolvedApprovals, hasLength(1));
     expect(client.resolvedApprovals.single, endsWith(':approve'));
-    expect(find.textContaining('待核可 · proc.run cargo clean'), findsNothing);
+    expect(find.textContaining('Pending approval · proc.run cargo clean'),
+        findsNothing);
 
     final remembered = client.rememberedLastEventIds.values.single;
     await tester.pumpWidget(MikuApp(key: UniqueKey(), client: client));
@@ -368,6 +428,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(client.eventResumeIds.last, remembered);
-    expect(find.textContaining('從事件 #$remembered'), findsOneWidget);
+    expect(find.textContaining('event #$remembered'), findsOneWidget);
   });
 }

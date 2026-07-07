@@ -2,29 +2,52 @@ part of 'main.dart';
 
 // ─── Small reusable widgets ────────────────────────────────────────────────────
 
+bool _reducedMotion(BuildContext context) {
+  final media = MediaQuery.maybeOf(context);
+  return media?.disableAnimations == true ||
+      media?.accessibleNavigation == true;
+}
+
 class _TokIconBtn extends StatelessWidget {
   const _TokIconBtn({
     required this.tok,
     required this.icon,
+    required this.tooltip,
+    required this.semanticLabel,
     required this.onTap,
   });
 
   final _Tok tok;
   final IconData icon;
-  final VoidCallback onTap;
+  final String tooltip;
+  final String semanticLabel;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          border: Border.all(color: tok.border),
-          borderRadius: BorderRadius.circular(9),
+    return Tooltip(
+      message: tooltip,
+      child: Semantics(
+        button: true,
+        enabled: onTap != null,
+        label: semanticLabel,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(10),
+            focusColor: tok.focus.withOpacity(0.2),
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                border: Border.all(color: tok.border),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: tok.muted, size: 17),
+            ),
+          ),
         ),
-        child: Icon(icon, color: tok.muted, size: 16),
       ),
     );
   }
@@ -33,59 +56,76 @@ class _TokIconBtn extends StatelessWidget {
 class _ModeDropMenuButton extends StatelessWidget {
   const _ModeDropMenuButton({
     required this.tok,
+    required this.copy,
     required this.mode,
     required this.accent,
     required this.locked,
     required this.onTap,
+    this.compact = false,
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final _Mode mode;
   final Color accent;
   final bool locked;
   final VoidCallback onTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final borderColor = locked ? accent.withOpacity(0.58) : tok.border;
     final bg = locked ? accent.withOpacity(0.12) : tok.surface.withOpacity(0.6);
-    final label = locked ? '${mode.short}鎖定' : mode.short;
+    final label = copy.modeChipLabel(mode, locked);
     return Tooltip(
-      message: locked ? '模式已鎖定，點擊管理' : '切換模式',
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          height: 32,
-          constraints: const BoxConstraints(minWidth: 58, maxWidth: 92),
-          padding: const EdgeInsets.symmetric(horizontal: 9),
-          decoration: BoxDecoration(
-            color: bg,
-            border: Border.all(color: borderColor),
+      message: locked ? copy.modeLocked : copy.switchMode,
+      child: Semantics(
+        button: true,
+        label: locked ? copy.currentModeLocked(mode) : copy.currentMode(mode),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
             borderRadius: BorderRadius.circular(999),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                locked ? Icons.lock : mode.icon,
-                color: locked ? accent : tok.muted,
-                size: 13,
+            focusColor: tok.focus.withOpacity(0.18),
+            child: Container(
+              height: 40,
+              constraints: BoxConstraints(
+                minWidth: compact ? 62 : 72,
+                maxWidth: compact ? 90 : 128,
               ),
-              const SizedBox(width: 5),
-              Flexible(
-                child: Text(
-                  label,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: bg,
+                border: Border.all(color: borderColor),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    locked ? Icons.lock : mode.icon,
                     color: locked ? accent : tok.muted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
+                    size: 14,
                   ),
-                ),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: locked ? accent : tok.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(Icons.arrow_drop_down, color: tok.muted, size: 16),
+                ],
               ),
-              const SizedBox(width: 2),
-              Icon(Icons.arrow_drop_down, color: tok.muted, size: 16),
-            ],
+            ),
           ),
         ),
       ),
@@ -94,10 +134,17 @@ class _ModeDropMenuButton extends StatelessWidget {
 }
 
 class _ConnectionBadge extends StatefulWidget {
-  const _ConnectionBadge({required this.status, required this.tok});
+  const _ConnectionBadge({
+    required this.status,
+    required this.tok,
+    required this.copy,
+    this.compact = false,
+  });
 
   final String status;
   final _Tok tok;
+  final _UiCopy copy;
+  final bool compact;
 
   @override
   State<_ConnectionBadge> createState() => _ConnectionBadgeState();
@@ -128,59 +175,176 @@ class _ConnectionBadgeState extends State<_ConnectionBadge>
     final isLive = widget.status == 'connected' ||
         widget.status == 'streaming' ||
         widget.status == 'complete';
-    final dotColor = isLive ? tok.cool : tok.muted;
+    final dotColor = isLive ? tok.success : tok.warning;
+    final label = widget.copy.statusLabel(widget.status);
+    final reduceMotion = _reducedMotion(context);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(
-        border: Border.all(color: tok.border),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedBuilder(
-            animation: _pulse,
-            builder: (_, __) {
-              final t = _pulse.value * math.pi * 2;
-              final opacity = (math.sin(t) * 0.34 + 0.66).clamp(0.32, 1.0);
-              return Opacity(
-                opacity: isLive ? opacity : 0.45,
-                child: Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: dotColor,
-                  ),
-                ),
-              );
-            },
-          ),
-          const SizedBox(width: 5),
-          Text(
-            _label(widget.status),
-            style: TextStyle(
-              color: tok.muted,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+    Widget dot() {
+      return AnimatedBuilder(
+        animation: _pulse,
+        builder: (_, __) {
+          final t = _pulse.value * math.pi * 2;
+          final opacity =
+              reduceMotion ? 1.0 : (math.sin(t) * 0.34 + 0.66).clamp(0.32, 1.0);
+          return Opacity(
+            opacity: isLive ? opacity : 0.55,
+            child: Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: dotColor,
+              ),
             ),
+          );
+        },
+      );
+    }
+
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        label: widget.copy.connectionStatus(label),
+        child: Container(
+          width: widget.compact ? 40 : null,
+          height: widget.compact ? 40 : null,
+          padding: widget.compact
+              ? EdgeInsets.zero
+              : const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: tok.border),
+            borderRadius: BorderRadius.circular(999),
           ),
-        ],
+          child: widget.compact
+              ? Center(child: dot())
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    dot(),
+                    const SizedBox(width: 6),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: tok.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+        ),
       ),
     );
   }
+}
 
-  static String _label(String s) => switch (s) {
-        'idle' => '未連線',
-        'connecting' => '連線中',
-        'connected' => '已連線',
-        'streaming' => '回應中',
-        'reconnecting' => '重連中',
-        'offline' => '離線',
-        'complete' => '已連線',
-        _ => s,
-      };
+class _LanguageToggle extends StatelessWidget {
+  const _LanguageToggle({
+    required this.tok,
+    required this.copy,
+    required this.onTap,
+  });
+
+  final _Tok tok;
+  final _UiCopy copy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: copy.languageTooltip,
+      child: Semantics(
+        button: true,
+        label: copy.languageSemantic,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(10),
+            focusColor: tok.focus.withOpacity(0.2),
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                border: Border.all(color: tok.border),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Center(
+                child: Text(
+                  copy.code,
+                  style: TextStyle(
+                    color: tok.muted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({
+    required this.tok,
+    required this.accent,
+    required this.status,
+    required this.copy,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final String status;
+  final _UiCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 92, 4, 28),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.smart_toy, color: _textOn(accent), size: 22),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                copy.emptyTitle,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: tok.text,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                copy.statusLabel(status),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: tok.muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SystemLine extends StatelessWidget {
@@ -213,12 +377,16 @@ class _SystemLine extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 7),
-              Text(
-                text,
-                style: TextStyle(
-                  color: tok.muted,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
+              Flexible(
+                child: Text(
+                  text,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: tok.muted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -230,9 +398,14 @@ class _SystemLine extends StatelessWidget {
 }
 
 class _RoundLabel extends StatelessWidget {
-  const _RoundLabel({required this.tok, required this.index});
+  const _RoundLabel({
+    required this.tok,
+    required this.copy,
+    required this.index,
+  });
 
   final _Tok tok;
+  final _UiCopy copy;
   final int index;
 
   @override
@@ -240,7 +413,7 @@ class _RoundLabel extends StatelessWidget {
     return Row(
       children: [
         Text(
-          '回合 $index',
+          copy.round(index),
           style: TextStyle(
             color: tok.muted,
             fontSize: 11,
@@ -303,6 +476,7 @@ class _UserBubble extends StatelessWidget {
 class _MikuBubble extends StatelessWidget {
   const _MikuBubble({
     required this.tok,
+    required this.copy,
     required this.text,
     required this.accent,
     required this.resources,
@@ -311,6 +485,7 @@ class _MikuBubble extends StatelessWidget {
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final String text;
   final Color accent;
   final List<String> resources;
@@ -371,35 +546,53 @@ class _MikuBubble extends StatelessWidget {
                   runSpacing: 6,
                   children: resources
                       .map(
-                        (uri) => GestureDetector(
-                          onTap: () => onOpenResource(uri),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: tok.surface,
-                              border: Border.all(color: tok.border),
+                        (uri) => Semantics(
+                          button: true,
+                          label: copy.openResource(uri),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              key: ValueKey('resource:$uri'),
+                              onTap: () => onOpenResource(uri),
                               borderRadius: BorderRadius.circular(9),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.insert_drive_file_outlined,
-                                    size: 13, color: accent),
-                                const SizedBox(width: 6),
-                                Text(
-                                  uri,
-                                  style: TextStyle(
-                                    color: accent,
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w700,
-                                    fontFamily: 'monospace',
-                                  ),
+                              focusColor: tok.focus.withOpacity(0.18),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 7,
                                 ),
-                                const SizedBox(width: 4),
-                                Icon(Icons.open_in_new,
-                                    size: 11, color: tok.muted),
-                              ],
+                                decoration: BoxDecoration(
+                                  color: tok.surface,
+                                  border: Border.all(color: tok.border),
+                                  borderRadius: BorderRadius.circular(9),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.insert_drive_file_outlined,
+                                      size: 13,
+                                      color: accent,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      uri,
+                                      style: TextStyle(
+                                        color: accent,
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w700,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.open_in_new,
+                                      size: 11,
+                                      color: tok.muted,
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -445,6 +638,16 @@ class _PulsingDotState extends State<_PulsingDot>
 
   @override
   Widget build(BuildContext context) {
+    if (_reducedMotion(context)) {
+      return Container(
+        width: 6,
+        height: 6,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: widget.color,
+        ),
+      );
+    }
     return AnimatedBuilder(
       animation: _c,
       builder: (_, __) {
@@ -479,6 +682,7 @@ class _TypingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = _reducedMotion(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -499,11 +703,15 @@ class _TypingIndicator extends StatelessWidget {
             builder: (_, __) => Row(
               mainAxisSize: MainAxisSize.min,
               children: List.generate(3, (i) {
-                final phase = (anim.value - i * 0.18) % 1.0;
-                final opacity = (math.sin(phase * math.pi * 2) * 0.4 + 0.6)
-                    .clamp(0.25, 1.0);
-                final dy =
-                    (math.sin(phase * math.pi * 2) * -2.0).clamp(-2.0, 0.0);
+                final phase =
+                    reduceMotion ? 0.0 : (anim.value - i * 0.18) % 1.0;
+                final opacity = reduceMotion
+                    ? 0.85
+                    : (math.sin(phase * math.pi * 2) * 0.4 + 0.6)
+                        .clamp(0.25, 1.0);
+                final dy = reduceMotion
+                    ? 0.0
+                    : (math.sin(phase * math.pi * 2) * -2.0).clamp(-2.0, 0.0);
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 2),
                   child: Transform.translate(
@@ -533,6 +741,7 @@ class _TypingIndicator extends StatelessWidget {
 class _AgentStatusBar extends StatelessWidget {
   const _AgentStatusBar({
     required this.tok,
+    required this.copy,
     required this.accent,
     required this.anim,
     required this.agents,
@@ -541,6 +750,7 @@ class _AgentStatusBar extends StatelessWidget {
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final Color accent;
   final AnimationController anim;
   final List<_AgentStatus> agents;
@@ -554,87 +764,99 @@ class _AgentStatusBar extends StatelessWidget {
     final visibleAgents =
         agents.length > 4 ? agents.sublist(agents.length - 4) : agents;
     final fallback = _runtimeFallback();
-    return GestureDetector(
-      onTap: onTap,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: tok.surface,
-              border: Border.all(color: tok.border),
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: Icon(Icons.account_tree_outlined, color: accent, size: 16),
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
-              decoration: BoxDecoration(
-                color: tok.surface.withOpacity(0.78),
-                border: Border.all(color: tok.border.withOpacity(0.82)),
-                borderRadius: BorderRadius.circular(10),
+    return Semantics(
+      button: true,
+      label: copy.openAgentActivity,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          focusColor: tok.focus.withOpacity(0.18),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: tok.surface,
+                  border: Border.all(color: tok.border),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child:
+                    Icon(Icons.account_tree_outlined, color: accent, size: 16),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+              const SizedBox(width: 9),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+                  decoration: BoxDecoration(
+                    color: tok.surface.withOpacity(0.78),
+                    border: Border.all(color: tok.border.withOpacity(0.82)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.route_outlined, color: accent, size: 14),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          agents.isEmpty
-                              ? 'Runtime 狀態'
-                              : 'Agents · $running running / $stopped stopped',
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: tok.text,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
+                      Row(
+                        children: [
+                          Icon(Icons.route_outlined, color: accent, size: 14),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              agents.isEmpty
+                                  ? copy.runtimeStatus
+                                  : copy.agentsSummary(running, stopped),
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: tok.text,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 8),
+                          Text(
+                            copy.events(activities.length),
+                            style: TextStyle(
+                              color: tok.muted,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(Icons.open_in_full, color: tok.muted, size: 12),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${activities.length} events',
-                        style: TextStyle(
-                          color: tok.muted,
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w800,
+                      const SizedBox(height: 7),
+                      if (visibleAgents.isNotEmpty)
+                        for (final agent in visibleAgents) ...[
+                          _AgentStatusLine(
+                            tok: tok,
+                            copy: copy,
+                            accent: accent,
+                            anim: anim,
+                            agent: agent,
+                          ),
+                          if (agent != visibleAgents.last)
+                            const SizedBox(height: 5),
+                        ]
+                      else
+                        _RuntimeStatusLine(
+                          tok: tok,
+                          copy: copy,
+                          accent: accent,
+                          anim: anim,
+                          item: fallback,
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(Icons.open_in_full, color: tok.muted, size: 12),
                     ],
                   ),
-                  const SizedBox(height: 7),
-                  if (visibleAgents.isNotEmpty)
-                    for (final agent in visibleAgents) ...[
-                      _AgentStatusLine(
-                        tok: tok,
-                        accent: accent,
-                        anim: anim,
-                        agent: agent,
-                      ),
-                      if (agent != visibleAgents.last)
-                        const SizedBox(height: 5),
-                    ]
-                  else
-                    _RuntimeStatusLine(
-                      tok: tok,
-                      accent: accent,
-                      anim: anim,
-                      item: fallback,
-                    ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -650,12 +872,14 @@ class _AgentStatusBar extends StatelessWidget {
 class _AgentStatusLine extends StatelessWidget {
   const _AgentStatusLine({
     required this.tok,
+    required this.copy,
     required this.accent,
     required this.anim,
     required this.agent,
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final Color accent;
   final AnimationController anim;
   final _AgentStatus agent;
@@ -678,7 +902,7 @@ class _AgentStatusLine extends StatelessWidget {
           ),
         ),
         Text(
-          _stateLabel(agent.state),
+          copy.stateLabel(agent.state),
           style: TextStyle(
             color: agent.isRunning ? accent : tok.muted,
             fontSize: 10.5,
@@ -693,12 +917,14 @@ class _AgentStatusLine extends StatelessWidget {
 class _RuntimeStatusLine extends StatelessWidget {
   const _RuntimeStatusLine({
     required this.tok,
+    required this.copy,
     required this.accent,
     required this.anim,
     required this.item,
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final Color accent;
   final AnimationController anim;
   final _ActivityItem item;
@@ -721,7 +947,7 @@ class _RuntimeStatusLine extends StatelessWidget {
           ),
         ),
         Text(
-          _stateLabel(item.state),
+          copy.stateLabel(item.state),
           style: TextStyle(
             color: item.state == _ActivityState.running ? accent : tok.muted,
             fontSize: 10.5,
@@ -749,6 +975,16 @@ class _StatusGlyph extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (state == _ActivityState.running) {
+      if (_reducedMotion(context)) {
+        return Container(
+          width: 14,
+          height: 14,
+          decoration: BoxDecoration(
+            color: accent,
+            shape: BoxShape.circle,
+          ),
+        );
+      }
       return AnimatedBuilder(
         animation: anim,
         builder: (_, __) {
@@ -775,8 +1011,8 @@ class _StatusGlyph extends StatelessWidget {
       _ActivityState.running => Icons.circle,
     };
     final color = switch (state) {
-      _ActivityState.failed => const Color(0xFFB84A30),
-      _ActivityState.done => tok.muted,
+      _ActivityState.failed => tok.danger,
+      _ActivityState.done => tok.success,
       _ActivityState.info => tok.muted,
       _ActivityState.running => accent,
     };
@@ -787,12 +1023,14 @@ class _StatusGlyph extends StatelessWidget {
 class _ActivityRow extends StatelessWidget {
   const _ActivityRow({
     required this.tok,
+    required this.copy,
     required this.accent,
     required this.item,
     required this.onOpenResource,
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final Color accent;
   final _ActivityItem item;
   final void Function(String) onOpenResource;
@@ -850,44 +1088,53 @@ class _ActivityRow extends StatelessWidget {
                   runSpacing: 6,
                   children: item.resourceUris
                       .map(
-                        (uri) => GestureDetector(
-                          key: ValueKey('activity-resource:$uri'),
-                          onTap: () => onOpenResource(uri),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: tok.surface,
-                              border: Border.all(color: tok.border),
+                        (uri) => Semantics(
+                          button: true,
+                          label: copy.openActivityResource(uri),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              key: ValueKey('activity-resource:$uri'),
+                              onTap: () => onOpenResource(uri),
                               borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.insert_drive_file_outlined,
-                                  size: 12,
-                                  color: accent,
+                              focusColor: tok.focus.withOpacity(0.18),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 6,
                                 ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  uri,
-                                  style: TextStyle(
-                                    color: accent,
-                                    fontSize: 10.8,
-                                    fontWeight: FontWeight.w800,
-                                    fontFamily: 'monospace',
-                                  ),
+                                decoration: BoxDecoration(
+                                  color: tok.surface,
+                                  border: Border.all(color: tok.border),
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
-                                const SizedBox(width: 4),
-                                Icon(
-                                  Icons.open_in_new,
-                                  size: 10,
-                                  color: tok.muted,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.insert_drive_file_outlined,
+                                      size: 12,
+                                      color: accent,
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      uri,
+                                      style: TextStyle(
+                                        color: accent,
+                                        fontSize: 10.8,
+                                        fontWeight: FontWeight.w800,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.open_in_new,
+                                      size: 10,
+                                      color: tok.muted,
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ),
@@ -904,18 +1151,11 @@ class _ActivityRow extends StatelessWidget {
 
   Color _stateColor(_ActivityState state) => switch (state) {
         _ActivityState.running => accent,
-        _ActivityState.done => tok.cool,
-        _ActivityState.failed => const Color(0xFFB84A30),
+        _ActivityState.done => tok.success,
+        _ActivityState.failed => tok.danger,
         _ActivityState.info => tok.muted,
       };
 }
-
-String _stateLabel(_ActivityState state) => switch (state) {
-      _ActivityState.running => 'running',
-      _ActivityState.done => 'stopped',
-      _ActivityState.failed => 'failed',
-      _ActivityState.info => 'updated',
-    };
 
 String _trimActivityDetail(String detail) {
   final cleaned = detail
@@ -931,69 +1171,82 @@ String _trimActivityDetail(String detail) {
 class _ApprovalCard extends StatelessWidget {
   const _ApprovalCard({
     required this.tok,
+    required this.copy,
     required this.approval,
     required this.accent,
     required this.onTap,
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final ApprovalPrompt approval;
   final Color accent;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
-        decoration: BoxDecoration(
-          color: accent.withOpacity(0.09),
-          border: Border.all(color: accent.withOpacity(0.45)),
+    return Semantics(
+      button: true,
+      label: copy.pendingApprovalSemantics(approval.action),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(13),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: accent,
-                borderRadius: BorderRadius.circular(9),
-              ),
-              child: Icon(
-                Icons.warning_amber_rounded,
-                color: _textOn(accent),
-                size: 18,
-              ),
+          focusColor: tok.focus.withOpacity(0.18),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+            decoration: BoxDecoration(
+              color: tok.warning.withOpacity(0.11),
+              border: Border.all(color: tok.warning.withOpacity(0.52)),
+              borderRadius: BorderRadius.circular(13),
             ),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '待核可 · ${approval.action}',
-                    style: TextStyle(
-                      color: tok.text,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: tok.warning,
+                    borderRadius: BorderRadius.circular(9),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '點擊檢視詳情 · 逾時自動拒絕',
-                    style: TextStyle(
-                      color: tok.muted,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w500,
-                    ),
+                  child: Icon(
+                    Icons.warning_amber_rounded,
+                    color: _textOn(tok.warning),
+                    size: 18,
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        copy.pendingApproval(approval.action),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: tok.text,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        copy.tapForDetails,
+                        style: TextStyle(
+                          color: tok.muted,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: tok.muted, size: 18),
+              ],
             ),
-            Icon(Icons.chevron_right, color: tok.muted, size: 18),
-          ],
+          ),
         ),
       ),
     );
@@ -1003,6 +1256,7 @@ class _ApprovalCard extends StatelessWidget {
 class _MemoryProposalCard extends StatelessWidget {
   const _MemoryProposalCard({
     required this.tok,
+    required this.copy,
     required this.proposal,
     required this.approval,
     required this.accent,
@@ -1011,6 +1265,7 @@ class _MemoryProposalCard extends StatelessWidget {
   });
 
   final _Tok tok;
+  final _UiCopy copy;
   final MemoryWriteProposal proposal;
   final ApprovalPrompt? approval;
   final Color accent;
@@ -1048,7 +1303,7 @@ class _MemoryProposalCard extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        'Memory proposal',
+                        copy.memoryProposal,
                         style: TextStyle(
                           color: tok.text,
                           fontSize: 12.8,
@@ -1066,7 +1321,7 @@ class _MemoryProposalCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
-                        hasApproval ? 'pending' : 'syncing',
+                        hasApproval ? copy.pending : copy.syncing,
                         style: TextStyle(
                           color: accent,
                           fontSize: 10.5,
@@ -1101,12 +1356,12 @@ class _MemoryProposalCard extends StatelessWidget {
                     _ProposalChip(
                       tok: tok,
                       icon: Icons.folder_outlined,
-                      text: 'scope ${proposal.scopeLabel}',
+                      text: copy.scopeChip(proposal.scopeLabel),
                     ),
                     _ProposalChip(
                       tok: tok,
                       icon: Icons.history,
-                      text: 'provenance ${proposal.provenanceText}',
+                      text: copy.provenanceChip(proposal.provenanceText),
                     ),
                   ],
                 ),
@@ -1116,7 +1371,9 @@ class _MemoryProposalCard extends StatelessWidget {
                     _ProposalActionButton(
                       tok: tok,
                       icon: Icons.close,
-                      label: 'Deny',
+                      label: copy.deny,
+                      disabledLabel: copy.waitingForApproval,
+                      waitingLabel: copy.waiting,
                       onTap: onDeny,
                     ),
                     const SizedBox(width: 8),
@@ -1124,7 +1381,9 @@ class _MemoryProposalCard extends StatelessWidget {
                       child: _ProposalActionButton(
                         tok: tok,
                         icon: Icons.check,
-                        label: 'Save memory',
+                        label: copy.saveMemory,
+                        disabledLabel: copy.waitingForApproval,
+                        waitingLabel: copy.waiting,
                         accent: accent,
                         onTap: onApprove,
                       ),
@@ -1188,6 +1447,8 @@ class _ProposalActionButton extends StatelessWidget {
     required this.tok,
     required this.icon,
     required this.label,
+    required this.disabledLabel,
+    required this.waitingLabel,
     required this.onTap,
     this.accent,
   });
@@ -1195,6 +1456,8 @@ class _ProposalActionButton extends StatelessWidget {
   final _Tok tok;
   final IconData icon;
   final String label;
+  final String disabledLabel;
+  final String waitingLabel;
   final VoidCallback? onTap;
   final Color? accent;
 
@@ -1206,34 +1469,44 @@ class _ProposalActionButton extends StatelessWidget {
     final border = accent ?? tok.border;
     return Opacity(
       opacity: active ? 1 : 0.54,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          height: 36,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: bg,
-            border: Border.all(color: border),
+      child: Semantics(
+        button: true,
+        enabled: active,
+        label: active ? label : disabledLabel,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
             borderRadius: BorderRadius.circular(10),
-          ),
-          child: Center(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, color: fg, size: 15),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    active ? label : 'Waiting',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: fg,
-                      fontSize: 12.3,
-                      fontWeight: FontWeight.w800,
+            focusColor: tok.focus.withOpacity(0.18),
+            child: Container(
+              height: 38,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: bg,
+                border: Border.all(color: border),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, color: fg, size: 15),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        active ? label : waitingLabel,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: fg,
+                          fontSize: 12.3,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),

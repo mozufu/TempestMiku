@@ -7,6 +7,7 @@ part of 'main.dart';
 class _Tok {
   final Color bg, surface, raised, border, text, muted;
   final Color accent, accentSoft, cool, onAccent;
+  final Color success, warning, danger, focus;
   const _Tok({
     required this.bg,
     required this.surface,
@@ -18,32 +19,44 @@ class _Tok {
     required this.accentSoft,
     required this.cool,
     required this.onAccent,
+    required this.success,
+    required this.warning,
+    required this.danger,
+    required this.focus,
   });
 
   static const light = _Tok(
-    bg: Color(0xFFC9BFB6),
-    surface: Color(0xFFDAD2CB),
-    raised: Color(0xFFE8E1DB),
-    border: Color(0xFFAFA8A3),
-    text: Color(0xFF2F2730),
-    muted: Color(0xFF625B5E),
-    accent: Color(0xFF7E4F49),
-    accentSoft: Color(0xFFA1736B),
-    cool: Color(0xFF79837F),
-    onAccent: Color(0xFFE8E1DB),
+    bg: Color(0xFFF1EDE8),
+    surface: Color(0xFFFFF8F2),
+    raised: Color(0xFFFFFFFF),
+    border: Color(0xFFC9BDB5),
+    text: Color(0xFF251D27),
+    muted: Color(0xFF5F565D),
+    accent: Color(0xFF8E514B),
+    accentSoft: Color(0xFFB9786E),
+    cool: Color(0xFF466B61),
+    onAccent: Color(0xFFFFF8F2),
+    success: Color(0xFF2F7D55),
+    warning: Color(0xFFB76D2F),
+    danger: Color(0xFFA43F39),
+    focus: Color(0xFF2F6F9F),
   );
 
   static const dark = _Tok(
-    bg: Color(0xFF3E343F),
-    surface: Color(0xFF493E4A),
-    raised: Color(0xFF584B59),
-    border: Color(0xFF6B6069),
-    text: Color(0xFFE8E1DB),
-    muted: Color(0xFFB6AFAD),
-    accent: Color(0xFFD7A095),
-    accentSoft: Color(0xFFC58E82),
-    cool: Color(0xFFAAB4B0),
-    onAccent: Color(0xFF3E343F),
+    bg: Color(0xFF302735),
+    surface: Color(0xFF3B3140),
+    raised: Color(0xFF493D4F),
+    border: Color(0xFF746478),
+    text: Color(0xFFF8F1EA),
+    muted: Color(0xFFD1C6C8),
+    accent: Color(0xFFE0A193),
+    accentSoft: Color(0xFFCD8D82),
+    cool: Color(0xFFA9C8BC),
+    onAccent: Color(0xFF251D27),
+    success: Color(0xFF78C091),
+    warning: Color(0xFFE0AA62),
+    danger: Color(0xFFE17765),
+    focus: Color(0xFFC6B4FF),
   );
 }
 
@@ -51,16 +64,15 @@ class _Tok {
 Color _modeAccent(String temp, _Tok tok) {
   switch (temp) {
     case 'hot':
-      return const Color(
-          0xFFB84A30); // oklch(58% 0.094 33) — saturated rust orange
+      return tok.danger;
     case 'soft':
       return const Color(0xFFAA7860); // oklch(64% 0.058 28) — warm terracotta
     case 'warm':
-      return const Color(0xFFA1736B); // clay-500
+      return tok.accentSoft;
     case 'cool':
       return tok.cool;
     default:
-      return const Color(0xFFA1736B);
+      return tok.accentSoft;
   }
 }
 

@@ -96,6 +96,8 @@ class _MikuHomePageState extends State<MikuHomePage>
   String _projectStatus = '';
   bool _isDark = true;
   bool _modeLocked = false;
+  bool _canSend = false;
+  _UiLanguage _language = _UiLanguage.en;
 
   late final AnimationController _dotAnim;
 
@@ -121,6 +123,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   _Mode get _mode => _findMode(_modeId, _modes);
   _Tok get _tok => _isDark ? _Tok.dark : _Tok.light;
   Color get _accent => _tok.accentSoft;
+  _UiCopy get _copy => _UiCopy(_language);
 
   // ── Session ────────────────────────────────────────────────────────────────
 
@@ -535,11 +538,18 @@ class _MikuHomePageState extends State<MikuHomePage>
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOut,
-        );
+        final media = MediaQuery.maybeOf(context);
+        final reduceMotion = media?.disableAnimations == true ||
+            media?.accessibleNavigation == true;
+        if (reduceMotion) {
+          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        } else {
+          _scrollCtrl.animateTo(
+            _scrollCtrl.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 240),
+            curve: Curves.easeOut,
+          );
+        }
       }
     });
   }
@@ -554,6 +564,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         userText: text,
       ));
       _status = 'streaming';
+      _canSend = false;
     });
     _inputCtrl.clear();
     await widget.client.sendMessage(_sessionId!, text);
@@ -641,7 +652,8 @@ class _MikuHomePageState extends State<MikuHomePage>
         showDragHandle: true,
         isScrollControlled: true,
         backgroundColor: _tok.surface,
-        builder: (_) => _ResourceSheet(preview: preview, tok: _tok),
+        builder: (_) =>
+            _ResourceSheet(preview: preview, tok: _tok, copy: _copy),
       );
     } catch (err) {
       if (!mounted) return;
@@ -737,6 +749,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         ),
         child: _SessionHistorySheet(
           tok: tok,
+          copy: _copy,
           currentSessionId: _sessionId,
           loadSessions: () => widget.client.listSessions(),
           onSelect: (id) {
@@ -773,6 +786,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           currentId: _modeId,
           locked: _modeLocked,
           tok: tok,
+          copy: _copy,
           onPick: (id) {
             Navigator.pop(sheetContext);
             unawaited(_applyModePick(id));
@@ -796,6 +810,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       builder: (_) => _ApprovalSheet(
         approval: a,
         tok: _tok,
+        copy: _copy,
         accent: _accent,
         onOption: (option) {
           final isReject = option.kind.startsWith('reject') ||
@@ -834,6 +849,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         ),
         child: _AgentActivitySheet(
           tok: tok,
+          copy: _copy,
           accent: _accent,
           roundIndex: round.index,
           agents: _agentStatuses(round.activities),
@@ -854,6 +870,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       ),
       builder: (_) => _OverflowSheet(
         tok: tok,
+        copy: _copy,
         projectStatus: _projectStatus,
         nextActions: _nextActions,
         isDark: _isDark,
@@ -922,71 +939,109 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   Widget _buildHeader(_Tok tok, _Mode mode, Color accent) {
-    return Container(
-      decoration: BoxDecoration(
-        color: tok.bg,
-        border: Border(
-          bottom: BorderSide(color: tok.border.withOpacity(0.6), width: 0.5),
-        ),
-      ),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: accent,
-              borderRadius: BorderRadius.circular(10),
-              boxShadow: [
-                BoxShadow(
-                  color: accent.withOpacity(0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3),
+    final copy = _copy;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 430;
+        final title = compact ? 'Miku' : 'TempestMiku';
+        return Container(
+          decoration: BoxDecoration(
+            color: tok.bg,
+            border: Border(
+              bottom:
+                  BorderSide(color: tok.border.withOpacity(0.6), width: 0.5),
+            ),
+          ),
+          padding: EdgeInsets.fromLTRB(compact ? 14 : 16, 8, 14, 10),
+          child: Row(
+            children: [
+              Semantics(
+                label: 'TempestMiku',
+                image: true,
+                child: Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: accent,
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                        color: accent.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child:
+                      Icon(Icons.smart_toy, color: _textOn(accent), size: 19),
                 ),
-              ],
-            ),
-            child: Icon(Icons.smart_toy, color: _textOn(accent), size: 19),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'TempestMiku',
-              style: TextStyle(
-                color: tok.text,
-                fontSize: 15.5,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.3,
               ),
-            ),
+              SizedBox(width: compact ? 8 : 10),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: tok.text,
+                    fontSize: compact ? 15 : 15.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              _ModeDropMenuButton(
+                tok: tok,
+                copy: copy,
+                mode: mode,
+                accent: accent,
+                locked: _modeLocked,
+                compact: compact,
+                onTap: _showModeSheet,
+              ),
+              SizedBox(width: compact ? 6 : 8),
+              _ConnectionBadge(
+                status: _status,
+                tok: tok,
+                copy: copy,
+                compact: compact,
+              ),
+              SizedBox(width: compact ? 6 : 8),
+              _LanguageToggle(
+                tok: tok,
+                copy: copy,
+                onTap: () {
+                  setState(() {
+                    _language = _language == _UiLanguage.en
+                        ? _UiLanguage.zh
+                        : _UiLanguage.en;
+                  });
+                },
+              ),
+              SizedBox(width: compact ? 6 : 8),
+              _TokIconBtn(
+                tok: tok,
+                icon: Icons.history,
+                tooltip: copy.sessions,
+                semanticLabel: copy.openSessions,
+                onTap: _showHistorySheet,
+              ),
+              SizedBox(width: compact ? 6 : 8),
+              _TokIconBtn(
+                tok: tok,
+                icon: Icons.more_horiz,
+                tooltip: copy.more,
+                semanticLabel: copy.openMore,
+                onTap: _showOverflowSheet,
+              ),
+            ],
           ),
-          _ModeDropMenuButton(
-            tok: tok,
-            mode: mode,
-            accent: accent,
-            locked: _modeLocked,
-            onTap: _showModeSheet,
-          ),
-          const SizedBox(width: 8),
-          _ConnectionBadge(status: _status, tok: tok),
-          const SizedBox(width: 8),
-          _TokIconBtn(
-            tok: tok,
-            icon: Icons.history,
-            onTap: _showHistorySheet,
-          ),
-          const SizedBox(width: 8),
-          _TokIconBtn(
-            tok: tok,
-            icon: Icons.more_horiz,
-            onTap: _showOverflowSheet,
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _buildThread(_Tok tok, Color accent) {
+    final copy = _copy;
     final items = <Widget>[];
 
     // Connection system line
@@ -994,13 +1049,20 @@ class _MikuHomePageState extends State<MikuHomePage>
       _SystemLine(
         tok: tok,
         text: _sessionId != null
-            ? '已連線到 lumo${_lastEventId != null ? ' · 從事件 #$_lastEventId 續傳' : ''}'
-            : '未連線 · 傳訊息建立連線',
+            ? copy.systemConnected(_lastEventId)
+            : copy.systemOffline,
       ),
     );
 
+    if (_rounds.isEmpty && _memoryProposals.isEmpty && _approvals.isEmpty) {
+      items.add(
+        _EmptyState(tok: tok, accent: accent, status: _status, copy: copy),
+      );
+      items.add(const SizedBox(height: 14));
+    }
+
     for (final round in _rounds) {
-      items.add(_RoundLabel(tok: tok, index: round.index));
+      items.add(_RoundLabel(tok: tok, copy: copy, index: round.index));
       items.add(const SizedBox(height: 8));
       if (round.userText.isNotEmpty) {
         items.add(
@@ -1013,6 +1075,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         items.add(
           _AgentStatusBar(
             tok: tok,
+            copy: copy,
             accent: accent,
             anim: _dotAnim,
             agents: _agentStatuses(round.activities),
@@ -1028,6 +1091,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         final resources = _extractResources(assistantText);
         items.add(_MikuBubble(
           tok: tok,
+          copy: copy,
           text: assistantText,
           accent: accent,
           resources: resources,
@@ -1046,6 +1110,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       items.add(
         _MemoryProposalCard(
           tok: tok,
+          copy: copy,
           proposal: proposal,
           approval: approval,
           accent: accent,
@@ -1062,6 +1127,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       items.add(
         _ApprovalCard(
           tok: tok,
+          copy: copy,
           approval: a,
           accent: accent,
           onTap: () => _showApprovalSheet(a),
@@ -1070,65 +1136,119 @@ class _MikuHomePageState extends State<MikuHomePage>
       items.add(const SizedBox(height: 10));
     }
 
-    return ListView(
-      controller: _scrollCtrl,
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
-      children: items,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Center(
+          child: SizedBox(
+            width: math.min(constraints.maxWidth, 720),
+            height: constraints.maxHeight,
+            child: ListView(
+              controller: _scrollCtrl,
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
+              children: items,
+            ),
+          ),
+        );
+      },
     );
   }
 
   Widget _buildComposer(_Tok tok, Color accent) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [tok.bg.withOpacity(0), tok.bg],
-          stops: const [0, 0.22],
-        ),
-      ),
-      child: Container(
-        decoration: BoxDecoration(
-          color: tok.raised,
-          border: Border.all(color: tok.border),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _inputCtrl,
-                style: TextStyle(color: tok.text, fontSize: 13.5),
-                maxLines: null,
-                decoration: InputDecoration(
-                  hintText: '傳訊息給 Miku…',
-                  hintStyle: TextStyle(color: tok.muted, fontSize: 13.5),
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+    final copy = _copy;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [tok.bg.withOpacity(0), tok.bg],
+              stops: const [0, 0.22],
+            ),
+          ),
+          child: Center(
+            child: SizedBox(
+              width: math.min(constraints.maxWidth, 720),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: tok.raised,
+                  border: Border.all(color: tok.border),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                onSubmitted: (_) => _send(),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Semantics(
+                        label: copy.messageField,
+                        textField: true,
+                        child: TextField(
+                          controller: _inputCtrl,
+                          style: TextStyle(color: tok.text, fontSize: 13.5),
+                          minLines: 1,
+                          maxLines: 6,
+                          keyboardType: TextInputType.multiline,
+                          textInputAction: TextInputAction.send,
+                          decoration: InputDecoration(
+                            hintText: copy.messageHint,
+                            hintStyle:
+                                TextStyle(color: tok.muted, fontSize: 13.5),
+                            border: InputBorder.none,
+                            contentPadding:
+                                const EdgeInsets.fromLTRB(14, 10, 8, 10),
+                          ),
+                          onChanged: (value) {
+                            final canSend = value.trim().isNotEmpty;
+                            if (canSend != _canSend) {
+                              setState(() => _canSend = canSend);
+                            }
+                          },
+                          onSubmitted: (_) => _send(),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: Tooltip(
+                        message: _canSend ? copy.send : copy.typeMessage,
+                        child: Semantics(
+                          button: true,
+                          enabled: _canSend,
+                          label: copy.sendMessage,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 140),
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: _canSend
+                                  ? accent
+                                  : tok.border.withOpacity(0.55),
+                              borderRadius: BorderRadius.circular(11),
+                            ),
+                            child: IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              onPressed: _canSend ? _send : null,
+                              icon: Icon(
+                                Icons.send,
+                                color: _canSend
+                                    ? _textOn(accent)
+                                    : tok.muted.withOpacity(0.72),
+                                size: 17,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(5),
-              child: GestureDetector(
-                onTap: _send,
-                child: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: accent,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(Icons.send, color: _textOn(accent), size: 17),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

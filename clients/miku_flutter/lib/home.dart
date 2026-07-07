@@ -11,6 +11,7 @@ class _ConversationRound {
 
   final int index;
   final String userText;
+  final List<_ActivityItem> activities = [];
   String assistantStreamedText = '';
   String assistantFinalText = '';
   bool isStreaming;
@@ -20,6 +21,24 @@ class _ConversationRound {
       : assistantStreamedText;
 
   bool get isComplete => assistantFinalText.isNotEmpty && !isStreaming;
+}
+
+enum _ActivityState { running, done, failed, info }
+
+class _ActivityItem {
+  const _ActivityItem({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.state,
+    this.monospace = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final _ActivityState state;
+  final bool monospace;
 }
 
 // ─── Home page ─────────────────────────────────────────────────────────────────
@@ -232,6 +251,10 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   void _applyEvent(MikuEvent e) {
+    final activity = _activityFromEvent(e);
+    if (activity != null) {
+      _appendActivity(activity);
+    }
     switch (e.type) {
       case 'connection':
         _status = e.data['status'] as String? ?? _status;
@@ -307,6 +330,129 @@ class _MikuHomePageState extends State<MikuHomePage>
           _upsertMemoryProposal(proposal);
         }
     }
+  }
+
+  _ActivityItem? _activityFromEvent(MikuEvent e) {
+    final data = e.data;
+    switch (e.type) {
+      case 'tool_call':
+        final name = _eventText(data, 'name', fallback: 'execute');
+        return _ActivityItem(
+          icon: Icons.build_outlined,
+          title: '呼叫工具 $name',
+          detail: _eventText(data, 'arguments'),
+          state: _ActivityState.running,
+          monospace: true,
+        );
+      case 'tool_call_update':
+        final name = _eventText(data, 'name', fallback: 'execute');
+        return _ActivityItem(
+          icon: Icons.more_horiz,
+          title: '更新工具參數 $name',
+          detail: _eventText(data, 'arguments'),
+          state: _ActivityState.running,
+          monospace: true,
+        );
+      case 'cell_start':
+        return _ActivityItem(
+          icon: Icons.terminal,
+          title: '執行程式',
+          detail: _eventText(data, 'code'),
+          state: _ActivityState.running,
+          monospace: true,
+        );
+      case 'cell_result':
+        final shaped = _eventText(data, 'shaped');
+        return _ActivityItem(
+          icon: shaped.startsWith('error:')
+              ? Icons.error_outline
+              : Icons.check_circle_outline,
+          title: shaped.startsWith('error:') ? '程式失敗' : '程式結果',
+          detail: shaped,
+          state: shaped.startsWith('error:')
+              ? _ActivityState.failed
+              : _ActivityState.done,
+          monospace: true,
+        );
+      case 'actor_spawned':
+        final actorId = _eventText(data, 'actor_id',
+            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final role = _eventText(data, 'role', fallback: 'worker');
+        return _ActivityItem(
+          icon: Icons.account_tree_outlined,
+          title: '啟動 $role · $actorId',
+          detail: _eventText(data, 'task'),
+          state: _ActivityState.running,
+        );
+      case 'actor_status':
+        final actorId = _eventText(data, 'actor_id',
+            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final status = _eventText(data, 'status', fallback: 'updated');
+        return _ActivityItem(
+          icon: Icons.timeline,
+          title: '$actorId 狀態 $status',
+          detail: '',
+          state: status == 'terminated'
+              ? _ActivityState.done
+              : _ActivityState.running,
+        );
+      case 'actor_message':
+        final actorId = _eventText(data, 'actor_id',
+            camelKey: 'actorId', fallback: _eventText(data, 'from'));
+        return _ActivityItem(
+          icon: Icons.chat_bubble_outline,
+          title: '$actorId 訊息',
+          detail:
+              _eventText(data, 'text', fallback: _eventText(data, 'message')),
+          state: _ActivityState.info,
+        );
+      case 'actor_completed':
+        final actorId = _eventText(data, 'actor_id',
+            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final summary = _eventText(data, 'summary');
+        final resources = [
+          _eventText(data, 'artifact_uri', camelKey: 'artifactUri'),
+          _eventText(data, 'history_uri', camelKey: 'historyUri'),
+        ].where((uri) => uri.isNotEmpty).join(' · ');
+        return _ActivityItem(
+          icon: Icons.task_alt,
+          title: '完成 $actorId',
+          detail:
+              [summary, resources].where((part) => part.isNotEmpty).join('\n'),
+          state: _ActivityState.done,
+        );
+      case 'actor_failed':
+        final actorId = _eventText(data, 'actor_id',
+            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        return _ActivityItem(
+          icon: Icons.error_outline,
+          title: '$actorId 失敗',
+          detail: _eventText(data, 'error',
+              fallback: _eventText(data, 'failure_reason',
+                  camelKey: 'failureReason')),
+          state: _ActivityState.failed,
+        );
+      case 'actor_cancelled':
+        final actorId = _eventText(data, 'actor_id',
+            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        return _ActivityItem(
+          icon: Icons.cancel_outlined,
+          title: '取消 $actorId',
+          detail: _eventText(data, 'reason'),
+          state: _ActivityState.failed,
+        );
+    }
+    return null;
+  }
+
+  void _appendActivity(_ActivityItem item) {
+    final round = _ensureAssistantRound();
+    round.activities.add(item);
+    if (round.activities.length > 16) {
+      round.activities.removeRange(0, round.activities.length - 16);
+    }
+    round.isStreaming = true;
+    _status = 'streaming';
   }
 
   _ConversationRound _ensureAssistantRound() {
@@ -797,6 +943,17 @@ class _MikuHomePageState extends State<MikuHomePage>
         items.add(const SizedBox(height: 10));
       }
 
+      if (round.activities.isNotEmpty) {
+        items.add(
+          _ActivityTimeline(
+            tok: tok,
+            accent: accent,
+            activities: round.activities,
+          ),
+        );
+        items.add(const SizedBox(height: 10));
+      }
+
       final assistantText = round.assistantText;
       if (assistantText.isNotEmpty) {
         final resources = _extractResources(assistantText);
@@ -808,7 +965,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           onOpenResource: _openResource,
           isStreaming: round.assistantFinalText.isEmpty && round.isStreaming,
         ));
-      } else if (round.isStreaming) {
+      } else if (round.isStreaming && round.activities.isEmpty) {
         items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
       }
       items.add(const SizedBox(height: 14));
@@ -905,4 +1062,15 @@ class _MikuHomePageState extends State<MikuHomePage>
       ),
     );
   }
+}
+
+String _eventText(
+  Map<String, Object?> data,
+  String key, {
+  String? camelKey,
+  String fallback = '',
+}) {
+  final value = data[key] ?? (camelKey == null ? null : data[camelKey]);
+  final text = value?.toString() ?? '';
+  return text.isEmpty ? fallback : text;
 }

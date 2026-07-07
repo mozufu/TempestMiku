@@ -530,6 +530,171 @@ class _TypingIndicator extends StatelessWidget {
   }
 }
 
+class _ActivityTimeline extends StatelessWidget {
+  const _ActivityTimeline({
+    required this.tok,
+    required this.accent,
+    required this.activities,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final List<_ActivityItem> activities;
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = activities.length > 6
+        ? activities.sublist(activities.length - 6)
+        : activities;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: tok.surface,
+            border: Border.all(color: tok.border),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Icon(Icons.terminal, color: accent, size: 16),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(11, 10, 11, 11),
+            decoration: BoxDecoration(
+              color: tok.surface.withOpacity(0.78),
+              border: Border.all(color: tok.border.withOpacity(0.82)),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.route_outlined, color: accent, size: 14),
+                    const SizedBox(width: 6),
+                    Text(
+                      '執行動態',
+                      style: TextStyle(
+                        color: tok.text,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${activities.length}',
+                      style: TextStyle(
+                        color: tok.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                for (var i = 0; i < visible.length; i++) ...[
+                  _ActivityRow(
+                    tok: tok,
+                    accent: accent,
+                    item: visible[i],
+                  ),
+                  if (i != visible.length - 1) const SizedBox(height: 7),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActivityRow extends StatelessWidget {
+  const _ActivityRow({
+    required this.tok,
+    required this.accent,
+    required this.item,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final _ActivityItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final stateColor = _stateColor(item.state);
+    final detail = _trimActivityDetail(item.detail);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            color: stateColor.withOpacity(0.12),
+            border: Border.all(color: stateColor.withOpacity(0.38)),
+            borderRadius: BorderRadius.circular(7),
+          ),
+          child: Icon(item.icon, size: 13, color: stateColor),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.title,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: tok.text,
+                  fontSize: 12.2,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              if (detail.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  detail,
+                  maxLines: item.monospace ? 5 : 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: tok.muted,
+                    fontSize: item.monospace ? 11 : 11.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontFamily: item.monospace ? 'monospace' : null,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Color _stateColor(_ActivityState state) => switch (state) {
+        _ActivityState.running => accent,
+        _ActivityState.done => tok.cool,
+        _ActivityState.failed => const Color(0xFFB84A30),
+        _ActivityState.info => tok.muted,
+      };
+}
+
+String _trimActivityDetail(String detail) {
+  final cleaned = detail
+      .trim()
+      .split('\n')
+      .map((line) => line.trimRight())
+      .where((line) => line.trim().isNotEmpty)
+      .join('\n');
+  if (cleaned.length <= 520) return cleaned;
+  return '${cleaned.substring(0, 517)}...';
+}
+
 class _ApprovalCard extends StatelessWidget {
   const _ApprovalCard({
     required this.tok,

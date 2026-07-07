@@ -246,6 +246,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Handoff'), findsOneWidget);
+    expect(find.text('執行動態'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsOneWidget);
+    expect(find.text('執行程式'), findsOneWidget);
+    expect(find.text('啟動 worker · Worker0'), findsOneWidget);
+    expect(find.text('完成 Worker0'), findsOneWidget);
+    expect(find.text('程式結果'), findsOneWidget);
+    final actorReply =
+        find.textContaining('Actor Worker0 completed', skipOffstage: false);
+    expect(actorReply, findsOneWidget);
+    await tester.ensureVisible(actorReply);
+    await tester.pump();
     expect(find.textContaining('Actor Worker0 completed'), findsOneWidget);
     expect(find.text('artifact://0'), findsOneWidget);
     expect(find.textContaining('待核可 · proc.run cargo clean'), findsOneWidget);

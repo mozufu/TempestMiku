@@ -186,6 +186,24 @@ class ScriptedMikuClient implements MikuSessionClient {
           },
         ),
       );
+      controller.add(
+        MikuEvent(
+          type: 'tool_call',
+          id: _eventId(),
+          data: const {'name': 'execute'},
+        ),
+      );
+      controller.add(
+        MikuEvent(
+          type: 'cell_start',
+          id: _eventId(),
+          data: const {
+            'code':
+                'const worker = await agents.spawn("worker", "scripted actor smoke");\n'
+                    'display(await agents.wait(worker, 5000));',
+          },
+        ),
+      );
       controller.add(MikuEvent(
         type: 'actor_spawned',
         id: _eventId(),
@@ -236,6 +254,16 @@ class ScriptedMikuClient implements MikuSessionClient {
           'history_uri': 'history://Worker0',
         },
       ));
+      controller.add(
+        MikuEvent(
+          type: 'cell_result',
+          id: _eventId(),
+          data: const {
+            'shaped':
+                'stdout:\ndisplay: scripted actor complete\n\nresult:\nnull',
+          },
+        ),
+      );
     } else if (lower.contains('code')) {
       _sessions[sessionId] = _sessionForMode(sessionId, 'serious_engineer');
       controller.add(

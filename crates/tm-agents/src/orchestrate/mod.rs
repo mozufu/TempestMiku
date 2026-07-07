@@ -18,8 +18,8 @@ use crate::supervise::FailureReason;
 
 /// Capability names for the P3/P3-plus `agents.*` calls (§23.3, ROADMAP authority).
 ///
-/// `pipeline`, active supervision, cancel, and fuller protocol enforcement remain later P3-plus
-/// work.
+/// `pipeline`, active supervision, wall-clock budgets, subtree cancellation, and fuller provenance
+/// remain later P3-plus work.
 pub mod caps {
     pub const AGENTS_RUN: &str = "agents.run";
     pub const AGENTS_SPAWN: &str = "agents.spawn";
@@ -225,6 +225,20 @@ fn parse_timeout_ms(args: &Value, default_ms: u64) -> Result<u64> {
         )),
         None => Ok(default_ms),
     }
+}
+
+async fn reject_descendant_wait(
+    roster: &MailboxRegistry,
+    waiter: &ActorId,
+    target: &ActorId,
+    field: &str,
+) -> Result<()> {
+    if roster.would_wait_on_descendant(waiter, target).await {
+        return Err(HostError::InvalidArgs(format!(
+            "{field} would make actor {waiter} wait on itself or its own descendant {target}"
+        )));
+    }
+    Ok(())
 }
 
 fn child_agent_grants(ctx: &InvocationCtx) -> CapabilityGrants {

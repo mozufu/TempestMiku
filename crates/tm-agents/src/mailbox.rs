@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
@@ -529,6 +529,43 @@ impl MailboxRegistry {
             .is_some_and(ActorCancelToken::is_cancelled)
     }
 
+    /// Return true when `waiter` would explicitly wait on itself or a descendant.
+    ///
+    /// The synthetic top-level Root actor is intentionally exempt: top-level
+    /// orchestrator code must be able to await root-level workers. Real actor
+    /// descendants are checked through the tracked parent chain.
+    pub async fn would_wait_on_descendant(&self, waiter: &ActorId, target: &ActorId) -> bool {
+        if waiter.as_str() == "Root" {
+            return false;
+        }
+        if waiter == target {
+            return true;
+        }
+        self.is_descendant_of(target, waiter).await
+    }
+
+    /// Return true when `actor_id` has `ancestor_id` in its tracked parent chain.
+    pub async fn is_descendant_of(&self, actor_id: &ActorId, ancestor_id: &ActorId) -> bool {
+        let actors = self.actors.read().await;
+        let mut current = actor_id.clone();
+        let mut seen = HashSet::new();
+
+        while seen.insert(current.clone()) {
+            let Some(record) = actors.get(&current) else {
+                return false;
+            };
+            let Some(parent) = record.parent.as_ref() else {
+                return false;
+            };
+            if parent == ancestor_id {
+                return true;
+            }
+            current = parent.clone();
+        }
+
+        false
+    }
+
     /// Snapshot of all tracked actor records.
     pub async fn list(&self) -> Vec<ActorRecord> {
         self.actors.read().await.values().cloned().collect()
@@ -602,6 +639,13 @@ mod tests {
         }
     }
 
+    fn test_record_with_parent(id: &str, parent: &str) -> ActorRecord {
+        ActorRecord {
+            parent: Some(ActorId::new(parent).unwrap()),
+            ..test_record(id)
+        }
+    }
+
     #[tokio::test]
     async fn track_and_get() {
         let registry = MailboxRegistry::new();
@@ -619,6 +663,38 @@ mod tests {
         registry.track(test_record("Beta")).await;
         let list = registry.list().await;
         assert_eq!(list.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn lineage_detects_descendant_wait_edges() {
+        let registry = MailboxRegistry::new();
+        let parent = ActorId::new("Parent").unwrap();
+        let child = ActorId::new("Child").unwrap();
+        let grandchild = ActorId::new("Grandchild").unwrap();
+        let sibling = ActorId::new("Sibling").unwrap();
+        let root = ActorId::new("Root").unwrap();
+
+        registry.track(test_record("Parent")).await;
+        registry
+            .track(test_record_with_parent("Child", "Parent"))
+            .await;
+        registry
+            .track(test_record_with_parent("Grandchild", "Child"))
+            .await;
+        registry.track(test_record("Sibling")).await;
+
+        assert!(registry.is_descendant_of(&child, &parent).await);
+        assert!(registry.is_descendant_of(&grandchild, &parent).await);
+        assert!(!registry.is_descendant_of(&sibling, &parent).await);
+        assert!(registry.would_wait_on_descendant(&parent, &child).await);
+        assert!(
+            registry
+                .would_wait_on_descendant(&parent, &grandchild)
+                .await
+        );
+        assert!(registry.would_wait_on_descendant(&parent, &parent).await);
+        assert!(!registry.would_wait_on_descendant(&child, &parent).await);
+        assert!(!registry.would_wait_on_descendant(&root, &child).await);
     }
 
     #[tokio::test]

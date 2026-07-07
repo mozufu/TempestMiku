@@ -104,7 +104,8 @@ P3 ships the first concrete slice only:
 > cancellation tokens: a direct parent can trip a running child, the actor record becomes terminal,
 > and one replayable `actor_cancelled` event lands in the parent session log. Plain-prose message
 > enforcement rejects control-payload blobs at the `agents.msg` / `agents.send` / `agents.broadcast`
-> boundary. `pipeline`, active restart supervision, subtree cancellation, DAG enforcement, and fuller
+> boundary. DAG enforcement rejects targeted live waits where a real actor would wait on itself or
+> its own descendant. `pipeline`, active restart supervision, subtree cancellation, and fuller
 > provenance remain later P3-plus work.
 
 The remaining §23 full surface is split across the landed P3-plus foundation and later P3-plus work:
@@ -121,7 +122,8 @@ The remaining §23 full surface is split across the landed P3-plus foundation an
 
 Handles **wire the DAG by reference** — an upstream result feeds a downstream prompt, so the large transcript
 is never re-inlined. P3 MVP `parallel` = one wave; P3-plus `pipeline` = waves with a barrier. The graph
-must be **acyclic**: an actor never waits on its own descendant.
+must be **acyclic**: a real actor never waits on itself or its own descendant. Top-level orchestration
+uses the synthetic `Root` actor and may still await root-level workers.
 
 ```mermaid
 flowchart TD

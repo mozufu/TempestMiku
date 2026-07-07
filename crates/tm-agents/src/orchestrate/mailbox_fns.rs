@@ -236,8 +236,10 @@ impl AgentsSendFn {
                      bounded per-actor inbox. Fire-and-forget returns a delivered/failed \
                      receipt. With opts.await = true, waits for the recipient to reply to \
                      the caller inbox and returns the reply message, or null on timeout or \
-                     unreachable target. Messages are plain prose; JSON control payloads are \
-                     rejected. Pass large payloads by reference. Requires agents.send grant."
+                     unreachable target. Awaiting a real actor's own descendant is rejected \
+                     to keep the actor DAG acyclic. Messages are plain prose; JSON control \
+                     payloads are rejected. Pass large payloads by reference. \
+                     Requires agents.send grant."
                         .to_string(),
                 ),
                 signature: "agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>"
@@ -299,6 +301,9 @@ impl HostFn for AgentsSendFn {
         let text = parse_plain_prose_text(&args, "text")?;
         let do_await = args["opts"]["await"].as_bool().unwrap_or(false);
         let from = caller_actor_id(ctx)?;
+        if do_await {
+            reject_descendant_wait(&self.roster, &from, &to, "to").await?;
+        }
 
         let message = ActorMessage {
             from: from.clone(),
@@ -348,7 +353,8 @@ impl AgentsWaitFn {
                 description: Some(
                     "Blocks until the current actor inbox receives a matching message, \
                      optionally filtered by sender. Top-level sessions use the synthetic \
-                     Root inbox. Returns null on timeout. Requires agents.wait grant."
+                     Root inbox. A real actor cannot target a wait at itself or its own \
+                     descendant. Returns null on timeout. Requires agents.wait grant."
                         .to_string(),
                 ),
                 signature: "agents.wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>"
@@ -402,6 +408,9 @@ impl HostFn for AgentsWaitFn {
             Some(value) => Some(parse_actor_ref(value, "from")?),
             None => None,
         };
+        if let Some(from) = from.as_ref() {
+            reject_descendant_wait(&self.roster, &actor_id, from, "from").await?;
+        }
         let timeout_ms = parse_timeout_ms(&args, 30_000)?;
 
         Ok(wait_for_actor_message_or_cancel(

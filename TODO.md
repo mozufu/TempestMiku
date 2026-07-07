@@ -150,8 +150,8 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       writes to an artifact URI. Test: `agents_parallel_runs_all_and_returns_ordered_digests`.
 - [x] Sibling agents can coordinate through explicit messages.
       **P3-plus update:** live resident delivery now uses per-actor bounded inbox queues plus
-      `Agent::run` inbox draining. `agents.send/broadcast/wait/inbox/list/cancel` are live; pipeline and
-      stricter protocol enforcement remain open P3-plus items.
+      `Agent::run` inbox draining. `agents.send/broadcast/wait/inbox/list/cancel` are live; pipeline
+      and fuller supervision/provenance remain open P3-plus items.
 - [x] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
       replayable events.
       **Deferred to P3-plus:** Child failures are isolated today (`mark_failed`, `FailureReason`,
@@ -445,8 +445,11 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
       reject control-payload blobs (`{"type":"done"}` and similar) with `InvalidArgsError`.
       **Resolved:** `agents.msg`, `agents.send`, and `agents.broadcast` now share a plain-prose
       validator that rejects empty messages and complete JSON object/array payloads before delivery.
-- [ ] DAG acyclicity check: detect and reject actor specs that would cause an actor to
-      wait on its own descendant (structural deadlock prevention, not just timeout).
+- [x] DAG acyclicity check: detect and reject targeted live waits that would cause an actor to
+      wait on itself or its own descendant (structural deadlock prevention, not just timeout).
+      **Resolved:** `MailboxRegistry` exposes actor lineage checks. `agents.msg(..., {await:true})`,
+      `agents.send(..., {await:true})`, and targeted `agents.wait(from)` reject descendant wait
+      edges with `InvalidArgsError`; synthetic top-level `Root` waits remain allowed.
 - [ ] Bounded mailbox + backpressure: drop or back-pressure senders when the inbox is full;
       `agents.broadcast` targets only currently live peers.
 

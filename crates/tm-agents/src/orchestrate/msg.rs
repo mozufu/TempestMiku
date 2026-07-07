@@ -24,6 +24,8 @@ impl AgentsMsgFn {
                      keeps the P3 compatibility behavior: a one-shot seeded continuation from the \
                      target's last digest summary + the new text. \
                      A null reply means the actor is unreachable — do not retry-loop (§23.9). \
+                     Live request/reply from a real actor to its own descendant is rejected to keep \
+                     the actor DAG acyclic. \
                      Messages are plain prose — never control-payload blobs. \
                      Pass large payloads by reference (artifact://, memory://). \
                      Requires agents.msg grant."
@@ -113,6 +115,7 @@ impl HostFn for AgentsMsgFn {
         // Live request/reply for running actors: deliver to the target inbox, then
         // wait for a plain-prose reply back to the caller inbox.
         if target_record.status != ActorStatus::Terminated {
+            reject_descendant_wait(&self.roster, &from_id, &target_id, "handle").await?;
             let timeout_ms = parse_timeout_ms(&args, 30_000)?;
             let message = ActorMessage {
                 from: from_id.clone(),

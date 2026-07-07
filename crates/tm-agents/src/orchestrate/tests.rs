@@ -314,6 +314,26 @@ async fn agents_msg_rejects_json_control_payload() {
 }
 
 #[tokio::test]
+async fn agents_msg_await_rejects_descendant_wait_edge() {
+    let roster = make_roster();
+    track_actor(&roster, "Parent", None, ActorStatus::Running).await;
+    track_actor(&roster, "Child", Some("Parent"), ActorStatus::Running).await;
+    let f = AgentsMsgFn::new(Arc::clone(&roster));
+    let ctx = ctx_with_actor(caps::AGENTS_MSG, "Parent");
+
+    let err = f
+        .call(
+            json!({"handle": {"id": "Child"}, "text": "status?", "opts": {"await": true}}),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+    assert!(roster.messages().await.is_empty());
+}
+
+#[tokio::test]
 async fn agents_msg_unknown_handle_returns_null() {
     let f = AgentsMsgFn::new(make_roster());
     let ctx = ctx_with(caps::AGENTS_MSG);
@@ -596,6 +616,26 @@ async fn agents_send_rejects_json_control_payload() {
 }
 
 #[tokio::test]
+async fn agents_send_await_rejects_descendant_wait_edge() {
+    let roster = make_roster();
+    track_actor(&roster, "Parent", None, ActorStatus::Running).await;
+    track_actor(&roster, "Child", Some("Parent"), ActorStatus::Running).await;
+    let f = AgentsSendFn::new(Arc::clone(&roster));
+    let ctx = ctx_with_actor(caps::AGENTS_SEND, "Parent");
+
+    let err = f
+        .call(
+            json!({"to": "Child", "text": "status?", "opts": {"await": true, "timeoutMs": 1}}),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+    assert!(roster.messages().await.is_empty());
+}
+
+#[tokio::test]
 async fn agents_broadcast_denied_without_grant() {
     let f = AgentsBroadcastFn::new(make_roster());
     let ctx = ctx_without_agents();
@@ -829,6 +869,48 @@ async fn agents_wait_returns_prequeued_root_message() {
     assert_eq!(result["from"], Value::String("Worker".into()));
     assert_eq!(result["to"], Value::String("Root".into()));
     assert_eq!(result["text"], Value::String("done".into()));
+}
+
+#[tokio::test]
+async fn agents_wait_rejects_descendant_filter() {
+    let roster = make_roster();
+    track_actor(&roster, "Parent", None, ActorStatus::Running).await;
+    track_actor(&roster, "Child", Some("Parent"), ActorStatus::Running).await;
+    track_actor(&roster, "Grandchild", Some("Child"), ActorStatus::Running).await;
+    let f = AgentsWaitFn::new(roster);
+    let ctx = ctx_with_actor(caps::AGENTS_WAIT, "Parent");
+
+    let err = f
+        .call(json!({"from": "Grandchild", "timeoutMs": 1}), &ctx)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+}
+
+#[tokio::test]
+async fn agents_wait_allows_actor_to_wait_on_ancestor() {
+    let roster = make_roster();
+    track_actor(&roster, "Parent", None, ActorStatus::Running).await;
+    track_actor(&roster, "Child", Some("Parent"), ActorStatus::Running).await;
+    roster
+        .send_message(ActorMessage {
+            from: ActorId::new("Parent").unwrap(),
+            to: ActorId::new("Child").unwrap(),
+            text: "proceed".to_string(),
+            reply_to: None,
+            sent_at: Utc::now(),
+        })
+        .await;
+
+    let f = AgentsWaitFn::new(roster);
+    let ctx = ctx_with_actor(caps::AGENTS_WAIT, "Child");
+    let result = f
+        .call(json!({"from": "Parent", "timeoutMs": 50}), &ctx)
+        .await
+        .unwrap();
+
+    assert_eq!(result["text"], Value::String("proceed".into()));
 }
 
 #[tokio::test]

@@ -44,7 +44,8 @@ declare global {
    * - One ask per message; lead with the answer when replying.
    * - Large payloads pass by reference (artifact://, memory://), never inline.
    * - A `null` or void reply means unreachable — do not retry-loop.
-   * - The agent DAG must be acyclic; an actor never waits on its own descendant.
+   * - The agent DAG must be acyclic; a real actor never waits on itself or its
+   *   own descendant. Synthetic Root may await root-level workers.
    */
   const agents: AgentsNamespace | undefined;
 }
@@ -544,8 +545,10 @@ interface AgentsNamespace {
    * last digest summary + the new text.
    *
    * A null/void reply means the actor is unreachable — do not retry-loop (§23.9).
-   * Messages must be plain prose — never control-payload blobs. Pass large payloads by
-   * reference (artifact://, memory://). Requires agents.msg grant.
+   * Request/reply from a real actor to itself or its own descendant is rejected
+   * to keep the DAG acyclic. Messages must be plain prose — never
+   * control-payload blobs. Pass large payloads by reference (artifact://,
+   * memory://). Requires agents.msg grant.
    */
   msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<string | void>;
 
@@ -555,6 +558,7 @@ interface AgentsNamespace {
    * Deliver a plain-prose message to one live actor inbox. Fire-and-forget
    * returns a delivered/failed receipt. With opts.await = true, waits for a
    * matching reply message in the caller inbox and returns it, or null on timeout.
+   * Awaiting a real actor's own descendant is rejected to keep the DAG acyclic.
    * Requires agents.send grant.
    */
   send(
@@ -589,6 +593,7 @@ interface AgentsNamespace {
    *
    * Block until the current actor inbox receives a matching message. Top-level
    * orchestrator code uses the synthetic Root inbox. Returns null on timeout.
+   * A real actor cannot target a wait at itself or its own descendant.
    * Requires agents.wait grant.
    */
   wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>;

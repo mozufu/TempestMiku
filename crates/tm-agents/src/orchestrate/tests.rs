@@ -299,8 +299,25 @@ async fn agents_pipeline_invalid_args_returns_invalid_args_error() {
 
 #[tokio::test]
 async fn agents_pipeline_runs_stage_barriers_and_feeds_digests() {
+    struct ReferenceExec;
+    #[async_trait::async_trait]
+    impl crate::executor::ActorExecutor for ReferenceExec {
+        async fn run_to_digest(
+            &self,
+            spec: crate::actor::ActorSpec,
+        ) -> std::result::Result<crate::actor::ActorDigest, crate::executor::ActorError> {
+            Ok(crate::actor::ActorDigest {
+                artifact_uri: Some(format!("artifact://{}", spec.id.as_str())),
+                history_uri: Some(format!("history://{}", spec.id.as_str())),
+                history_content: Some(format!("FULL TRANSCRIPT: {}", spec.task)),
+                actor_id: spec.id,
+                summary: format!("echo: {}", spec.task),
+            })
+        }
+    }
+
     let roster = Arc::new(MailboxRegistry::new());
-    roster.set_executor(Arc::new(EchoExec));
+    roster.set_executor(Arc::new(ReferenceExec));
     let f = AgentsPipelineFn::new(Arc::clone(&roster));
     let ctx = ctx_with(caps::AGENTS_PIPELINE);
 
@@ -331,7 +348,35 @@ async fn agents_pipeline_runs_stage_barriers_and_feeds_digests() {
             .as_str()
             .unwrap()
             .contains("research this input"),
-        "second stage should receive first-stage digest JSON"
+        "second stage should receive the first-stage digest reference"
+    );
+    assert!(
+        second[0]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("agentUri=agent://Researcher0"),
+        "second stage should receive the upstream actor by reference"
+    );
+    assert!(
+        second[0]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("historyUri=history://Researcher0"),
+        "second stage should receive the upstream transcript handle"
+    );
+    assert!(
+        second[0]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("artifactUri=artifact://Researcher0"),
+        "second stage should receive the upstream artifact handle"
+    );
+    assert!(
+        !second[0]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("FULL TRANSCRIPT"),
+        "pipeline must not re-inline upstream transcripts"
     );
 
     let records = roster.list().await;

@@ -24,11 +24,12 @@ impl AgentsPipelineFn {
                 summary: "Run staged actor waves with a barrier between stages".to_string(),
                 description: Some(
                     "Runs a staged map pipeline. Each stage fans out one actor per current \
-                     item, waits for the full wave to finish, then feeds only bounded digest \
-                     JSON into the next stage. Stage specs provide a role plus either one \
-                     task applied to each input or a tasks array matching the current wave \
-                     length. Returns one ordered digest array per stage. Requires \
-                     agents.pipeline grant."
+                     item, waits for the full wave to finish, then feeds compact digest \
+                     references into the next stage. Downstream tasks receive actor/resource \
+                     handles plus a bounded summary, never a transcript re-inline. Stage specs \
+                     provide a role plus either one task applied to each input or a tasks array \
+                     matching the current wave length. Returns one ordered digest array per \
+                     stage. Requires agents.pipeline grant."
                         .to_string(),
                 ),
                 signature:
@@ -71,7 +72,7 @@ impl AgentsPipelineFn {
                     code: "const waves = await agents.pipeline(\n  ['§21', '§22'],\n  { role: 'researcher', task: 'Find the important points for this input.' },\n  { role: 'writer', task: 'Turn this digest into a concise summary.' },\n);\ndisplay(waves.at(-1).map(d => d.summary));"
                         .to_string(),
                     notes: Some(
-                        "Each stage waits for all actors in the previous stage; downstream prompts receive digest JSON, not transcripts."
+                        "Each stage waits for all actors in the previous stage; downstream prompts receive actor/resource references plus bounded summaries, not transcripts."
                             .to_string(),
                     ),
                 }],
@@ -225,10 +226,31 @@ fn pipeline_wave_tasks(
 }
 
 fn compact_pipeline_input(input: &Value) -> String {
+    if let Some(actor_id) = input.get("actorId").and_then(Value::as_str) {
+        return compact_pipeline_digest_reference(input, actor_id);
+    }
+
     input
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_else(|_| "null".to_string()))
+}
+
+fn compact_pipeline_digest_reference(input: &Value, actor_id: &str) -> String {
+    let summary = input.get("summary").and_then(Value::as_str).unwrap_or("");
+    let artifact_uri = compact_optional_string(input.get("artifactUri"));
+    let history_uri = compact_optional_string(input.get("historyUri"));
+    format!(
+        "digest actorId={actor_id}; agentUri=agent://{actor_id}; historyUri={history_uri}; \
+         artifactUri={artifact_uri}; summary={summary}"
+    )
+}
+
+fn compact_optional_string(value: Option<&Value>) -> String {
+    value
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| "null".to_string())
 }
 
 async fn run_pipeline_wave(

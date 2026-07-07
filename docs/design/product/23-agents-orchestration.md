@@ -106,8 +106,9 @@ P3 ships the first concrete slice only:
 > enforcement rejects control-payload blobs at the `agents.msg` / `agents.send` / `agents.broadcast`
 > boundary. DAG enforcement rejects targeted live waits where a real actor would wait on itself or
 > its own descendant. `agents.pipeline` runs staged actor waves with a barrier between stages and
-> feeds only bounded digest JSON downstream. Active restart supervision, subtree cancellation, and
-> fuller provenance remain later P3-plus work.
+> feeds compact digest references downstream: `agent://` / `history://` / artifact handles plus a
+> bounded summary, never an upstream transcript. Active restart supervision, subtree cancellation,
+> and fuller provenance remain later P3-plus work.
 
 The remaining §23 full surface is split across the landed P3-plus foundation and later P3-plus work:
 
@@ -121,10 +122,11 @@ The remaining §23 full surface is split across the landed P3-plus foundation an
 | `agents.list()` | roster: peers, status, unread, last activity |
 | `agents.pipeline(items, …stages)` | staged map, **barrier between stages** |
 
-Handles **wire the DAG by reference** — an upstream result feeds a downstream prompt, so the large transcript
-is never re-inlined. P3 MVP `parallel` = one wave; P3-plus `pipeline` = waves with a barrier. The graph
-must be **acyclic**: a real actor never waits on itself or its own descendant. Top-level orchestration
-uses the synthetic `Root` actor and may still await root-level workers.
+Handles **wire the DAG by reference** — an upstream result feeds a downstream prompt as a compact digest
+reference (`agent://`, `history://`, artifact URI, and bounded summary), so the large transcript is never
+re-inlined. P3 MVP `parallel` = one wave; P3-plus `pipeline` = waves with a barrier. The graph must be
+**acyclic**: a real actor never waits on itself or its own descendant. Top-level orchestration uses the
+synthetic `Root` actor and may still await root-level workers.
 
 ```mermaid
 flowchart TD

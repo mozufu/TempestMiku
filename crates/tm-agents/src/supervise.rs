@@ -69,3 +69,55 @@ impl Supervisor {
         self.children.push(id);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn supervision_policy_default_is_one_for_one_with_three_restarts() {
+        let policy = SupervisionPolicy::default();
+
+        assert_eq!(policy.strategy, RestartStrategy::OneForOne);
+        assert_eq!(policy.max_restarts, 3);
+    }
+
+    #[test]
+    fn supervisor_tracks_children_in_spawn_order() {
+        let mut supervisor = Supervisor::new(SupervisionPolicy {
+            strategy: RestartStrategy::RestForOne,
+            max_restarts: 2,
+        });
+        let child_a = ActorId::new("ChildA").expect("valid actor id");
+        let child_b = ActorId::new("ChildB").expect("valid actor id");
+
+        supervisor.track(child_a.clone());
+        supervisor.track(child_b.clone());
+
+        let expected = vec![child_a, child_b];
+        assert_eq!(supervisor.policy.strategy, RestartStrategy::RestForOne);
+        assert_eq!(supervisor.policy.max_restarts, 2);
+        assert_eq!(supervisor.children(), expected.as_slice());
+    }
+
+    #[test]
+    fn supervision_wire_values_are_snake_case_and_tagged() {
+        assert_eq!(
+            serde_json::to_value(RestartStrategy::OneForAll).expect("serialize strategy"),
+            json!("one_for_all")
+        );
+        assert_eq!(
+            serde_json::to_value(FailureReason::Crash {
+                message: "boom".to_string(),
+            })
+            .expect("serialize failure reason"),
+            json!({"kind": "crash", "message": "boom"})
+        );
+
+        let reason: FailureReason =
+            serde_json::from_value(json!({"kind": "approval_denied"})).expect("parse reason");
+        assert!(matches!(reason, FailureReason::ApprovalDenied));
+    }
+}

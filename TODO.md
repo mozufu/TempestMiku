@@ -150,8 +150,8 @@ Ship the handoff + sub-agent actor baseline without weakening the catalog bounda
       writes to an artifact URI. Test: `agents_parallel_runs_all_and_returns_ordered_digests`.
 - [x] Sibling agents can coordinate through explicit messages.
       **P3-plus update:** live resident delivery now uses per-actor bounded inbox queues plus
-      `Agent::run` inbox draining. `agents.send/broadcast/wait/inbox/list/cancel` are live; pipeline
-      and fuller supervision/provenance remain open P3-plus items.
+      `Agent::run` inbox draining. `agents.send/broadcast/wait/inbox/list/cancel/pipeline` are live;
+      fuller supervision/provenance remain open P3-plus items.
 - [x] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
       replayable events.
       **Deferred to P3-plus:** Child failures are isolated today (`mark_failed`, `FailureReason`,
@@ -412,8 +412,9 @@ The §23 full messaging surface. The foundation is now in place: per-actor bound
 - [x] `agents.broadcast(text)` — deliver a message to all currently live children.
 - [x] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
       **Resolved:** `agents.pipeline` is registered and prelude-backed. It runs ordered actor waves
-      stage-by-stage, waits at each barrier, and feeds only bounded digest JSON into the next stage.
-      The namespace wrapper also supports per-stage task builder functions.
+      stage-by-stage, waits at each barrier, and feeds compact digest references (`agent://`,
+      `history://`, artifact URI, bounded summary) into the next stage without re-inlining
+      transcripts. The namespace wrapper also supports per-stage task builder functions.
 - [x] Real caller actor-id threading through `InvocationCtx` (top-level orchestrator calls still use
       synthetic `"Root"`; child sandboxes receive their real actor id).
 

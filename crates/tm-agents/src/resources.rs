@@ -203,3 +203,201 @@ fn parse_selector(selector: Option<&str>, total_lines: usize) -> (usize, usize) 
     let end = b.parse::<usize>().unwrap_or(DEFAULT_PAGE).min(total_lines);
     (start.min(total_lines), end.max(start).min(total_lines))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use tm_host::{CapabilityGrants, HostError, InvocationCtx, ResourceHandler};
+
+    use super::*;
+    use crate::{
+        ActorBudget, ActorId,
+        actor::{ActorRecord, ActorStatus},
+    };
+
+    fn ctx() -> InvocationCtx {
+        InvocationCtx::new(CapabilityGrants::default())
+    }
+
+    fn test_record(id: &str, mode: Option<&str>, history_uri: Option<&str>) -> ActorRecord {
+        ActorRecord {
+            id: ActorId::new(id).expect("valid actor id"),
+            parent: None,
+            status: ActorStatus::Running,
+            mode: mode.map(str::to_string),
+            budget: ActorBudget::default(),
+            spawned_at: Utc::now(),
+            completed_at: None,
+            cancelled: false,
+            failure_reason: None,
+            last_summary: None,
+            artifact_uri: None,
+            history_uri: history_uri.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_resource_reads_record_json_and_lists_records() {
+        let roster = Arc::new(MailboxRegistry::new());
+        roster
+            .track(test_record("Worker", Some("researcher"), None))
+            .await;
+        roster
+            .track(test_record("Reviewer", Some("critic"), None))
+            .await;
+        let handler = AgentResourceHandler::new(roster);
+
+        assert_eq!(handler.scheme(), "agent");
+        assert_eq!(handler.capability(), CAP_AGENT_READ);
+
+        let content = handler
+            .read("agent://Worker", None, &ctx())
+            .await
+            .expect("read actor resource");
+        let record: ActorRecord =
+            serde_json::from_str(&content.content).expect("actor record json");
+
+        assert_eq!(content.uri, "agent://Worker");
+        assert_eq!(content.kind, "actor");
+        assert_eq!(content.mime, "application/json");
+        assert_eq!(content.title.as_deref(), Some("Actor Worker"));
+        assert_eq!(content.size_bytes, content.content.len());
+        assert_eq!(record.id, ActorId::new("Worker").unwrap());
+        assert_eq!(record.mode.as_deref(), Some("researcher"));
+
+        let entries = handler.list(None, &ctx()).await.expect("list agents");
+        assert_eq!(entries.len(), 2);
+        let worker = entries
+            .iter()
+            .find(|entry| entry.uri == "agent://Worker")
+            .expect("worker entry");
+        assert_eq!(worker.name, "Worker");
+        assert_eq!(worker.kind, "actor");
+        assert_eq!(worker.title.as_deref(), Some("researcher"));
+    }
+
+    #[tokio::test]
+    async fn agent_resource_rejects_bad_or_missing_actor_uris() {
+        let roster = Arc::new(MailboxRegistry::new());
+        let handler = AgentResourceHandler::new(roster);
+
+        let empty = handler.read("agent://", None, &ctx()).await.unwrap_err();
+        assert!(matches!(empty, HostError::InvalidArgs(_)));
+
+        let invalid_id = handler
+            .read("agent://lowercase", None, &ctx())
+            .await
+            .unwrap_err();
+        assert!(matches!(invalid_id, HostError::NotFound(_)));
+
+        let missing = handler
+            .read("agent://Missing", None, &ctx())
+            .await
+            .unwrap_err();
+        assert!(matches!(missing, HostError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn history_resource_reads_selected_transcript_lines_and_lists_only_history_records() {
+        let roster = Arc::new(MailboxRegistry::new());
+        let worker = ActorId::new("Worker").unwrap();
+        roster
+            .track(test_record(
+                "Worker",
+                Some("researcher"),
+                Some("history://Worker"),
+            ))
+            .await;
+        roster
+            .track(test_record("NoHistory", Some("observer"), None))
+            .await;
+        roster
+            .store_transcript(
+                &worker,
+                "line 1\nline 2\nline 3\nline 4\nline 5".to_string(),
+            )
+            .await;
+        let handler = HistoryResourceHandler::new(roster);
+
+        assert_eq!(handler.scheme(), "history");
+        assert_eq!(handler.capability(), CAP_HISTORY_READ);
+
+        let content = handler
+            .read("history://Worker", Some("2-4"), &ctx())
+            .await
+            .expect("read history resource");
+
+        assert_eq!(content.uri, "history://Worker");
+        assert_eq!(content.kind, "history");
+        assert_eq!(content.mime, "text/plain");
+        assert_eq!(content.title.as_deref(), Some("researcher transcript"));
+        assert_eq!(content.selector.as_deref(), Some("2-4"));
+        assert_eq!(content.content, "line 2\nline 3\nline 4");
+        assert!(content.has_more);
+        assert_eq!(content.preview, "line 1\nline 2\nline 3\nline 4\nline 5");
+        assert_eq!(content.size_bytes, content.preview.len());
+
+        let entries = handler.list(None, &ctx()).await.expect("list histories");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uri, "history://Worker");
+        assert_eq!(entries[0].kind, "history");
+        assert_eq!(entries[0].title.as_deref(), Some("researcher"));
+    }
+
+    #[tokio::test]
+    async fn history_resource_falls_back_when_transcript_is_missing() {
+        let roster = Arc::new(MailboxRegistry::new());
+        roster
+            .track(test_record(
+                "Worker",
+                Some("researcher"),
+                Some("history://Worker"),
+            ))
+            .await;
+        let handler = HistoryResourceHandler::new(roster);
+
+        let content = handler
+            .read("history://Worker", None, &ctx())
+            .await
+            .expect("read fallback history");
+
+        assert!(content.content.contains("no transcript captured yet"));
+        assert!(!content.has_more);
+        assert_eq!(content.selector, None);
+    }
+
+    #[tokio::test]
+    async fn history_resource_rejects_bad_or_missing_actor_uris() {
+        let roster = Arc::new(MailboxRegistry::new());
+        let handler = HistoryResourceHandler::new(roster);
+
+        let empty = handler.read("history://", None, &ctx()).await.unwrap_err();
+        assert!(matches!(empty, HostError::InvalidArgs(_)));
+
+        let invalid_id = handler
+            .read("history://lowercase", None, &ctx())
+            .await
+            .unwrap_err();
+        assert!(matches!(invalid_id, HostError::NotFound(_)));
+
+        let missing = handler
+            .read("history://Missing", None, &ctx())
+            .await
+            .unwrap_err();
+        assert!(matches!(missing, HostError::NotFound(_)));
+    }
+
+    #[test]
+    fn history_selector_defaults_and_clamps_ranges() {
+        assert_eq!(parse_selector(None, 120), (0, 50));
+        assert_eq!(parse_selector(None, 7), (0, 7));
+        assert_eq!(parse_selector(Some("not-a-range"), 120), (0, 50));
+        assert_eq!(parse_selector(Some("3-nope"), 120), (2, 50));
+        assert_eq!(parse_selector(Some("0-3"), 120), (0, 3));
+        assert_eq!(parse_selector(Some("4-2"), 120), (3, 3));
+        assert_eq!(parse_selector(Some("99-150"), 120), (98, 120));
+        assert_eq!(parse_selector(Some("200-300"), 120), (120, 120));
+    }
+}

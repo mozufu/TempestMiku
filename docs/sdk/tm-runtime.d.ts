@@ -535,9 +535,10 @@ interface AgentsNamespace {
    * agents.pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>
    *
    * Run a staged map pipeline. Each stage fans out one actor per current item,
-   * waits for the full wave to finish, then feeds only bounded digest JSON into
-   * the next stage. Returns one ordered digest array per stage. Requires
-   * agents.pipeline grant.
+   * waits for the full wave to finish, then feeds compact digest references
+   * into the next stage: actor/resource handles plus a bounded summary, never
+   * the upstream transcript. Returns one ordered digest array per stage.
+   * Requires agents.pipeline grant.
    */
   pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>;
 

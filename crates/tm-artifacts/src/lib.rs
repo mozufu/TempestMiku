@@ -4,7 +4,8 @@
 //! Blobs are global content-addressed `blob:sha256:<hash>` files for deduplication.
 
 use std::{
-    fs, io,
+    fs::{self, OpenOptions},
+    io,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -109,31 +110,53 @@ impl ArtifactStore {
     ) -> Result<ArtifactRef> {
         let content = content.as_ref();
         let bytes = content.as_bytes();
-        let (id, artifact) = {
-            let mut inner = self.inner.lock();
-            let id = inner.next_id;
-            inner.next_id += 1;
-            let id_s = id.to_string();
-            let artifact = ArtifactRef {
-                uri: format!("artifact://{id_s}"),
-                id: id_s,
-                kind: "text".to_string(),
-                mime: mime.to_string(),
-                title,
-                size_bytes: bytes.len(),
-                preview: preview(content, 1024),
-            };
-            inner.refs.push(artifact.clone());
-            (id, artifact)
-        };
-
         let dir = self.session_artifact_dir();
         fs::create_dir_all(&dir)?;
-        fs::write(dir.join(format!("{id}.txt")), bytes)?;
-        fs::write(
-            dir.join(format!("{id}.meta")),
-            serde_json::to_vec_pretty(&artifact).map_err(io::Error::other)?,
-        )?;
+        let (id, artifact, lock_path) = {
+            let mut inner = self.inner.lock();
+            let mut id = inner
+                .next_id
+                .max(max_artifact_id(&dir)?.map_or(0, |id| id + 1));
+            loop {
+                let lock_path = dir.join(format!("{id}.lock"));
+                match OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&lock_path)
+                {
+                    Ok(_) => {
+                        inner.next_id = id + 1;
+                        let id_s = id.to_string();
+                        let artifact = ArtifactRef {
+                            uri: format!("artifact://{id_s}"),
+                            id: id_s,
+                            kind: "text".to_string(),
+                            mime: mime.to_string(),
+                            title,
+                            size_bytes: bytes.len(),
+                            preview: preview(content, 1024),
+                        };
+                        break (id, artifact, lock_path);
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                        id += 1;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        };
+
+        let write_result = (|| -> Result<()> {
+            fs::write(dir.join(format!("{id}.txt")), bytes)?;
+            fs::write(
+                dir.join(format!("{id}.meta")),
+                serde_json::to_vec_pretty(&artifact).map_err(io::Error::other)?,
+            )?;
+            Ok(())
+        })();
+        let _ = fs::remove_file(lock_path);
+        write_result?;
+        self.inner.lock().refs.push(artifact.clone());
         Ok(artifact)
     }
 
@@ -189,6 +212,24 @@ impl ArtifactStore {
     }
 }
 
+fn max_artifact_id(session_dir: &Path) -> io::Result<Option<u64>> {
+    let mut max_id = None;
+    for entry in fs::read_dir(session_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("meta") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if let Ok(id) = stem.parse::<u64>() {
+            max_id = Some(max_id.map_or(id, |m: u64| m.max(id)));
+        }
+    }
+    Ok(max_id)
+}
+
 pub fn default_root() -> PathBuf {
     Path::new(".tempestmiku").to_path_buf()
 }
@@ -238,6 +279,8 @@ fn floor_boundary(s: &str, mut idx: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Barrier};
+
     use super::*;
 
     #[test]
@@ -262,5 +305,33 @@ mod tests {
         let two = store.put_blob(b"same").unwrap();
         assert_eq!(one, two);
         assert!(one.starts_with("blob:sha256:"));
+    }
+
+    #[test]
+    fn concurrent_store_instances_allocate_distinct_artifact_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let barrier = Arc::new(Barrier::new(2));
+        let mut handles = Vec::new();
+
+        for label in ["one", "two"] {
+            let root = root.clone();
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let store = ArtifactStore::open(root, "default").unwrap();
+                barrier.wait();
+                store
+                    .put_text(label, Some(label.to_string()), "text/plain")
+                    .unwrap()
+                    .uri
+            }));
+        }
+
+        let mut uris = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        uris.sort();
+        assert_eq!(uris, ["artifact://0", "artifact://1"]);
     }
 }

@@ -50,6 +50,10 @@ TM_E2E_REQUIRE_ARTIFACT=1
 TM_E2E_RECORD_PATH=target/tm-e2e/scripted-latest.json
 ```
 
+`tm-e2e` loads the nearest workspace `.env` before reading these variables. Values already exported
+in the shell win over `.env`. Evidence manifests include credential presence only as redacted
+environment entries (`OPENAI_API_KEY`, `TM_MIKU_BEARER_TOKEN`, etc.).
+
 The JSON record is machine-readable so UI tests and manual dogfood runs can
 compare rounds without scraping logs:
 
@@ -97,6 +101,7 @@ Useful variants:
 cargo run -p tm-e2e -- record api
 cargo run -p tm-e2e -- record ui --headed
 TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api
+TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record native-actor
 ```
 
 The normal `suite` run starts an in-process `tm-server` fixture, uses the
@@ -125,9 +130,34 @@ Each evidence bundle includes:
 `tm_e2e::run_actor_smoke` is a narrow public-API smoke used by tests for the
 P3+ actor surface. It creates a Handoff session, watches actor lifecycle events
 over SSE, resolves a child `native-deno` approval through
-`POST /sessions/:id/approvals/:approval_id`, opens the child `artifact://`
-resource through the session resource gateway, and reconnects with
-`Last-Event-ID` to prove replay includes the approval and completion events.
+`POST /sessions/:id/approvals/:approval_id`, opens child `artifact://`,
+`history://`, and `agent://` resources through the session resource gateway,
+checks a terminal cancelled `agent://` record, and reconnects with
+`Last-Event-ID` to prove replay includes approval, output-link, completion, and
+cancellation events.
+
+## Native Actor Coordination
+
+`native_deno_actor_coordination_public_api_covers_p3_plus_route` is the
+network-free public-API E2E for the native Deno actor path. It starts an
+in-process `tm-server` with `NativeDenoBackend`, injects a scripted streaming
+LLM, opens a Handoff session through HTTP, and runs real sandbox SDK calls:
+`agents.spawn`, `agents.send`, `agents.broadcast`, `agents.wait`, and
+`agents.list`. The test verifies live SSE plus `Last-Event-ID` replay for
+`actor_spawned`, `actor_message`, `actor_completed`, `actor_resources_linked`,
+and `final`, then resolves each child `artifact://`, `history://`, and
+`agent://` resource through the public session resource gateway.
+
+For a credentialed live check without letting the model free-form the JS route,
+run:
+
+```sh
+TM_LLM_E2E_LIVE=1 cargo run -p tm-e2e -- record native-actor
+```
+
+That command loads `.env`, performs a real OpenAI-compatible streaming preflight,
+uses the same native Deno actor route, and lets the final parent/child LLM turns
+come from the `.env` endpoint while keeping the executed JS deterministic.
 
 ## Live Speaker Run
 
@@ -145,7 +175,8 @@ Use `TM_E2E_SPEAKER_MODEL` to choose a separate model for the E2E actor.
 The workflow verifies the public P1/P2 surface: session creation, Miku persona
 metadata, SSE streaming and replay, mode routing, memory approval/persistence,
 project promotion, and resource reads. Actor smoke verifies the public P3+
-attach/approve/resource/replay path. The full native Deno engineering path
-remains covered by focused server tests for `fs.*`, `code.*`, `proc.*`,
-artifacts, child actor approval routing, and approval approve/deny/timeout
-behavior.
+attach/approve/resource/replay path, while native actor coordination verifies
+the real Deno SDK route for P3+ mailbox coordination and child resources. The
+remaining native Deno engineering path stays covered by focused server tests for
+`fs.*`, `code.*`, `proc.*`, child actor approval routing, and approval
+approve/deny/timeout behavior.

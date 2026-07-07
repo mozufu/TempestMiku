@@ -568,16 +568,19 @@ impl ActorExecutor for ChatActorExecutor {
             .await
             .map_err(|_| ActorError::Execution("actor worker dropped response".to_string()))??;
 
-        // Populate artifact_uri from child cell-spills; transcript content is served via history://.
+        // Populate artifact_uri from this child's own transcript first; concurrent child actors
+        // can write to the same session artifact store, so "latest new artifact" is only a fallback.
         let (artifact_uri, history_uri) = if let Some(ref root) = artifact_root {
             match ArtifactStore::open(root, owner_session_id.to_string()) {
                 Ok(store) => {
-                    let artifact_uri = store
-                        .list()
-                        .into_iter()
-                        .rev()
-                        .find(|artifact| !existing_artifact_ids.contains(&artifact.id))
-                        .map(|r| r.uri);
+                    let artifact_uri = last_artifact_uri_in_text(&transcript).or_else(|| {
+                        store
+                            .list()
+                            .into_iter()
+                            .rev()
+                            .find(|artifact| !existing_artifact_ids.contains(&artifact.id))
+                            .map(|r| r.uri)
+                    });
                     let history_uri =
                         (!transcript.is_empty()).then(|| format!("history://{actor_id}"));
                     (artifact_uri, history_uri)
@@ -601,5 +604,41 @@ impl ActorExecutor for ChatActorExecutor {
             history_uri,
             history_content,
         })
+    }
+}
+
+fn last_artifact_uri_in_text(text: &str) -> Option<String> {
+    let marker = "artifact://";
+    let mut cursor = 0;
+    let mut found = None;
+    while let Some(offset) = text[cursor..].find(marker) {
+        let start = cursor + offset;
+        let id_start = start + marker.len();
+        let id_len = text[id_start..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if id_len > 0 {
+            found = Some(text[start..id_start + id_len].to_string());
+            cursor = id_start + id_len;
+        } else {
+            cursor = id_start;
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_artifact_uri_in_text_uses_child_transcript_order() {
+        let text = "[cell_result] first artifact://0\n[text] later\n[cell_result] artifact://12,";
+        assert_eq!(
+            last_artifact_uri_in_text(text).as_deref(),
+            Some("artifact://12")
+        );
     }
 }

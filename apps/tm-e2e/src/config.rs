@@ -1,7 +1,24 @@
-use std::{env, time::Duration};
+use std::{env, path::Path, sync::Once, time::Duration};
 
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8787";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+static LOAD_DOTENV: Once = Once::new();
+
+/// Load the nearest workspace `.env` before reading E2E credentials.
+///
+/// Existing process environment wins; `.env` only fills missing keys.
+pub fn load_dotenv() {
+    LOAD_DOTENV.call_once(|| {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        if let Some(path) = manifest_dir
+            .ancestors()
+            .map(|dir| dir.join(".env"))
+            .find(|path| path.is_file())
+        {
+            let _ = dotenvy::from_path(path);
+        }
+    });
+}
 
 #[derive(Debug, Clone)]
 pub struct E2eConfig {
@@ -12,6 +29,7 @@ pub struct E2eConfig {
 
 impl E2eConfig {
     pub fn from_env() -> Self {
+        load_dotenv();
         let timeout = env::var("TM_MIKU_E2E_TIMEOUT_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())

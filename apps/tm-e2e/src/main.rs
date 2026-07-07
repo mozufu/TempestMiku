@@ -2,12 +2,14 @@ use std::{env, path::PathBuf};
 
 use anyhow::{Result, bail};
 use tm_e2e::{
-    LiveSpeaker, MikuClient, RecordOptions, ScriptedSpeaker, WorkflowOptions, run_record_api,
-    run_record_live_api, run_record_suite, run_record_ui, run_workflow, write_workflow_record,
+    LiveSpeaker, MikuClient, RecordOptions, ScriptedSpeaker, WorkflowOptions, load_dotenv,
+    run_record_api, run_record_live_api, run_record_native_actor, run_record_suite, run_record_ui,
+    run_workflow, write_workflow_record,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    load_dotenv();
     let args = Args::parse()?;
 
     match args {
@@ -65,8 +67,11 @@ async fn run_record(args: RecordCliArgs) -> Result<()> {
         "api" => run_record_api(options).await?,
         "ui" => run_record_ui(options).await?,
         "live-api" => run_record_live_api(options).await?,
+        "native-actor" => run_record_native_actor(options).await?,
         other => {
-            bail!("unsupported tm-e2e record mode {other}; expected suite, api, ui, or live-api")
+            bail!(
+                "unsupported tm-e2e record mode {other}; expected suite, api, ui, live-api, or native-actor"
+            )
         }
     };
     println!("tm-e2e record {} passed", args.mode);
@@ -261,7 +266,8 @@ fn print_help() {
            cargo run -p tm-e2e -- record suite [--output-dir path] [--headed] [--skip-flutter-build]\n  \
            cargo run -p tm-e2e -- record api [--output-dir path]\n  \
            cargo run -p tm-e2e -- record ui [--output-dir path] [--headed]\n  \
-           TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api [--output-dir path]\n\n\
+  TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api [--output-dir path]\n  \
+  TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record native-actor [--output-dir path]\n\n\
          Environment:\n  \
            TM_MIKU_BASE_URL          server URL, default http://127.0.0.1:8787\n  \
            TM_MIKU_BEARER_TOKEN      optional bearer token for tm-server auth\n  \

@@ -1,18 +1,32 @@
 use std::{
+    collections::VecDeque,
     env, fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
+use chrono::Utc;
+use futures::stream::{self, BoxStream};
 use serde::Deserialize;
 use serde_json::{Value, json, to_value};
+use tm_agents::{ActorBudget, ActorId, ActorRecord, ActorStatus, FailureReason, MailboxRegistry};
+use tm_core::{
+    AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Message,
+    Result as CoreResult, StreamEvent, ToolChoice,
+};
+use tm_llm::OpenAiClient;
+use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use tm_server::{
     AppState, ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig,
-    CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult, EchoChatRunner, InMemoryStore,
-    ModeId, ServerError, StoreEvent, StoreMemoryProvider, app,
+    ChatActorExecutor, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
+    EchoChatRunner, HttpApprovalPolicy, InMemoryStore, ModeId, NativeApprovalMode,
+    NativeDenoBackend, RosterCodingEventSink, ServerError, StoreEvent, StoreMemoryProvider, app,
 };
 use tokio::process::Command;
 
@@ -42,11 +56,37 @@ pub async fn run_record_ui(options: RecordOptions) -> Result<EvidenceManifest> {
 }
 
 pub async fn run_record_live_api(options: RecordOptions) -> Result<EvidenceManifest> {
+    crate::load_dotenv();
     ensure!(
         env::var("TM_LLM_E2E_LIVE").ok().as_deref() == Some("1"),
         "record live-api is gated by TM_LLM_E2E_LIVE=1"
     );
     run_recorded("live-api", options, true, false, false, true).await
+}
+
+pub async fn run_record_native_actor(options: RecordOptions) -> Result<EvidenceManifest> {
+    crate::load_dotenv();
+    ensure!(
+        env::var("TM_LLM_E2E_LIVE").ok().as_deref() == Some("1"),
+        "record native-actor is gated by TM_LLM_E2E_LIVE=1"
+    );
+    ensure_live_llm_env("record native-actor")?;
+
+    let root = options
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| default_run_dir("native-actor"));
+    let command = env::args().collect::<Vec<_>>().join(" ");
+    let recorder = EvidenceRecorder::create(&root, command)?;
+    let result = run_record_native_actor_inner(&recorder).await;
+    let manifest = recorder.finish(result.is_ok())?;
+    if let Err(err) = result {
+        bail!(
+            "tm-e2e record native-actor failed: {err}; evidence: {}",
+            manifest.run_dir
+        );
+    }
+    Ok(manifest)
 }
 
 async fn run_recorded(
@@ -57,6 +97,7 @@ async fn run_recorded(
     include_ui: bool,
     live_api: bool,
 ) -> Result<EvidenceManifest> {
+    crate::load_dotenv();
     let root = options
         .output_dir
         .clone()
@@ -128,6 +169,97 @@ async fn run_recorded_inner(
     }
 
     Ok(())
+}
+
+async fn run_record_native_actor_inner(recorder: &EvidenceRecorder) -> Result<()> {
+    recorder.append_transcript(format!(
+        "- Run `native-actor` started at `{}`.",
+        timestamp()
+    ));
+    let live_model = live_llm_model();
+    let server = NativeActorRecordingServer::start(&recorder.root(), live_model.clone()).await?;
+    recorder.set_server(ServerEvidence {
+        base_url: server.base_url.clone(),
+        artifact_root: server.artifact_root.display().to_string(),
+        store: "in-memory".to_string(),
+        coding_backend: "native-deno-scripted-execute-live-final".to_string(),
+    });
+    let client = MikuClient::new(E2eConfig {
+        base_url: server.base_url.clone(),
+        bearer_token: None,
+        timeout: Duration::from_secs(45),
+    })?
+    .with_recorder(recorder.clone());
+
+    run_live_llm_preflight(recorder, &live_model).await?;
+    run_native_actor_coordination_scenario(recorder, &client, Arc::clone(&server.live_tail_calls))
+        .await
+}
+
+fn ensure_live_llm_env(label: &str) -> Result<()> {
+    let api_key_set = env::var("OPENAI_API_KEY")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let base_url_set = env::var("OPENAI_BASE_URL")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    ensure!(
+        api_key_set || base_url_set,
+        "{label} needs OPENAI_API_KEY or OPENAI_BASE_URL in the environment/.env"
+    );
+    Ok(())
+}
+
+fn live_llm_model() -> String {
+    env::var("TM_LLM_MODEL")
+        .or_else(|_| env::var("OPENAI_MODEL"))
+        .unwrap_or_else(|_| "gpt-4o-mini".to_string())
+}
+
+async fn run_live_llm_preflight(recorder: &EvidenceRecorder, model: &str) -> Result<()> {
+    let started_at = timestamp();
+    let result = async {
+        let client =
+            OpenAiClient::from_env().context("creating native-actor live preflight LLM")?;
+        let turn = client
+            .chat(&ChatRequest {
+                model: model.to_string(),
+                messages: vec![
+                    Message::system("You are a deterministic integration-test endpoint."),
+                    Message::user(format!(
+                        "Return exactly this ASCII token and nothing else: {LIVE_PREFLIGHT_TOKEN}"
+                    )),
+                ],
+                tools: Vec::new(),
+                tool_choice: ToolChoice::None,
+                temperature: Some(0.0),
+                max_tokens: Some(32),
+            })
+            .await
+            .context("running live LLM credential preflight")?;
+        ensure!(
+            turn.tool_calls.is_empty(),
+            "live credential preflight unexpectedly returned tool calls"
+        );
+        ensure!(
+            turn.text
+                .to_ascii_uppercase()
+                .contains(LIVE_PREFLIGHT_TOKEN),
+            "live credential preflight did not return expected token {LIVE_PREFLIGHT_TOKEN}: {:?}",
+            turn.text
+        );
+        recorder.append_transcript(format!(
+            "- Live credential preflight: `{LIVE_PREFLIGHT_TOKEN}` via model `{model}`."
+        ));
+        Ok::<Value, anyhow::Error>(json!({
+            "model": model,
+            "expectedToken": LIVE_PREFLIGHT_TOKEN,
+            "responsePreview": turn.text.chars().take(80).collect::<String>(),
+        }))
+    }
+    .await;
+    record_scenario_result(recorder, "live-llm-preflight", started_at, &result);
+    result.map(|_| ())
 }
 
 async fn run_public_api_scenario(
@@ -202,17 +334,237 @@ async fn run_actor_api_scenario(recorder: &EvidenceRecorder, client: &MikuClient
     let result = async {
         let report = run_actor_smoke(client).await?;
         capture_resource(recorder, client, &report.session_id, &report.artifact_uri).await?;
+        capture_resource(recorder, client, &report.session_id, &report.history_uri).await?;
+        capture_resource(recorder, client, &report.session_id, &report.agent_uri).await?;
+        capture_resource(
+            recorder,
+            client,
+            &report.session_id,
+            &report.cancelled_agent_uri,
+        )
+        .await?;
+        recorder.append_transcript(format!(
+            "- Actor smoke resources: actor `{}`, approval `{}`, artifact `{}`, history `{}`, cancelled `{}`.",
+            report.actor_id,
+            report.approval_id,
+            report.artifact_uri,
+            report.history_uri,
+            report.cancelled_agent_uri
+        ));
+        recorder.append_transcript(format!(
+            "- Actor replay event types: `{}`",
+            report.replayed_event_types.join("`, `")
+        ));
         Ok::<Value, anyhow::Error>(json!({
             "sessionId": report.session_id,
             "actorId": report.actor_id,
+            "agentUri": report.agent_uri,
             "approvalId": report.approval_id,
             "artifactUri": report.artifact_uri,
+            "historyUri": report.history_uri,
+            "cancelledActorId": report.cancelled_actor_id,
+            "cancelledAgentUri": report.cancelled_agent_uri,
             "replayedEventTypes": report.replayed_event_types
         }))
     }
     .await;
     record_scenario_result(recorder, "api-actor", started_at, &result);
     result.map(|_| ())
+}
+
+async fn run_native_actor_coordination_scenario(
+    recorder: &EvidenceRecorder,
+    client: &MikuClient,
+    live_tail_calls: Arc<AtomicUsize>,
+) -> Result<()> {
+    let started_at = timestamp();
+    let result = async {
+        let session = client.create_session(Some("handoff")).await?;
+        let (_, mode_event) = client
+            .wait_for_event(&session.id, Some(0), |event| event.event_type == "mode")
+            .await?;
+        let replay_anchor = mode_event.id;
+
+        let send_client = client.clone();
+        let send_session_id = session.id.clone();
+        let send = tokio::spawn(async move {
+            send_client
+                .send_message(
+                    &send_session_id,
+                    "exercise native P3+ actor coordination route with .env live credentials",
+                )
+                .await
+        });
+        let live_events = client.read_until_final(&session.id, replay_anchor).await?;
+        send.await.context("joining native actor send task")??;
+        let final_text = live_events
+            .iter()
+            .find(|event| event.event_type == "final")
+            .and_then(|event| event.data["text"].as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let (first_link_batch, first_link) = client
+            .wait_for_event(&session.id, replay_anchor, |event| {
+                event.event_type == "actor_resources_linked"
+            })
+            .await?;
+        let (second_link_batch, second_link) = client
+            .wait_for_event(&session.id, first_link.id, |event| {
+                event.event_type == "actor_resources_linked"
+            })
+            .await?;
+        let replayed = [
+            live_events.clone(),
+            first_link_batch,
+            second_link_batch,
+            vec![first_link.clone(), second_link.clone()],
+        ]
+        .concat();
+        let event_types = replayed
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>();
+        ensure_min_event_count(&event_types, "actor_spawned", 2)?;
+        ensure_min_event_count(&event_types, "actor_message", 4)?;
+        ensure_min_event_count(&event_types, "actor_completed", 2)?;
+        ensure_min_event_count(&event_types, "actor_resources_linked", 2)?;
+        ensure!(
+            event_types.iter().any(|kind| *kind == "final"),
+            "native actor route did not replay a final event"
+        );
+
+        let mut resources = Vec::new();
+        let mut artifact_uris = Vec::new();
+        for linked in [&first_link, &second_link] {
+            let actor_id = linked.data["actor_id"]
+                .as_str()
+                .context("actor_resources_linked actor_id")?
+                .to_string();
+            let artifact_uri = linked.data["artifact_uri"]
+                .as_str()
+                .context("actor_resources_linked artifact_uri")?
+                .to_string();
+            let history_uri = linked.data["history_uri"]
+                .as_str()
+                .context("actor_resources_linked history_uri")?
+                .to_string();
+            ensure!(
+                history_uri == format!("history://{actor_id}"),
+                "unexpected history uri {history_uri} for actor {actor_id}"
+            );
+            ensure_native_child_resource_contents(
+                client,
+                &session.id,
+                &actor_id,
+                &artifact_uri,
+                &history_uri,
+            )
+            .await?;
+            let agent_uri = format!("agent://{actor_id}");
+            capture_resource(recorder, client, &session.id, &artifact_uri).await?;
+            capture_resource(recorder, client, &session.id, &history_uri).await?;
+            capture_resource(recorder, client, &session.id, &agent_uri).await?;
+            artifact_uris.push(artifact_uri.clone());
+            resources.push(json!({
+                "actorId": actor_id,
+                "artifactUri": artifact_uri,
+                "historyUri": history_uri,
+                "agentUri": agent_uri,
+            }));
+        }
+        ensure!(
+            artifact_uris.len() == 2 && artifact_uris[0] != artifact_uris[1],
+            "native actor route expected distinct child artifact URIs, saw {artifact_uris:?}"
+        );
+
+        let live_tail_call_count = live_tail_calls.load(Ordering::SeqCst);
+        ensure!(
+            live_tail_call_count >= 3,
+            "native actor route expected at least 3 live final LLM calls, saw {live_tail_call_count}"
+        );
+        recorder.append_transcript(format!(
+            "- Native actor route final: `{}`",
+            final_text.chars().take(240).collect::<String>()
+        ));
+        recorder.append_transcript(format!(
+            "- Native actor replay event types: `{}`",
+            event_types.join("`, `")
+        ));
+        recorder.append_transcript(format!(
+            "- Native actor live final LLM calls: `{live_tail_call_count}`."
+        ));
+        Ok::<Value, anyhow::Error>(json!({
+            "sessionId": session.id,
+            "finalText": final_text,
+            "eventTypes": event_types,
+            "resources": resources,
+            "liveTailCalls": live_tail_call_count,
+        }))
+    }
+    .await;
+    record_scenario_result(recorder, "native-actor", started_at, &result);
+    result.map(|_| ())
+}
+
+fn ensure_min_event_count(event_types: &[&str], event_type: &str, expected: usize) -> Result<()> {
+    let actual = event_types
+        .iter()
+        .filter(|kind| **kind == event_type)
+        .count();
+    ensure!(
+        actual >= expected,
+        "expected at least {expected} `{event_type}` events, saw {actual}: {event_types:?}"
+    );
+    Ok(())
+}
+
+async fn ensure_native_child_resource_contents(
+    client: &MikuClient,
+    session_id: &str,
+    actor_id: &str,
+    artifact_uri: &str,
+    history_uri: &str,
+) -> Result<()> {
+    let artifact = client.resolve_resource(session_id, artifact_uri).await?;
+    let artifact_content = artifact["content"]
+        .as_str()
+        .context("artifact content string")?;
+    ensure!(
+        artifact_content.contains(NATIVE_P3_BROADCAST_TEXT),
+        "artifact {artifact_uri} did not contain broadcast token: {artifact_content}"
+    );
+
+    let history = client.resolve_resource(session_id, history_uri).await?;
+    let history_content = history["content"]
+        .as_str()
+        .context("history content string")?;
+    ensure!(
+        history_content.contains("agents.wait")
+            && history_content.contains("[cell_result]")
+            && history_content.contains(NATIVE_P3_BROADCAST_TEXT),
+        "history {history_uri} did not contain expected native actor transcript markers"
+    );
+
+    let agent = client
+        .resolve_resource(session_id, &format!("agent://{actor_id}"))
+        .await?;
+    let record: Value =
+        serde_json::from_str(agent["content"].as_str().context("agent content string")?)?;
+    ensure!(
+        record["status"] == json!("terminated"),
+        "actor not terminal"
+    );
+    ensure!(record["cancelled"] == json!(false), "actor was cancelled");
+    ensure!(
+        record["artifact_uri"] == json!(artifact_uri),
+        "agent record artifact_uri mismatch"
+    );
+    ensure!(
+        record["history_uri"] == json!(history_uri),
+        "agent record history_uri mismatch"
+    );
+    Ok(())
 }
 
 async fn run_ui_scenario(
@@ -479,6 +831,257 @@ fn read_ui_result(path: &Path) -> Result<UiResultFile> {
     serde_json::from_slice(&bytes).with_context(|| format!("decoding UI result {}", path.display()))
 }
 
+const LIVE_PREFLIGHT_TOKEN: &str = "TEMPEST_MIKU_E2E_OK";
+const NATIVE_P3_BROADCAST_TEXT: &str = "native P3 plus broadcast token";
+const NATIVE_P3_FINAL_TEXT: &str = "native P3 plus coordination complete";
+
+struct NativeActorRecordingServer {
+    base_url: String,
+    artifact_root: PathBuf,
+    handle: tokio::task::JoinHandle<()>,
+    live_tail_calls: Arc<AtomicUsize>,
+}
+
+impl NativeActorRecordingServer {
+    async fn start(run_root: &Path, live_model: String) -> Result<Self> {
+        let artifact_root = run_root.join("native-actor-artifacts");
+        fs::create_dir_all(&artifact_root)
+            .with_context(|| format!("creating {}", artifact_root.display()))?;
+        let parent_code = native_parent_coordination_code();
+        let child_code = native_child_coordination_code();
+        let live_tail_calls = Arc::new(AtomicUsize::new(0));
+        let llm = Arc::new(ScriptedThenLiveLlm::new(
+            vec![
+                execute_script("parent_call", &parent_code),
+                execute_script("child_call_0", &child_code),
+                execute_script("child_call_1", &child_code),
+            ],
+            OpenAiClient::from_env().context("creating native actor live-tail LLM")?,
+            live_model,
+            Arc::clone(&live_tail_calls),
+        ));
+        let cfg = AgentConfig {
+            model: "scripted-then-env-live".to_string(),
+            max_turns: 6,
+            cell_budget: CellBudget {
+                wall_ms: 240_000,
+                output_bytes: 50_000,
+            },
+            ..AgentConfig::default()
+        };
+
+        let roster = Arc::new(MailboxRegistry::new());
+        let mut sandbox_options = DenoSandboxOptions {
+            artifact_root: artifact_root.clone(),
+            approval_timeout: Duration::from_secs(5),
+            ..DenoSandboxOptions::default()
+        };
+        tm_agents::register(
+            &mut sandbox_options.host_registry,
+            &mut sandbox_options.resource_registry,
+            Arc::clone(&roster),
+        );
+
+        let store = Arc::new(InMemoryStore::default());
+        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let chat = Arc::new(EchoChatRunner);
+        let mut state = AppState::new(
+            store,
+            memory,
+            chat,
+            tm_server::ModesConfig::default(),
+            AuthConfig::NoAuth,
+        )
+        .with_artifact_root(artifact_root.clone())
+        .with_actor_roster(Arc::clone(&roster));
+        let broker = Arc::clone(&state.approval_broker);
+
+        let executor_options = sandbox_options.clone();
+        let executor_roster = Arc::clone(&roster);
+        let executor_approval_roster = Arc::clone(&roster);
+        let executor_broker = Arc::clone(&broker);
+        let llm_for_executor: Arc<dyn LlmClient> = llm.clone();
+        let executor: Arc<dyn tm_agents::ActorExecutor> =
+            Arc::new(ChatActorExecutor::with_actor_context(
+                llm_for_executor,
+                cfg.clone(),
+                move |session_id, actor_id, grants, cancellation| {
+                    let mut opts = executor_options.clone();
+                    opts.session_id = session_id.to_string();
+                    opts.actor_id = actor_id.map(str::to_string);
+                    opts.cancellation = cancellation;
+                    opts.grants = opts
+                        .grants
+                        .clone()
+                        .allow_many(grants.names().map(str::to_string));
+                    let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
+                        session_id,
+                        Arc::clone(&executor_approval_roster),
+                    ));
+                    opts.approval_policy = Arc::new(
+                        HttpApprovalPolicy::new(Arc::clone(&executor_broker), session_id, sink)
+                            .with_actor_id(actor_id.map(str::to_string)),
+                    );
+                    Arc::new(DenoSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
+                },
+                Some(artifact_root.clone()),
+                executor_roster,
+            ));
+        roster.set_executor(executor);
+
+        let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+        let backend = NativeDenoBackend::new(
+            llm_for_backend,
+            cfg,
+            sandbox_options,
+            NativeApprovalMode::Manual,
+            broker,
+        );
+        state = state.with_coding_backend(Arc::new(backend));
+        state.wire_lifecycle_sink();
+
+        let router = app(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .context("binding tm-e2e native actor server")?;
+        let addr = listener
+            .local_addr()
+            .context("reading native actor server addr")?;
+        let handle = tokio::spawn(async move {
+            if let Err(err) = axum::serve(listener, router).await {
+                eprintln!("tm-e2e native actor server exited: {err}");
+            }
+        });
+        Ok(Self {
+            base_url: format!("http://{addr}"),
+            artifact_root,
+            handle,
+            live_tail_calls,
+        })
+    }
+}
+
+impl Drop for NativeActorRecordingServer {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+fn native_parent_coordination_code() -> String {
+    format!(
+        r#"
+const alpha = await agents.spawn("worker", "Wait for the parent broadcast, write a short artifact, and send Root a report.");
+const beta = await agents.spawn("worker", "Wait for the parent broadcast, write a short artifact, and send Root a report.");
+const readyA = await agents.wait(alpha, 15000);
+const readyB = await agents.wait(beta, 15000);
+const receipts = await agents.broadcast("{broadcast}");
+const first = await agents.wait(alpha, 15000);
+const second = await agents.wait(beta, 15000);
+let roster = [];
+for (let i = 0; i < 40; i++) {{
+  roster = await agents.list();
+  const done = [alpha.id, beta.id].every((id) =>
+    roster.find((entry) => entry.id === id)?.status === "terminated"
+  );
+  if (done) break;
+  await agents.wait(undefined, 100);
+}}
+display({{
+  receipts,
+  ready: [readyA?.text, readyB?.text],
+  reports: [first?.text, second?.text],
+  roster: roster.map((entry) => [entry.id, entry.status, entry.artifactUri, entry.historyUri])
+}});
+"#,
+        broadcast = NATIVE_P3_BROADCAST_TEXT
+    )
+}
+
+fn native_child_coordination_code() -> String {
+    r#"
+await agents.send("Root", "child ready for native broadcast");
+const msg = await agents.wait("Root", 15000);
+const text = msg?.text ?? "missing broadcast";
+const artifact = artifacts.put(`native child saw: ${text}`, { title: "native p3 child" });
+await agents.send("Root", `child report ${artifact.uri}: ${text}`);
+display({ text, artifact: artifact.uri });
+"#
+    .to_string()
+}
+
+fn execute_script(id: &str, code: &str) -> Vec<StreamEvent> {
+    vec![
+        StreamEvent::ToolCall {
+            index: 0,
+            id: Some(id.to_string()),
+            name: Some("execute".to_string()),
+            arguments: Some(json!({ "code": code }).to_string()),
+        },
+        StreamEvent::Finish {
+            reason: Some("tool_calls".to_string()),
+        },
+    ]
+}
+
+struct ScriptedThenLiveLlm {
+    scripts: Mutex<VecDeque<Vec<StreamEvent>>>,
+    live: OpenAiClient,
+    live_model: String,
+    live_tail_calls: Arc<AtomicUsize>,
+}
+
+impl ScriptedThenLiveLlm {
+    fn new(
+        scripts: Vec<Vec<StreamEvent>>,
+        live: OpenAiClient,
+        live_model: String,
+        live_tail_calls: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            scripts: Mutex::new(scripts.into()),
+            live,
+            live_model,
+            live_tail_calls,
+        }
+    }
+}
+
+#[async_trait]
+impl LlmClient for ScriptedThenLiveLlm {
+    async fn chat_stream(
+        &self,
+        _req: &ChatRequest,
+    ) -> CoreResult<BoxStream<'static, CoreResult<StreamEvent>>> {
+        let scripted = self
+            .scripts
+            .lock()
+            .map_err(|_| CoreError::Llm("scripted native actor LLM lock poisoned".to_string()))?
+            .pop_front();
+        if let Some(events) = scripted {
+            return Ok(Box::pin(stream::iter(
+                events.into_iter().map(Ok::<StreamEvent, CoreError>),
+            )));
+        }
+
+        self.live_tail_calls.fetch_add(1, Ordering::SeqCst);
+        self.live
+            .chat_stream(&ChatRequest {
+                model: self.live_model.clone(),
+                messages: vec![
+                    Message::system("You are a deterministic integration-test endpoint."),
+                    Message::user(format!(
+                        "Return exactly this ASCII string and nothing else: {NATIVE_P3_FINAL_TEXT}"
+                    )),
+                ],
+                tools: Vec::new(),
+                tool_choice: ToolChoice::None,
+                temperature: Some(0.0),
+                max_tokens: Some(32),
+            })
+            .await
+    }
+}
+
 struct RecordingServer {
     base_url: String,
     artifact_root: PathBuf,
@@ -494,6 +1097,7 @@ impl RecordingServer {
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let chat = Arc::new(EchoChatRunner);
         let broker = Arc::new(ApprovalBroker::default());
+        let roster = Arc::new(MailboxRegistry::new());
         let state = AppState::new(
             store,
             memory,
@@ -503,9 +1107,11 @@ impl RecordingServer {
         )
         .with_approval_broker(Arc::clone(&broker))
         .with_artifact_root(artifact_root.clone())
+        .with_actor_roster(Arc::clone(&roster))
         .with_coding_backend(Arc::new(RecordingBackend {
             root: artifact_root.clone(),
             broker,
+            roster,
         }));
         state.wire_lifecycle_sink();
         let router = app(state);
@@ -537,6 +1143,7 @@ impl Drop for RecordingServer {
 struct RecordingBackend {
     root: PathBuf,
     broker: Arc<ApprovalBroker>,
+    roster: Arc<MailboxRegistry>,
 }
 
 #[async_trait]
@@ -602,11 +1209,22 @@ impl RecordingBackend {
         turn: CodingTurn,
         sink: Arc<dyn CodingEventSink>,
     ) -> tm_server::Result<CodingTurnResult> {
-        let actor_id = "Worker0";
+        let actor_id =
+            ActorId::new("Worker0").map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
+        let actor_id_text = actor_id.to_string();
+        self.roster
+            .track(actor_record(
+                actor_id.clone(),
+                "worker",
+                ActorStatus::Running,
+                false,
+                None,
+            ))
+            .await;
         sink.emit(
             "actor_spawned",
             json!({
-                "actor_id": actor_id,
+                "actor_id": actor_id_text,
                 "role": "worker",
                 "task": "recording actor smoke",
             }),
@@ -620,7 +1238,7 @@ impl RecordingBackend {
                 ApprovalPrompt {
                     action: "proc.run cargo clean".to_string(),
                     scope: json!({
-                        "actorId": actor_id,
+                        "actorId": actor_id_text,
                         "action": "proc.run cargo clean",
                         "capability": "proc.run",
                     }),
@@ -642,6 +1260,17 @@ impl RecordingBackend {
             )
             .await?;
         if approval.status != ApprovalStatus::Approved {
+            let cancelled_actor_id = ActorId::new("CancelledWorker")
+                .map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
+            self.roster
+                .track(actor_record(
+                    cancelled_actor_id,
+                    "watcher",
+                    ActorStatus::Terminated,
+                    true,
+                    Some(FailureReason::ApprovalDenied),
+                ))
+                .await;
             let final_text = "Actor smoke approval denied".to_string();
             sink.emit(
                 "final",
@@ -665,6 +1294,20 @@ impl RecordingBackend {
                 "text/plain",
             )
             .map_err(|err| ServerError::Store(err.to_string()))?;
+        self.roster
+            .store_transcript(
+                &actor_id,
+                "child smoke transcript\n[cell_result] artifact://0\n".to_string(),
+            )
+            .await;
+        self.roster
+            .mark_complete_with_digest(
+                &actor_id,
+                "child smoke complete".to_string(),
+                Some("artifact://0".to_string()),
+                Some(format!("history://{actor_id_text}")),
+            )
+            .await;
         sink.emit(
             "artifact",
             json!({
@@ -676,10 +1319,43 @@ impl RecordingBackend {
         sink.emit(
             "actor_completed",
             json!({
-                "actor_id": actor_id,
+                "actor_id": actor_id_text,
                 "summary": "child smoke complete",
                 "artifact_uri": "artifact://0",
-                "history_uri": "history://Worker0",
+                "history_uri": format!("history://{actor_id_text}"),
+            }),
+        )
+        .await?;
+        sink.emit(
+            "actor_resources_linked",
+            json!({
+                "kind": "resources_linked",
+                "actor_id": actor_id_text,
+                "source_event_type": "actor_completed",
+                "source_event_seq": null,
+                "artifact_uri": "artifact://0",
+                "history_uri": format!("history://{actor_id_text}"),
+            }),
+        )
+        .await?;
+        let cancelled_actor_id = ActorId::new("CancelledWorker")
+            .map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
+        let cancelled_actor_id_text = cancelled_actor_id.to_string();
+        self.roster
+            .track(actor_record(
+                cancelled_actor_id,
+                "watcher",
+                ActorStatus::Terminated,
+                true,
+                Some(FailureReason::Cancelled),
+            ))
+            .await;
+        sink.emit(
+            "actor_cancelled",
+            json!({
+                "kind": "cancelled",
+                "actor_id": cancelled_actor_id_text,
+                "cancelled_at": Utc::now(),
             }),
         )
         .await?;
@@ -696,5 +1372,29 @@ impl RecordingBackend {
             final_text,
             transcript_artifact: None,
         })
+    }
+}
+
+fn actor_record(
+    id: ActorId,
+    mode: &str,
+    status: ActorStatus,
+    cancelled: bool,
+    failure_reason: Option<FailureReason>,
+) -> ActorRecord {
+    let now = Utc::now();
+    ActorRecord {
+        id,
+        parent: None,
+        status,
+        mode: Some(mode.to_string()),
+        budget: ActorBudget::default(),
+        spawned_at: now,
+        completed_at: (status == ActorStatus::Terminated).then_some(now),
+        cancelled,
+        failure_reason,
+        last_summary: None,
+        artifact_uri: None,
+        history_uri: None,
     }
 }

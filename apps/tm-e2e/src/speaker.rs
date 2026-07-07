@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use tm_core::{ChatRequest, LlmClient, Message, ToolChoice};
 use tm_llm::OpenAiClient;
 
+use crate::load_dotenv;
+
 #[derive(Debug, Clone, Copy)]
 pub enum WorkflowStep {
     PersonalAssistantGreeting,
@@ -82,6 +84,7 @@ pub struct LiveSpeaker {
 
 impl LiveSpeaker {
     pub fn from_env() -> Result<Self> {
+        load_dotenv();
         ensure!(
             env::var("TM_LLM_E2E_LIVE").ok().as_deref() == Some("1"),
             "live mode is gated by TM_LLM_E2E_LIVE=1"

@@ -398,10 +398,13 @@ fn sanitized_environment() -> BTreeMap<String, String> {
     let mut env_out = BTreeMap::new();
     for key in [
         "TM_MIKU_BASE_URL",
+        "TM_MIKU_BEARER_TOKEN",
+        "TM_MIKU_TOKEN",
         "TM_MIKU_E2E_TIMEOUT_MS",
         "TM_E2E_REQUIRE_ARTIFACT",
         "TM_LLM_E2E_LIVE",
         "TM_E2E_SPEAKER_MODEL",
+        "OPENAI_API_KEY",
         "OPENAI_MODEL",
         "OPENAI_BASE_URL",
         "TM_OMP_ACP_ENABLED",

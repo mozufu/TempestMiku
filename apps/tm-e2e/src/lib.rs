@@ -9,7 +9,7 @@ mod workflow;
 
 pub use actor_smoke::{ActorSmokeReport, run_actor_smoke};
 pub use client::{MikuClient, SessionInfo};
-pub use config::E2eConfig;
+pub use config::{E2eConfig, load_dotenv};
 pub use evidence::*;
 pub use record::*;
 pub use speaker::{E2eSpeaker, LiveSpeaker, ScriptedSpeaker, WorkflowContext, WorkflowStep};

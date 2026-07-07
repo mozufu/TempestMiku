@@ -35,6 +35,7 @@ class _ActivityItem {
     this.kind = 'event',
     this.actorId,
     this.role,
+    this.resourceUris = const [],
   });
 
   final IconData icon;
@@ -45,6 +46,7 @@ class _ActivityItem {
   final String kind;
   final String? actorId;
   final String? role;
+  final List<String> resourceUris;
 }
 
 class _AgentStatus {
@@ -446,15 +448,15 @@ class _MikuHomePageState extends State<MikuHomePage>
         final resources = [
           _eventText(data, 'artifact_uri', camelKey: 'artifactUri'),
           _eventText(data, 'history_uri', camelKey: 'historyUri'),
-        ].where((uri) => uri.isNotEmpty).join(' · ');
+        ].where((uri) => uri.isNotEmpty).toList();
         return _ActivityItem(
           icon: Icons.task_alt,
           title: '完成 $actorId',
-          detail:
-              [summary, resources].where((part) => part.isNotEmpty).join('\n'),
+          detail: summary,
           state: _ActivityState.done,
           kind: 'actor',
           actorId: actorId,
+          resourceUris: resources,
         );
       case 'actor_failed':
         final actorId = _eventText(data, 'actor_id',
@@ -836,6 +838,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           roundIndex: round.index,
           agents: _agentStatuses(round.activities),
           activities: List<_ActivityItem>.from(round.activities),
+          onOpenResource: _openResource,
         ),
       ),
     );

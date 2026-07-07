@@ -210,6 +210,7 @@ class _AgentActivitySheet extends StatelessWidget {
     required this.roundIndex,
     required this.agents,
     required this.activities,
+    required this.onOpenResource,
   });
 
   final _Tok tok;
@@ -217,6 +218,7 @@ class _AgentActivitySheet extends StatelessWidget {
   final int roundIndex;
   final List<_AgentStatus> agents;
   final List<_ActivityItem> activities;
+  final void Function(String) onOpenResource;
 
   @override
   Widget build(BuildContext context) {
@@ -322,6 +324,7 @@ class _AgentActivitySheet extends StatelessWidget {
                   tok: tok,
                   accent: accent,
                   item: activities[i],
+                  onOpenResource: onOpenResource,
                 ),
                 if (i != activities.length - 1) ...[
                   const SizedBox(height: 9),

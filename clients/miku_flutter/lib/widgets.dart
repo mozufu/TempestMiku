@@ -789,11 +789,13 @@ class _ActivityRow extends StatelessWidget {
     required this.tok,
     required this.accent,
     required this.item,
+    required this.onOpenResource,
   });
 
   final _Tok tok;
   final Color accent;
   final _ActivityItem item;
+  final void Function(String) onOpenResource;
 
   @override
   Widget build(BuildContext context) {
@@ -839,6 +841,58 @@ class _ActivityRow extends StatelessWidget {
                     height: 1.35,
                     fontFamily: item.monospace ? 'monospace' : null,
                   ),
+                ),
+              ],
+              if (item.resourceUris.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: item.resourceUris
+                      .map(
+                        (uri) => GestureDetector(
+                          key: ValueKey('activity-resource:$uri'),
+                          onTap: () => onOpenResource(uri),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: tok.surface,
+                              border: Border.all(color: tok.border),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.insert_drive_file_outlined,
+                                  size: 12,
+                                  color: accent,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  uri,
+                                  style: TextStyle(
+                                    color: accent,
+                                    fontSize: 10.8,
+                                    fontWeight: FontWeight.w800,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  Icons.open_in_new,
+                                  size: 10,
+                                  color: tok.muted,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList(),
                 ),
               ],
             ],

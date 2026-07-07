@@ -232,6 +232,63 @@ void main() {
     expect(find.text('Memory proposal'), findsNothing);
   });
 
+  testWidgets('opens actor completion resources from activity feed',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'handoff actor links');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await tester.tap(find.text('Agents · 0 running / 1 stopped'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    final toolCall = find.text('呼叫工具 execute');
+    final cellStart = find.text('執行程式');
+    final actorCompleted = find.text('完成 Worker0');
+    expect(toolCall, findsOneWidget);
+    expect(cellStart, findsOneWidget);
+    expect(actorCompleted, findsOneWidget);
+    expect(tester.getTopLeft(toolCall).dy,
+        lessThan(tester.getTopLeft(cellStart).dy));
+    expect(
+      tester.getTopLeft(cellStart).dy,
+      lessThan(tester.getTopLeft(actorCompleted).dy),
+    );
+
+    final artifactLink =
+        find.byKey(const ValueKey('activity-resource:artifact://0'));
+    final historyLink =
+        find.byKey(const ValueKey('activity-resource:history://Worker0'));
+    expect(artifactLink, findsOneWidget);
+    expect(historyLink, findsOneWidget);
+    expect(find.widgetWithText(GestureDetector, 'artifact://0'), findsWidgets);
+    expect(find.widgetWithText(GestureDetector, 'history://Worker0'),
+        findsOneWidget);
+
+    await tester.tap(artifactLink);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Scripted resource'), findsOneWidget);
+    expect(find.text('Preview for artifact://0'), findsOneWidget);
+
+    await tester.tap(find.byType(ModalBarrier).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    await tester.tap(historyLink);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Scripted resource'), findsOneWidget);
+    expect(find.text('Preview for history://Worker0'), findsOneWidget);
+  });
+
   testWidgets('handles actor approval, child resource, and reconnect cursor',
       (WidgetTester tester) async {
     final client = ScriptedMikuClient();

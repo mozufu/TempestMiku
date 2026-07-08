@@ -665,3 +665,316 @@ async fn gated_postgres_recall_chunks_use_fts_with_substring_fallback() {
     assert_eq!(substring.len(), 1);
     assert_eq!(substring[0].source, "postgres-ilike");
 }
+
+#[tokio::test]
+async fn gated_postgres_bootstraps_drive_schema() {
+    let Some(dsn) = postgres_test_dsn() else {
+        return;
+    };
+    let store = PostgresStore::connect(&dsn).await.unwrap();
+    for table in [
+        "drive_entries",
+        "drive_attributes",
+        "drive_tags",
+        "drive_proposals",
+        "drive_links",
+    ] {
+        let name = format!("public.{table}");
+        let exists: bool = store
+            .client()
+            .query_one("select to_regclass($1) is not null", &[&name])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(exists, "{table} should exist");
+    }
+
+    for index in [
+        "drive_entries_hash_idx",
+        "drive_entries_project_idx",
+        "drive_entries_doc_kind_idx",
+        "drive_entries_search_fts_idx",
+        "drive_tags_tag_idx",
+        "drive_proposals_status_updated_idx",
+        "drive_links_status_updated_idx",
+    ] {
+        let name = format!("public.{index}");
+        let exists: bool = store
+            .client()
+            .query_one("select to_regclass($1) is not null", &[&name])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(exists, "{index} should exist");
+    }
+
+    let run_id = Uuid::new_v4();
+    let project = format!("Pg Drive {run_id}");
+    let source_path = format!("inbox/{run_id}.md");
+    let source_uri = format!("drop://postgres/{run_id}.md");
+    let artifacts = tempfile::tempdir().unwrap();
+    let in_memory = tm_drive::InMemoryDriveStore::new(
+        tm_artifacts::ArtifactStore::open(artifacts.path(), "drive").unwrap(),
+    );
+    in_memory
+        .put_bytes(
+            b"# Pg Drive Brief\nApproval gates durable drive writes.",
+            tm_drive::DrivePutOptions {
+                suggested_path: Some(source_path.clone()),
+                project: Some(project.clone()),
+                doc_kind: Some("note".to_string()),
+                source_uri: Some(source_uri.clone()),
+                event_seq: Some(23),
+                ..tm_drive::DrivePutOptions::default()
+            },
+        )
+        .unwrap();
+    let proposals = in_memory
+        .organize_with_config(tm_drive::DriveOrganizerConfig::default())
+        .unwrap();
+    assert_eq!(proposals.len(), 1);
+    let applied = in_memory
+        .apply_organizer_proposals(&[proposals[0].id])
+        .unwrap();
+    assert_eq!(applied[0].status, tm_drive::ProposalStatus::Applied);
+    let final_path = applied[0].proposed_path.as_deref().unwrap().to_string();
+    let tagged = in_memory
+        .tag_entry(&final_path, vec!["review".to_string()])
+        .unwrap();
+    let memory_snapshot = LogicalDriveSnapshot::from_memory(&tagged, &applied[0]);
+
+    insert_postgres_drive_snapshot(&store, &tagged, &applied[0]).await;
+    let postgres_snapshot = postgres_drive_snapshot(&store, &tagged.uri, applied[0].id).await;
+    assert_eq!(postgres_snapshot, memory_snapshot);
+
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "postgres drive replay".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let drive_event = store
+        .append_event(
+            session.id,
+            "drive_put",
+            json!({
+                "uri": tagged.uri,
+                "path": tagged.path,
+                "contentHash": tagged.content_hash,
+                "sourceUri": tagged.source_uri,
+                "resourceRefs": [{
+                    "role": "document",
+                    "uri": tagged.uri,
+                    "kind": "drive_document",
+                    "title": tagged.title,
+                }]
+            }),
+        )
+        .await
+        .unwrap();
+    let replay = store
+        .events_after(session.id, drive_event.seq.checked_sub(1))
+        .await
+        .unwrap();
+    assert!(replay.iter().any(|event| {
+        event.event_type == "drive_put" && event.payload_json["uri"] == json!(tagged.uri)
+    }));
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LogicalDriveSnapshot {
+    path: String,
+    uri: String,
+    project: Option<String>,
+    doc_kind: Option<String>,
+    tags: Vec<String>,
+    content_hash: String,
+    source_uri: Option<String>,
+    proposal_status: String,
+}
+
+impl LogicalDriveSnapshot {
+    fn from_memory(entry: &tm_drive::DriveEntry, proposal: &tm_drive::OrganizerProposal) -> Self {
+        let mut tags = entry.tags.clone();
+        tags.sort();
+        Self {
+            path: entry.path.clone(),
+            uri: entry.uri.clone(),
+            project: entry.project.clone(),
+            doc_kind: entry.doc_kind.clone(),
+            tags,
+            content_hash: entry.content_hash.clone(),
+            source_uri: entry.source_uri.clone(),
+            proposal_status: serde_json::to_value(&proposal.status)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+        }
+    }
+}
+
+async fn insert_postgres_drive_snapshot(
+    store: &PostgresStore,
+    entry: &tm_drive::DriveEntry,
+    proposal: &tm_drive::OrganizerProposal,
+) {
+    let size_bytes = entry.size_bytes as i64;
+    let provenance = serde_json::to_value(&entry.provenance).unwrap();
+    store
+        .client()
+        .execute(
+            "insert into drive_entries (id, path, uri, blob_uri, content_hash, mime, size_bytes, title, doc_kind, project, source_uri, provenance_json, summary, status, created_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+            &[
+                &entry.id,
+                &entry.path,
+                &entry.uri,
+                &entry.blob_uri,
+                &entry.content_hash,
+                &entry.mime,
+                &size_bytes,
+                &entry.title,
+                &entry.doc_kind,
+                &entry.project,
+                &entry.source_uri,
+                &provenance,
+                &entry.summary,
+                &"active",
+                &entry.created_at,
+                &entry.updated_at,
+            ],
+        )
+        .await
+        .unwrap();
+    for (idx, attribute) in entry.attributes.iter().enumerate() {
+        let idx = idx as i32;
+        let evidence = serde_json::to_value(&attribute.evidence).unwrap();
+        store
+            .client()
+            .execute(
+                "insert into drive_attributes (entry_id, idx, key, value, confidence, evidence_json, extractor, source_uri, session_id, event_seq, content_hash)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                &[
+                    &entry.id,
+                    &idx,
+                    &attribute.key,
+                    &attribute.value,
+                    &attribute.confidence,
+                    &evidence,
+                    &attribute.extractor,
+                    &attribute.source_uri,
+                    &attribute.session_id,
+                    &attribute.event_seq,
+                    &attribute.content_hash,
+                ],
+            )
+            .await
+            .unwrap();
+    }
+    for tag in &entry.tags {
+        store
+            .client()
+            .execute(
+                "insert into drive_tags (entry_id, tag) values ($1, $2) on conflict do nothing",
+                &[&entry.id, tag],
+            )
+            .await
+            .unwrap();
+    }
+    let proposed_tags = serde_json::to_value(&proposal.proposed_tags).unwrap();
+    let evidence = serde_json::to_value(&proposal.evidence).unwrap();
+    let replay_metadata = serde_json::to_value(&proposal.replay_metadata).unwrap();
+    let action = serde_json::to_value(&proposal.action)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    let policy_decision = serde_json::to_value(&proposal.policy_decision)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    let status = serde_json::to_value(&proposal.status)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    store
+        .client()
+        .execute(
+            "insert into drive_proposals (id, action, entry_id, source_path, proposed_path, proposed_tags, proposed_doc_kind, proposed_project, evidence_json, confidence, policy_decision, approval_id, status, source_run_id, replay_metadata, created_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+            &[
+                &proposal.id,
+                &action,
+                &entry.id,
+                &proposal.source_path,
+                &proposal.proposed_path,
+                &proposed_tags,
+                &proposal.proposed_doc_kind,
+                &proposal.proposed_project,
+                &evidence,
+                &proposal.confidence,
+                &policy_decision,
+                &proposal.approval_id,
+                &status,
+                &proposal.source_run_id,
+                &replay_metadata,
+                &proposal.created_at,
+                &proposal.updated_at,
+            ],
+        )
+        .await
+        .unwrap();
+}
+
+async fn postgres_drive_snapshot(
+    store: &PostgresStore,
+    uri: &str,
+    proposal_id: Uuid,
+) -> LogicalDriveSnapshot {
+    let row = store
+        .client()
+        .query_one(
+            "select id, path, uri, project, doc_kind, content_hash, source_uri from drive_entries where uri = $1",
+            &[&uri],
+        )
+        .await
+        .unwrap();
+    let entry_id: Uuid = row.get("id");
+    let mut tags = store
+        .client()
+        .query(
+            "select tag from drive_tags where entry_id = $1 order by tag asc",
+            &[&entry_id],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<_, String>("tag"))
+        .collect::<Vec<_>>();
+    tags.sort();
+    let status: String = store
+        .client()
+        .query_one(
+            "select status from drive_proposals where id = $1 and entry_id = $2",
+            &[&proposal_id, &entry_id],
+        )
+        .await
+        .unwrap()
+        .get("status");
+    LogicalDriveSnapshot {
+        path: row.get("path"),
+        uri: row.get("uri"),
+        project: row.get("project"),
+        doc_kind: row.get("doc_kind"),
+        tags,
+        content_hash: row.get("content_hash"),
+        source_uri: row.get("source_uri"),
+        proposal_status: status,
+    }
+}

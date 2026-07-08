@@ -28,6 +28,7 @@ use tm_agents::{
 };
 use tm_artifacts::{ResourceContent, preview};
 use tm_core::DEFAULT_SYSTEM_PROMPT;
+use tm_drive::InMemoryDriveStore;
 use tm_host::{
     CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
     ResourceRegistry,
@@ -108,6 +109,7 @@ pub struct AppState<S, M, C> {
     pub approval_broker: Arc<ApprovalBroker>,
     pub artifact_root: PathBuf,
     pub linked_folders: LinkedFolders,
+    pub drive_store: Option<InMemoryDriveStore>,
     pub actor_roster: Arc<MailboxRegistry>,
     live_events:
         Arc<parking_lot::Mutex<std::collections::BTreeMap<Uuid, broadcast::Sender<SessionEvent>>>>,
@@ -125,6 +127,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             approval_broker: Arc::clone(&self.approval_broker),
             artifact_root: self.artifact_root.clone(),
             linked_folders: self.linked_folders.clone(),
+            drive_store: self.drive_store.clone(),
             actor_roster: Arc::clone(&self.actor_roster),
             live_events: Arc::clone(&self.live_events),
         }
@@ -149,6 +152,7 @@ impl<S, M, C> AppState<S, M, C> {
             approval_broker: Arc::new(ApprovalBroker::default()),
             artifact_root: tm_artifacts::default_root(),
             linked_folders: LinkedFolders::default(),
+            drive_store: None,
             actor_roster: Arc::new(MailboxRegistry::new()),
             live_events: Arc::new(parking_lot::Mutex::new(std::collections::BTreeMap::new())),
         }
@@ -176,6 +180,11 @@ impl<S, M, C> AppState<S, M, C> {
 
     pub fn with_linked_folders(mut self, linked_folders: LinkedFolders) -> Self {
         self.linked_folders = linked_folders;
+        self
+    }
+
+    pub fn with_drive_store(mut self, drive_store: InMemoryDriveStore) -> Self {
+        self.drive_store = Some(drive_store);
         self
     }
 
@@ -379,6 +388,10 @@ where
         .route(
             "/sessions/:id/resources/list",
             get(resources::list_resources::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/drive/feed",
+            get(resources::drive_feed::<S, M, C>),
         )
         .route(
             "/sessions/:id/resources/artifacts",

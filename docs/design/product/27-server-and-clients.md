@@ -156,8 +156,7 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 - **Mobile remote control (P1/P4).** Phone/browser control uses the same server API as every client: SSE
   for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
-  `project://`, `memory://`, `history://`, and P4 `cron://` links. Reserved `drive://` links use the
-  same gateway shape once P5 registers handlers and grants. The phone is only a view and controller;
+  `project://`, `memory://`, `history://`, P4 `cron://`, and configured P5 `drive://` links. The phone is only a view and controller;
   the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
   The P2/P4 memory gateway currently exposes `memory://root`, `memory://user-model`, exact approved
   profile fact / scoped recall record URIs, dream queue/record previews, dream summaries, and skill
@@ -181,13 +180,18 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
 
-The session resource gateway supports resolve/list/preview for the live P0-P4 schemes:
+The session resource gateway supports resolve/list/preview for the live P0-P5 schemes:
 `artifact://`, `workspace://session/...`, `linked://...`, `project://...`, the P2 `memory://`
 surface plus P4 summary/skill-proposal previews (§22.9), the P3 `agent://` / `history://` actor
-resources (§23), and P4 `cron://` job/run views. Reserved `drive://` paths fail closed until P5
-registers handlers and grants. `GET
+resources (§23), P4 `cron://` job/run views, and P5 `drive://` documents/virtual dirs when a drive
+store is configured. `GET
 /sessions/:id/resources/preview` returns a bounded metadata envelope with empty `content`; clients
 resolve full content only on demand.
+
+P5 also exposes a compact read-only drive browser feed at `GET /sessions/:id/drive/feed`: recent
+drive docs, virtual directory roots, pending organizer proposals, and a pending-approvals slot for
+mobile/web views. Full document content still flows through the normal resource gateway, and drive
+writes remain approval/host-call mediated rather than client-authoritative.
 
 Coding execution is a backend choice behind the same API. `TM_OMP_ACP_ENABLED=1` dispatches Serious
 Engineer / Handoff turns to the P0a OMP ACP bridge; otherwise, when a real LLM is configured,
@@ -196,9 +200,12 @@ events normalize into the same `session_events` and SSE event names.
 
 `POST /sessions/:id/promote` turns an ad-hoc session into a project or merges it into an existing one.
 The request selects which session summary, open loops, decisions, `workspace://session` files,
-`artifact://` outputs, and linked-folder references to keep. User-initiated promotion is the approval;
-Miku-initiated promotion emits a `write_proposal` and waits for approval. The response returns the
-created/updated `project://<id>` URI plus every promoted target and its source provenance.
+`artifact://` outputs, and linked-folder references to keep. By default workspace attachments remain
+project pointers; `importResourcesToDrive: true` materializes `workspace://session/...` or
+`project://<id>/workspace/...` files into `drive://projects/<id>/attachments/...` with source
+provenance. User-initiated promotion is the approval; Miku-initiated promotion emits a
+`write_proposal` and waits for approval. The response returns the created/updated `project://<id>` URI
+plus every promoted target and its source provenance.
 
 ## 27.6 Approvals surface
 
@@ -243,7 +250,8 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
   `project://`, `memory://`, and the other registered schemes (§09), browser feeds; optional
   OpenAI-compatible endpoint (§27.5).
 - `store` — in-memory and Postgres-shaped session storage: sessions, messages, append-only events,
-  approvals, project refs, P4.0 dream queue rows, and replay from `Last-Event-ID`.
+  approvals, project refs, compact drive mutation/proposal events with mobile preview payloads, P4.0
+  dream queue rows, and replay from `Last-Event-ID`.
 - `scheduler` (P4) — cron-style scheduler, job/run tables, scheduled-fire claim/reuse, bounded
   missed-run catch-up, bounds (`max_turns`, `cron_mode`, `script_timeout_seconds`), weekly
   ship-ledger trigger, and `cron://` handler (list jobs / a job's

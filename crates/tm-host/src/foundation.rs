@@ -210,6 +210,7 @@ pub struct InvocationCtx {
     pub grants: CapabilityGrants,
     pub approvals: Arc<dyn ApprovalPolicy>,
     pub approval_timeout: Duration,
+    pub events: Arc<dyn HostEventSink>,
     /// Session UUID string; empty when no session context is available.
     pub session_id: String,
     /// Current actor id, when the host call originates inside a sub-agent sandbox.
@@ -248,6 +249,7 @@ impl InvocationCtx {
             grants,
             approvals,
             approval_timeout,
+            events: Arc::new(NoopHostEventSink),
             session_id: String::new(),
             actor_id: None,
         }
@@ -263,6 +265,11 @@ impl InvocationCtx {
         self
     }
 
+    pub fn with_event_sink(mut self, events: Arc<dyn HostEventSink>) -> Self {
+        self.events = events;
+        self
+    }
+
     pub async fn require_approval(&self, action: &str) -> Result<()> {
         match self
             .approvals
@@ -272,6 +279,24 @@ impl InvocationCtx {
             ApprovalDecision::Approved => Ok(()),
             ApprovalDecision::Denied => Err(HostError::ApprovalDenied(action.to_string())),
         }
+    }
+
+    pub async fn emit_event(&self, event_type: &str, payload_json: Value) -> Result<()> {
+        self.events.emit(event_type, payload_json).await
+    }
+}
+
+#[async_trait]
+pub trait HostEventSink: Send + Sync {
+    async fn emit(&self, event_type: &str, payload_json: Value) -> Result<()>;
+}
+
+pub struct NoopHostEventSink;
+
+#[async_trait]
+impl HostEventSink for NoopHostEventSink {
+    async fn emit(&self, _event_type: &str, _payload_json: Value) -> Result<()> {
+        Ok(())
     }
 }
 

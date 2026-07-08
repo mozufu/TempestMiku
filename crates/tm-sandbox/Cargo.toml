@@ -10,6 +10,7 @@ description = "TempestMiku sandbox backends. M0 ships a stub; deno_core lands in
 tm-core.workspace = true
 tm-artifacts.workspace = true
 tm-host.workspace = true
+tm-drive.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 deno_core = "0.405.0"

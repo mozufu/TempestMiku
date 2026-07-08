@@ -3891,6 +3891,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tm-drive"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "hex",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tm-artifacts",
+ "tm-host",
+ "tm-memory",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "tm-e2e"
 version = "0.1.0"
 dependencies = [
@@ -3907,6 +3928,7 @@ dependencies = [
  "tm-agents",
  "tm-artifacts",
  "tm-core",
+ "tm-drive",
  "tm-llm",
  "tm-sandbox",
  "tm-server",
@@ -3984,6 +4006,7 @@ dependencies = [
  "tempfile",
  "tm-artifacts",
  "tm-core",
+ "tm-drive",
  "tm-host",
  "tokio",
 ]
@@ -4011,6 +4034,7 @@ dependencies = [
  "tm-agents",
  "tm-artifacts",
  "tm-core",
+ "tm-drive",
  "tm-host",
  "tm-llm",
  "tm-memory",

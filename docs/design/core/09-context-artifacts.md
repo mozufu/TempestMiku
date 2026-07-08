@@ -83,10 +83,10 @@ outputs out of both the model context and the mobile client render path.
 
 ## 9.3 Resource catalog
 
-Internal schemes (v1). The implemented P0-P4 session gateway currently registers `artifact://`,
-`workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, `history://`, and `cron://`.
-Other catalog entries are reserved designs and must fail closed until their backing subsystem
-registers a handler and grant.
+Internal schemes (v1). The implemented P0-P5 session gateway currently registers `artifact://`,
+`workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, `history://`, `cron://`,
+and `drive://` when the local-first drive store is configured. Other catalog entries are reserved
+designs and must fail closed until their backing subsystem registers a handler and grant.
 
 | scheme | resolves | backing subsystem | registered by |
 |---|---|---|---|
@@ -95,7 +95,7 @@ registers a handler and grant.
 | `history://<id>` | read-only sub-agent transcript | agents §23 | `tm-agents` |
 | `memory://…` | P2/P4 memory gateway: `root`, `user-model`, approved profile facts, scoped recall chunks, dream queue/record previews, summaries, and skill proposal previews (§22.9). Richer `MEMORY.md`, episodic query, and project memory remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
 | `skill://<name>` | **Reserved prompt label only in P2**: composed system prompts may label injected `SKILL.md` sections this way, but `resources.read/list/preview("skill://...")` is not registered and must fail closed until P4/P7 defines the read lifecycle. | skills §22 / §26 | prompt composition now; no resource handler until P4/P7 |
-| `drive://<path>` | reserved P5 user document by canonical path §24 | drive §24 | `tm-drive` later |
+| `drive://<path>` | P5 user document by canonical path, with virtual directory views such as `drive://by-project/<project>` and `drive://by-type/<kind>` §24 | drive §24 | `tm-drive` |
 | `cron://[<id>]` | P4 scheduler job table: list jobs / a job's definition + run history §27.2 | scheduler §27 | `tm-server` session resource gateway |
 | `workspace://session/<path>` | current session sandbox workspace read/list/preview | sandbox workspace §07 / §08 | `tm-sandbox` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
@@ -127,9 +127,13 @@ behind the grant, not a public scheme.
 memory, the session event log, linked-folder registry, artifacts, agents, and promoted workspace
 attachments into stable surfaces such as `project://tempestmiku`,
 `project://tempestmiku/open-loops`, `project://tempestmiku/decisions`,
-`project://tempestmiku/linked-folders`, `project://tempestmiku/workspace`, and
+`project://tempestmiku/memory`, `project://tempestmiku/linked-folders`, `project://tempestmiku/workspace`, and
 `project://tempestmiku/resources`. It links to `memory://`, `linked://`, `artifact://`, and
-`agent://` resources rather than replacing them.
+`agent://` resources rather than replacing them. `project://<id>/linked-folders/<alias>/...`
+delegates to the same linked-folder resource handler as `linked://<alias>/...`, preserving selector
+paging and fail-closed `FsPolicy` checks while presenting the entry inside the project view.
+`project://<id>/memory` exposes the explicit `memory://scopes/project:<id>/chunks` pointer for
+project-scoped recall while `memory://root` remains the active session-scope view.
 
 ### Project promotion
 
@@ -140,14 +144,16 @@ operation is approved.
 | source | promoted target |
 |---|---|
 | `workspace://session/<path>` | `project://<id>/workspace/<path>` |
+| `project://<id>/workspace/<path>` with `importResourcesToDrive` | `drive://projects/<id>/attachments/<path>` |
 | `artifact://<id>` | `project://<id>/artifacts/<id>` |
 | session summary / open loops / decisions | `memory://projects/<id>/…`, surfaced through `project://<id>/…` |
 | `linked://<alias>/` | listed under `project://<id>/linked-folders` |
 
-Promoted workspace files are backed by the project attachment store (content-addressed blobs plus a
-project manifest) until `tm-drive` can optionally materialize them into `drive://`. Each promoted entry
-records `source_uri`, source session, content hash, timestamp, and actor. Existing targets default to
-keep-both; overwrites require explicit approval.
+Promoted workspace files default to pointer records. When promotion sets `importResourcesToDrive`, the
+server reads the session workspace file, stores it in the local drive under
+`projects/<id>/attachments/`, and records the original `project://.../workspace` or
+`workspace://session/...` source URI, source session, timestamp, and actor. Existing drive targets
+default to keep-both; overwrites require explicit approval.
 
 ### Parked — external read-through resources (§15)
 

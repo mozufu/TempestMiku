@@ -208,6 +208,23 @@ async fn linked_path_rejects_traversal_and_symlink_escape() {
 }
 
 #[tokio::test]
+async fn linked_path_vanished_fails_closed_without_host_path() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("vanished.txt");
+    fs::write(&file, "temporary").unwrap();
+    let linked = temp_linked(root.path(), FsMode::Ro);
+    fs::remove_file(&file).unwrap();
+
+    let err = linked
+        .read_resource("linked://tempestmiku/vanished.txt", None)
+        .unwrap_err();
+    assert!(matches!(err, HostError::InvalidPath(_)));
+    let error = err.to_string();
+    assert!(error.contains("tempestmiku:vanished.txt"));
+    assert!(!error.contains(root.path().to_str().unwrap()));
+}
+
+#[tokio::test]
 async fn fs_read_write_ls_find_honor_mode_and_gitignore() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join(".gitignore"), "ignored.txt\n").unwrap();
@@ -242,6 +259,41 @@ async fn fs_read_write_ls_find_honor_mode_and_gitignore() {
     )
     .await;
     assert_eq!(included.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn dynamic_link_narrowing_revokes_write_access() {
+    let root = tempfile::tempdir().unwrap();
+    let linked = temp_linked(root.path(), FsMode::Rw);
+    let write = FsWriteFn::new(linked.clone());
+    call_fn(
+        &write,
+        json!({"path":"tempestmiku:src/lib.rs","data":"pub fn x() {}\n","createParents":true}),
+        &ctx(),
+    )
+    .await;
+
+    linked
+        .insert_policy(FsPolicy {
+            alias: "tempestmiku".to_string(),
+            root: root.path().canonicalize().unwrap(),
+            mode: FsMode::Ro,
+            commands: std::collections::BTreeSet::new(),
+            safe_args: Vec::new(),
+        })
+        .unwrap();
+    let err = write
+        .call(
+            json!({"path":"tempestmiku:src/blocked.rs","data":"nope","createParents":true}),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        HostError::CapabilityDenied("tempestmiku:src/blocked.rs is read-only".to_string())
+    );
+    assert!(!root.path().join("src/blocked.rs").exists());
 }
 
 #[tokio::test]

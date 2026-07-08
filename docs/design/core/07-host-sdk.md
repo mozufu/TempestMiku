@@ -16,10 +16,10 @@ First-pass globals:
   the op layer stays small.
 - `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2),
   including the live `artifact://`, `workspace://session`, `linked://`, `project://`, `memory://`,
-  `agent://`, `history://`, and P4 session-gateway `cron://` handlers when their grants are present.
-  `skill://...` labels are prompt-composition provenance only in the current runtime; `drive://`
-  remains a reserved URI shape; reads for unregistered schemes must fail closed until the owning
-  milestone registers a handler and grants.
+  `agent://`, `history://`, P4 session-gateway `cron://`, and P5 `drive://` handlers when their
+  grants/config are present. `skill://...` labels are prompt-composition provenance only in the
+  current runtime; reads for unregistered schemes must fail closed until the owning milestone
+  registers a handler and grants.
 - `artifacts.put/get/slice/list(...)` — session artifact store; large outputs return `artifact://`
   handles.
 - `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
@@ -27,6 +27,15 @@ First-pass globals:
 - `proc.run(cmd, args, opts?)` — allowlisted argv-vector process execution; never a shell string.
 - `http.get(url)` — current M1/P0 default-deny deterministic allowlist helper; it is not ambient
   network egress, not `fetch()`, and not a production egress policy.
+- `drive.put/get/ls/move/search/tag/link/unlink/organize(...)` — P5 local-first user document space. The
+  namespace is registered only when a drive store is configured; calls are still host functions
+  behind `tools.call`, and `drive://` reads use the same resource registry and paging envelope as
+  artifacts, memory, agents, history, cron, workspace, and linked folders. `drive.put(...,
+  { auto: true })` requires approval under the default conservative policy before the store commits;
+  sandbox callers cannot select the trusted auto-file path. `drive.link(...)` registers an
+  approved folder in the existing `LinkedFolders`/`FsPolicy` registry when that registry is present;
+  relinking the same alias/root can narrow the mode, and `drive.unlink(...)` removes the alias from
+  that shared registry.
 - `agents.run/spawn/parallel/pipeline/msg/send/broadcast/wait/inbox/list/cancel(...)` —
   capability-gated sub-agent orchestration, defined only in sessions holding an `agents.*` grant.
   Ungranted sessions keep `agents` as `undefined`; P3-plus covers active supervision, wall-clock
@@ -89,6 +98,7 @@ declare global {
   const code: CodeNamespace;
   const proc: ProcNamespace;
   const http: HttpNamespace;
+  const drive: DriveNamespace;
 
   var secrets: undefined;
   var memory: undefined;
@@ -562,9 +572,9 @@ approval, and audit boundaries. The root roadmap is canonical (§28), but the SD
 | Namespace / surface | Target milestone | SDK rule |
 |---|---|---|
 | `memory.*` | P2/P4 split | P2 exposes memory reads as `memory://` resources through `resources.read:memory`; the `memory` global remains `undefined`. A future explicit `memory.*` namespace may expose minimum profile/user recall and state-capture calls, while P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
-| `agents.*` | P3/P3+ | P3 exposes `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` with `tm-agents`, actor lifecycle, mailbox/roster, supervision defaults, and `agent://` resource handling. P3-plus adds live bounded-inbox `agents.send`, `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, `agents.cancel`, and `agents.pipeline` with digest-reference stage wiring, plus child approval routing through the live HTTP broker, plain-prose enforcement, current live-wait DAG checks, active restart strategies, wall-clock budgets, subtree cancellation, status lifecycle events, and parent-event provenance links. |
+| `agents.*` | P3/P3+ | P3 exposes `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` with `tm-agents`, actor lifecycle, mailbox/roster, supervision defaults, and `agent://` resource handling. P3-plus adds live bounded-inbox `agents.send`, `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, `agents.cancel`, and `agents.pipeline` with digest-reference stage wiring, plus child approval routing through the live HTTP broker, plain-prose enforcement, current live-wait DAG checks, active restart strategies, wall-clock budgets, per-child `agents.parallel` task budgets, subtree cancellation, status lifecycle events, and parent-event provenance links. |
 | `skills.*` / `skill://` reads | P4/P7 split | P2 may compose bundled skill markdown under `skill://...` prompt labels only. `skills` remains `undefined`, and `resources.read/preview/list("skill://...")` must fail closed until P4/P7 defines approval-gated proposals plus safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
-| `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, and drive organizer flows. |
+| `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, link/unlink policy, and drive organizer flows. |
 | `http.*` hardening | P5 or P7 | Keep current `http.get` as a default-deny deterministic allowlisted helper with no open egress; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |
 | `secrets.use` | P7 | Requires opaque egress-scoped handles from a secret broker; secret values must never materialize in JS heap, artifacts, or model context. |
 | `code.ast` / `code.lsp` | P1.5/P2 tech slice | Native cutover makes this possible, but add only for a concrete structured-edit user; do not block the P2 companion baseline. |

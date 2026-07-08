@@ -1,12 +1,27 @@
-use std::{collections::BTreeMap, fs};
+use std::{collections::BTreeMap, fs, sync::Arc};
 
 use serde_json::Value;
+use tm_artifacts::ArtifactStore;
 use tm_core::{CellBudget, Sandbox, SessionConfig};
-use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
+use tm_drive::InMemoryDriveStore;
+use tm_host::{ApprovalDecision, ApprovalPolicy, FsMode, LinkedFolderConfig, LinkedFolders};
 
 use crate::{DenoSandbox, DenoSandboxOptions, StubSandbox};
 
 fn p0_sandbox(root: &std::path::Path, artifact_root: &std::path::Path) -> DenoSandbox {
+    p0_sandbox_with_approval(
+        root,
+        artifact_root,
+        DenoSandboxOptions::default().approval_policy,
+    )
+}
+
+fn p0_sandbox_with_approval(
+    root: &std::path::Path,
+    artifact_root: &std::path::Path,
+    approval_policy: Arc<dyn ApprovalPolicy>,
+) -> DenoSandbox {
+    let drive_artifacts = ArtifactStore::open(artifact_root, "drive").unwrap();
     DenoSandbox::new(DenoSandboxOptions {
         artifact_root: artifact_root.to_path_buf(),
         linked_folders: Some(
@@ -19,8 +34,23 @@ fn p0_sandbox(root: &std::path::Path, artifact_root: &std::path::Path) -> DenoSa
             }])
             .unwrap(),
         ),
+        drive_store: Some(InMemoryDriveStore::new(drive_artifacts)),
+        approval_policy,
         ..DenoSandboxOptions::default()
     })
+}
+
+struct StaticApproval(ApprovalDecision);
+
+#[async_trait::async_trait]
+impl ApprovalPolicy for StaticApproval {
+    async fn request(
+        &self,
+        _action: &str,
+        _timeout: std::time::Duration,
+    ) -> tm_host::Result<ApprovalDecision> {
+        Ok(self.0)
+    }
 }
 
 const SDK_CATALOG_NAMESPACE_METHODS: &[(&str, &str)] = &[
@@ -42,6 +72,15 @@ const SDK_CATALOG_NAMESPACE_METHODS: &[(&str, &str)] = &[
     ("code.edit", "code"),
     ("proc.run", "proc"),
     ("http.get", "http"),
+    ("drive.put", "drive"),
+    ("drive.get", "drive"),
+    ("drive.ls", "drive"),
+    ("drive.move", "drive"),
+    ("drive.search", "drive"),
+    ("drive.tag", "drive"),
+    ("drive.link", "drive"),
+    ("drive.unlink", "drive"),
+    ("drive.organize", "drive"),
 ];
 
 #[tokio::test]
@@ -236,6 +275,329 @@ async fn deno_spills_large_output_to_artifact() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
+async fn deno_drive_put_read_and_resource_round_trip() {
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("README.md"), "TempestMiku\n").unwrap();
+    let sandbox = p0_sandbox_with_approval(
+        root.path(),
+        artifacts.path(),
+        Arc::new(StaticApproval(ApprovalDecision::Approved)),
+    );
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+
+    let out = session
+        .eval(
+            "const filed = await drive.put('# P5 Note\\nhello', { auto: true, project: 'TempestMiku' });\n\
+             const viaDrive = await drive.get(filed.uri, { selector: '2-2' });\n\
+             const viaResource = await resources.read(filed.uri, '1-1');\n\
+             ({ uri: filed.uri, path: filed.entry.path, viaDrive: viaDrive.content, viaResource: viaResource.content })",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(out.error.is_none(), "drive eval failed: {:?}", out.error);
+    let result = out.result.unwrap();
+    assert_eq!(result["viaDrive"], Value::String("hello".to_string()));
+    assert_eq!(
+        result["viaResource"],
+        Value::String("# P5 Note".to_string())
+    );
+    assert!(
+        result["uri"]
+            .as_str()
+            .is_some_and(|uri| uri.starts_with("drive://"))
+    );
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn deno_drive_link_registers_linked_resource_after_approval() {
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = tempfile::tempdir().unwrap();
+    fs::write(
+        root.path().join("README.md"),
+        "TempestMiku linked project\n",
+    )
+    .unwrap();
+    let sandbox = p0_sandbox_with_approval(
+        root.path(),
+        artifacts.path(),
+        Arc::new(StaticApproval(ApprovalDecision::Approved)),
+    );
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let host_path = serde_json::to_string(root.path().to_str().unwrap()).unwrap();
+    let code = format!(
+        "const plan = await drive.link({host_path}, 'rw', {{ project: 'Approved Project' }});\n\
+         const read = await resources.read('linked://approved-project/README.md');\n\
+         await fs.write('approved-project:tmp.txt', 'allowed before attenuation');\n\
+         const narrowed = await drive.link({host_path}, 'ro', {{ project: 'Approved Project' }});\n\
+         const writeAfterNarrow = await fs.write('approved-project:after.txt', 'blocked').catch(err => ({{ name: err.name }}));\n\
+         const revoked = await drive.unlink('linked://approved-project/');\n\
+         const readAfterRevoke = await resources.read('linked://approved-project/README.md').catch(err => ({{ name: err.name }}));\n\
+         ({{ linkedUri: plan.linkedUri, memoryScope: plan.memoryScope, narrowedMode: narrowed.mode, revokedAt: typeof revoked.revokedAt, content: read.content, writeAfterNarrow, readAfterRevoke }})"
+    );
+
+    let out = session
+        .eval(
+            &code,
+            CellBudget {
+                wall_ms: 30_000,
+                output_bytes: 50_000,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        out.error.is_none(),
+        "drive link eval failed: {:?}",
+        out.error
+    );
+    let result = out.result.unwrap();
+    assert_eq!(
+        result["linkedUri"],
+        Value::String("linked://approved-project/".to_string())
+    );
+    assert_eq!(
+        result["memoryScope"],
+        Value::String("project:approved-project".to_string())
+    );
+    assert_eq!(
+        result["content"],
+        Value::String("TempestMiku linked project\n".to_string())
+    );
+    assert_eq!(result["narrowedMode"], Value::String("ro".to_string()));
+    assert_eq!(result["revokedAt"], Value::String("string".to_string()));
+    assert_eq!(
+        result["writeAfterNarrow"]["name"],
+        Value::String("CapabilityDeniedError".to_string())
+    );
+    assert_eq!(
+        result["readAfterRevoke"]["name"],
+        Value::String("InvalidPathError".to_string())
+    );
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn deno_research_drive_summarizes_bounded_local_corpus() {
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("README.md"), "TempestMiku\n").unwrap();
+    let sandbox = p0_sandbox(root.path(), artifacts.path());
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+
+    let out = session
+        .eval(
+            "await drive.put('# Approval Notes\\nManual approval gates drive writes.\\nExtra private body that should stay out of corpus.', { project: 'TempestMiku', suggestedPath: 'projects/tempestmiku/notes/approval.md' });\n\
+             await drive.put('# Approval Checklist\\nUse bounded citations for every local drive digest.', { project: 'TempestMiku', suggestedPath: 'projects/tempestmiku/notes/checklist.md' });\n\
+             await drive.put('# Other Notes\\nUnrelated project material.', { project: 'Other', suggestedPath: 'projects/other/notes/other.md' });\n\
+             const result = await research.drive('approval', { project: 'TempestMiku', maxDocs: 2, maxSnippets: 1, maxWorkers: 0, maxBytesPerDoc: 80, maxDigestBytes: 80 });\n\
+             let seenTasks = [];\n\
+             globalThis.agents = { parallel: async (tasks) => { seenTasks = tasks; return tasks.map((task, index) => ({ actorId: `Scripted-${index}`, summary: `scripted ${index}: ${task.task.includes('Approval')}`, artifactUri: `artifact://${index}`, historyUri: `history://Scripted-${index}` })); } };\n\
+             const agentResult = await research.drive('approval', { project: 'TempestMiku', maxDocs: 2, maxSnippets: 2, maxWorkers: 1, maxBytesPerDoc: 80, maxDigestBytes: 80, workerTimeoutMs: 250, totalTimeoutMs: 200 });\n\
+             ({ corpus: result.corpus.length, digests: result.digests.length, citations: result.citations.length, answer: result.answer, leakedContent: Object.prototype.hasOwnProperty.call(result.corpus[0], 'content'), uri: result.corpus[0].uri, sourceKind: result.corpus[0].sourceKind, citationKind: result.citations[0].sourceKind, hash: result.corpus[0].contentHash, budget: result.budget, workerFailures: result.workerFailures.length, agentDigests: agentResult.digests.length, agentDocs: agentResult.budget.agentDocs, agentDocsCompleted: agentResult.budget.agentDocsCompleted, agentFailures: agentResult.workerFailures.length, firstActor: agentResult.digests[0].actorId, secondActor: agentResult.digests[1].actorId, firstHistory: agentResult.digests[0].historyUri, agentCitationKind: agentResult.citations[0].sourceKind, agentWorkerTimeout: agentResult.budget.workerTimeoutMs, agentTotalTimeout: agentResult.budget.totalTimeoutMs, childTimeout: seenTasks[0]?.timeoutMs, childWallMs: seenTasks[0]?.budget?.wallMs })",
+            CellBudget {
+                wall_ms: 30_000,
+                output_bytes: 50_000,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(out.error.is_none(), "research eval failed: {:?}", out.error);
+    let result = out.result.unwrap();
+    assert_eq!(result["corpus"], Value::Number(1.into()));
+    assert_eq!(result["digests"], Value::Number(1.into()));
+    assert_eq!(result["citations"], Value::Number(1.into()));
+    assert_eq!(result["leakedContent"], Value::Bool(false));
+    assert!(result["answer"].as_str().unwrap().contains("drive://"));
+    assert!(result["uri"].as_str().unwrap().contains("approval.md"));
+    assert_eq!(result["sourceKind"], Value::String("drive".to_string()));
+    assert_eq!(result["citationKind"], Value::String("drive".to_string()));
+    assert!(!result["hash"].as_str().unwrap().is_empty());
+    assert_eq!(result["budget"]["maxDocs"], Value::Number(2.into()));
+    assert_eq!(result["budget"]["maxSnippets"], Value::Number(1.into()));
+    assert_eq!(result["budget"]["maxWorkers"], Value::Number(0.into()));
+    assert_eq!(result["budget"]["maxBytesPerDoc"], Value::Number(80.into()));
+    assert_eq!(result["budget"]["maxDigestBytes"], Value::Number(80.into()));
+    assert_eq!(result["budget"]["selectedDocs"], Value::Number(1.into()));
+    assert_eq!(result["budget"]["agentDocs"], Value::Number(0.into()));
+    assert_eq!(result["budget"]["workerFailures"], Value::Number(0.into()));
+    assert_eq!(result["workerFailures"], Value::Number(0.into()));
+    assert_eq!(result["agentDigests"], Value::Number(2.into()));
+    assert_eq!(result["agentDocs"], Value::Number(1.into()));
+    assert_eq!(result["agentDocsCompleted"], Value::Number(1.into()));
+    assert_eq!(result["agentFailures"], Value::Number(0.into()));
+    assert_eq!(result["agentWorkerTimeout"], Value::Number(200.into()));
+    assert_eq!(result["agentTotalTimeout"], Value::Number(200.into()));
+    assert_eq!(result["childTimeout"], Value::Number(200.into()));
+    assert_eq!(result["childWallMs"], Value::Number(200.into()));
+    assert_eq!(
+        result["firstActor"],
+        Value::String("Scripted-0".to_string())
+    );
+    assert_eq!(result["secondActor"], Value::Null);
+    assert_eq!(
+        result["firstHistory"],
+        Value::String("history://Scripted-0".to_string())
+    );
+    assert_eq!(
+        result["agentCitationKind"],
+        Value::String("drive".to_string())
+    );
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn deno_research_drive_isolates_child_failure_and_cancellation() {
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("README.md"), "TempestMiku\n").unwrap();
+    let sandbox = p0_sandbox(root.path(), artifacts.path());
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+
+    let out = session
+        .eval(
+            "await drive.put('# Approval Notes\\nManual approval gates drive writes.', { project: 'TempestMiku', suggestedPath: 'projects/tempestmiku/notes/approval.md' });\n\
+             await drive.put('# Approval Checklist\\nUse bounded citations for every local drive digest.', { project: 'TempestMiku', suggestedPath: 'projects/tempestmiku/notes/checklist.md' });\n\
+             const before = (await drive.ls('projects/tempestmiku/notes', { recursive: true })).map((entry) => entry.uri).sort().join('|');\n\
+             globalThis.agents = { parallel: async () => { const err = new Error('actor CancelledOne failed: actor cancelled'); err.name = 'HostCallError'; throw err; } };\n\
+             const cancelled = await research.drive('approval', { project: 'TempestMiku', maxDocs: 2, maxSnippets: 2, maxWorkers: 2, maxBytesPerDoc: 80, maxDigestBytes: 80 });\n\
+             globalThis.agents = { parallel: async (tasks) => tasks.map((task, index) => index === 0 ? { status: 'failed', actorId: 'FailedOne', reason: 'model timeout' } : { actorId: 'OkTwo', summary: `ok ${index}`, artifactUri: null, historyUri: 'history://OkTwo' }) };\n\
+             const partial = await research.drive('approval', { project: 'TempestMiku', maxDocs: 2, maxSnippets: 2, maxWorkers: 2, maxBytesPerDoc: 80, maxDigestBytes: 80 });\n\
+             const after = (await drive.ls('projects/tempestmiku/notes', { recursive: true })).map((entry) => entry.uri).sort().join('|');\n\
+             ({ unchanged: before === after, cancelledDigests: cancelled.digests.length, cancelledFailures: cancelled.workerFailures.length, cancelledKind: cancelled.workerFailures[0].kind, cancelledActor: cancelled.workerFailures[0].actorId, cancelledPhase: cancelled.workerFailures[0].phase, cancelledCompleted: cancelled.budget.agentDocsCompleted, cancelledBudgetFailures: cancelled.budget.workerFailures, cancelledAnswer: cancelled.answer, partialDigests: partial.digests.length, partialFailures: partial.workerFailures.length, partialKind: partial.workerFailures[0].kind, partialActor: partial.workerFailures[0].actorId, partialUriPresent: partial.workerFailures[0].uri != null, partialOkActor: partial.digests.some((digest) => digest.actorId === 'OkTwo'), partialCompleted: partial.budget.agentDocsCompleted, partialBudgetFailures: partial.budget.workerFailures })",
+            CellBudget {
+                wall_ms: 30_000,
+                output_bytes: 50_000,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        out.error.is_none(),
+        "research failure isolation eval failed: {:?}",
+        out.error
+    );
+    let result = out.result.unwrap();
+    assert_eq!(result["unchanged"], Value::Bool(true));
+    assert_eq!(result["cancelledDigests"], Value::Number(2.into()));
+    assert_eq!(result["cancelledFailures"], Value::Number(1.into()));
+    assert_eq!(
+        result["cancelledKind"],
+        Value::String("cancelled".to_string())
+    );
+    assert_eq!(
+        result["cancelledActor"],
+        Value::String("CancelledOne".to_string())
+    );
+    assert_eq!(
+        result["cancelledPhase"],
+        Value::String("agents.parallel".to_string())
+    );
+    assert_eq!(result["cancelledCompleted"], Value::Number(0.into()));
+    assert_eq!(result["cancelledBudgetFailures"], Value::Number(1.into()));
+    assert!(
+        result["cancelledAnswer"]
+            .as_str()
+            .unwrap()
+            .contains("drive://")
+    );
+    assert_eq!(result["partialDigests"], Value::Number(2.into()));
+    assert_eq!(result["partialFailures"], Value::Number(1.into()));
+    assert_eq!(result["partialKind"], Value::String("timeout".to_string()));
+    assert_eq!(
+        result["partialActor"],
+        Value::String("FailedOne".to_string())
+    );
+    assert_eq!(result["partialUriPresent"], Value::Bool(true));
+    assert_eq!(result["partialOkActor"], Value::Bool(true));
+    assert_eq!(result["partialCompleted"], Value::Number(1.into()));
+    assert_eq!(result["partialBudgetFailures"], Value::Number(1.into()));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn deno_drive_fail_closed_denial_paths() {
+    let no_drive = DenoSandbox::default();
+    let mut no_drive_session = no_drive.open(SessionConfig::default()).await.unwrap();
+    let missing = no_drive_session
+        .eval(
+            "await drive.put('x').catch(err => ({ name: err.name, capability: err.capability }))",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(
+        missing["name"],
+        Value::String("CapabilityDeniedError".to_string())
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("README.md"), "TempestMiku\n").unwrap();
+    let sandbox = p0_sandbox(root.path(), artifacts.path());
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let out = session
+        .eval(
+            "const unknown = await tools.call('drive.nope', {}).catch(err => ({ name: err.name, capability: err.capability }));\n\
+             const rawPath = await drive.put('x', { suggestedPath: '/Users/brian/secret.txt' }).catch(err => ({ name: err.name, path: err.path }));\n\
+             const oversized = await drive.put('x'.repeat(5 * 1024 * 1024 + 1)).catch(err => ({ name: err.name }));\n\
+             const autoTimeout = await drive.put('blocked', { auto: true, suggestedPath: 'notes/blocked.txt' }).catch(err => ({ name: err.name, retryable: err.retryable }));\n\
+             const missingAfterTimeout = await drive.get('notes/blocked.txt').catch(err => ({ name: err.name }));\n\
+             const filed = await drive.put('hello', { suggestedPath: 'notes/a.txt' });\n\
+             const timeout = await drive.move(filed.uri, 'notes/b.txt').catch(err => ({ name: err.name, retryable: err.retryable }));\n\
+             ({ unknown, rawPath, oversized, autoTimeout, missingAfterTimeout, timeout })",
+            CellBudget {
+                wall_ms: 30_000,
+                output_bytes: 50_000,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        out.error.is_none(),
+        "drive denial eval failed: {:?}",
+        out.error
+    );
+    let result = out.result.unwrap();
+    assert_eq!(
+        result["unknown"]["name"],
+        Value::String("CapabilityDeniedError".to_string())
+    );
+    assert_eq!(
+        result["rawPath"]["name"],
+        Value::String("InvalidPathError".to_string())
+    );
+    assert_eq!(
+        result["oversized"]["name"],
+        Value::String("InvalidArgsError".to_string())
+    );
+    assert_eq!(
+        result["autoTimeout"]["name"],
+        Value::String("ApprovalTimeoutError".to_string())
+    );
+    assert_eq!(result["autoTimeout"]["retryable"], Value::Bool(true));
+    assert_eq!(
+        result["missingAfterTimeout"]["name"],
+        Value::String("NotFoundError".to_string())
+    );
+    assert_eq!(
+        result["timeout"]["name"],
+        Value::String("ApprovalTimeoutError".to_string())
+    );
+    assert_eq!(result["timeout"]["retryable"], Value::Bool(true));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
 async fn deno_tools_docs_match_sdk_declarations_for_exposed_namespace_methods() {
     let sdk_types = include_str!("../../../docs/sdk/tm-runtime.d.ts");
     let root = tempfile::tempdir().unwrap();
@@ -254,7 +616,7 @@ async fn deno_tools_docs_match_sdk_declarations_for_exposed_namespace_methods() 
                 r#"
                 (async () => {{
                 const expected = {js_expected}
-                const namespaces = ["tools", "resources", "artifacts", "fs", "code", "proc", "http"]
+                const namespaces = ["tools", "resources", "artifacts", "fs", "code", "proc", "http", "drive"]
                 const runtimeMethods = namespaces.flatMap((namespace) =>
                   Object.keys(globalThis[namespace] ?? {{}}).map((method) => `${{namespace}}.${{method}}`)
                 ).sort()
@@ -281,7 +643,10 @@ async fn deno_tools_docs_match_sdk_declarations_for_exposed_namespace_methods() 
                 }})()
                 "#
             ),
-            CellBudget::default(),
+            CellBudget {
+                output_bytes: 50_000,
+                ..CellBudget::default()
+            },
         )
         .await
         .unwrap();
@@ -289,7 +654,7 @@ async fn deno_tools_docs_match_sdk_declarations_for_exposed_namespace_methods() 
     let result = out.result.unwrap();
     let runtime_methods: Vec<String> = result["runtimeMethods"]
         .as_array()
-        .unwrap()
+        .unwrap_or_else(|| panic!("runtimeMethods missing from parity result: {result:?}"))
         .iter()
         .map(|value| value.as_str().unwrap().to_string())
         .collect();

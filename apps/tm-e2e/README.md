@@ -136,6 +136,16 @@ checks a terminal cancelled `agent://` record, and reconnects with
 `Last-Event-ID` to prove replay includes approval, output-link, completion, and
 cancellation events.
 
+## Drive Smoke
+
+`tm_e2e::run_drive_smoke` is the P5 public-API smoke for the local-first drive
+and research workspace. It starts a Serious Engineer session, sends a scripted
+native-Deno turn that files a dropped `drop://` document through `drive.put`,
+watches the shared approval appear in transcript `pendingEvents`, approves it
+through the normal approval route, then verifies `drive_put` replay, `drive://`
+preview/resolve, the compact drive feed, `drive.search`, `research.drive`, and
+`Last-Event-ID` replay.
+
 ## Native Actor Coordination
 
 `native_deno_actor_coordination_public_api_covers_p3_plus_route` is the
@@ -177,6 +187,7 @@ metadata, SSE streaming and replay, mode routing, memory approval/persistence,
 project promotion, and resource reads. Actor smoke verifies the public P3+
 attach/approve/resource/replay path, while native actor coordination verifies
 the real Deno SDK route for P3+ mailbox coordination and child resources. The
-remaining native Deno engineering path stays covered by focused server tests for
-`fs.*`, `code.*`, `proc.*`, child actor approval routing, and approval
+drive smoke verifies the P5 drop/approve/file/preview/search/research/replay
+path. The remaining native Deno engineering path stays covered by focused server
+tests for `fs.*`, `code.*`, `proc.*`, child actor approval routing, and approval
 approve/deny/timeout behavior.

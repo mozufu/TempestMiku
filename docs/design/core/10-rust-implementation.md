@@ -12,6 +12,8 @@ tempest-miku/
 │   ├── tm-artifacts/   # content-addressed artifact store
 │   ├── tm-modes/       # runtime mode catalog, default scopes, voice caps, mode/skill asset status
 │   ├── tm-agents/      # actor lifecycle, mailbox, agents.* host fns, agent:// + history:// resources
+│   ├── tm-memory/      # P4 recall, summaries, dream queue/worker, redaction helpers
+│   ├── tm-drive/       # P5 local-first drive metadata, transducers, vdirs, resources, host fns
 │   └── tm-server/      # axum sessions, SSE replay, approvals, project views, coding backends
 └── apps/
     ├── tm-cli/         # binary: wiring, config, REPL/chat entrypoint
@@ -19,9 +21,8 @@ tempest-miku/
 ```
 
 Client scaffolds live under `clients/` (`miku_flutter` for Web/PWA now and Android later, plus web
-smoke coverage). Planned product/support crates remain `tm-memory`, `tm-drive`, `tm-mcp`, and
-`tm-trace`; they should be extracted only when the settled server/resource surface has two concrete
-users.
+smoke coverage). Planned product/support crates after P5 remain `tm-mcp` and `tm-trace`; they should
+be extracted only when the settled server/resource surface has two concrete users.
 
 ### 10.2 Key types & traits
 

@@ -19,6 +19,7 @@ tm-modes = { path = "crates/tm-modes" }
 tm-server = { path = "crates/tm-server" }
 tm-agents = { path = "crates/tm-agents" }
 tm-memory = { path = "crates/tm-memory" }
+tm-drive = { path = "crates/tm-drive" }
 
 # async + runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time", "process"] }

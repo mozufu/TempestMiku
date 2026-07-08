@@ -32,6 +32,8 @@ declare global {
   const code: CodeNamespace;
   const proc: ProcNamespace;
   const http: HttpNamespace;
+  const drive: DriveNamespace;
+  const research: ResearchNamespace;
 
   var secrets: undefined;
   var memory: undefined;
@@ -59,6 +61,7 @@ interface JsonArray extends Array<JsonValue> {}
 type MimeType = string;
 type CapabilityName = string;
 type ArtifactUri = `artifact://${string}`;
+type BlobUri = `blob:sha256:${string}`;
 type SkillPromptLabel = `skill://${string}`;
 
 type MemoryResourceUri =
@@ -222,7 +225,8 @@ interface GrantDoc {
     | "secret"
     | "memory"
     | "artifact"
-    | "agents";
+    | "agents"
+    | "drive";
   description: string;
 }
 
@@ -232,14 +236,14 @@ interface ResourcesNamespace {
    *
    * Scheme-dispatched resource read. Current registered schemes include
    * artifact://, linked://, workspace://session, project://, the P2/P4
-   * memory:// surface, the P3 agent:// / history:// handlers, and P4 cron://
-   * job/run previews. Each scheme has its own grant such as
+   * memory:// surface, the P3 agent:// / history:// handlers, P4 cron://
+   * job/run previews, and P5 drive:// documents when configured. Each scheme has its own grant such as
    * resources.read:artifact, resources.read:linked, resources.read:memory,
-   * resources.read:agent, resources.read:history, or resources.read:cron;
+   * resources.read:agent, resources.read:history, resources.read:cron,
+   * or resources.read:drive;
    * missing grants and unknown schemes fail closed.
-   * skill://... is prompt-composition-only for now; drive:// and cron:// are
-   * reserved URI shapes. Reads for unregistered schemes must fail closed until
-   * their owning milestones wire handlers and grants.
+   * skill://... is prompt-composition-only for now. Reads for unregistered
+   * schemes must fail closed until their owning milestones wire handlers and grants.
    */
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
   /** resources.preview(uri: ResourceUri): Promise<ResourceContent> */
@@ -283,6 +287,8 @@ type ResourceKind =
   | "memory_profile_fact"
   | "memory_recall_chunk"
   | "project_view"
+  | "drive_document"
+  | "drive_binary"
   | "actor"
   | "history"
   | (string & {});
@@ -503,6 +509,336 @@ interface HttpNamespace {
   get(url: string): Promise<string>;
 }
 
+// ─── P5 Drive ────────────────────────────────────────────────────────────────
+
+interface DriveNamespace {
+  /** drive.put(content: DriveContent, opts?: DrivePutOptions): Promise<DrivePutResult> */
+  put(content: DriveContent, opts?: DrivePutOptions): Promise<DrivePutResult>;
+  /** drive.get(pathOrUri: string, opts?: { selector?: ResourceSelector }): Promise<ResourceContent> */
+  get(pathOrUri: string, opts?: { selector?: ResourceSelector }): Promise<ResourceContent>;
+  /** drive.ls(pathOrQuery?: string, opts?: DriveListOptions): Promise<DriveEntry[]> */
+  ls(pathOrQuery?: string, opts?: DriveListOptions): Promise<DriveEntry[]>;
+  /** drive.move(from: string, to: string, opts?: DriveMoveOptions): Promise<DriveEntry> */
+  move(from: string, to: string, opts?: DriveMoveOptions): Promise<DriveEntry>;
+  /** drive.search(query?: string, opts?: DriveSearchOptions): Promise<DriveSearchResult[]> */
+  search(query?: string, opts?: DriveSearchOptions): Promise<DriveSearchResult[]>;
+  /** drive.tag(path: string, tags: string[]): Promise<DriveEntry> */
+  tag(path: string, tags: string[]): Promise<DriveEntry>;
+  /** drive.link(hostPath: string, mode?: 'ro' | 'rw', opts?: { project?: string }): Promise<DriveLinkPlan> */
+  link(hostPath: string, mode?: 'ro' | 'rw', opts?: { project?: string }): Promise<DriveLinkPlan>;
+  /** drive.unlink(aliasOrUri: string): Promise<DriveUnlinkResult> */
+  unlink(aliasOrUri: string): Promise<DriveUnlinkResult>;
+  /** drive.organize(opts?: DriveOrganizeOptions): Promise<OrganizerProposal[]> */
+  organize(opts?: DriveOrganizeOptions): Promise<OrganizerProposal[]>;
+}
+
+type DriveJsonContent = JsonPrimitive | JsonArray | ({ [key: string]: JsonValue } & { uri?: never });
+type DriveContent = string | DriveJsonContent | { uri: BlobUri } | { text: string };
+type DriveUri = `drive://${string}`;
+type DriveEntryStatus = "active" | "archived" | "deleted";
+type DriveCollisionStrategy = "keep-both" | "reject" | "overwrite";
+/** "propose" is the conservative default; trusted host policy owns auto filing. */
+type DriveApprovalMode = "propose" | "requireApproval";
+type DriveDedupeMode = "contentHash" | "off";
+type DriveAutomationTier = "conservative";
+
+interface DriveModelExtractionOptions {
+  /** Disabled by default; when enabled, emits a redacted bounded request for a configured model role. */
+  enabled?: boolean;
+  /** Defaults to "document_extractor". */
+  role?: string;
+  /** Defaults to docKind/entities/dates/amounts/summary/embedding. */
+  fields?: string[];
+  /** Bounded by the host; defaults to 2000 bytes. */
+  maxPreviewBytes?: number;
+}
+
+interface DrivePutOptions {
+  /** When true, the host policy asks before committing at the sandbox boundary. */
+  auto?: boolean;
+  suggestedPath?: string;
+  project?: string;
+  docKind?: string;
+  tags?: string[];
+  sourceUri?: string;
+  mime?: MimeType;
+  title?: string;
+  /** "requireApproval" always asks; auto filing is trusted host policy, not a sandbox option. */
+  approvalMode?: DriveApprovalMode;
+  dedupe?: DriveDedupeMode;
+  collision?: DriveCollisionStrategy;
+  overwrite?: boolean;
+  conventions?: DriveConventions;
+  modelExtraction?: DriveModelExtractionOptions;
+}
+
+interface DriveConventions {
+  /** Template tokens: {project}, {docKind}, {title}, {filename}. */
+  project?: string;
+  /** Template tokens: {year}, {docKind}, {title}, {filename}. */
+  finance?: string;
+  /** Template tokens: {date}, {docKind}, {title}, {filename}. */
+  inbox?: string;
+}
+
+interface DriveListOptions {
+  recursive?: boolean;
+  limit?: number;
+  includeArchived?: boolean;
+}
+
+interface DriveMoveOptions {
+  collision?: DriveCollisionStrategy;
+  overwrite?: boolean;
+}
+
+interface DriveSearchOptions {
+  project?: string;
+  docKind?: string;
+  tags?: string[];
+  limit?: number;
+  includeArchived?: boolean;
+  since?: string;
+  until?: string;
+  returnSnippets?: boolean;
+}
+
+interface DriveOrganizeOptions {
+  /** Apply all pending proposals after approval; omitted means propose or config-gated auto-apply only. */
+  apply?: boolean;
+  /** Conservative by default; only configured higher-tier rules may auto-apply low-risk proposals. */
+  config?: DriveOrganizerConfig;
+}
+
+interface DriveOrganizerConfig {
+  /** The sandbox host API accepts conservative proposal generation only. */
+  tier?: DriveAutomationTier;
+  /** Auto-apply rules are trusted server/background policy only. */
+  autoApply?: never;
+}
+
+interface DriveOrganizerAutoApplyRule {
+  /** Explicit actions are required; empty means no proposal matches. */
+  actions?: OrganizerActionKind[];
+  docKinds?: string[];
+  projects?: string[];
+  /** Defaults to 0.8. */
+  minConfidence?: number;
+}
+
+interface DriveAmount {
+  raw: string;
+  value?: number;
+  currency?: string;
+}
+
+interface DriveEvidence {
+  snippet: string;
+  selector?: ResourceSelector;
+}
+
+interface DriveAttribute {
+  key: string;
+  value: string;
+  confidence: number;
+  evidence?: DriveEvidence;
+  extractor: string;
+  sourceUri?: ResourceUri;
+  sessionId?: string;
+  eventSeq?: number;
+  contentHash?: string;
+}
+
+interface DriveProvenance {
+  sourceUri?: string;
+  sessionId?: string;
+  eventSeq?: number;
+  actorId?: string;
+  sourceRunId?: string;
+  contentHash: string;
+  extractor: string;
+  createdAt: string;
+}
+
+interface DriveEntry {
+  id: string;
+  path: string;
+  uri: DriveUri;
+  blobUri: string;
+  contentHash: string;
+  mime: MimeType;
+  sizeBytes: number;
+  title?: string;
+  docKind?: string;
+  project?: string;
+  entities: string[];
+  dates: string[];
+  amounts: DriveAmount[];
+  tags: string[];
+  embedding?: string;
+  sourceUri?: string;
+  provenance: DriveProvenance[];
+  createdAt: string;
+  updatedAt: string;
+  status: DriveEntryStatus;
+  attributes: DriveAttribute[];
+  summary?: string;
+}
+
+interface DrivePutResult {
+  entry: DriveEntry;
+  uri: DriveUri;
+  proposedPath: string;
+  filed: boolean;
+  proposal?: OrganizerProposal;
+}
+
+interface DriveSearchResult {
+  uri: DriveUri;
+  path: string;
+  title?: string;
+  docKind?: string;
+  project?: string;
+  tags: string[];
+  contentHash: string;
+  score: number;
+  snippet?: string;
+  selector?: ResourceSelector;
+}
+
+interface DriveLinkPlan {
+  alias: string;
+  canonicalRoot: string;
+  mode: "ro" | "rw";
+  linkedUri: `linked://${string}/`;
+  memoryScope: string;
+  project: string;
+  requiresApproval: boolean;
+}
+
+interface DriveUnlinkResult {
+  alias: string;
+  canonicalRoot: string;
+  linkedUri: `linked://${string}/`;
+  memoryScope: string;
+  revokedAt: string;
+}
+
+type OrganizerActionKind = "move" | "tag" | "dedupe" | "archive" | "set_doc_kind" | "set_project";
+type ProposalStatus = "pending" | "approved" | "denied" | "applied" | "stale" | "failed";
+type PolicyDecision = "auto_apply" | "approval_required" | "denied" | "noop";
+
+interface OrganizerProposal {
+  id: string;
+  action: OrganizerActionKind;
+  entryId: string;
+  sourcePath: string;
+  proposedPath?: string;
+  proposedTags: string[];
+  proposedDocKind?: string;
+  proposedProject?: string;
+  evidence: DriveEvidence[];
+  confidence: number;
+  policyDecision: PolicyDecision;
+  approvalId?: string;
+  status: ProposalStatus;
+  sourceRunId: string;
+  replayMetadata: JsonObject;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── P5 Local Research Helpers ──────────────────────────────────────────────
+
+interface ResearchNamespace {
+  /**
+   * Compose drive.search + paged resources.read + optional agents.parallel.
+   * Returns bounded digests and resource refs; full document content is not
+   * included in the returned corpus.
+   */
+  drive(query?: string, opts?: DriveResearchOptions): Promise<DriveResearchResult>;
+}
+
+interface DriveResearchOptions {
+  project?: string;
+  docKind?: string;
+  tags?: string[];
+  maxDocs?: number;
+  limit?: number;
+  maxSnippets?: number;
+  maxBytesPerDoc?: number;
+  maxDigestBytes?: number;
+  maxWorkers?: number;
+  workerTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  selector?: ResourceSelector;
+  useAgents?: boolean;
+  role?: string;
+}
+
+interface DriveResearchCorpusRef {
+  uri: DriveUri;
+  sourceKind: "drive" | "external";
+  selector: ResourceSelector;
+  contentHash: string;
+  title: string;
+  snippet: string;
+  sizeBytes: number;
+}
+
+interface DriveResearchCitation {
+  uri: DriveUri;
+  sourceKind: "drive" | "external";
+  selector: ResourceSelector;
+  contentHash: string;
+}
+
+interface DriveResearchDigest {
+  uri: DriveUri;
+  selector: ResourceSelector;
+  contentHash: string;
+  summary: string;
+  actorId: string | null;
+  artifactUri: ArtifactUri | null;
+  historyUri: string | null;
+  citations: DriveResearchCitation[];
+}
+
+interface DriveResearchFailure {
+  phase: "agents.parallel" | "worker";
+  index: number | null;
+  uri: DriveUri | null;
+  selector: ResourceSelector | null;
+  contentHash: string | null;
+  actorId: string | null;
+  kind: "failed" | "cancelled" | "timeout";
+  reason: string;
+}
+
+interface DriveResearchResult {
+  query: string;
+  corpus: DriveResearchCorpusRef[];
+  digests: DriveResearchDigest[];
+  citations: DriveResearchCitation[];
+  workerFailures: DriveResearchFailure[];
+  answer: string;
+  budget: DriveResearchBudget;
+}
+
+interface DriveResearchBudget {
+  maxDocs: number;
+  maxSnippets: number;
+  maxBytesPerDoc: number;
+  maxDigestBytes: number;
+  maxWorkers: number;
+  workerTimeoutMs: number;
+  totalTimeoutMs: number;
+  selectedDocs: number;
+  agentDocs: number;
+  agentDocsCompleted: number;
+  workerFailures: number;
+}
+
 // ─── P3 Agents ───────────────────────────────────────────────────────────────
 
 /**
@@ -664,6 +1000,17 @@ interface AgentTask {
   role: string;
   /** Plain-prose task description. */
   task: string;
+  /** Optional wall-clock timeout for this child actor in milliseconds. */
+  timeoutMs?: number;
+  /** Optional explicit child actor budget. */
+  budget?: AgentTaskBudget;
+}
+
+interface AgentTaskBudget {
+  /** Wall-clock limit for this child actor in milliseconds. */
+  wallMs?: number;
+  /** Maximum spawn depth allowed from this child actor. */
+  maxDepth?: number;
 }
 
 /** Stage descriptor passed to agents.pipeline. */

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use tm_core::{Agent, AgentConfig, EventSink, LlmClient};
 use tm_host::{
     ApprovalDecision as HostApprovalDecision, ApprovalPolicy, DefaultDenyApprovalPolicy, HostError,
+    HostEventSink,
 };
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use tokio::sync::mpsc;
@@ -125,6 +126,7 @@ async fn run_native_turn(
             Arc::clone(&sink),
         )),
     };
+    options.host_event_sink = Arc::new(CodingHostEventSink::new(Arc::clone(&sink)));
     cfg.system_prompt = turn.system_prompt.clone();
 
     let sandbox = Arc::new(DenoSandbox::new(options));
@@ -144,6 +146,27 @@ async fn run_native_turn(
         final_text: result?,
         transcript_artifact: None,
     })
+}
+
+struct CodingHostEventSink {
+    sink: Arc<dyn CodingEventSink>,
+}
+
+impl CodingHostEventSink {
+    fn new(sink: Arc<dyn CodingEventSink>) -> Self {
+        Self { sink }
+    }
+}
+
+#[async_trait]
+impl HostEventSink for CodingHostEventSink {
+    async fn emit(&self, event_type: &str, payload_json: Value) -> tm_host::Result<()> {
+        self.sink
+            .emit(event_type, payload_json)
+            .await
+            .map(|_| ())
+            .map_err(|err| HostError::HostCall(err.to_string()))
+    }
 }
 
 pub struct HttpApprovalPolicy {

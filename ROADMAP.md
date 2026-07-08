@@ -29,7 +29,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **P3 — handoff + orchestration** ✓ | P3 MVP `agents.run/spawn/parallel/msg` (§23): actor sessions + message passing + supervision; Handoff mode + brief template; actor lifecycle events in SSE stream | 5 | M2 | ✓ fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ crashing sub-agent isolated + `actor_failed` in SSE; ✓ handoff matches `oh-my-pi-handoff` |
 | **P3+ — live actor mailbox** ✓ | Live MPSC resident delivery (`agents.send/wait/inbox/list/broadcast/cancel/pipeline`); active supervision (restart/subtree cancel); child approval routing through `ApprovalBroker`; DAG acyclicity + protocol invariants; Flutter smoke coverage | 5 | M2 | live siblings coordinate via `send`/`wait`; child cancel yields replayable `Cancelled` event; child approval requests reach the user; restart/timeout/subtree-failure decisions are replayable; Flutter attach/approve/reconnect pass |
 | **P4 — dreaming + proactivity** | consolidation + `skills/` generation (§22/§26); scheduler/cron (§27.2) | all | — | post-session dream writes summary + ≥1 self-verified skill (approval-gated); weekly ship ledger runs on cron |
-| **P5 — drive + research** | `drive.*` + auto-organizer (§24): transducers + virtual dirs; deep-research workspace (P3+P4+P5) | 4/5 | — | dropped file auto-filed by derived attributes; sandbox-default; a link mints `FsPolicy` + per-project memory scope; local-first offline |
+| **P5 — drive + research** ✓ | `drive.*` + auto-organizer (§24): transducers + virtual dirs; deep-research workspace (P3+P4+P5) | 4/5 | — | ✓ dropped file auto-filed by derived attributes after approval; ✓ sandbox-default local research; ✓ a link mints `FsPolicy` + per-project memory scope; ✓ local-first offline |
 | **P6 — Android package + OS integrations** | Ship the Android target of the existing Flutter client after the server API and product surfaces stabilize | all | — | Android + Web/PWA both connect to the same server/session; Android adds native packaging, secure pairing storage, push approval notifications, app links, and reconnect/resume polish without a second execution path |
 | **P7 — self-evolution tiers + hardening** | tiers (§26); isolation / egress hardening | all | M3–M4 | tier switch changes write-scope; conservative writes only memory+skills; audit trail |
 
@@ -58,14 +58,20 @@ typed parent `SessionEvent` resource links, `actor_resources_linked` provenance 
 tm-e2e/Flutter actor smoke coverage. P4 ships durable dream leases, deterministic dream extraction,
 redaction/config guardrails, session/reflection/rollup summaries, approval-gated memory and skill
 proposals, Postgres FTS recall coverage, cron-backed scheduled proactivity, and Flutter/Web smoke
-coverage for dream-origin proposals and replay.
+coverage for dream-origin proposals and replay. P5 is also closed: `tm-drive`, `drive.*`, local-first
+blob-backed entries, transducers, search/virtual-dir feeds, approval-gated dropped-file writes,
+shared `write_proposal` organizer events, `drive://` resource resolution, replayable drive mutation
+events, project links that mint `FsPolicy` and memory scopes, and local research fan-out over drive
+docs with per-child budgets are covered by deterministic Rust/e2e/client tests plus gated Postgres
+schema/resource/replay tests.
 Normal Rust tests pass when local loopback networking is available; managed sandboxes may need
 elevated permissions for tests that bind `127.0.0.1`.
 
 Still not production-complete: `tm-mcp`, `tm-trace`, fuller `tm-memory` mechanisms beyond the P4
 acceptance slice (pgvector dense retrieval, graph extraction, LLM-backed extraction, richer scoped
-`memory.*` APIs), and `tm-drive`; first-class skill import/reload/write surfaces; Android OS
-packaging; generated SDK docs from the runtime registry; and production egress/secret hardening.
+`memory.*` APIs), first-class skill import/reload/write surfaces, Android OS packaging, optional
+drive cloud sync, generated SDK docs from the runtime registry, and production egress/secret
+hardening.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -82,7 +88,7 @@ each milestone is done only when its acceptance checks pass.
 | 6 | **DONE — P3: handoff + sub-agent actors** | 6–10d | Added `tm-agents` with actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` + `history://` resources, child artifact spill + transcript history, actor lifecycle events in SSE stream, supervision defaults, Handoff mode wired from catalog, `CapabilityGrants` glob permit. | ✓ Fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ child crash isolated + `actor_failed` in SSE log; ✓ handoff matches `oh-my-pi-handoff`. |
 | 6+ | **DONE — P3+ live actor mailbox + supervision** | 4–8d | Landed per-actor bounded inbox + `Agent::run` inbox draining, `agents.send/broadcast/wait/inbox/list/cancel/pipeline`, child approval routing through the live broker, parent-session child artifacts, parent-driven cancel tokens with replayable `actor_cancelled`, plain-prose enforcement, live-wait DAG acyclicity checks, pipeline digest-reference wiring, active restart strategies (`one_for_one`, `one_for_all`, `rest_for_one`), wall-clock budget enforcement, fail-fast sibling-subtree supervision, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and tm-e2e/Flutter actor smoke coverage. | Tests prove live sibling coordination, cancel/replay, child approval routing, restart decisions, actor timeouts, fail-fast sibling-subtree cancellation, event-log resource provenance, and Flutter attach/approve/reconnect smoke coverage. |
 | 7 | **DONE — P4 dreaming + scheduler** | 6–10d | Landed `tm-memory` ownership, durable `dream_queue` records, `POST /sessions/:id/end`, replayable `session_end` / `dream_queued` events, the server-owned dream worker, deterministic extraction/redaction/reflection/summaries, approval-gated memory and skill proposals, Postgres FTS recall, cron jobs/runs, bounded missed-run catch-up, model-role/config fail-closed paths, and client smoke coverage. | Tests prove idempotent session-end dreams, dream lease/complete/fail/stale-lock paths, summary + reflection + recursive rollup writes, approval-gated memory and self-verified skill proposals, config/failure guardrails, gated Postgres schema/replay/FTS coverage, and the weekly ship ledger under cron bounds. |
-| 8 | **P5 — drive + research workspace** | 5–9d | Add `tm-drive`, `drive.*`, local-first file metadata, transducers, virtual dirs, project memory scopes, drive organizer. | Dropped file auto-files by derived attributes after approval; project link mints `FsPolicy` + memory scope; offline local-first path works. |
+| 8 | **DONE — P5 drive + research workspace** | 5–9d | Added `tm-drive`, `drive.*`, local-first file metadata/blob storage, transducers, virtual dirs/search feeds, `drive://` resources, approval-gated dropped-file writes, shared organizer proposals, project links/memory scopes, local research fan-out, per-child research budgets, and replayable drive/research events. | Tests prove dropped-file approval + replay, derived metadata/transducers, organizer proposal/apply flows, project link `FsPolicy` + memory scope minting, `drive://` preview/resolve, local offline research citations, child failure/cancel isolation, tm-e2e public API smoke, Flutter/Web client smoke, and gated Postgres schema/resource/replay parity. |
 | 9 | **P6 — Android package + OS integrations** | 4–7d | Package the existing Flutter client for Android; add mobile OS integrations such as secure pairing storage, push approval notifications, app links, and reconnect/resume polish. No on-device sandbox. | Android and Web/PWA attach to the same server/session stream; the Android build reuses the same chat, approval, artifact/resource, memory, drive, and agent-browser components rather than duplicating client code. |
 | 10 | **P7 — self-evolution + hardening** | 6–12d | Implement evolution tiers; write-scope switches; audit trail; MCP import/reload gates; egress/isolation hardening; add replay checks. | Tier switch changes allowed writes; conservative writes only memory+skills proposals; audit/replay can explain every gated write. |
 
@@ -91,11 +97,12 @@ each milestone is done only when its acceptance checks pass.
 1. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
    artifacts, and HTTP-routed manual approvals.
-2. **Start P5 from the settled P4 surface** — drive, research workspace, and project file memory should
-   layer on the same event-log/resource/approval contracts instead of adding a second orchestration path.
-3. **Defer drive, MCP, trace, Android, and self-evolution surfaces until their roadmap stages** —
-   `tm-drive`, `tm-mcp`, `tm-trace`, Android packaging, and P7 hardening should layer on the same
-   server/resource surface.
+2. **Start P6 from the settled P5 surface** — Android packaging and OS integrations should reuse the
+   existing Flutter/Web client model, session stream, approval API, resource gateway, drive browser,
+   and reconnect path.
+3. **Defer MCP, trace, live external research, cloud drive sync, and self-evolution surfaces until
+   their roadmap stages** — `tm-mcp`, `tm-trace`, live egress, optional cloud sync, and P7 hardening
+   should layer on the same server/resource surface.
 
 ### Deferred SDK namespace placement
 
@@ -106,8 +113,8 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 | `memory.*` | **P2/P4 shipped; richer APIs later** | P2 exposes the minimum profile/user recall and personal-assistant state-capture surface. P4 owns `tm-memory` contracts, session-end dream queue writes, deterministic worker extraction, summaries, Postgres FTS, and skill/memory proposals; pgvector dense retrieval, graph recall, LLM-backed extraction, and richer scoped memory APIs remain later hardening. |
 | `agents.*` | **P3 ✓ / P3+ ✓** | P3 MVP shipped: `agents.run/spawn/parallel/msg`, actor lifecycle, mailbox/roster, `agent://`+`history://` resources, SSE lifecycle events, Handoff mode. P3+ shipped bounded live inbox delivery plus `send`, `broadcast`, `wait`, `inbox`, `list`, `cancel`, and `pipeline` with digest-reference stage wiring, child approval routing, plain-prose enforcement, live-wait DAG acyclicity checks, active restart supervision, sibling-subtree cancellation policy, wall-clock budgets, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and actor smoke coverage. |
 | `skills.*` / `skill://` reads | **P4/P7 split** | Current `skill://...` use is prompt-composition-only. P4 emits approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, MCP import gates, and any first-class read/list/preview handler. |
-| `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
-| `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as the deterministic allowlist helper until P7 hardening. |
+| `drive.*` | **P5 ✓** | Shipped with `tm-drive`, virtual dirs/search feeds, transducers, approval-gated writes, `drive://` resources, project links, project memory scopes, local research fan-out, and drive organizer flows. |
+| `http.*` hardening | **P7** | P5 research stays local-first over `drive://` docs. Live external research remains deferred until byte/request caps, redirect policy, audit logging, production allowlists, and secret handling are proven. |
 | `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
 | `code.ast` / `code.lsp` | **P1.5/P2 tech slice** | Now unblocked by the native cutover proof, but keep it out of the critical companion baseline unless structured code edits have a concrete user. |
 
@@ -121,22 +128,22 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 ### Do-not-start-yet list
 
-- Android OS packaging before the P2/P3 product surfaces stabilize.
-- Drive auto-organizer before approval policy and memory scopes exist.
+- Android OS packaging before the P5 server/client surface stabilizes.
 - Self-evolution writes before audit/replay and tier gates exist.
-- Research/deep orchestration before `agents.*`, artifacts, memory scopes, and scheduler are real.
+- Live external research before egress hardening, byte caps, audit logging, and secret handling are real.
 
 ## Crate plan
 
 Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-modes`,
-`tm-agents`, `tm-memory`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The P0a bridge
+`tm-agents`, `tm-memory`, `tm-drive`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The P0a bridge
 currently lives in `tm-server::omp_acp`; P2 minimal memory still lives in `tm-server::memory` while
 P4 dream queue ownership lives in `tm-memory`; `fs.*` /
 `code.*` / `proc.*` live in `tm-host`; actor lifecycle, mailbox, orchestration, and resources live
-in `tm-agents`.
+in `tm-agents`; local-first drive storage, transducers, organizer proposals, links, and search feeds
+live in `tm-drive`.
 
 Planned product/support crates remain: full `tm-memory` (multi-mechanism recall + dreaming),
-`tm-drive`, `tm-mcp`, and `tm-trace`. Existing core crates (§10.1) keep their contracts; future
+`tm-mcp`, and `tm-trace`. Existing core crates (§10.1) keep their contracts; future
 work should extract product storage/orchestration only when the second concrete user exists.
 
 ## Open questions (near-term resolved; deployment still open)

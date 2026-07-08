@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use tm_agents::MailboxRegistry;
-use tm_artifacts::default_root;
+use tm_artifacts::{ArtifactStore, default_root};
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
 use tm_host::{ApprovalPolicy, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig};
 use tm_llm::OpenAiClient;
@@ -33,12 +33,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_config = load_host_config()?;
     let linked_folders = host_config.linked_folders()?;
     let artifact_root = server_artifact_root(&host_config);
+    let drive_store =
+        tm_drive::InMemoryDriveStore::new(ArtifactStore::open(&artifact_root, "drive")?);
     let roster = Arc::new(MailboxRegistry::new());
     let approval_broker = Arc::new(ApprovalBroker::default());
     let runtime = build_runtime(
         &host_config,
         &linked_folders,
         artifact_root.clone(),
+        Some(drive_store.clone()),
         Arc::clone(&roster),
         Arc::clone(&approval_broker),
     )?;
@@ -51,7 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state = configure_coding_backend(
             AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
                 .with_approval_broker(Arc::clone(&approval_broker))
-                .with_actor_roster(Arc::clone(&roster)),
+                .with_actor_roster(Arc::clone(&roster))
+                .with_drive_store(drive_store.clone()),
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
@@ -67,7 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state = configure_coding_backend(
             AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
                 .with_approval_broker(Arc::clone(&approval_broker))
-                .with_actor_roster(roster),
+                .with_actor_roster(roster)
+                .with_drive_store(drive_store),
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
@@ -95,6 +100,7 @@ fn build_runtime(
     host_config: &P0HostConfig,
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
+    drive_store: Option<tm_drive::InMemoryDriveStore>,
     roster: Arc<MailboxRegistry>,
     approval_broker: Arc<ApprovalBroker>,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
@@ -129,6 +135,7 @@ fn build_runtime(
     let mut sandbox_options = DenoSandboxOptions {
         artifact_root,
         linked_folders,
+        drive_store,
         approval_policy: chat_approval_policy(host_config)?,
         approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
         ..DenoSandboxOptions::default()

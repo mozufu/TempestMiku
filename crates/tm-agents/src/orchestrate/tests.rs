@@ -393,6 +393,58 @@ async fn agents_parallel_runs_all_and_returns_ordered_digests() {
 }
 
 #[tokio::test]
+async fn agents_parallel_applies_per_child_task_budgets() {
+    use crate::actor::{ActorDigest, ActorSpec};
+    use crate::executor::{ActorError, ActorExecutor};
+
+    struct BudgetExecutor {
+        budgets: Arc<std::sync::Mutex<Vec<ActorBudget>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ActorExecutor for BudgetExecutor {
+        async fn run_to_digest(
+            &self,
+            spec: ActorSpec,
+        ) -> std::result::Result<ActorDigest, ActorError> {
+            self.budgets.lock().unwrap().push(spec.budget.clone());
+            Ok(ActorDigest {
+                actor_id: spec.id,
+                summary: "ok".to_string(),
+                artifact_uri: None,
+                history_uri: None,
+                history_content: None,
+            })
+        }
+    }
+
+    let budgets = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let roster = Arc::new(MailboxRegistry::new());
+    roster.set_executor(Arc::new(BudgetExecutor {
+        budgets: Arc::clone(&budgets),
+    }));
+    let f = AgentsParallelFn::new(Arc::clone(&roster));
+    let ctx = ctx_with(caps::AGENTS_PARALLEL);
+
+    f.call(
+        json!({"tasks": [
+            {"role": "researcher", "task": "task A", "timeoutMs": 42},
+            {"role": "writer", "task": "task B", "budget": {"wallMs": 55, "maxDepth": 2}},
+        ]}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let budgets = budgets.lock().unwrap().clone();
+    assert_eq!(budgets.len(), 2);
+    assert_eq!(budgets[0].wall_ms, 42);
+    assert_eq!(budgets[0].max_depth, ActorBudget::default().max_depth);
+    assert_eq!(budgets[1].wall_ms, 55);
+    assert_eq!(budgets[1].max_depth, 2);
+}
+
+#[tokio::test]
 async fn agents_parallel_failure_cancels_sibling_wave_members() {
     use crate::actor::{ActorDigest, ActorId, ActorSpec};
     use crate::executor::{ActorError, ActorExecutor};

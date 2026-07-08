@@ -16,8 +16,8 @@ use tm_core::{
 };
 use tm_e2e::{
     E2eConfig, E2eEvent, EVIDENCE_SCHEMA_VERSION, MikuClient, RecordOptions, ScriptedSpeaker,
-    WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions, run_actor_smoke, run_record_api, run_workflow,
-    write_workflow_record,
+    WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions, run_actor_smoke, run_drive_smoke,
+    run_record_api, run_workflow, write_workflow_record,
 };
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use tm_server::{
@@ -158,6 +158,39 @@ async fn actor_smoke_covers_progress_approval_resource_and_replay() {
         report
             .replayed_event_types
             .contains(&"actor_cancelled".to_string())
+    );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn drive_smoke_public_api_covers_p5_drop_approval_resource_and_replay() {
+    let (base_url, server, _temp) = start_drive_smoke_server().await;
+    let client = MikuClient::new(E2eConfig {
+        base_url,
+        bearer_token: None,
+        timeout: Duration::from_secs(15),
+    })
+    .unwrap();
+
+    let report = run_drive_smoke(&client).await.unwrap();
+
+    assert_eq!(report.filed_uri, "drive://inbox/approval-drop.md");
+    assert!(report.approval_id.len() > 8);
+    assert!(
+        report
+            .replayed_event_types
+            .contains(&"approval".to_string())
+    );
+    assert!(
+        report
+            .replayed_event_types
+            .contains(&"approval_resolved".to_string())
+    );
+    assert!(
+        report
+            .replayed_event_types
+            .contains(&"drive_put".to_string())
     );
 
     server.abort();
@@ -558,6 +591,93 @@ async fn start_native_actor_coordination_server()
         axum::serve(listener, router).await.unwrap();
     });
     (format!("http://{addr}"), server, temp)
+}
+
+async fn start_drive_smoke_server() -> (String, tokio::task::JoinHandle<()>, tempfile::TempDir) {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let drive_store = tm_drive::InMemoryDriveStore::new(
+        tm_artifacts::ArtifactStore::open(temp.path(), "drive").unwrap(),
+    );
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        execute_script("drive_smoke_call", &drive_smoke_code()),
+        text_script("drive smoke complete"),
+    ]));
+    let cfg = AgentConfig {
+        model: "fake".to_string(),
+        max_turns: 3,
+        cell_budget: CellBudget {
+            wall_ms: 240_000,
+            output_bytes: 50_000,
+        },
+        ..AgentConfig::default()
+    };
+
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store,
+        memory,
+        chat,
+        tm_server::ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone())
+    .with_drive_store(drive_store.clone());
+    let broker = Arc::clone(&state.approval_broker);
+    let backend = NativeDenoBackend::new(
+        llm,
+        cfg,
+        DenoSandboxOptions {
+            artifact_root,
+            drive_store: Some(drive_store),
+            approval_timeout: Duration::from_secs(5),
+            ..DenoSandboxOptions::default()
+        },
+        NativeApprovalMode::Manual,
+        broker,
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+
+    let router = app(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (format!("http://{addr}"), server, temp)
+}
+
+fn drive_smoke_code() -> String {
+    r##"
+const filed = await drive.put("# Approval Drop\nManual approval gates drive writes.\nResearch smoke citation body.", {
+  auto: true,
+  suggestedPath: "inbox/approval-drop.md",
+  project: "TempestMiku",
+  docKind: "note",
+  sourceUri: "drop://browser/approval-drop.md",
+  eventSeq: 101
+});
+const hits = await drive.search("approval", { project: "TempestMiku", returnSnippets: true });
+const researchResult = await research.drive("approval", {
+  project: "TempestMiku",
+  maxDocs: 1,
+  maxSnippets: 1,
+  maxWorkers: 0,
+  maxBytesPerDoc: 200,
+  maxDigestBytes: 120
+});
+display({
+  filedUri: filed.uri,
+  sourceUri: filed.entry.sourceUri,
+  searchHits: hits.length,
+  researchCitations: researchResult.citations.length,
+  sourceKind: researchResult.citations[0]?.sourceKind,
+  answerHasDriveUri: researchResult.answer.includes("drive://")
+});
+"##
+    .to_string()
 }
 
 fn native_parent_coordination_code() -> String {

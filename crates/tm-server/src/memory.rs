@@ -22,3 +22,4 @@ pub use resource::MemoryResourceHandler;
 #[cfg(test)]
 pub(crate) use state_capture::STATE_CAPTURE_PROVENANCE_LABEL;
 pub use state_capture::personal_assistant_state_capture_proposals;
+pub(crate) use util::encode_memory_segment;

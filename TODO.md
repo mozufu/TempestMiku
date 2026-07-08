@@ -2,318 +2,461 @@
 
 Last aligned: **2026-07-08**.
 
-Active milestone: **P4 — dreaming + proactivity**.
+Active milestone: **P5 — drive + research workspace**.
 
-`ROADMAP.md` remains the canonical milestone order. This file is the working execution checklist for
-finishing P4 after the P3-plus actor/mailbox/supervision/provenance closeout and the landed P4.0
-dream-queue slice. Keep it aligned with core docs §07/§09 and product docs §21, §22, §26, §27, and
-§29.
+`ROADMAP.md` remains the canonical milestone order. This file is the working implementation
+checklist for P5 after the completed P4 dreaming/scheduler slice. Keep it aligned with core docs
+§07/§09 and product docs §22, §23, §24, §25, §27, and §29.
 
-## P4 North Star
+## P5 North Star
 
-Ship a replayable, approval-bound dreaming and scheduler loop:
+Ship the first useful local-first document space and research workspace:
 
-- Ending a session enqueues durable dream work.
-- A worker leases queued dreams, extracts useful memory, summarizes what happened, reflects on
-  reusable lessons, and proposes at least one self-verified skill when the session contains a stable
-  recurring workflow.
-- Durable facts, summaries, and skill proposals are redacted, deduped, provenance-linked, and
-  approval-gated where the docs require it.
-- The weekly ship ledger runs from cron under proactivity bounds, streams through the same SSE/event
-  log, and defers on approvals instead of auto-acting.
+- The user can drop or put a file into TempestMiku's drive without granting ambient real-FS access.
+- The system extracts useful field-value attributes, proposes a canonical path, and files only after
+  the applicable approval/tier policy allows it.
+- `drive://` resources are readable through the same capability-gated resource registry and client
+  gateway as `artifact://`, `memory://`, `agent://`, `history://`, `cron://`, and `linked://`.
+- `drive.*` is exposed as a host capability namespace through the existing one-tool `execute(code)`
+  architecture, not as a second orchestration path.
+- Linking a real project folder mints an `FsPolicy` grant and opens the matching per-project memory
+  scope as one approval-bound act.
+- Deep research can combine P3+ agents, P4 memory/summaries/scheduler, artifacts, and filed drive
+  documents while preserving bounded context and provenance.
 
-P4 is not a drive, MCP, Android, or self-rewrite milestone. It extends the existing server, store,
-resource, approval, mode, and actor contracts; it does not fork a second orchestration path.
+P5 is not an Android, MCP, self-evolution, or generic cloud-drive milestone. It layers `tm-drive` on
+the existing host registry, resource gateway, approval broker, memory store, event log, and clients.
 
 ## Non-Negotiable Invariants
 
 - The model still gets one chat-native tool: `execute(code)`.
-- Streaming remains the source of truth. Dream, approval, and scheduler progress must be represented
-  as replayable `session_events` and SSE frames.
-- Capabilities are config and grants, not prompts. Unknown capability names and resource schemes fail
-  closed.
-- `skill://<name>` is prompt-composition-only until a P4/P7-approved read/preview surface lands with
-  grants, provenance, and tests.
-- `skills.*` import/version/reload remains P7. P4 may produce approval-gated skill proposals, but it
-  must not silently install or reload skills.
-- `memory://` resources remain the public read surface for existing P2 memory records. Any P4
-  `memory.*` API must ship with host-catalog docs, SDK typings, grant tests, and denial behavior.
-- Scheduled proactivity honors §21.3: safe summarize/organize/review work may run; destructive,
-  external, commitment, spend, sensitive, or publish/send actions defer through approvals.
-- Serious Engineer, Handoff, and child-agent approval behavior from P0-P3+ must not regress.
-- Normal `cargo test` stays external-service-free. Live LLM, Postgres, and browser/Flutter coverage
-  stay opt-in or gated.
+- Streaming remains the source of truth. Drive ingestion, organizer decisions, approvals, research
+  progress, and resource links must be represented as replayable `session_events` and SSE frames when
+  user-visible.
+- Capabilities are config and grants, not prompts. Unknown capability names and unknown or ungranted
+  resource schemes fail closed.
+- `drive://` is a user-document resource route, not a host path and not a blob hash. Raw host paths
+  must never become model-visible.
+- Default drive storage is sandbox/local-first. Real folders are reachable only through explicit
+  `drive.link` / configured linked-folder policy and approval where interactive.
+- `linked://<alias>/...` remains the read-only resource view of an `FsPolicy`; writes still go
+  through `fs.write`, `code.edit`, or explicit drive operations with approval.
+- `proc.run(cmd,args)` remains argv-vector only. No shell-string shortcut, no ambient cwd, no `sh -c`.
+- Large file contents, extraction logs, research corpora, and sub-agent outputs spill to artifacts,
+  blobs, or resource rows. Do not push them wholesale into model context or SSE payloads.
+- Approval deny/timeout writes nothing, revokes no extra state, and remains replayable.
+- Normal `cargo test` stays external-service-free. Live LLM, Postgres, browser/Flutter, network, and
+  cloud-sync coverage stays opt-in or gated.
 
 ## Current Baseline
 
 - [x] P0/P1/P2 are complete per `ROADMAP.md`.
-- [x] P3 and P3-plus are complete: `agents.run/spawn/parallel/msg/send/broadcast/wait/inbox/list/cancel/pipeline`,
-      live inboxes, active supervision, child approvals, replayable actor/resource provenance, and
-      Flutter/tm-e2e actor smoke coverage are in place.
-- [x] Persona assets are catalog-driven from `SOUL.md`, `modes.json`, and bundled/configured
-      `skills/<name>/SKILL.md`.
-- [x] P2 memory context injects bounded profile facts and scoped recall with provenance.
-- [x] P2 memory writes use approval-gated `write_proposal` flows; deny/timeout writes nothing.
-- [x] `memory://` resources expose the current P2 profile/user-model and approved record views.
-- [x] P4.0: `tm-memory` owns `DreamQueueRecord`, `DreamReason`, `DreamStatus`,
-      `NewDreamQueueRecord`, `DreamWorker`, `DreamWorkerReport`, and `NoopDreamWorker`.
-- [x] P4.0: `tm-server` persists `dream_queue` rows in memory/Postgres stores.
-- [x] P4.0: `POST /sessions/:id/end` marks the session ended, enqueues one idempotent dream record,
-      and emits replayable `session_end` + `dream_queued` events.
-- [x] P4.1/P4.7 store spine: in-memory/Postgres stores include dream lifecycle operations,
-      `memory_summaries`, `skill_proposals`, `cron_jobs`, and `cron_runs`.
-- [x] P4 deterministic worker: `ServerDreamWorker` leases dreams, redacts input, writes bounded
-      session summaries, emits approval-gated memory/skill proposals, and records replayable dream
-      lifecycle events without external services.
-- [x] P4 scheduler slice: weekly ship ledger can run through a normal session under
-      `cron_mode: deny`, `max_turns <= 8`, and a 120-second script bound; `cron://` resources expose
-      job/run previews.
+- [x] P3 and P3-plus are complete:
+      `agents.run/spawn/parallel/msg/send/broadcast/wait/inbox/list/cancel/pipeline`, live inboxes,
+      active supervision, child approvals, replayable actor/resource provenance, and client smoke
+      coverage are in place.
+- [x] P4 is complete: `tm-memory`, dream queue/worker, summaries, skill proposals, Postgres FTS
+      coverage, cron jobs/runs, `cron://` resources, and replayable proactivity are in place.
+- [x] `tm-host` already owns linked-folder `FsPolicy`, `fs.*`, `code.*`, `proc.*`, and `linked://`
+      resource behavior.
+- [x] `tm-server` already exposes session-scoped resource resolve/list/preview endpoints and
+      registers current resource schemes.
+- [x] `drive://` now registers through `tm-drive` when a drive store is configured and still fails
+      closed when unregistered or ungranted.
+- [x] `tm-drive` crate exists.
+- [x] `drive.*` exists in the runtime SDK.
+- [x] Drive metadata, transducers, virtual dirs, organizer proposal records, and first project
+      memory-scope recall coupling exist.
 
-## P4 Acceptance Gate
+## P5 Acceptance Gate
 
-- [x] Post-session dream writes a bounded session summary with evidence/provenance links.
-- [x] Post-session dream extracts durable memory candidates, applies redaction/dedup rules, and uses
-      existing approval/default-deny semantics before writing durable facts or scoped recall chunks.
-- [x] Post-session dream emits at least one self-verified skill proposal when the session contains a
-      reusable workflow; the proposal is approval-gated and not silently installed.
-- [x] Weekly ship ledger runs from cron under `cron_mode: deny`, `goals.max_turns <= 8`, and the
-      120-second script bound; approval-needed actions are deferred, not auto-applied.
-- [x] Dream and cron runs are visible through the same event log/SSE replay path as interactive
-      sessions.
-- [x] Parity §29.5 still holds: Miku voice, mode router, memory recall/profile, manual approvals,
-      project continuity, and Serious Engineer coding reach are preserved.
-- [x] Normal `cargo test` passes without external services; gated Postgres/live/browser tests document
-      their env vars and stay opt-in.
+- [x] A dropped or `drive.put(..., { auto: true })` file is stored locally, transduced into
+      field-value attributes, deduped by content hash, assigned a proposed canonical path, and filed
+      only after approval/tier policy allows it.
+- [x] `drive.get`, `drive.ls`, `drive.search`, `drive.tag`, `drive.move`, `drive.link`, and
+      `drive.organize` work through capability-checked host calls with denial/default-deny tests.
+- [x] `drive://<path>` can be resolved/listed/previewed through the normal session resource gateway
+      with paging, MIME, preview metadata, grants, and fail-closed behavior.
+- [x] Virtual directories such as `/by-project/<project>`, `/by-type/<kind>`, and `/recent` map to
+      attribute queries without moving canonical files.
+- [x] Linking a project folder mints or reuses an `FsPolicy` and opens the matching per-project memory
+      scope; revocation/narrowing invalidates both together.
+- [x] Filed documents become recallable through the P4 memory/retrieval surface with provenance back
+      to `drive://`, source session/event ids, and content hashes.
+- [x] The research workspace can fan out over drive documents with P3+ agents and return only
+      bounded digests/resource refs to the parent context.
+- [x] Offline local-first operation works without cloud or network dependency.
+- [x] Normal `cargo test` passes; gated Postgres/client/live tests document their env vars.
 
-## P4.1 Store And Migration Spine
+## P5.0 API Contract And Data Model
 
-- [x] Move more P2 memory record ownership from `tm-server::memory` toward `tm-memory` only where
-      there is a concrete P4 worker/retrieval user; avoid churny extraction for its own sake.
-- [x] Define `tm-memory::store` traits for the P4 logical stores needed now:
-      episodic messages/events, summaries, profile/fact candidates, scoped recall chunks, skill
-      proposals, and dream leases.
-- [x] Extend `Store` with dream-queue worker operations:
-      `claim_ready_dream`, `heartbeat_dream`, `complete_dream`, `fail_dream`, and retry/backoff
-      metadata.
-- [x] Preserve `enqueue_dream` idempotency by `dedupe_key`; duplicate session-end calls must not
-      duplicate work or events.
-- [x] Add in-memory store support for the full worker lifecycle so unit tests remain external-free.
-- [x] Add Postgres schema additions behind gated tests:
-      `memory_summaries`, `skill_proposals`, and any normalized P4 worker tables required before
-      pgvector/FTS.
-- [x] Add ready-queue indexes for `(status, available_at)`, stale-lock recovery, and session/scope
-      queries.
+- [x] Freeze the first P5 data vocabulary before writing host ops:
+      drive entry id, canonical path, blob/content hash, MIME, size, title, doc kind, project,
+      entities, dates, amounts, tags, embedding placeholder, source URI, provenance, created/updated
+      timestamps, and status.
+- [x] Define canonical path rules:
+      normalized separators, no `..`, no raw host paths, stable casing policy, collision strategy
+      (`keep-both` by default), and explicit overwrite approval.
+- [x] Define virtual directory grammar:
+      `/recent`, `/by-project/<project>`, `/by-type/<doc_kind>`, `/by-tag/<tag>`,
+      `/by-date/<yyyy>/<mm>`, and a fallback query object for future extensions.
+- [x] Define the first `DrivePutOptions`:
+      `auto`, `suggestedPath`, `project`, `docKind`, `tags`, `sourceUri`, `mime`, `title`,
+      `approvalMode`, and `dedupe`.
+- [x] Define the first `DriveSearchOptions`:
+      `project`, `docKind`, `tags`, `limit`, `includeArchived`, `since`, `until`, and
+      `returnSnippets`.
+- [x] Define organizer proposal records:
+      proposed move/tag/dedupe action, evidence, confidence, policy decision, approval id,
+      status, source run id, and replay metadata.
+- [x] Decide exact event names and payloads before client work:
+      `drive_put`, `drive_transduced`, `drive_path_proposed`, `drive_write_proposed`,
+      `drive_filed`, `drive_moved`, `drive_tagged`, `drive_linked`, `drive_organizer_started`,
+      `drive_organizer_completed`, and `drive_organizer_failed`.
 - [x] Add JSON wire tests for every new event/resource payload before exposing it to clients.
-- [x] Add gated Postgres tests for dream claim/complete/fail idempotency, stale lock recovery, and
-      duplicate enqueue behavior.
 
 Acceptance:
 
-- [x] A queued dream can be claimed exactly once, heartbeated, completed, and replayed using both
-      in-memory and Postgres stores.
-- [x] A failed dream records `attempts`, `last_error`, and next `available_at`; retries are bounded and
-      deterministic.
-- [x] Normal tests do not require Postgres.
+- [x] API/data shapes are documented in `docs/design/product/24-drive-storage.md`,
+      `docs/design/core/07-host-sdk.md`, `docs/design/core/09-context-artifacts.md`, and
+      `docs/sdk/tm-runtime.d.ts`.
+- [x] Unknown future fields are either ignored safely or rejected with a stable error.
 
-## P4.2 Dream Worker Runtime
+## P5.1 Crate And Workspace Setup
 
-- [x] Replace `NoopDreamWorker` usage with a real worker implementation while keeping the trait usable
-      in tests.
-- [x] Add a server-owned worker runner that can run once in tests and loop in daemon mode without
-      blocking request handling.
-- [x] Ensure every worker state transition emits replayable events:
-      `dream_started`, `dream_progress`, `dream_completed`, `dream_failed`, and proposal events where
-      applicable.
-- [x] Add a worker config block for enable/disable, poll interval, lease timeout, max attempts,
-      concurrency, per-dream timeout, and model-role names.
-- [x] Wire cancellation/shutdown so the server can stop cleanly without leaving permanent locks.
-- [x] Make worker output bounded. Large summaries, extracted evidence, or verification logs should
-      spill to `artifact://` or resource rows, not into model context.
-- [x] Add scripted test workers/LLM clients for extraction, summary, critique, and error cases.
-- [x] Add failure-mode tests for model error, timeout, redaction failure, approval timeout, store
-      failure, and duplicate worker race.
+- [x] Add `crates/tm-drive` to the workspace and workspace dependencies.
+- [x] Keep `tm-drive` concrete and boring; do not introduce broad framework abstractions before two
+      users exist.
+- [x] Add module skeletons matching §24.6:
+      `store`, `transduce`, `organize`, `vdir`, `policy`, `resources`, and `types`.
+- [x] Define crate-local errors with `thiserror`; keep `anyhow` at binary/server edges only.
+- [x] Export only the stable P5 surface from `tm-drive::lib`.
+- [x] Add deterministic unit-test fixtures under the crate for text, markdown, JSON, image/blob refs,
+      duplicate content, and malformed paths.
+- [x] Add `tm-drive` to `docs/design/core/10-rust-implementation.md` crate plan once behavior lands.
 
 Acceptance:
 
-- [x] `DreamWorker::run_once` can process one ready record end-to-end in a deterministic test.
-- [x] Two concurrent workers cannot complete the same dream twice.
-- [x] Worker failure is replayable and leaves the queue retryable or terminal according to config.
+- [x] `cargo test -p tm-drive` runs without external services.
+- [x] The crate compiles as a standalone workspace package (`cargo test -p tm-drive`) while exposing
+      explicit host/server adapter APIs.
 
-## P4.3 Episodic Capture And Redaction
+## P5.2 Local-First Store And Blob Integration
 
-- [x] Build the dream input collector from the existing session tables/event log:
-      messages, final answer, mode changes, approvals, memory proposals, actor digests, project
-      promotions, artifact/resource links, and session-end metadata.
-- [x] Keep child-agent transcripts out of dream prompt context by default; include `agent://` /
-      `history://` / `artifact://` handles and bounded previews only when useful.
-- [x] Add deterministic redaction before any dream prompt or durable derived write:
-      secrets/tokens, obvious credentials, private keys, raw auth headers, and sensitive PII patterns.
-- [x] Preserve negative-state discipline: distress-only sessions may summarize supportively but must
-      not create durable profile facts unless Brian explicitly asked to remember stable signal.
-- [x] Attach provenance to every candidate: source session id, event sequence(s), message ids,
-      resource URIs, scope, and subject.
-- [x] Add a compact prompt budgeter so long sessions are chunked before LLM extraction.
-- [x] Add tests for redaction, bounded previews, provenance, and negative-state no-write behavior.
+- [x] Implement the in-memory `DriveStore` first:
+      put/get/list by canonical path, update attrs, move, archive/delete marker if needed, search by
+      indexed attributes, organizer proposal lifecycle, and idempotent writes by content hash.
+- [x] Store document bytes by content hash using the existing artifact/blob primitives where possible;
+      avoid a second CAS implementation unless the existing blob layer cannot fit.
+- [x] Store drive entries as metadata pointing at `blob:sha256:` or session/project artifact refs;
+      never duplicate binary content unnecessarily.
+- [x] Add integrity checks on read: content hash mismatch fails closed.
+- [x] Add size, MIME, preview, and selector/paging helpers consistent with `ResourceContent`.
+- [x] Add Postgres schema behind gated tests only after in-memory behavior is stable:
+      `drive_entries`, `drive_attributes`, `drive_tags`, `drive_proposals`, `drive_links`, and
+      indexes for path, hash, project, doc kind, tags, recency, and FTS text.
+- [x] Preserve local-first semantics: no cloud dependency and no live network in normal tests.
+- [x] Add import path for promoted project attachments so `project://.../workspace` resources can
+      optionally materialize into `drive://`.
 
 Acceptance:
 
-- [x] Dream input is sufficient for extraction but never contains unbounded transcripts or obvious
-      secrets.
-- [x] Every candidate durable write can be traced back to exact session/event/resource evidence.
+- [x] The same logical drive tests pass against in-memory store and gated Postgres store.
+- [x] Duplicate content creates one blob and separate metadata only when paths differ.
+- [x] Offline read/list/search works entirely from local store state.
 
-## P4.4 Extraction, Importance, And Memory Writes
+## P5.3 Transducers And Attribute Extraction
 
-- [x] Implement extraction passes for the P4-worthy durable memory classes:
-      stable preferences, commitments/deadlines, decisions, shipped artifacts, reusable workflows,
-      project open loops, and recurring blind spots.
-- [x] Score importance/poignancy for extracted candidates and store the score with provenance.
-- [x] Add dedupe and contradiction handling:
-      normalize candidate text, merge duplicates, supersede obsolete facts with `valid_to`, never
-      erase history.
-- [x] Keep project-specific commands and repo lore scoped to the active project scope, not global user
+- [x] Implement deterministic fallback transducers first:
+      plain text, markdown, JSON, filename/path hints, MIME, size, content hash, created timestamp,
+      simple date/entity/tag heuristics, and project/doc-kind hints from options.
+- [x] Add type-specific extractors behind traits so model-assisted extraction can be added without
+      changing store/resource contracts.
+- [x] Add model-role hooks for richer extraction only behind config:
+      document classification, entities, dates, amounts, summary, and embedding generation.
+- [x] Run redaction before model-assisted extraction or durable summaries:
+      secrets, private keys, auth headers, obvious credentials, and sensitive PII patterns.
+- [x] Ensure transducer failure degrades to MIME + filename + recency and never loses the file.
+- [x] Attach provenance to every extracted attribute:
+      extractor version, evidence snippet/resource selector, source URI, session id, and confidence.
+- [x] Add extraction budget limits for file size, token preview, number of attributes, and evidence
+      snippets.
+- [x] Add tests for malformed files, binary files, redaction, fallback behavior, confidence scoring,
+      bounded snippets, and deterministic output.
+
+Acceptance:
+
+- [x] `drive.put` can classify representative notes, receipts/invoices, papers, and project docs
+      without live LLM access.
+- [x] Model extraction can be disabled and the acceptance path still works.
+
+## P5.4 Canonical Paths, Virtual Directories, And Search
+
+- [x] Implement placement proposer:
+      attributes + user/project conventions -> proposed canonical path.
+- [x] Add configurable conventions with safe defaults:
+      `projects/<project>/<doc-kind>/<title>`, `finance/<yyyy>/<doc-kind>/...`, and
+      `inbox/<yyyy-mm-dd>/...` fallback.
+- [x] Ensure user corrections through `drive.move` and `drive.tag` are recorded as learning signals
+      for future placement without silently rewriting old files.
+- [x] Implement `vdir` query mapping:
+      virtual path -> conjunctive attribute filter.
+- [x] Implement `drive.ls` over both canonical path prefixes and virtual dirs.
+- [x] Implement `drive.search` as hybrid lexical/attribute search first, reusing P4 FTS/recency/
+      importance patterns where practical.
+- [x] Add snippet generation that returns bounded evidence and `drive://` selectors.
+- [x] Add path collision handling:
+      keep-both, explicit move, explicit overwrite approval, and stale-source rejection.
+- [x] Add tests for virtual dirs, canonical path listing, search ranking, snippets, collision handling,
+      move correction, and query/path ambiguity.
+
+Acceptance:
+
+- [x] `/by-project/X` and `/by-type/invoice` return the expected entries without moving files.
+- [x] Search returns bounded results with resource refs and does not load full documents into context.
+
+## P5.5 `drive://` Resource Handler
+
+- [x] Implement `tm-drive::resources` handler for `drive://<path>`.
+- [x] Support `read(uri, selector?)`, `preview(uri)`, and `list(uri?)` with the same envelope shape as
+      existing resource gateway responses.
+- [x] Gate reads through `resources.read:drive`, previews through `resources.preview:drive`, and lists
+      through `resources.list:drive` or the equivalent existing grant shape.
+- [x] Keep reserved `drive://` paths fail-closed until the handler is registered.
+- [x] Return stable not-found errors with nearby available paths only when that does not leak
+      ungranted information.
+- [x] Add binary/image behavior:
+      preview metadata and download/resource handles, not raw bytes in SSE or model context.
+- [x] Add selector paging for large text docs.
+- [x] Register the handler in `tm-server` session resource gateway only when drive is configured.
+- [x] Add resource gateway tests for resolve/list/preview, grants, denial, unknown scheme,
+      not-found, selector paging, MIME, and binary preview.
+
+Acceptance:
+
+- [x] Client and sandbox resource reads share the same authorization and pagination semantics.
+- [x] Existing `artifact://`, `memory://`, `agent://`, `history://`, `cron://`, `workspace://`, and
+      `linked://` resource tests do not regress.
+
+## P5.6 Host Capability Namespace: `drive.*`
+
+- [x] Add host catalog docs for `drive.put`, `drive.get`, `drive.ls`, `drive.move`, `drive.search`,
+      `drive.tag`, `drive.link`, `drive.unlink`, and `drive.organize`.
+- [x] Expose the namespace through the existing sandbox SDK generator/runtime path; no chat-native
+      tool additions.
+- [x] Add grants:
+      `drive.put`, `drive.get`, `drive.ls`, `drive.move`, `drive.search`, `drive.tag`, `drive.link`,
+      `drive.unlink`, `drive.organize`, and resource read/list/preview grants for `drive://`.
+- [x] Decide whether `drive.get` returns `ResourceContent` directly or a `drive://` ref plus preview;
+      prefer bounded `ResourceContent` with selectors for parity with resources.
+- [x] Ensure every mutating call uses approval policy when required:
+      file create, move, overwrite, link, organizer apply, tag edits that affect memory recall, and
+      project-scope coupling.
+- [x] Ensure deny/timeout writes nothing and emits proposal status where user-visible.
+- [x] Add SDK typings in `docs/sdk/tm-runtime.d.ts` for all request/response shapes.
+- [x] Add sandbox denial tests for missing capability, unknown method, invalid path, oversized input,
+      raw host path, and approval timeout.
+
+Acceptance:
+
+- [x] A Deno cell can `await drive.put(...)`, inspect the returned `drive://` ref, and later
+      `await resources.read(ref)` under grants.
+- [x] Runs without drive grants cannot infer document existence or host paths.
+
+## P5.7 Link Policy And Project Memory Scope Coupling
+
+- [x] Reuse or extend `tm-host::FsPolicy` instead of creating a parallel real-FS permission model.
+- [x] Register approved `drive.link` calls into the shared in-process `LinkedFolders` registry so
+      existing `linked://` resources and `fs.*` boundaries see the new alias.
+- [x] Implement `drive.link(host_path, mode)` as an approval-gated operation that mints or registers
+      an `FsPolicy` with alias, canonical root, mode, and empty commands/safe args for dynamic links.
+- [x] Implement `drive.unlink(alias_or_uri)` as an approval-gated revocation operation returning
+      alias, canonical root, `linked://` URI, memory scope id, and revocation timestamp.
+- [x] Couple link creation to a per-project memory scope:
+      one approved link grants both filesystem access and scoped memory recall/write surface.
+- [x] Add filesystem attenuation/revocation:
+      same-root relink can narrow `rw -> ro`, widening requires approval, and revocation invalidates
+      `linked://` resource plus `fs.*` access.
+- [x] Add memory-scope attenuation/revocation:
+      narrowing or removing a link must invalidate matching memory scope access together with file
+      access.
+- [x] Ensure linked folders remain exposed as `linked://<alias>/...`, not `drive://`.
+- [x] Add project view/resource integration for linked folders:
+      linked folders list and read under `project://<id>/linked-folders/...` using the existing
+      linked resource handler.
+- [x] Surface linked project memory scope through existing `memory://`/`project://` views.
+- [x] Add tests for link approval, deny, timeout/default-deny, attenuation, revocation, and project
+      linked-folder list/read integration.
+- [x] Add tests for duplicate alias, path vanished, symlink escape, and linked-folder fail-closed
+      behavior in the link lifecycle.
+- [x] Add memory-scope isolation tests for the link lifecycle.
+
+Acceptance:
+
+- [x] A linked project can be used by Serious Engineer through existing `fs.*`/`code.*`/`proc.*`
+      boundaries and by drive/search through scoped metadata without ambient host access.
+- [x] Removing or narrowing the link fails closed for both file and memory surfaces.
+
+## P5.8 Organizer Worker And Approval Flow
+
+- [x] Implement organizer proposal generation:
+      better path, tags, doc kind, project assignment, dedupe, archive suggestion, and evidence.
+- [x] Add worker lease/heartbeat/complete/fail behavior matching P4 dream/scheduler patterns to avoid
+      duplicate organizer runs.
+- [x] Add `drive.organize()` manual trigger plus optional scheduled run hook; scheduler integration
+      must use the existing event/session path.
+- [x] Gate apply-vs-propose by config/tier:
+      conservative default proposes and asks; only low-risk configured classes may auto-apply.
+- [x] Reuse approval broker and write-proposal surfaces; do not invent a drive-only approval channel.
+- [x] Emit replayable organizer events and resource refs for proposed changes.
+- [x] Add stale proposal handling when the source file moved or changed hash.
+- [x] Add tests for proposal generation, approval apply, deny, timeout, stale source, duplicate worker
+      race, retry/backoff, and low-risk auto-apply config.
+
+Acceptance:
+
+- [x] Dropped files can be auto-filed after approval with exact provenance and replayable events.
+- [x] Bad placement can be corrected with `drive.move`, and the correction informs future proposals.
+
+## P5.9 Memory And Recall Integration
+
+- [x] Add drive-derived records to the P4 memory/retrieval path without making `drive` depend on
+      server internals.
+- [x] Store document summaries/attributes as scoped recall chunks with provenance to `drive://`,
+      content hash, extractor version, and source events.
+- [x] Keep project-specific docs in project scope; do not leak repo/project lore into global user
       memory.
-- [x] Use the existing `write_proposal` + `approval` route for durable fact/chunk writes unless config
-      explicitly grants safe auto-write for the record class.
-- [x] Ensure approval deny/timeout writes nothing and emits resolved proposal status.
-- [x] Add exact `memory://` resource previews for new summary/fact/chunk records.
-- [x] Add tests for approve, deny, timeout/default-deny, idempotent re-run, contradiction supersede,
-      scope isolation, and provenance replay.
+- [x] Add recall budget rules so session-start memory context can include drive-derived summaries
+      without raw document dumps.
+- [x] Add contradiction/update behavior:
+      moving/tagging a document updates derived recall metadata but preserves historical provenance.
+- [x] Add `memory://` previews for drive-derived chunks if they are persisted in memory tables.
+- [x] Add tests for scope isolation, recall ranking, move/tag propagation, redaction, approval denial,
+      and bounded context injection.
 
 Acceptance:
 
-- [x] A dream can propose and, after approval, persist durable facts/chunks without blocking normal
-      chat turns.
-- [x] Re-running the same dream does not duplicate facts, chunks, or approvals.
-- [x] Sensitive or transient content is skipped before proposal creation.
+- [x] A later session in the same project can recall a filed document's summary/open loops without
+      loading the full file.
+- [x] A different project/global session cannot see project-scoped drive memory without grants.
 
-## P4.5 Summaries, Reflection, And Recall
+## P5.10 Research Workspace
 
-- [x] Add summary record types for session, daily, weekly, and topic/project rollups.
-- [x] Implement the first session-summary dream output:
-      what happened, shipped artifacts, decisions, open loops, unresolved approvals, and next likely
+- [x] Define the first research workflow:
+      select corpus from drive/search, spawn bounded P3+ workers, read paged resources, produce
+      digest artifacts, and synthesize a parent answer with citations/resource refs.
+- [x] Keep corpus selection explicit and bounded for local corpus shape:
+      max docs, max bytes per doc, max snippets, max digest bytes, and max workers.
+- [x] Add enforceable per-worker timeouts and total run budget once `agents.parallel` accepts
+      per-child budgets.
+- [x] Use `agents.pipeline` or `agents.parallel` for fan-out; only child digests and resource refs
+      return to parent context.
+- [x] Add citation/provenance format:
+      `drive://` URI + selector/snippet + content hash + extraction/run id.
+- [x] Add research workspace resources under existing project/session surfaces rather than a new
+      scheme unless a second concrete user requires one.
+- [x] Add approval deferral for external/network research, publishing, sending, or destructive file
       actions.
-- [x] Add reflection synthesis when cumulative importance crosses a threshold; reflections must cite
-      evidence and be stored as derived memory, not raw assertion.
-- [x] Add recursive summary update logic so old sessions can be folded without loading full logs.
-- [x] Extend recall to use P4 summaries alongside P2 profile facts and scoped recall chunks.
-- [x] Add a hybrid retrieval stepping-stone before full pgvector:
-      exact/FTS-style lexical query plus scoped recency and importance scoring.
-- [x] Add Postgres FTS coverage when the Postgres gate is enabled; keep in-memory fallback deterministic.
-- [x] Defer dense embeddings/pgvector until the lexical + summary path is stable, then add provider
-      config and dimension pinning.
-- [x] Add tests that session-start memory context can include a recent summary with provenance and
-      bounded token budget.
+- [x] Add tests using scripted drive docs and scripted workers for corpus selection, bounded fan-out,
+      and citation integrity.
+- [x] Add research tests for child failure isolation, cancellation, and replay.
 
 Acceptance:
 
-- [x] Ending a productive session creates a reusable summary visible through `memory://`.
-- [x] A later session in the same scope can recall the summary/open loops without loading raw logs.
-- [x] Recall degrades gracefully when optional vector/FTS stores are empty or unavailable.
+- [x] A local-only research task can summarize multiple filed documents with citations and without
+      unbounded context growth.
+- [x] Child-agent failures or cancellations are visible in SSE and do not corrupt drive state.
 
-## P4.6 Skill Proposal Generation
+## P5.11 Server API And Client Surface
 
-- [x] Define `SkillProposal` data in `tm-memory`:
-      id, name, description, body, trigger/use criteria, evidence, self-critique, verification result,
-      status, dedupe key, created/updated timestamps, and source dream id.
-- [x] Distill skill candidates only from repeated or clearly reusable workflows, not one-off commands
-      or project-local trivia.
-- [x] Generate skill bodies in the existing `SKILL.md` style with concise trigger rules and procedural
-      steps.
-- [x] Add self-critique/refine pass before surfacing a proposal.
-- [x] Add self-verification:
-      dry-run the skill against the source scenario, check frontmatter/body shape, check no forbidden
-      capability claims, and ensure it does not mutate `SOUL.md`, modes, or grants.
-- [x] Emit `write_proposal` with `kind: "skill"` and use the shared approval/default-deny flow.
-- [x] Store approved proposals as pending skill assets or reviewable files according to the eventual
-      P4/P7 split; do not install/reload them into the live prompt catalog automatically.
-- [x] Add `skill_proposal://` or a constrained `memory://.../skill-proposals/...` preview resource
-      before exposing full `skill://` reads.
-- [x] Add tests for low-value candidate rejection, self-critique refinement, verification failure,
-      approval approve/deny/timeout, dedupe on re-run, and no live skill reload.
+- [x] Wire drive store/config into `tm-server` app state.
+- [x] Register drive resource handler in the session resource gateway when grants/config allow it.
+- [x] Add endpoints only where the generic resource gateway is insufficient:
+      prefer `resources/resolve`, `resources/list`, `resources/preview`, and existing approvals.
+- [x] Add a compact drive browser feed for clients:
+      recent docs, virtual dirs, proposals, pending approvals, and search results.
+- [x] Add session/project event payloads for drive actions with mobile-friendly previews.
+- [x] Add `apps/tm-e2e` smoke flow:
+      put/drop doc -> proposal -> approve -> `drive://` preview -> search -> research digest.
+- [x] Add Flutter/Web smoke only after server shapes stabilize:
+      browse recent docs, preview `drive://`, resolve pending organizer proposal, reconnect/replay.
+- [x] Keep clients thin; they never gain direct write authority over host files, memory, or drive
+      metadata outside server-approved APIs.
 
 Acceptance:
 
-- [x] At least one representative post-session dream produces a self-verified skill proposal.
-- [x] Approval can accept or reject the proposal; rejection leaves the live skill catalog unchanged.
-- [x] P7-owned `skills.*` import/version/reload remains unimplemented and fail-closed.
+- [x] A browser/phone can see a pending drive filing proposal, approve/deny it, open the resulting
+      `drive://` resource, and reconnect via `Last-Event-ID`.
 
-## P4.7 Scheduler And Cron
+## P5.12 Security, Failure Modes, And Degradation
 
-- [x] Add a scheduler module under `tm-server` with cron-style job definitions, next-run calculation,
-      job state, run history, and per-job bounds.
-- [x] Add persistent job/run tables to in-memory and Postgres stores.
-- [x] Model reserved `cron://` resources:
-      job list, job definition preview, run history, and last result.
-- [x] Register `cron://` with the resource gateway only when grants/docs/tests are in place; until then
-      reserved paths must keep failing closed.
-- [x] Implement the weekly ship ledger job using the existing `weekly-ship-ledger` skill.
-- [x] Start scheduled runs through the same session API/agent loop/event stream as interactive work.
-- [x] Enforce `cron_mode: deny`: any approval-needed action in a scheduled run is deferred and
-      surfaced for Brian; it is never auto-approved.
-- [x] Enforce `goals.max_turns <= 8`, script timeout <= 120 seconds, bounded model role, and one-run
-      per scheduled fire.
-- [x] Handle offline/client-disconnected mode by logging queued/pending approvals for later review.
-- [x] Add tests for cron parsing, missed-run policy, duplicate-fire prevention, approval deferral,
-      bounds enforcement, event replay, and `cron://` resource previews.
-
-Acceptance:
-
-- [x] A deterministic weekly ship ledger run can be triggered in tests and emits a replayable session.
-- [x] Scheduled runs share the normal approval, memory, artifact, and resource pathways.
-- [x] Scheduler restart does not double-run completed or currently leased jobs.
-
-## P4.8 Resource, API, And Client Surface
-
-- [x] Add full dream inspection endpoints or resources:
-      queue status and exact dream records are visible through `memory://dreams`; dream run events,
-      produced summaries, and proposals are visible through `session_events` / `memory://`.
-- [x] Prefer the session resource gateway for previews over bespoke debug routes.
-- [x] Add event payload docs for all new P4 event types.
-- [x] Update `docs/sdk/tm-runtime.d.ts` for any new resource URI shape or approved `memory.*` /
-      scheduler surface in the same change as host docs/tests.
-- [x] Add compact mobile-friendly payloads for pending memory/skill proposals and scheduled-run
-      status.
-- [x] Add Flutter/Web smoke coverage only after the server event/resource shape is stable:
-      pending dream/proposal display, approval resolution, cron run replay, and resource open.
-- [x] Keep clients thin; no client gains direct write authority over memory, skills, files, or cron.
+- [x] Unknown `drive.*` methods fail closed with `NotImplementedError` or stable invalid-call errors.
+- [x] Unknown/unregistered `drive://` resources fail closed until the handler is enabled.
+- [x] Raw absolute host paths in `drive.put`, `drive.get`, `drive.move`, or `drive.search` are rejected
+      unless they come through an approved link operation.
+- [x] Symlink traversal, `..`, path normalization tricks, duplicate aliases, and stale tags are covered
+      by tests.
+- [x] Link revocation invalidates shared linked-folder grants and returns a safe error while sandbox
+      copies and blobs remain intact.
+- [x] Path-vanished linked-folder reads return safe errors without leaking host paths.
+- [x] Memory-scope revocation returns safe errors and cannot leak scoped recall.
+- [x] Transducer/model failures leave the file stored with fallback metadata and a replayable warning.
+- [x] Organizer/store failure leaves proposals retryable or terminal according to config; no partial
+      metadata writes.
+- [x] Dedup integrity checks use `sha256`; hash mismatch fails closed.
+- [x] Sensitive content redaction happens before model extraction, memory writes, or research snippets.
+- [x] Network egress remains disabled/default-deny unless P5 explicitly opts into the hardening slice.
 
 Acceptance:
 
-- [x] A browser/phone can see a dream or cron proposal, resolve it through the existing approval route,
-      open the produced memory/summary/proposal resource, and reconnect via `Last-Event-ID`.
+- [x] Security tests cover denial, timeout/default-deny, fail-closed unknown scheme/capability,
+      sandbox-default behavior, and linked-folder escape attempts.
 
-## P4.9 Model Roles And Configuration
+## P5.13 Optional HTTP Hardening If Research Needs Live Egress
 
-- [x] Add config for model roles used by dreaming:
-      extraction, reflection, summarization, skill distillation, self-critique, verification, and
-      embeddings if/when dense recall lands.
-- [x] Keep aux dream roles on cheaper/fallback-capable models by default.
-- [x] Add config for redaction, token budgets, summary cadence, reflect threshold, retry/backoff, and
-      scheduler bounds.
-- [x] Ensure missing model config degrades visibly and safely:
-      queue remains pending or failed with `last_error`, no partial unapproved writes.
-- [x] Add docs for env vars and gated live tests.
+- [x] Decide early whether P5 research requires live web egress. If not, defer this whole section to
+      P7 and keep `http.get` as the deterministic allowlist helper.
+- [x] Defer request count, byte caps, timeout caps, redirect policy, response MIME/size filters,
+      audit logging, and production allowlists to the future live-egress hardening slice.
+- [x] Keep credentials behind future `secrets.use`; do not materialize secret values in JS heap,
+      artifacts, model context, or drive metadata.
+- [x] Defer network tests to the future live-egress hardening slice; live internet tests remain
+      opt-in.
+- [x] Ensure research citations distinguish future fetched/external resources from local `drive://`
+      docs via `sourceKind`.
 
 Acceptance:
 
-- [x] P4 can run deterministically with scripted model clients in normal tests and with real model
-      roles only under explicit live-test configuration.
+- [x] Live egress remains unavailable in P5; future live-egress work must prove approval, allowlists,
+      audit, byte caps, and resource spill before enabling it.
 
-## P4.10 Documentation And Verification
+## P5.14 Documentation And Verification
 
-- [x] Update §22 when storage/worker behavior changes:
-      implemented tables, event names, failure modes, and recall behavior.
-- [x] Update §26 when the skill proposal lifecycle is concretely implemented.
-- [x] Update §27 when scheduler jobs, bounds, `cron://`, or client surfaces land.
-- [x] Update `ROADMAP.md` only when P4 acceptance checks are actually satisfied.
-- [x] Add focused unit tests before broad `cargo test`:
-      dream queue lifecycle, extraction filters, redaction, summary write, skill proposal gate, and
-      scheduler fire.
-- [x] Run `cargo test` before marking any P4 slice complete.
-- [x] Run gated Postgres tests for schema/lease/replay work:
+- [x] Update `ROADMAP.md` only when P5 acceptance checks actually pass.
+- [x] Update §24 when concrete store, transducer, organizer, resource, and link behavior lands.
+- [x] Update §07 when `drive.*` host catalog/SDK/grant behavior changes.
+- [x] Update §09 when `drive://` is registered and no longer only reserved.
+- [x] Update §22 when drive-derived memory scopes or recall chunks are implemented.
+- [x] Update §23 for `agents.parallel` per-child budgets used by research fan-out.
+- [x] Update §27 when client/server drive browser or research workspace surfaces land.
+- [x] Update §29 parity notes if drive/research changes user-visible behavior inherited from
+      `hermes-agent`.
+- [x] Add narrow tests before broad tests:
+      store/path, transducers, vdir/search, resource handler, host ops, approvals, link/memory scope,
+      organizer, research fan-out.
+- [x] Run focused tests as slices land:
+      `cargo test -p tm-drive`, `cargo test -p tm-host`, `cargo test -p tm-sandbox`, and
+      `cargo test -p tm-server`.
+- [x] Run baseline `cargo test` before marking P5 complete.
+- [x] Run gated Postgres tests for drive schema/resource/replay work:
       `TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server`.
 - [x] Run tm-e2e/Flutter smoke only after public API/event shapes change and need client proof.
-- [x] Keep live OpenAI tests opt-in and skipped by default.
+- [x] Keep live OpenAI/network tests opt-in and skipped by default.
+
+Acceptance:
+
+- [x] P5 can be proven with deterministic scripted tests and no external services.
+- [x] Docs describe exactly which drive/research features are implemented and which remain deferred.
 
 ## Deferred Namespace Placement
 
@@ -321,35 +464,37 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 | Namespace / surface | Target milestone | Placement note |
 |---|---|---|
-| `memory.*` | **P4, only when justified** | P2 uses `memory://` resources plus server-side write proposals. P4 may add `memory.recall` / `memory.reflect` only after grants, host docs, SDK typings, denial tests, and approval policy exist. |
-| `skills.*` / full `skill://` reads | **P4/P7 split** | P4 produces approval-gated skill proposals and may expose constrained proposal previews. P7 owns import/version/reload, live catalog mutation, MCP import gates, and full audit/replay semantics. |
-| `cron://` | **P4 ✓** | Session resource gateway exposes scheduler job definitions and run history with bounds and replay tests. Sandbox/runtime `cron.*` write authority remains absent. |
-| `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
-| `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as deterministic allowlist helper until P7 hardening. |
-| `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
-| `code.ast` / `code.lsp` | **Post-critical tech slice** | Useful for coding-agent quality, but keep it out of P4 unless a concrete dream/scheduler user requires it. |
+| `drive.*` | **P5** | Current active milestone. Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, resource handler, and organizer flows. |
+| `drive://` | **P5** | Reserved today. Register only with `tm-drive` handler, grants, paging, previews, fail-closed tests, and client gateway coverage. |
+| `memory.*` richer APIs | **After P5 need is concrete** | P5 should feed existing memory/resource surfaces first. Add new global memory methods only with grants, SDK typings, denial tests, and bounded context behavior. |
+| `skills.*` / full `skill://` reads | **P7** | P4 can produce skill proposals. P7 owns import/version/reload, live catalog mutation, MCP import gates, and audit/replay semantics. |
+| `http.*` hardening | **P5 or P7** | Do it in P5 only if research needs live egress. Otherwise defer to P7 hardening. |
+| `secrets.use` | **P7** | Requires opaque egress-scoped handles and audit guarantees that never expose secret values to JS/model/artifacts/drive. |
+| `tm-mcp` | **P7 or explicit later slice** | External resources/tools can feed the same resource/approval model later; do not block local-first drive. |
+| Android OS integrations | **P6** | Wait until P5 drive/resource surfaces stabilize, then package existing Flutter client without a second execution path. |
 
 ## Parallelization Seams
 
-- Dream queue leasing/store work can proceed independently from LLM extraction as long as the worker
-  trait stays scripted-testable.
-- Summary/recall can land before dense embeddings; lexical + recency + importance is enough for the
-  first P4 acceptance path.
-- Skill proposal generation can use stored summaries/evidence before full graph recall exists.
-- Scheduler/job tables and the deterministic weekly ledger trigger are now in place; future scheduler
-  work should focus on daemon looping, missed-run policy, restart duplicate prevention, and client
-  smoke.
-- Flutter smoke can wait until the server event/resource contract stabilizes.
+- `tm-drive` store/path/vdir work can proceed independently of host SDK wiring once data shapes are
+  frozen.
+- Resource handler and server gateway work can proceed with an in-memory drive store before Postgres
+  schema lands.
+- Deterministic transducers can land before model-assisted extraction and embeddings.
+- Organizer proposal generation can land before scheduler integration; manual `drive.organize()` is
+  enough for the first acceptance path.
+- Research workflow tests can use scripted drive docs and scripted actors before client UI exists.
+- Flutter/Web smoke should wait until server event/resource payloads stabilize.
 
 ## Do-Not-Start-Yet List
 
-- Android OS packaging before P5/P6 server and resource surfaces stabilize.
-- Drive auto-organizer before P5 approval policy and memory scopes are in place.
+- Android OS packaging before P5 server/resource surfaces stabilize.
+- Cloud sync or CRDT replication in P5 v1; local-first/offline is the acceptance path.
+- Generic networked filesystem behavior; drive is the user document space, not ambient host access.
 - `skills.*` live import/reload, MCP import gates, and tiered self-evolution writes before P7.
-- Secret broker work and production egress hardening outside their hardening milestone unless a P4
-  acceptance test truly requires a small prerequisite.
-- Research/deep orchestration beyond the existing P3+ actor surface before memory scopes, scheduler,
-  and drive surfaces are real.
+- Secret broker work and production egress hardening unless P5 research explicitly needs the small
+  hardening slice.
+- A new orchestration loop for research; use the existing agent loop, P3+ actors, resources,
+  artifacts, approvals, and event log.
 - Any relaxation of manual approval, unknown-scheme fail-closed behavior, argv-vector `proc.run`, or
   linked-folder grant boundaries.
 
@@ -359,32 +504,38 @@ Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host
 `tm-agents`, `tm-memory`, `tm-server`, `apps/tm-cli`, `apps/tm-e2e`, and client scaffolds under
 `clients/`.
 
-P4 ownership:
+P5 ownership:
 
-- `tm-memory`: dream queue, worker contracts, profile/recall record shapes,
-  extraction/summary/proposal data types, input budgeting, recall logic, redaction, future
-  embeddings/FTS/graph modules.
-- `tm-server`: durable store implementations, session/dream/scheduler APIs, event log/SSE emission,
-  approval broker integration, resource registration, model-role wiring, daemon worker loop.
-- `tm-modes`: existing skill assets and prompt catalog. P4 must not mutate the live catalog without
-  the approved P4/P7 lifecycle.
-- `tm-host` / `tm-sandbox`: only touched if P4 exposes a new capability-gated SDK namespace; update
-  host docs, SDK typings, grants, and denial tests in the same change.
-- `clients/miku_flutter` and `apps/tm-e2e`: smoke coverage for visible P4 events/resources after the
-  server shape stabilizes.
+- `tm-drive`: drive entry types, metadata store traits/implementations, path rules, transducers,
+  virtual dirs, placement proposer, organizer proposals/worker contracts, resource handler helpers,
+  and link/memory-scope policy helpers where they do not depend on server internals.
+- `tm-host`: host catalog and dispatch for `drive.*` only where capability registration belongs;
+  preserve existing linked-folder `FsPolicy` semantics.
+- `tm-sandbox`: SDK namespace exposure, Deno op routing, docs search entries, typings alignment, and
+  denial tests.
+- `tm-server`: app-state wiring, durable store integration, resource registration, approval broker,
+  session events/SSE, project/memory integration, organizer runner, research workflow entry points,
+  and client-facing resource/browser APIs.
+- `tm-memory`: drive-derived scoped recall records and retrieval hooks if existing P4 surfaces need
+  extension.
+- `tm-artifacts`: blob/CAS reuse for document bytes and large derived outputs.
+- `clients/miku_flutter` and `apps/tm-e2e`: smoke coverage after server contract stabilizes.
 
-Planned product/support crates remain: `tm-drive`, `tm-mcp`, and `tm-trace`. Extract new crates only
-after a second concrete user exists.
+Planned product/support crates after P5 remain: `tm-mcp` and `tm-trace`. Avoid extracting more crates
+until a second concrete user exists.
 
 ## Open Questions
 
-- Should P4 expose `memory.reflect()` to sandbox code, or keep manual reflection server-only until the
-  dream worker is stable?
-- Should approved skill proposals write to a configured review folder, a database row, or both before
-  P7 import/version/reload exists?
-- What is the first dense-embedding backend to support after lexical recall proves useful:
-  OpenAI-compatible embeddings, local `fastembed`/`candle`, or both behind config?
-- What missed-run policy should cron use on restart: run once immediately, skip missed windows, or
-  queue a bounded catch-up?
-- Which client surface should display pending dreams first: project view, session details, or a
-  dedicated proactivity/review inbox?
+- Should `drive.put` accept raw bytes/content directly from the sandbox, or require artifact/blob refs
+  for large inputs and only allow inline text below a small cap?
+- What is the first canonical path convention set for TempestMiku's own repo/project docs?
+- How should future clients group shared `write_proposal` drive events with the richer
+  `drive_organizer_completed` run summary without duplicating proposal rows?
+- How should project memory scope ids be derived from `drive.link`: alias, canonical root hash,
+  project id, or explicit user-provided name?
+- Which drive-derived records should enter recall by default: summaries only, extracted attributes,
+  or both?
+- What is the minimum useful research workflow for dogfooding P5: local docs QA, project archaeology,
+  paper/note synthesis, or release-planning over project artifacts?
+- Is P5 the right moment for HTTP hardening, or should local-only research ship first and leave live
+  web egress to P7?

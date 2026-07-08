@@ -1,6 +1,8 @@
 use super::*;
 use crate::scheduler::{WEEKLY_SHIP_LEDGER_JOB_ID, WEEKLY_SHIP_LEDGER_SCHEDULE};
 use crate::{NewCronJobRecord, NewCronRunRecord};
+use tm_artifacts::ArtifactStore;
+use tm_drive::{DriveListOptions, DrivePutOptions, InMemoryDriveStore};
 use tm_memory::{
     DreamReason, DreamStatus, MemoryEvidenceRef, MemorySummaryKind, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillVerification,
@@ -94,6 +96,92 @@ async fn project_views_and_promotion_are_idempotent() {
 }
 
 #[tokio::test]
+async fn promotion_can_import_project_workspace_attachment_into_drive() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let drive_store = InMemoryDriveStore::new(ArtifactStore::open(temp.path(), "drive").unwrap());
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone())
+    .with_drive_store(drive_store.clone());
+    let app = app(state);
+    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    let workspace = artifact_root
+        .join("sessions")
+        .join(session.id.to_string())
+        .join("workspace")
+        .join("notes");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("import.md"),
+        "# Imported\nproject attachment",
+    )
+    .unwrap();
+
+    let source_uri = "project://tempestmiku/workspace/notes/import.md";
+    let promoted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/promote", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"projectId":"tempestmiku","resources":["{source_uri}"],"importResourcesToDrive":true}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(promoted.status(), StatusCode::OK);
+    let promoted = response_json(promoted).await;
+    let item = &promoted["promoted"].as_array().unwrap()[0];
+    assert_eq!(item["kind"], json!("workspace"));
+    assert_eq!(item["sourceUri"], json!(source_uri));
+    assert_eq!(
+        item["targetUri"],
+        json!("drive://projects/tempestmiku/attachments/notes/import.md")
+    );
+
+    let entry = drive_store
+        .get("drive://projects/tempestmiku/attachments/notes/import.md")
+        .unwrap();
+    assert_eq!(entry.project.as_deref(), Some("tempestmiku"));
+    assert_eq!(entry.source_uri.as_deref(), Some(source_uri));
+    let session_id = session.id.to_string();
+    assert_eq!(
+        entry.provenance[0].session_id.as_deref(),
+        Some(session_id.as_str())
+    );
+
+    let resolved = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={}",
+                    session.id,
+                    item["targetUri"].as_str().unwrap()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved.status(), StatusCode::OK);
+    let resolved = response_json(resolved).await;
+    assert_eq!(resolved["content"], json!("# Imported\nproject attachment"));
+}
+
+#[tokio::test]
 async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
@@ -102,8 +190,8 @@ async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
     std::fs::write(linked_root.join("README.md"), "linked readme").unwrap();
     let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
         name: "tempestmiku".to_string(),
-        path: linked_root,
-        mode: FsMode::Ro,
+        path: linked_root.clone(),
+        mode: FsMode::Rw,
         commands: Vec::new(),
         safe_args: Vec::new(),
     }])
@@ -112,7 +200,7 @@ async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
     let state = AppState::new(
-        store,
+        store.clone(),
         memory,
         chat,
         ModesConfig::default(),
@@ -206,6 +294,444 @@ async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
         .await
         .unwrap();
     assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn project_linked_folder_view_lists_and_reads_shared_links() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("linked");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    std::fs::write(linked_root.join("README.md"), "one\ntwo\nthree").unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: linked_root.clone(),
+        mode: FsMode::Rw,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root)
+    .with_linked_folders(linked.clone());
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+
+    let root = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=project://tempestmiku",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(root.status(), StatusCode::OK);
+    let root_entries = response_json(root).await;
+    assert!(
+        root_entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["uri"] == json!("project://tempestmiku/linked-folders"))
+    );
+    assert!(
+        root_entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["uri"] == json!("project://tempestmiku/memory"))
+    );
+
+    let memory = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=project://tempestmiku/memory",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(memory.status(), StatusCode::OK);
+    let memory = response_json(memory).await;
+    let memory_view: Value = serde_json::from_str(memory["content"].as_str().unwrap()).unwrap();
+    assert_eq!(memory_view["scope"], json!("project:tempestmiku"));
+    assert_eq!(
+        memory_view["chunksUri"],
+        json!("memory://scopes/project:tempestmiku/chunks")
+    );
+    assert_eq!(memory_view["mode"], json!("rw"));
+    assert_eq!(memory_view["linkedUri"], json!("linked://tempestmiku/"));
+
+    linked
+        .insert_policy(tm_host::FsPolicy {
+            alias: "tempestmiku".to_string(),
+            root: linked_root.canonicalize().unwrap(),
+            mode: FsMode::Ro,
+            commands: std::collections::BTreeSet::new(),
+            safe_args: Vec::new(),
+        })
+        .unwrap();
+    let narrowed_memory = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=project://tempestmiku/memory",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(narrowed_memory.status(), StatusCode::OK);
+    let narrowed_memory = response_json(narrowed_memory).await;
+    let narrowed_view: Value =
+        serde_json::from_str(narrowed_memory["content"].as_str().unwrap()).unwrap();
+    assert_eq!(narrowed_view["mode"], json!("ro"));
+
+    let other_memory = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=project://other/memory",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_memory.status(), StatusCode::FORBIDDEN);
+
+    let memory_entries = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=project://tempestmiku/memory",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(memory_entries.status(), StatusCode::OK);
+    let memory_entries = response_json(memory_entries).await;
+    assert_eq!(
+        memory_entries.as_array().unwrap()[0]["uri"],
+        json!("memory://scopes/project:tempestmiku/chunks")
+    );
+
+    let links = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=project://tempestmiku/linked-folders",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(links.status(), StatusCode::OK);
+    let link_entries = response_json(links).await;
+    assert_eq!(
+        link_entries.as_array().unwrap()[0]["uri"],
+        json!("project://tempestmiku/linked-folders/tempestmiku/")
+    );
+    let other_links = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=project://other/linked-folders",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_links.status(), StatusCode::OK);
+    assert!(
+        response_json(other_links)
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let files = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=project://tempestmiku/linked-folders/tempestmiku/",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(files.status(), StatusCode::OK);
+    let file_entries = response_json(files).await;
+    assert!(
+        file_entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["uri"]
+                == json!("project://tempestmiku/linked-folders/tempestmiku/README.md"))
+    );
+
+    let resolved = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=project://tempestmiku/linked-folders/tempestmiku/README.md&selector=2-2",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved.status(), StatusCode::OK);
+    let resolved = response_json(resolved).await;
+    assert_eq!(
+        resolved["uri"],
+        json!("project://tempestmiku/linked-folders/tempestmiku/README.md")
+    );
+    assert_eq!(resolved["selector"], json!("2-2"));
+    assert_eq!(resolved["content"], json!("two"));
+
+    let scoped_recall = "revoked linked memory should not leak this recall";
+    store
+        .add_recall_chunk(RecallChunkRecord {
+            id: Uuid::new_v4(),
+            scope: "project:tempestmiku".to_string(),
+            text: scoped_recall.to_string(),
+            source: "linked-revocation-test".to_string(),
+            importance: 0.8,
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    linked.remove_policy("tempestmiku").unwrap();
+    let revoked_memory = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=project://tempestmiku/memory",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoked_memory.status(), StatusCode::FORBIDDEN);
+    let revoked_body = response_json(revoked_memory).await;
+    assert!(!revoked_body.to_string().contains(scoped_recall));
+    assert!(
+        revoked_body
+            .to_string()
+            .contains("project memory scope project:tempestmiku is not active")
+    );
+
+    let revoked_file = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=project://tempestmiku/linked-folders/tempestmiku/README.md",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoked_file.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn drive_resource_gateway_reads_lists_and_previews_when_configured() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let artifact_root = tempfile::tempdir().unwrap();
+    let drive_store =
+        InMemoryDriveStore::new(ArtifactStore::open(artifact_root.path(), "drive").unwrap());
+    let filed = drive_store
+        .put_bytes(
+            b"# Drive Note\nhello from drive",
+            DrivePutOptions {
+                auto: true,
+                project: Some("TempestMiku".to_string()),
+                ..DrivePutOptions::default()
+            },
+        )
+        .unwrap();
+    let state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.path().to_path_buf())
+    .with_drive_store(drive_store.clone());
+    let app = app(state);
+    let session = create(&app).await;
+
+    let resolved = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={}&selector=2-2",
+                    session.id, filed.uri
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved.status(), StatusCode::OK);
+    let json = response_json(resolved).await;
+    assert_eq!(json["content"], json!("hello from drive"));
+    assert_eq!(json["uri"], json!(filed.uri));
+
+    let missing_parent = filed
+        .entry
+        .path
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .unwrap_or("");
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=drive://{}/missing.md",
+                    session.id, missing_parent
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let missing = response_json(missing).await;
+    let error = missing["error"].as_str().unwrap();
+    assert!(error.contains("nearby paths"));
+    assert!(error.contains(&filed.entry.path));
+    assert!(!error.contains(artifact_root.path().to_str().unwrap()));
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=drive://by-project/TempestMiku",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let entries = response_json(listed).await;
+    assert_eq!(entries.as_array().unwrap().len(), 1);
+
+    let feed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/drive/feed?project=TempestMiku&limit=5",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(feed.status(), StatusCode::OK);
+    let feed = response_json(feed).await;
+    assert_eq!(feed["recent"].as_array().unwrap().len(), 1);
+    assert_eq!(feed["recent"][0]["uri"], json!(filed.uri));
+    assert_eq!(feed["virtualDirs"].as_array().unwrap().len(), 5);
+    assert!(feed["pendingApprovals"].as_array().unwrap().is_empty());
+
+    let preview = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/preview?uri={}",
+                    session.id, filed.uri
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let json = response_json(preview).await;
+    assert_eq!(json["content"], json!(""));
+    assert!(json["preview"].as_str().unwrap().contains("Drive Note"));
+
+    let project_entries = drive_store
+        .list(DriveListOptions {
+            path: Some("/by-project/TempestMiku".to_string()),
+            recursive: true,
+            ..DriveListOptions::default()
+        })
+        .unwrap();
+    assert_eq!(project_entries.len(), 1);
 }
 
 #[tokio::test]

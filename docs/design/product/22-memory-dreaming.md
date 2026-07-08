@@ -143,6 +143,17 @@ embeddings, graph extraction, and LLM-backed extraction remain later P4 hardenin
 enabled, scoped recall also uses a `simple` `tsvector`/`plainto_tsquery` path with substring fallback;
 the in-memory store keeps deterministic substring matching for normal tests.
 
+P5 drive documents add a second bounded recall source at turn construction: when `tm-server` has a
+configured drive store, project-scoped turns search filed drive entries for that project and inject at
+most three summary/snippet lines with `drive://` URI, selector, and content hash. Raw document bodies
+remain behind `resources.read("drive://...", selector)` paging. After a turn, the server also upserts
+project-scoped recall chunks for matching filed drive documents with `drive://` URI, content hash,
+extractor version, bounded attribute lines, and source session/event fields when supplied, using the
+existing P4 recall store rather than a drive-owned memory table. Drive-derived recall records are keyed
+by project scope plus content hash, so moving or tagging a document updates the persisted recall text
+without losing source session/event provenance. Automatic source-event ids for drive host calls remain
+follow-up hardening.
+
 ## 22.6 Storage substrate & embeddings (decisions)
 
 - **Spine: PostgreSQL + `pgvector`** (self-hosted on `lumo`) — `pgvector` (HNSW index) for dense ANN;

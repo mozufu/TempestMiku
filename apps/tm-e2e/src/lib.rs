@@ -1,6 +1,7 @@
 mod actor_smoke;
 mod client;
 mod config;
+mod drive_smoke;
 mod evidence;
 mod record;
 mod speaker;
@@ -10,6 +11,7 @@ mod workflow;
 pub use actor_smoke::{ActorSmokeReport, run_actor_smoke};
 pub use client::{MikuClient, SessionInfo};
 pub use config::{E2eConfig, load_dotenv};
+pub use drive_smoke::{DriveSmokeReport, run_drive_smoke};
 pub use evidence::*;
 pub use record::*;
 pub use speaker::{E2eSpeaker, LiveSpeaker, ScriptedSpeaker, WorkflowContext, WorkflowStep};

@@ -645,8 +645,12 @@ async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
     let cancelled_seq = events
         .iter()
         .find(|event| event.event_type == "actor_cancelled")
-        .and_then(|event| event.seq.checked_sub(1));
-    let replay = store.events_after(session.id, cancelled_seq).await.unwrap();
+        .map(|event| event.seq)
+        .expect("actor_cancelled seq");
+    let replay = store
+        .events_after(session.id, cancelled_seq.checked_sub(1))
+        .await
+        .unwrap();
     assert!(
         replay
             .iter()
@@ -661,6 +665,134 @@ async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
     assert_eq!(record["status"], json!("terminated"));
     assert_eq!(record["cancelled"], json!(true));
     assert_eq!(record["failure_reason"]["kind"], json!("cancelled"));
+
+    store
+        .append_event(session.id, "final", json!({"text": "done"}))
+        .await
+        .unwrap();
+    let sse = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/events?lastEventId={}",
+                    session.id,
+                    cancelled_seq - 1
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(sse.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("event: actor_cancelled"), "{body}");
+    assert!(body.contains("event: final"), "{body}");
+}
+
+#[tokio::test]
+async fn actor_failed_event_replays_and_agent_resource_is_terminal() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let roster = Arc::new(tm_agents::MailboxRegistry::new());
+    let state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_actor_roster(Arc::clone(&roster));
+    state.wire_lifecycle_sink();
+    let app = app(state);
+    let session = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
+
+    let actor_id = tm_agents::ActorId::new("ResearchWorker").unwrap();
+    roster
+        .track(tm_agents::ActorRecord {
+            id: actor_id.clone(),
+            parent: None,
+            status: tm_agents::ActorStatus::Running,
+            mode: Some("researcher".to_string()),
+            budget: tm_agents::ActorBudget::default(),
+            spawned_at: Utc::now(),
+            completed_at: None,
+            cancelled: false,
+            failure_reason: None,
+            last_summary: None,
+            artifact_uri: None,
+            history_uri: None,
+        })
+        .await;
+
+    let decision = roster
+        .record_actor_error(
+            &session.id.to_string(),
+            &actor_id,
+            tm_agents::FailureReason::Timeout,
+        )
+        .await;
+    assert!(decision.is_some());
+
+    let failed = wait_for_event_payload(&store, session.id, "actor_failed").await;
+    assert_eq!(failed["actor_id"], json!("ResearchWorker"));
+    assert_eq!(failed["reason"]["kind"], json!("timeout"));
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    let failed_seq = events
+        .iter()
+        .find(|event| event.event_type == "actor_failed")
+        .map(|event| event.seq)
+        .expect("actor_failed seq");
+    let replay = store
+        .events_after(session.id, failed_seq.checked_sub(1))
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .iter()
+            .any(|event| event.event_type == "actor_failed"),
+        "Last-Event-ID replay should include actor_failed"
+    );
+
+    let resource =
+        get_session_resource_json(&app, session.id, "resolve", "agent://ResearchWorker").await;
+    assert_eq!(resource["uri"], json!("agent://ResearchWorker"));
+    let record: serde_json::Value =
+        serde_json::from_str(resource["content"].as_str().unwrap()).unwrap();
+    assert_eq!(record["status"], json!("terminated"));
+    assert_eq!(record["cancelled"], json!(false));
+    assert_eq!(record["failure_reason"]["kind"], json!("timeout"));
+
+    store
+        .append_event(session.id, "final", json!({"text": "done"}))
+        .await
+        .unwrap();
+    let sse = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/events?lastEventId={}",
+                    session.id,
+                    failed_seq - 1
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(sse.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("event: actor_failed"), "{body}");
+    assert!(body.contains("event: final"), "{body}");
 }
 
 #[tokio::test]
@@ -905,6 +1037,337 @@ display({
             .unwrap()
             .contains("server sdk artifact")
     );
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn serious_engineer_native_deno_uses_linked_repo_and_scoped_drive_search() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("repo");
+    std::fs::create_dir_all(linked_root.join("src")).unwrap();
+    std::fs::write(
+        linked_root.join("Cargo.toml"),
+        "[package]\nname = \"linked-drive-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        linked_root.join("src/lib.rs"),
+        "pub fn linked_answer() -> i32 { 42 }\n",
+    )
+    .unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "repo".to_string(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: vec!["cargo".to_string()],
+        safe_args: vec![vec!["cargo".to_string(), "test".to_string()]],
+    }])
+    .unwrap();
+    let drive_store = tm_drive::InMemoryDriveStore::new(
+        tm_artifacts::ArtifactStore::open(temp.path(), "drive").unwrap(),
+    );
+    let filed = drive_store
+        .put_bytes(
+            b"# Scoped Linked Brief\nScoped drive metadata for the linked project.",
+            tm_drive::DrivePutOptions {
+                auto: true,
+                suggested_path: Some("projects/tempestmiku/notes/scoped-linked.md".to_string()),
+                project: Some("TempestMiku".to_string()),
+                source_uri: Some("linked://repo/README.md".to_string()),
+                approval_mode: tm_drive::DriveApprovalMode::Auto,
+                ..tm_drive::DrivePutOptions::default()
+            },
+        )
+        .unwrap();
+
+    let code = format!(
+        r#"
+const read = await fs.read("repo:src/lib.rs");
+const hits = await code.search({{ pattern: "linked_answer", paths: ["repo:src/lib.rs"], regex: false }});
+const run = await proc.run("cargo", ["test", "--quiet"], {{ cwd: "repo:" }});
+const driveHits = await drive.search("Scoped", {{ project: "TempestMiku", returnSnippets: true }});
+display({{
+  readOk: read.content.includes("linked_answer"),
+  codeHits: hits.length,
+  exitCode: run.exitCode,
+  driveHits: driveHits.length,
+  driveUri: driveHits[0]?.uri,
+  driveProject: driveHits[0]?.project,
+  expectedDriveUri: "{uri}"
+}});
+"#,
+        uri = filed.uri
+    );
+    let tool_args = json!({ "code": code }).to_string();
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_linked_drive".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(tool_args),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("linked project checked".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+    ]));
+    let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+    let cfg = AgentConfig {
+        model: "fake".to_string(),
+        max_turns: 3,
+        cell_budget: CellBudget {
+            wall_ms: 240_000,
+            output_bytes: 50_000,
+        },
+        ..AgentConfig::default()
+    };
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store,
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone())
+    .with_linked_folders(linked.clone())
+    .with_drive_store(drive_store.clone());
+    let backend = NativeDenoBackend::new(
+        llm_for_backend,
+        cfg,
+        DenoSandboxOptions {
+            artifact_root,
+            linked_folders: Some(linked),
+            drive_store: Some(drive_store),
+            approval_timeout: Duration::from_secs(1),
+            ..DenoSandboxOptions::default()
+        },
+        NativeApprovalMode::Deny,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    let router = app(state);
+    let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/messages", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"inspect the linked project"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let tool_result = native_tool_result(&llm);
+    assert!(tool_result.contains("\"readOk\": true"), "{tool_result}");
+    assert!(tool_result.contains("\"codeHits\": 1"), "{tool_result}");
+    assert!(tool_result.contains("\"exitCode\": 0"), "{tool_result}");
+    assert!(tool_result.contains("\"driveHits\": 1"), "{tool_result}");
+    assert!(tool_result.contains(&filed.uri), "{tool_result}");
+    assert!(
+        tool_result.contains("\"driveProject\": \"TempestMiku\""),
+        "{tool_result}"
+    );
+}
+
+#[tokio::test]
+async fn native_deno_drive_organizer_events_are_persisted_for_replay() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let drive_store = tm_drive::InMemoryDriveStore::new(
+        tm_artifacts::ArtifactStore::open(temp.path(), "drive").unwrap(),
+    );
+    let code = r##"
+await drive.put("# Raw\norganizer should move this into project notes", {
+  suggestedPath: "inbox/raw.md",
+  project: "TempestMiku",
+  docKind: "note",
+  approvalMode: "auto"
+});
+const proposals = await drive.organize();
+display({
+  proposals: proposals.length,
+  status: proposals[0]?.status,
+  source: proposals[0]?.sourcePath,
+  target: proposals[0]?.proposedPath
+});
+"##;
+    let tool_args = json!({ "code": code }).to_string();
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_drive_organize".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(tool_args),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("drive organizer checked".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+    ]));
+    let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+    let cfg = AgentConfig {
+        model: "fake".to_string(),
+        max_turns: 3,
+        cell_budget: CellBudget {
+            wall_ms: 240_000,
+            output_bytes: 50_000,
+        },
+        ..AgentConfig::default()
+    };
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone())
+    .with_drive_store(drive_store.clone());
+    let backend = NativeDenoBackend::new(
+        llm_for_backend,
+        cfg,
+        DenoSandboxOptions {
+            artifact_root,
+            drive_store: Some(drive_store),
+            approval_timeout: Duration::from_secs(1),
+            ..DenoSandboxOptions::default()
+        },
+        NativeApprovalMode::Deny,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    let router = app(state);
+    let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/messages", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"organize drive docs"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let tool_result = native_tool_result(&llm);
+    assert!(tool_result.contains("\"proposals\": 1"), "{tool_result}");
+    assert!(
+        tool_result.contains("\"status\": \"pending\""),
+        "{tool_result}"
+    );
+    let events = store.events_after(session.id, None).await.unwrap();
+    let filed = events
+        .iter()
+        .find(|event| event.event_type == "drive_put")
+        .expect("drive put event");
+    assert_eq!(filed.payload_json["uri"], json!("drive://inbox/raw.md"));
+    assert_eq!(
+        filed.payload_json["preview"]["title"],
+        json!("Filed drive document")
+    );
+    assert_eq!(
+        filed.payload_json["resourceRefs"][0]["uri"],
+        json!("drive://inbox/raw.md")
+    );
+    let started = events
+        .iter()
+        .find(|event| event.event_type == "drive_organizer_started")
+        .expect("drive organizer start event");
+    assert_eq!(started.payload_json["apply"], json!(false));
+    let pending = events
+        .iter()
+        .find(|event| event.event_type == "write_proposal")
+        .expect("drive write proposal event");
+    assert_eq!(pending.payload_json["kind"], json!("drive"));
+    assert_eq!(pending.payload_json["status"], json!("pending"));
+    assert_eq!(
+        pending.payload_json["sourceUri"],
+        json!("drive://inbox/raw.md")
+    );
+    assert_eq!(
+        pending.payload_json["proposedUri"],
+        json!("drive://projects/tempestmiku/note/raw.md")
+    );
+    let completed = events
+        .iter()
+        .find(|event| event.event_type == "drive_organizer_completed")
+        .expect("drive organizer completion event");
+    assert_eq!(completed.payload_json["proposalCount"], json!(1));
+    assert_eq!(
+        completed.payload_json["proposals"][0]["sourceUri"],
+        json!("drive://inbox/raw.md")
+    );
+    assert_eq!(
+        completed.payload_json["proposals"][0]["proposedUri"],
+        json!("drive://projects/tempestmiku/note/raw.md")
+    );
+    assert_eq!(
+        completed.payload_json["resourceRefs"][0]["uri"],
+        json!("drive://inbox/raw.md")
+    );
+    let replay = store
+        .events_after(session.id, Some(started.seq - 1))
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .iter()
+            .any(|event| event.event_type == "drive_organizer_started")
+    );
+    assert!(
+        replay
+            .iter()
+            .any(|event| event.event_type == "drive_organizer_completed")
+    );
+    let transcript = router
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/sessions/{}/messages", session.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(transcript.status(), StatusCode::OK);
+    let transcript = response_json(transcript).await;
+    let pending_events = transcript["pendingEvents"].as_array().unwrap();
+    assert!(pending_events.iter().any(|event| {
+        event["type"] == json!("write_proposal")
+            && event["data"]["kind"] == json!("drive")
+            && event["data"]["sourceUri"] == json!("drive://inbox/raw.md")
+            && event["data"]["proposedUri"] == json!("drive://projects/tempestmiku/note/raw.md")
+    }));
 }
 
 async fn native_deno_approval_app(

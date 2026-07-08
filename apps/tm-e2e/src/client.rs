@@ -52,6 +52,11 @@ impl MikuClient {
         serde_json::from_value(value).context("decoding get-session response")
     }
 
+    pub async fn session_messages(&self, session_id: &str) -> Result<Value> {
+        self.get_json(&format!("/sessions/{session_id}/messages"))
+            .await
+    }
+
     pub async fn send_message(&self, session_id: &str, content: &str) -> Result<()> {
         self.post_json(
             &format!("/sessions/{session_id}/messages"),
@@ -160,6 +165,21 @@ impl MikuClient {
                     .await
             }
         }
+    }
+
+    pub async fn drive_feed(
+        &self,
+        session_id: &str,
+        project: Option<&str>,
+        limit: usize,
+    ) -> Result<Value> {
+        let limit = limit.to_string();
+        let mut query = vec![("limit", limit.as_str())];
+        if let Some(project) = project {
+            query.push(("project", project));
+        }
+        self.get_json_with_query(&format!("/sessions/{session_id}/drive/feed"), &query)
+            .await
     }
 
     pub async fn read_until_final(

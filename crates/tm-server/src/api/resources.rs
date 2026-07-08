@@ -50,6 +50,103 @@ pub(super) struct ResourceQuery {
     selector: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct DriveFeedQuery {
+    limit: Option<usize>,
+    project: Option<String>,
+}
+
+pub(super) async fn drive_feed<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<DriveFeedQuery>,
+) -> Result<Json<Value>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.auth.authorize(&headers)?;
+    state.store.get_session(session_id).await?;
+    let store = state
+        .drive_store
+        .as_ref()
+        .ok_or_else(|| ServerError::Policy("drive store is not configured".to_string()))?;
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    let recent = if query
+        .project
+        .as_ref()
+        .is_some_and(|project| !project.trim().is_empty())
+    {
+        store
+            .search(tm_drive::DriveSearchOptions {
+                project: query.project.clone(),
+                limit,
+                return_snippets: true,
+                ..tm_drive::DriveSearchOptions::default()
+            })
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .into_iter()
+            .map(|hit| {
+                json!({
+                    "uri": hit.uri,
+                    "path": hit.path,
+                    "title": hit.title,
+                    "docKind": hit.doc_kind,
+                    "project": hit.project,
+                    "tags": hit.tags,
+                    "contentHash": hit.content_hash,
+                    "snippet": hit.snippet,
+                    "selector": hit.selector,
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        store
+            .list(tm_drive::DriveListOptions {
+                recursive: true,
+                limit,
+                include_archived: false,
+                ..tm_drive::DriveListOptions::default()
+            })
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "uri": entry.uri,
+                    "path": entry.path,
+                    "title": entry.title,
+                    "docKind": entry.doc_kind,
+                    "project": entry.project,
+                    "tags": entry.tags,
+                    "contentHash": entry.content_hash,
+                    "sizeBytes": entry.size_bytes,
+                    "updatedAt": entry.updated_at,
+                    "summary": entry.summary,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let proposals = store
+        .proposals()
+        .into_iter()
+        .filter(|proposal| proposal.status == tm_drive::ProposalStatus::Pending)
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "recent": recent,
+        "virtualDirs": [
+            { "uri": "drive://recent", "name": "recent", "kind": "virtual_dir", "title": "Recent documents" },
+            { "uri": "drive://by-project", "name": "by-project", "kind": "virtual_dir", "title": "Documents by project" },
+            { "uri": "drive://by-type", "name": "by-type", "kind": "virtual_dir", "title": "Documents by type" },
+            { "uri": "drive://by-tag", "name": "by-tag", "kind": "virtual_dir", "title": "Documents by tag" },
+            { "uri": "drive://by-date", "name": "by-date", "kind": "virtual_dir", "title": "Documents by date" }
+        ],
+        "proposals": proposals,
+        "pendingApprovals": []
+    })))
+}
+
 pub(super) async fn resolve_resource<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
@@ -132,13 +229,15 @@ where
             read_workspace_resource(&state.artifact_root, session_id, uri, selector)
         }
         Some("linked") => read_linked_resource(&state.linked_folders, uri, selector).await,
-        Some("project") => read_project_resource(state, session_id, uri).await,
+        Some("project") => read_project_resource(state, session_id, uri, selector).await,
         Some("memory") => read_memory_resource(state, session_id, uri, selector).await,
         Some("agent") => read_agent_resource(state, uri, selector).await,
         Some("history") => read_history_resource(state, uri, selector).await,
         Some("cron") => read_cron_resource(state, uri).await,
+        Some("drive") => read_drive_resource(state, uri, selector).await,
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history, cron"
+            "unknown resource scheme {scheme}; registered: {}",
+            registered_resource_schemes(state).join(", ")
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
@@ -174,26 +273,17 @@ where
     C: ChatRunner,
 {
     let Some(uri) = uri.filter(|uri| !uri.is_empty()) else {
-        return Ok([
-            "artifact",
-            "linked",
-            "workspace",
-            "project",
-            "memory",
-            "agent",
-            "history",
-            "cron",
-        ]
-        .into_iter()
-        .map(|scheme| ResourceEntry {
-            uri: format!("{scheme}://"),
-            name: scheme.to_string(),
-            kind: "scheme".to_string(),
-            title: None,
-            size_bytes: None,
-            modified_at: None,
-        })
-        .collect());
+        return Ok(registered_resource_schemes(state)
+            .into_iter()
+            .map(|scheme| ResourceEntry {
+                uri: format!("{scheme}://"),
+                name: scheme.to_string(),
+                kind: "scheme".to_string(),
+                title: None,
+                size_bytes: None,
+                modified_at: None,
+            })
+            .collect());
     };
     match resource_scheme(uri).as_deref() {
         Some("artifact") => {
@@ -222,13 +312,32 @@ where
             "history:// listing not supported — read a specific history://<id>".to_string(),
         )),
         Some("cron") => list_cron_resources(state, uri).await,
+        Some("drive") => list_drive_resources(state, uri).await,
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history, cron"
+            "unknown resource scheme {scheme}; registered: {}",
+            registered_resource_schemes(state).join(", ")
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
         ))),
     }
+}
+
+fn registered_resource_schemes<S, M, C>(state: &AppState<S, M, C>) -> Vec<&'static str> {
+    let mut schemes = vec![
+        "artifact",
+        "linked",
+        "workspace",
+        "project",
+        "memory",
+        "agent",
+        "history",
+        "cron",
+    ];
+    if state.drive_store.is_some() {
+        schemes.push("drive");
+    }
+    schemes
 }
 
 async fn read_cron_resource<S, M, C>(
@@ -379,6 +488,52 @@ async fn list_linked_resources(
     registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"));
     registry.list(uri, &ctx).await.map_err(map_host_error)
+}
+
+async fn read_drive_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let drive_store = state.drive_store.clone().ok_or_else(|| {
+        ServerError::Policy(format!(
+            "unknown resource scheme drive; registered: {}",
+            registered_resource_schemes(state).join(", ")
+        ))
+    })?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(tm_drive::DriveResourceHandler::new(drive_store)));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"));
+    registry
+        .read(uri, selector, &ctx)
+        .await
+        .map_err(map_host_error)
+}
+
+async fn list_drive_resources<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let drive_store = state.drive_store.clone().ok_or_else(|| {
+        ServerError::Policy(format!(
+            "unknown resource scheme drive; registered: {}",
+            registered_resource_schemes(state).join(", ")
+        ))
+    })?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(Arc::new(tm_drive::DriveResourceHandler::new(drive_store)));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"));
+    registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 
 async fn read_memory_resource<S, M, C>(
@@ -660,6 +815,7 @@ async fn read_project_resource<S, M, C>(
     state: &AppState<S, M, C>,
     session_id: Uuid,
     uri: &str,
+    selector: Option<&str>,
 ) -> Result<ResourceContent>
 where
     S: Store,
@@ -667,6 +823,15 @@ where
     C: ChatRunner,
 {
     let (project_id, view) = parse_project_uri(uri)?;
+    if let Some(view) = view.as_deref()
+        && let Some(linked_uri) = project_linked_uri(view)
+    {
+        ensure_project_linked_alias_active(&project_id, view, &state.linked_folders)?;
+        let mut content =
+            read_linked_resource(&state.linked_folders, &linked_uri, selector).await?;
+        content.uri = uri.to_string();
+        return Ok(content);
+    }
     let payload = match view.as_deref() {
         None | Some("") => serde_json::to_value(
             build_project_overview(state, session_id, project_id.clone()).await?,
@@ -693,6 +858,15 @@ where
             let overview = build_project_overview(state, session_id, project_id.clone()).await?;
             serde_json::to_value(overview.resources)?
         }
+        Some("memory") => {
+            let policy = active_project_link_policy(&project_id, &state.linked_folders)
+                .ok_or_else(|| inactive_project_memory_scope_error(&project_id))?;
+            project_memory_view(&project_id, &policy)
+        }
+        Some("linked-folders") => serde_json::to_value(project_linked_folder_entries(
+            &project_id,
+            &state.linked_folders,
+        ))?,
         Some(other) => {
             return Err(ServerError::NotFound(format!(
                 "project view project://{project_id}/{other}"
@@ -724,6 +898,30 @@ where
     C: ChatRunner,
 {
     let (project_id, view) = parse_project_uri(uri)?;
+    if let Some(view) = view.as_deref() {
+        if view == "memory" {
+            let policy = active_project_link_policy(&project_id, &state.linked_folders)
+                .ok_or_else(|| inactive_project_memory_scope_error(&project_id))?;
+            return Ok(project_memory_entries(&project_id, &policy));
+        }
+        if view == "linked-folders" {
+            return Ok(project_linked_folder_entries(
+                &project_id,
+                &state.linked_folders,
+            ));
+        }
+        if let Some(linked_uri) = project_linked_uri(view) {
+            ensure_project_linked_alias_active(&project_id, view, &state.linked_folders)?;
+            let entries = list_linked_resources(&state.linked_folders, Some(&linked_uri)).await?;
+            return Ok(entries
+                .into_iter()
+                .map(|entry| ResourceEntry {
+                    uri: linked_to_project_uri(&project_id, &entry.uri),
+                    ..entry
+                })
+                .collect());
+        }
+    }
     if view.is_some() {
         let overview = build_project_overview(state, session_id, project_id).await?;
         return Ok(overview
@@ -739,7 +937,17 @@ where
             })
             .collect());
     }
-    Ok(["open-loops", "decisions", "next-actions", "resources"]
+    let mut views = vec![
+        "open-loops",
+        "decisions",
+        "next-actions",
+        "resources",
+        "linked-folders",
+    ];
+    if active_project_link_policy(&project_id, &state.linked_folders).is_some() {
+        views.insert(4, "memory");
+    }
+    Ok(views
         .into_iter()
         .map(|view| ResourceEntry {
             uri: format!("project://{project_id}/{view}"),
@@ -750,6 +958,124 @@ where
             modified_at: None,
         })
         .collect())
+}
+
+fn project_linked_folder_entries(
+    project_id: &str,
+    linked_folders: &LinkedFolders,
+) -> Vec<ResourceEntry> {
+    linked_folders
+        .policies()
+        .into_iter()
+        .filter(|policy| linked_alias_matches_project(project_id, &policy.alias))
+        .map(|policy| ResourceEntry {
+            uri: format!("project://{project_id}/linked-folders/{}/", policy.alias),
+            name: policy.alias.clone(),
+            kind: "linked_folder".to_string(),
+            title: Some(format!("linked://{}/", policy.alias)),
+            size_bytes: None,
+            modified_at: None,
+        })
+        .collect()
+}
+
+fn project_memory_view(project_id: &str, policy: &tm_host::FsPolicy) -> Value {
+    let scope = project_memory_scope(project_id);
+    let encoded = crate::memory::encode_memory_segment(&scope);
+    json!({
+        "scope": scope,
+        "chunksUri": format!("memory://scopes/{encoded}/chunks"),
+        "mode": fs_mode_label(policy.mode),
+        "linkedUri": format!("linked://{}/", policy.alias),
+        "activeRootUri": "memory://root",
+        "note": "memory://root and memory://summaries resolve using the active session scope; chunksUri is the explicit project-scope recall surface."
+    })
+}
+
+fn project_memory_entries(project_id: &str, policy: &tm_host::FsPolicy) -> Vec<ResourceEntry> {
+    let scope = project_memory_scope(project_id);
+    let encoded = crate::memory::encode_memory_segment(&scope);
+    vec![ResourceEntry {
+        uri: format!("memory://scopes/{encoded}/chunks"),
+        name: "chunks".to_string(),
+        kind: "memory_scope".to_string(),
+        title: Some(format!("{} ({})", scope, fs_mode_label(policy.mode))),
+        size_bytes: None,
+        modified_at: None,
+    }]
+}
+
+fn project_memory_scope(project_id: &str) -> String {
+    format!("project:{project_id}")
+}
+
+fn project_linked_uri(view: &str) -> Option<String> {
+    view.strip_prefix("linked-folders/")
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| format!("linked://{path}"))
+}
+
+fn ensure_project_linked_alias_active(
+    project_id: &str,
+    view: &str,
+    linked_folders: &LinkedFolders,
+) -> Result<()> {
+    let alias = project_linked_alias(view).ok_or_else(|| {
+        ServerError::Policy(format!(
+            "project linked-folder view project://{project_id}/{view} is not active"
+        ))
+    })?;
+    if !linked_alias_matches_project(project_id, alias) {
+        return Err(ServerError::Policy(format!(
+            "linked folder {alias} is not in project {project_id}"
+        )));
+    }
+    linked_folders.policy(alias).map_err(map_host_error)?;
+    Ok(())
+}
+
+fn active_project_link_policy(
+    project_id: &str,
+    linked_folders: &LinkedFolders,
+) -> Option<tm_host::FsPolicy> {
+    linked_folders
+        .policies()
+        .into_iter()
+        .find(|policy| linked_alias_matches_project(project_id, &policy.alias))
+}
+
+fn inactive_project_memory_scope_error(project_id: &str) -> ServerError {
+    ServerError::Policy(format!(
+        "project memory scope {} is not active; link the project folder first",
+        project_memory_scope(project_id)
+    ))
+}
+
+fn project_linked_alias(view: &str) -> Option<&str> {
+    view.strip_prefix("linked-folders/")
+        .and_then(|path| path.split('/').find(|part| !part.trim().is_empty()))
+}
+
+fn linked_alias_matches_project(project_id: &str, alias: &str) -> bool {
+    linked_project_key(project_id) == linked_project_key(alias)
+}
+
+fn linked_project_key(value: &str) -> String {
+    tm_drive::slug(value).replace('-', "")
+}
+
+fn fs_mode_label(mode: tm_host::FsMode) -> &'static str {
+    match mode {
+        tm_host::FsMode::Ro => "ro",
+        tm_host::FsMode::Rw => "rw",
+    }
+}
+
+fn linked_to_project_uri(project_id: &str, linked_uri: &str) -> String {
+    linked_uri
+        .strip_prefix("linked://")
+        .map(|path| format!("project://{project_id}/linked-folders/{path}"))
+        .unwrap_or_else(|| linked_uri.to_string())
 }
 
 fn parse_project_uri(uri: &str) -> Result<(String, Option<String>)> {

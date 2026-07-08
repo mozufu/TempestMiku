@@ -34,7 +34,16 @@ impl AgentsParallelFn {
                                 "required": ["role", "task"],
                                 "properties": {
                                     "role": { "type": "string" },
-                                    "task": { "type": "string" }
+                                    "task": { "type": "string" },
+                                    "timeoutMs": { "type": "integer", "minimum": 0 },
+                                    "budget": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "properties": {
+                                            "wallMs": { "type": "integer", "minimum": 0 },
+                                            "maxDepth": { "type": "integer", "minimum": 0 }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -79,7 +88,7 @@ impl HostFn for AgentsParallelFn {
         }
 
         // Validate all role/task strings before touching the executor or roster.
-        let parsed: Vec<(String, String)> = tasks
+        let parsed: Vec<ParsedParallelTask> = tasks
             .iter()
             .enumerate()
             .map(|(i, item)| {
@@ -95,7 +104,12 @@ impl HostFn for AgentsParallelFn {
                         HostError::InvalidArgs(format!("tasks[{i}].task must be a string"))
                     })?
                     .to_string();
-                Ok((role, task_str))
+                let budget = parse_parallel_budget(item, i)?;
+                Ok(ParsedParallelTask {
+                    role,
+                    task: task_str,
+                    budget,
+                })
             })
             .collect::<Result<_>>()?;
 
@@ -118,9 +132,13 @@ impl HostFn for AgentsParallelFn {
 
         // Register each actor as Running before spawning.
         let mut actor_specs: Vec<(ActorId, ActorSpec)> = Vec::with_capacity(parsed.len());
-        for (role, task_str) in parsed {
+        for task in parsed {
+            let ParsedParallelTask {
+                role,
+                task: task_str,
+                budget,
+            } = task;
             let actor_id = self.roster.next_actor_id(&role);
-            let budget = ActorBudget::default();
             let spawned_at = Utc::now();
             self.roster
                 .track_with_supervisor(
@@ -219,4 +237,46 @@ impl HostFn for AgentsParallelFn {
 
         Ok(Value::Array(digests))
     }
+}
+
+struct ParsedParallelTask {
+    role: String,
+    task: String,
+    budget: ActorBudget,
+}
+
+fn parse_parallel_budget(item: &Value, index: usize) -> Result<ActorBudget> {
+    let budget_value = item.get("budget");
+    let mut budget = ActorBudget::default();
+    if let Some(value) = budget_value
+        && !value.is_object()
+    {
+        return Err(HostError::InvalidArgs(format!(
+            "tasks[{index}].budget must be an object"
+        )));
+    }
+
+    let wall_ms = item
+        .get("timeoutMs")
+        .or_else(|| budget_value.and_then(|budget| budget.get("wallMs")));
+    if let Some(value) = wall_ms {
+        budget.wall_ms = value.as_u64().ok_or_else(|| {
+            HostError::InvalidArgs(format!(
+                "tasks[{index}].timeoutMs must be a non-negative integer"
+            ))
+        })?;
+    }
+
+    if let Some(value) = budget_value.and_then(|budget| budget.get("maxDepth")) {
+        let max_depth = value.as_u64().ok_or_else(|| {
+            HostError::InvalidArgs(format!(
+                "tasks[{index}].budget.maxDepth must be a non-negative integer"
+            ))
+        })?;
+        budget.max_depth = u32::try_from(max_depth).map_err(|_| {
+            HostError::InvalidArgs(format!("tasks[{index}].budget.maxDepth is too large"))
+        })?;
+    }
+
+    Ok(budget)
 }

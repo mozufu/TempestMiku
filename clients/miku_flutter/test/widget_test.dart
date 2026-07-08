@@ -63,6 +63,66 @@ void main() {
     expect(find.byKey(const ValueKey('resource:artifact://0')), findsOneWidget);
   });
 
+  testWidgets('shows and resolves pending drive filing approval',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    client.seedPendingApproval(
+      session.id,
+      approvalId: 'approval-drive',
+      action: 'drive.put inbox/approval-drop.md',
+      scope: const {
+        'capability': 'drive.put',
+        'sourceUri': 'drop://browser/approval-drop.md',
+      },
+    );
+    client.seedPendingApproval(
+      session.id,
+      approvalId: 'approval-drive-deny',
+      action: 'drive.put inbox/blocked-drop.md',
+      scope: const {
+        'capability': 'drive.put',
+        'sourceUri': 'drop://browser/blocked-drop.md',
+      },
+    );
+
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final approvalCard =
+        find.byKey(const ValueKey('approval:drive.put inbox/approval-drop.md'));
+    expect(approvalCard, findsOneWidget);
+    expect(find.text('Pending approval · drive.put inbox/approval-drop.md'),
+        findsOneWidget);
+
+    await tester.ensureVisible(approvalCard);
+    await tester.tap(approvalCard);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Approval needed'), findsOneWidget);
+    await tester.tap(find.text('Approve once'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(client.resolvedApprovals, contains('approval-drive:approve'));
+    expect(approvalCard, findsNothing);
+
+    final denyCard =
+        find.byKey(const ValueKey('approval:drive.put inbox/blocked-drop.md'));
+    expect(denyCard, findsOneWidget);
+    await tester.ensureVisible(denyCard);
+    await tester.tap(denyCard);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.text('Deny'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(client.resolvedApprovals, contains('approval-drive-deny:deny'));
+    expect(denyCard, findsNothing);
+  });
+
   testWidgets('language switch toggles chrome without changing chat content',
       (WidgetTester tester) async {
     await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));

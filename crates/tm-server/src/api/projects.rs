@@ -334,6 +334,8 @@ pub(super) struct PromoteSessionRequest {
     decisions: Vec<String>,
     #[serde(default)]
     resources: Vec<String>,
+    #[serde(default)]
+    import_resources_to_drive: bool,
     #[serde(default = "default_user_initiator")]
     initiated_by: String,
     #[serde(default)]
@@ -513,8 +515,17 @@ where
                 .await?,
         );
     }
+    let import_resources_to_drive = payload.import_resources_to_drive;
     for source_uri in payload.resources {
-        let (kind, target_uri) = promoted_resource_target(&project_id, &source_uri)?;
+        let (kind, target_uri) = promoted_resource_target(
+            state,
+            session_id,
+            &project_id,
+            &source_uri,
+            import_resources_to_drive,
+            latest_final.as_ref().map(|event| event.seq),
+        )
+        .await?;
         promoted.push(
             state
                 .store
@@ -576,7 +587,37 @@ fn promotion_provenance(
     })
 }
 
-fn promoted_resource_target(
+async fn promoted_resource_target<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    project_id: &str,
+    source_uri: &str,
+    import_resources_to_drive: bool,
+    source_event_seq: Option<i64>,
+) -> Result<(ProjectItemKind, String)>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    if import_resources_to_drive
+        && let Some((relative, relative_slash)) = workspace_source_relative(project_id, source_uri)?
+    {
+        let target_uri = import_workspace_attachment_to_drive(
+            state,
+            session_id,
+            project_id,
+            source_uri,
+            &relative,
+            &relative_slash,
+            source_event_seq,
+        )?;
+        return Ok((ProjectItemKind::Workspace, target_uri));
+    }
+    promoted_resource_pointer_target(project_id, source_uri)
+}
+
+fn promoted_resource_pointer_target(
     project_id: &str,
     source_uri: &str,
 ) -> Result<(ProjectItemKind, String)> {
@@ -593,6 +634,15 @@ fn promoted_resource_target(
             format!("project://{project_id}/workspace/{path}"),
         ));
     }
+    if let Some((source_project_id, path)) = project_workspace_source(source_uri) {
+        if source_project_id != project_id {
+            return Err(ServerError::Policy(format!(
+                "cannot promote workspace resource from project://{source_project_id} into project://{project_id}"
+            )));
+        }
+        validate_relative_path(path)?;
+        return Ok((ProjectItemKind::Workspace, source_uri.to_string()));
+    }
     if let Some(path) = source_uri.strip_prefix("linked://") {
         return Ok((
             ProjectItemKind::Linked,
@@ -602,4 +652,119 @@ fn promoted_resource_target(
     Err(ServerError::Policy(format!(
         "unsupported promotion resource scheme for {source_uri}"
     )))
+}
+
+fn import_workspace_attachment_to_drive<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    project_id: &str,
+    source_uri: &str,
+    relative: &FsPath,
+    relative_slash: &str,
+    source_event_seq: Option<i64>,
+) -> Result<String>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let drive_store = state.drive_store.as_ref().ok_or_else(|| {
+        ServerError::Policy(
+            "drive store is not configured for promoted resource import".to_string(),
+        )
+    })?;
+    let bytes = read_session_workspace_attachment(&state.artifact_root, session_id, relative)?;
+    let suggested_path = format!(
+        "projects/{}/attachments/{}",
+        tm_drive::slug(project_id),
+        relative_slash
+    );
+    let filed = drive_store
+        .put_bytes(
+            &bytes,
+            tm_drive::DrivePutOptions {
+                auto: true,
+                suggested_path: Some(suggested_path),
+                project: Some(project_id.to_string()),
+                doc_kind: Some("project_attachment".to_string()),
+                tags: vec!["project-attachment".to_string()],
+                source_uri: Some(source_uri.to_string()),
+                approval_mode: tm_drive::DriveApprovalMode::Auto,
+                session_id: Some(session_id.to_string()),
+                event_seq: source_event_seq,
+                ..tm_drive::DrivePutOptions::default()
+            },
+        )
+        .map_err(|err| ServerError::Store(err.to_string()))?;
+    Ok(filed.uri)
+}
+
+fn read_session_workspace_attachment(
+    artifact_root: &FsPath,
+    session_id: Uuid,
+    relative: &FsPath,
+) -> Result<Vec<u8>> {
+    let root = artifact_root
+        .join("sessions")
+        .join(session_id.to_string())
+        .join("workspace");
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| ServerError::NotFound("workspace://session/".to_string()))?;
+    let path = root.join(relative);
+    let canonical_path = path.canonicalize().map_err(|_| {
+        ServerError::NotFound(format!("workspace://session/{}", path_slash(relative)))
+    })?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(ServerError::Policy(format!(
+            "workspace path escapes session root: {}",
+            path_slash(relative)
+        )));
+    }
+    if !canonical_path.is_file() {
+        return Err(ServerError::Policy(format!(
+            "workspace promotion import requires a file: {}",
+            path_slash(relative)
+        )));
+    }
+    fs::read(&canonical_path).map_err(|err| ServerError::Store(err.to_string()))
+}
+
+fn workspace_source_relative(
+    project_id: &str,
+    source_uri: &str,
+) -> Result<Option<(PathBuf, String)>> {
+    if let Some(path) = source_uri.strip_prefix("workspace://session/") {
+        let relative = validate_relative_path(path)?;
+        let relative_slash = path_slash(&relative);
+        return Ok(Some((relative, relative_slash)));
+    }
+    if let Some((source_project_id, path)) = project_workspace_source(source_uri) {
+        if source_project_id != project_id {
+            return Err(ServerError::Policy(format!(
+                "cannot import workspace resource from project://{source_project_id} into project://{project_id}"
+            )));
+        }
+        let relative = validate_relative_path(path)?;
+        let relative_slash = path_slash(&relative);
+        return Ok(Some((relative, relative_slash)));
+    }
+    Ok(None)
+}
+
+fn project_workspace_source(source_uri: &str) -> Option<(&str, &str)> {
+    let rest = source_uri.strip_prefix("project://")?;
+    let (project_id, view) = rest.split_once('/')?;
+    let path = view.strip_prefix("workspace/")?;
+    Some((project_id, path))
+}
+
+fn path_slash(path: &FsPath) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }

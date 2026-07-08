@@ -52,6 +52,11 @@ Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
   commitments/deadlines, decisions, shipped artifacts, and workflows; transient moods, secrets, raw
   logs, one-off complaints, large notes, and obvious sensitive PII are skipped before proposal creation
   (§22.8 / §27.6).
+- **Adds P5 local-first drive/research as post-parity expansion:** `drive.*`, `drive://`, project
+  linked-folder/memory views, drive-derived recall chunks, and `research.drive(...)` are new Rust
+  surfaces layered on the existing approval/resource model. They must not weaken the inherited Hermes
+  invariants: manual approval for sensitive writes, no ambient host filesystem access, and bounded
+  context/proactivity.
 - **Keeps:** SOUL identity + 5 modes (§21); the **memory behavior** — hybrid recall, user profile +
   ToM, async write, ~1600-tok context, write-approval (§22, now self-built); the 7 skills (§26.2);
   manual approvals + proactivity bounds (§21.3); cron-driven reviews (§27.2); model-role system (§27.3).

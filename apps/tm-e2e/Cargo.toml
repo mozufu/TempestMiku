@@ -10,6 +10,7 @@ description = "TempestMiku local/dev E2E hatch that drives Miku through the publ
 tm-core.workspace = true
 tm-llm.workspace = true
 tm-artifacts.workspace = true
+tm-drive.workspace = true
 tm-server.workspace = true
 tm-agents.workspace = true
 tm-sandbox.workspace = true

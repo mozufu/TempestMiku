@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
 };
 
 use serde::{Deserialize, Serialize};
@@ -101,81 +102,91 @@ pub struct FsPolicy {
 
 #[derive(Debug, Clone, Default)]
 pub struct LinkedFolders {
-    policies: BTreeMap<String, FsPolicy>,
+    policies: Arc<RwLock<BTreeMap<String, FsPolicy>>>,
 }
 
 impl LinkedFolders {
     pub fn from_configs(configs: Vec<LinkedFolderConfig>) -> Result<Self> {
         let mut policies = BTreeMap::new();
         for config in configs {
-            validate_alias(&config.name)?;
             if policies.contains_key(&config.name) {
                 return Err(HostError::InvalidArgs(format!(
                     "duplicate linked folder alias {}",
                     config.name
                 )));
             }
-            let root = config.path.canonicalize().map_err(|err| {
-                HostError::InvalidPath(format!("{}: {err}", config.path.display()))
-            })?;
-            if !root.is_dir() {
-                return Err(HostError::InvalidPath(format!(
-                    "linked folder {} is not a directory",
-                    root.display()
-                )));
-            }
-            let mut commands = BTreeSet::new();
-            for command in config.commands {
-                validate_command_name(&command)?;
-                commands.insert(command);
-            }
-            for argv in &config.safe_args {
-                let Some(command) = argv.first() else {
-                    return Err(HostError::InvalidArgs(
-                        "safe_args entries must be non-empty".into(),
-                    ));
-                };
-                if !commands.contains(command) {
-                    return Err(HostError::InvalidArgs(format!(
-                        "safe_args command {command} is not in commands"
-                    )));
-                }
-            }
-            policies.insert(
-                config.name.clone(),
-                FsPolicy {
-                    alias: config.name,
-                    root,
-                    mode: config.mode,
-                    commands,
-                    safe_args: config.safe_args,
-                },
-            );
+            let policy = policy_from_config(config)?;
+            policies.insert(policy.alias.clone(), policy);
         }
-        Ok(Self { policies })
+        Ok(Self {
+            policies: Arc::new(RwLock::new(policies)),
+        })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.policies.is_empty()
-    }
-
-    pub fn first_alias(&self) -> Option<&str> {
-        self.policies.keys().next().map(String::as_str)
-    }
-
-    pub fn policies(&self) -> impl Iterator<Item = &FsPolicy> {
-        self.policies.values()
-    }
-
-    pub fn policy(&self, alias: &str) -> Result<&FsPolicy> {
         self.policies
+            .read()
+            .map(|policies| policies.is_empty())
+            .unwrap_or(true)
+    }
+
+    pub fn first_alias(&self) -> Option<String> {
+        self.policies
+            .read()
+            .ok()
+            .and_then(|policies| policies.keys().next().cloned())
+    }
+
+    pub fn policies(&self) -> Vec<FsPolicy> {
+        self.policies
+            .read()
+            .map(|policies| policies.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn policy(&self, alias: &str) -> Result<FsPolicy> {
+        self.policies
+            .read()
+            .map_err(|err| HostError::HostCall(format!("linked folder registry poisoned: {err}")))?
             .get(alias)
+            .cloned()
+            .ok_or_else(|| HostError::InvalidPath(format!("unknown linked folder alias {alias}")))
+    }
+
+    pub fn insert_policy(&self, policy: FsPolicy) -> Result<FsPolicy> {
+        let policy = validate_policy(policy)?;
+        let mut policies = self.policies.write().map_err(|err| {
+            HostError::HostCall(format!("linked folder registry poisoned: {err}"))
+        })?;
+        if let Some(existing) = policies.get(&policy.alias) {
+            if existing.root == policy.root && existing.mode == policy.mode {
+                return Ok(existing.clone());
+            }
+            if existing.root == policy.root {
+                policies.insert(policy.alias.clone(), policy.clone());
+                return Ok(policy);
+            }
+            return Err(HostError::InvalidArgs(format!(
+                "duplicate linked folder alias {}",
+                policy.alias
+            )));
+        }
+        policies.insert(policy.alias.clone(), policy.clone());
+        Ok(policy)
+    }
+
+    pub fn remove_policy(&self, alias: &str) -> Result<FsPolicy> {
+        validate_alias(alias)?;
+        self.policies
+            .write()
+            .map_err(|err| HostError::HostCall(format!("linked folder registry poisoned: {err}")))?
+            .remove(alias)
             .ok_or_else(|| HostError::InvalidPath(format!("unknown linked folder alias {alias}")))
     }
 
     pub(super) fn resolve_existing(&self, input: Option<&str>) -> Result<ResolvedPath> {
         let parsed = self.parse_path(input)?;
-        let policy = self.policy(&parsed.alias)?.clone();
+        let policy = self.policy(&parsed.alias)?;
         let joined = policy.root.join(&parsed.relative);
         let path = joined
             .canonicalize()
@@ -196,7 +207,7 @@ impl LinkedFolders {
         create_parents: bool,
     ) -> Result<ResolvedPath> {
         let parsed = self.parse_path(Some(input))?;
-        let policy = self.policy(&parsed.alias)?.clone();
+        let policy = self.policy(&parsed.alias)?;
         let target = policy.root.join(&parsed.relative);
         if target.exists() {
             let path = target
@@ -238,13 +249,18 @@ impl LinkedFolders {
     }
 
     fn parse_path(&self, input: Option<&str>) -> Result<ParsedPath> {
+        let default_input;
         let input = match input {
             Some(input) => input,
-            None => self
-                .first_alias()
-                .map(|alias| format!("{alias}:"))
-                .ok_or_else(|| HostError::InvalidPath("no linked folders configured".to_string()))?
-                .leak(),
+            None => {
+                default_input = self
+                    .first_alias()
+                    .map(|alias| format!("{alias}:"))
+                    .ok_or_else(|| {
+                        HostError::InvalidPath("no linked folders configured".to_string())
+                    })?;
+                default_input.as_str()
+            }
         };
         parse_linked_path(input)
     }
@@ -277,6 +293,53 @@ impl LinkedFolders {
             content: selected,
         })
     }
+}
+
+fn policy_from_config(config: LinkedFolderConfig) -> Result<FsPolicy> {
+    let mut commands = BTreeSet::new();
+    for command in config.commands {
+        validate_command_name(&command)?;
+        commands.insert(command);
+    }
+    let policy = FsPolicy {
+        alias: config.name,
+        root: config.path,
+        mode: config.mode,
+        commands,
+        safe_args: config.safe_args,
+    };
+    validate_policy(policy)
+}
+
+fn validate_policy(mut policy: FsPolicy) -> Result<FsPolicy> {
+    validate_alias(&policy.alias)?;
+    let root = policy
+        .root
+        .canonicalize()
+        .map_err(|err| HostError::InvalidPath(format!("{}: {err}", policy.root.display())))?;
+    if !root.is_dir() {
+        return Err(HostError::InvalidPath(format!(
+            "linked folder {} is not a directory",
+            root.display()
+        )));
+    }
+    for command in &policy.commands {
+        validate_command_name(command)?;
+    }
+    for argv in &policy.safe_args {
+        let Some(command) = argv.first() else {
+            return Err(HostError::InvalidArgs(
+                "safe_args entries must be non-empty".into(),
+            ));
+        };
+        if !policy.commands.contains(command) {
+            return Err(HostError::InvalidArgs(format!(
+                "safe_args command {command} is not in commands"
+            )));
+        }
+    }
+    policy.root = root;
+    Ok(policy)
 }
 
 #[derive(Debug, Clone)]

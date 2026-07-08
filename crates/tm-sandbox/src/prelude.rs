@@ -92,6 +92,215 @@ globalThis.proc = {
 globalThis.http = {
   get: async (url) => tools.call("http.get", { url: String(url) })
 };
+globalThis.drive = {
+  put: async (content, opts = undefined) =>
+    __tm_sdk_shape(await tools.call("drive.put", { content, options: opts ?? {} })),
+  get: async (pathOrUri, opts = undefined) =>
+    __tm_sdk_shape(await tools.call(
+      "drive.get",
+      String(pathOrUri).startsWith("drive://")
+        ? { uri: String(pathOrUri), ...(opts ?? {}) }
+        : { path: String(pathOrUri), ...(opts ?? {}) }
+    )),
+  ls: async (pathOrQuery = undefined, opts = undefined) =>
+    await tools.call("drive.ls", {
+      ...(pathOrQuery == null ? {} : { path: String(pathOrQuery) }),
+      ...(opts ?? {})
+    }),
+  move: async (from, to, opts = undefined) =>
+    __tm_sdk_shape(await tools.call("drive.move", { from: String(from), to: String(to), ...(opts ?? {}) })),
+  search: async (query = undefined, opts = undefined) =>
+    await tools.call("drive.search", {
+      ...(query == null ? {} : { query: String(query) }),
+      ...(opts ?? {})
+    }),
+  tag: async (path, tags) =>
+    __tm_sdk_shape(await tools.call("drive.tag", { path: String(path), tags: Array.from(tags ?? []) })),
+  link: async (hostPath, mode = "ro", opts = undefined) =>
+    __tm_sdk_shape(await tools.call("drive.link", { hostPath: String(hostPath), mode: String(mode), ...(opts ?? {}) })),
+  unlink: async (aliasOrUri) =>
+    __tm_sdk_shape(await tools.call("drive.unlink", { alias: String(aliasOrUri) })),
+  organize: async (opts = undefined) =>
+    await tools.call("drive.organize", opts ?? {})
+};
+const __tm_cap_text = (value, maxBytes) => {
+  const text = String(value ?? "");
+  return text.length <= maxBytes ? text : text.slice(0, maxBytes) + "...";
+};
+const __tm_bound_number = (value, fallback, min, max) => {
+  const n = Number(value ?? fallback);
+  const finite = Number.isFinite(n) ? n : fallback;
+  return Math.max(min, Math.min(max, Math.floor(finite)));
+};
+const __tm_first_lines = (text, maxLines = 3) =>
+  String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, maxLines)
+    .join(" ");
+const __tm_error_text = (error) => {
+  if (!error) return "unknown worker failure";
+  if (typeof error === "string") return error;
+  if (typeof error.message === "string") return error.message;
+  try { return JSON.stringify(error); } catch (_) { return String(error); }
+};
+const __tm_research_failure_kind = (value) => {
+  const text = __tm_error_text(value).toLowerCase();
+  const status = value && typeof value === "object" && value.status != null
+    ? String(value.status).toLowerCase()
+    : "";
+  if (status.includes("cancel") || text.includes("cancel")) return "cancelled";
+  if (status.includes("timeout") || text.includes("timeout") || text.includes("timed out")) return "timeout";
+  return "failed";
+};
+const __tm_research_actor_id = (value) => {
+  if (value && typeof value === "object") {
+    const actor = value.actorId ?? value.actor_id;
+    if (actor != null) return String(actor);
+  }
+  const match = __tm_error_text(value).match(/\bactor\s+([A-Za-z][A-Za-z0-9_-]{0,63})\b/);
+  return match ? match[1] : null;
+};
+const __tm_research_failure = (phase, value, index = null, doc = null) => ({
+  phase,
+  index,
+  uri: doc?.uri ?? null,
+  selector: doc?.selector ?? null,
+  contentHash: doc?.contentHash ?? null,
+  actorId: __tm_research_actor_id(value),
+  kind: __tm_research_failure_kind(value),
+  reason: __tm_cap_text(value && typeof value === "object" && value.reason != null ? value.reason : __tm_error_text(value), 300)
+});
+const __tm_drive_research = async (query = "", opts = undefined) => {
+  const options = opts && typeof opts === "object" ? opts : {};
+  const maxDocs = __tm_bound_number(options.maxDocs ?? options.limit, 5, 1, 10);
+  const maxSnippets = __tm_bound_number(options.maxSnippets, maxDocs, 1, maxDocs);
+  const maxBytesPerDoc = __tm_bound_number(options.maxBytesPerDoc, 2000, 1, 8000);
+  const maxDigestBytes = __tm_bound_number(options.maxDigestBytes, 600, 32, 2000);
+  const maxWorkers = __tm_bound_number(options.maxWorkers, maxDocs, 0, maxDocs);
+  const requestedWorkerTimeoutMs = __tm_bound_number(options.workerTimeoutMs, 30000, 100, 120000);
+  const totalTimeoutMs = __tm_bound_number(
+    options.totalTimeoutMs,
+    Math.max(requestedWorkerTimeoutMs, requestedWorkerTimeoutMs * Math.max(1, maxWorkers || maxDocs)),
+    100,
+    300000
+  );
+  const workerTimeoutMs = Math.min(requestedWorkerTimeoutMs, totalTimeoutMs);
+  const startedAt = Date.now();
+  const withinBudget = () => Date.now() - startedAt < totalTimeoutMs;
+  const selector = options.selector == null ? undefined : String(options.selector);
+  const hits = await drive.search(query == null ? undefined : String(query), {
+    ...(options.project == null ? {} : { project: String(options.project) }),
+    ...(options.docKind == null ? {} : { docKind: String(options.docKind) }),
+    ...(Array.isArray(options.tags) ? { tags: options.tags.map(String) } : {}),
+    limit: maxDocs,
+    returnSnippets: true
+  });
+  const docs = [];
+  for (const hit of hits.slice(0, Math.min(maxDocs, maxSnippets))) {
+    if (!withinBudget()) break;
+    const docSelector = selector ?? hit.selector ?? "1-20";
+    const read = await resources.read(hit.uri, docSelector);
+    const content = __tm_cap_text(read.content, maxBytesPerDoc);
+    docs.push({
+      uri: hit.uri,
+      sourceKind: "drive",
+      selector: docSelector,
+      contentHash: hit.contentHash,
+      title: hit.title ?? hit.path ?? hit.uri,
+      snippet: hit.snippet ?? __tm_first_lines(content),
+      sizeBytes: read.sizeBytes ?? 0,
+      content
+    });
+  }
+  const localDigests = docs.map((doc) => ({
+    uri: doc.uri,
+    selector: doc.selector,
+    contentHash: doc.contentHash,
+    summary: __tm_cap_text(__tm_first_lines(doc.content) || doc.snippet || doc.title, maxDigestBytes),
+    citations: [{ uri: doc.uri, sourceKind: "drive", selector: doc.selector, contentHash: doc.contentHash }]
+  }));
+  const useAgents = options.useAgents !== false
+    && maxWorkers > 0
+    && globalThis.agents
+    && typeof globalThis.agents.parallel === "function"
+    && docs.length > 0
+    && withinBudget();
+  const agentDocs = docs.slice(0, maxWorkers);
+  const workerFailures = [];
+  let workerResults = localDigests;
+  let agentDocsCompleted = 0;
+  if (useAgents) {
+    try {
+      const rawWorkerResults = await globalThis.agents.parallel(agentDocs.map((doc) => ({
+        role: String(options.role ?? "researcher"),
+        timeoutMs: workerTimeoutMs,
+        budget: { wallMs: workerTimeoutMs },
+        task: [
+          "Summarize this local drive document for the parent research workspace.",
+          `Cite only ${doc.uri} selector ${doc.selector} hash ${doc.contentHash}.`,
+          `Return a bounded digest within ${maxDigestBytes} bytes and ${workerTimeoutMs}ms; do not request network access.`,
+          "",
+          doc.content
+        ].join("\n")
+      })));
+      workerResults = docs.map((doc, index) => {
+        const worker = index < agentDocs.length ? rawWorkerResults[index] : localDigests[index];
+        const status = worker && typeof worker === "object" && worker.status != null
+          ? String(worker.status).toLowerCase()
+          : "completed";
+        if (status === "failed" || status === "cancelled" || status === "canceled" || status === "timeout") {
+          workerFailures.push(__tm_research_failure("worker", worker, index, doc));
+          return localDigests[index];
+        }
+        if (index < agentDocs.length && worker != null) agentDocsCompleted += 1;
+        return worker ?? localDigests[index];
+      });
+    } catch (error) {
+      workerFailures.push(__tm_research_failure("agents.parallel", error, null, null));
+      workerResults = localDigests;
+    }
+  }
+  const digests = docs.map((doc, index) => {
+    const worker = workerResults[index] ?? localDigests[index];
+    const summary = __tm_cap_text(worker.summary ?? worker.text ?? localDigests[index].summary, maxDigestBytes);
+    return {
+      uri: doc.uri,
+      selector: doc.selector,
+      contentHash: doc.contentHash,
+      summary,
+      actorId: worker.actorId ?? worker.actor_id ?? null,
+      artifactUri: worker.artifactUri ?? worker.artifact_uri ?? null,
+      historyUri: worker.historyUri ?? worker.history_uri ?? null,
+      citations: [{ uri: doc.uri, sourceKind: "drive", selector: doc.selector, contentHash: doc.contentHash }]
+    };
+  });
+  return {
+    query: String(query ?? ""),
+    corpus: docs.map(({ content, ...doc }) => doc),
+    digests,
+    citations: digests.flatMap((digest) => digest.citations),
+    workerFailures,
+    answer: digests.map((digest) => `[${digest.uri}#${digest.selector}] ${digest.summary}`).join("\n"),
+    budget: {
+      maxDocs,
+      maxSnippets,
+      maxBytesPerDoc,
+      maxDigestBytes,
+      maxWorkers,
+      workerTimeoutMs,
+      totalTimeoutMs,
+      selectedDocs: docs.length,
+      agentDocs: useAgents ? agentDocs.length : 0,
+      agentDocsCompleted,
+      workerFailures: workerFailures.length
+    }
+  };
+};
+globalThis.research = {
+  drive: __tm_drive_research
+};
 globalThis.secrets = undefined;
 globalThis.memory = undefined;
 globalThis.skills = undefined;

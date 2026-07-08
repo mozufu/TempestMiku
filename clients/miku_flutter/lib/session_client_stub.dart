@@ -112,6 +112,34 @@ class ScriptedMikuClient implements MikuSessionClient {
     return session;
   }
 
+  void seedPendingApproval(
+    String sessionId, {
+    required String approvalId,
+    required String action,
+    String backend = 'native-deno',
+    Map<String, Object?> scope = const {},
+    List<Map<String, Object?>> options = const [
+      {'optionId': 'allow', 'name': 'Allow once', 'kind': 'allow_once'},
+      {'optionId': 'reject', 'name': 'Reject once', 'kind': 'reject_once'},
+    ],
+  }) {
+    _approvalSessions[approvalId] = sessionId;
+    _approvalBackends[approvalId] = backend;
+    final event = MikuEvent(
+      type: 'approval',
+      id: _eventId(),
+      data: {
+        'approvalId': approvalId,
+        'backend': backend,
+        'action': action,
+        'scope': scope,
+        'options': options,
+        'timeoutMs': 60000,
+      },
+    );
+    _pendingEvents.putIfAbsent(sessionId, () => []).add(event);
+  }
+
   @override
   Future<List<SessionSummary>> listSessions({int limit = 30}) async {
     final ids = _sessions.keys.toList()

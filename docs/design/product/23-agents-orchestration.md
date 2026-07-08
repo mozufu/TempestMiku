@@ -90,7 +90,7 @@ P3 ships the first concrete slice only:
 |---|---|
 | `agents.run(role, task, opts)` | spawn one actor, await its result |
 | `agents.spawn(role, task) -> handle` | non-blocking; coordinate via the handle / messages |
-| `agents.parallel([{role, task}, …])` | fan-out, bounded pool, **one wave**, ordered results |
+| `agents.parallel([{role, task, timeoutMs?, budget?}, …])` | fan-out, bounded pool, **one wave**, ordered results with optional per-child budget |
 | `agents.msg(handle, text, opts?)` | send to a spawned actor (request / reply or fire-and-forget) |
 
 > **P3-plus closeout update.** P3 shipped `agents.msg` as a one-shot compatibility primitive.
@@ -107,7 +107,9 @@ P3 ships the first concrete slice only:
 > boundary. DAG enforcement rejects targeted live waits where a real actor would wait on itself or
 > its own descendant. `agents.pipeline` runs staged actor waves with a barrier between stages and
 > feeds compact digest references downstream: `agent://` / `history://` / artifact handles plus a
-> bounded summary, never an upstream transcript. Active restart supervision, wall-clock actor
+> bounded summary, never an upstream transcript. `agents.parallel` accepts per-child
+> `timeoutMs` / `budget.wallMs` / `budget.maxDepth` values and threads them into actor lifecycle
+> records and wall-clock enforcement. Active restart supervision, wall-clock actor
 > timeouts, fail-fast sibling-group cancellation, status lifecycle events,
 > typed parent `SessionEvent` actor/artifact/history links, and
 > `actor_resources_linked` provenance events are live.

@@ -112,7 +112,7 @@ impl ArtifactStore {
         let bytes = content.as_bytes();
         let dir = self.session_artifact_dir();
         fs::create_dir_all(&dir)?;
-        let (id, artifact, lock_path) = {
+        let (id, artifact) = {
             let mut inner = self.inner.lock();
             let mut id = inner
                 .next_id
@@ -136,7 +136,7 @@ impl ArtifactStore {
                             size_bytes: bytes.len(),
                             preview: preview(content, 1024),
                         };
-                        break (id, artifact, lock_path);
+                        break (id, artifact);
                     }
                     Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
                         id += 1;
@@ -154,7 +154,6 @@ impl ArtifactStore {
             )?;
             Ok(())
         })();
-        let _ = fs::remove_file(lock_path);
         write_result?;
         self.inner.lock().refs.push(artifact.clone());
         Ok(artifact)
@@ -168,6 +167,23 @@ impl ArtifactStore {
             fs::write(path, bytes)?;
         }
         Ok(uri)
+    }
+
+    pub fn read_blob(&self, uri: &str) -> Result<Vec<u8>> {
+        let hash = uri
+            .strip_prefix("blob:sha256:")
+            .ok_or_else(|| ArtifactError::InvalidUri(uri.to_string()))?;
+        let path = self.root.join("blobs").join(hash);
+        fs::read(&path).map_err(|err| {
+            if err.kind() == io::ErrorKind::NotFound {
+                ArtifactError::NotFound {
+                    uri: uri.to_string(),
+                    available: Vec::new(),
+                }
+            } else {
+                ArtifactError::Io(err)
+            }
+        })
     }
 
     pub fn read(&self, uri: &str, selector: Option<&str>) -> Result<ResourceContent> {
@@ -305,6 +321,7 @@ mod tests {
         let two = store.put_blob(b"same").unwrap();
         assert_eq!(one, two);
         assert!(one.starts_with("blob:sha256:"));
+        assert_eq!(store.read_blob(&one).unwrap(), b"same");
     }
 
     #[test]

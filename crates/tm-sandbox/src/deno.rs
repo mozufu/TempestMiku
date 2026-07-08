@@ -11,9 +11,10 @@ use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions, serde_v8, v8};
 use serde_json::{Value, json};
 use tm_artifacts::ArtifactStore;
 use tm_core::{CancellationToken, CellBudget, EvalOutput, Result, Sandbox, Session, SessionConfig};
+use tm_drive::InMemoryDriveStore;
 use tm_host::{
     ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy,
-    HostRegistry, InvocationCtx, LinkedFolders, ResourceRegistry,
+    HostEventSink, HostRegistry, InvocationCtx, LinkedFolders, NoopHostEventSink, ResourceRegistry,
     register_p0_linked_folder_functions,
 };
 
@@ -34,8 +35,10 @@ pub struct DenoSandboxOptions {
     pub resource_registry: ResourceRegistry,
     pub grants: CapabilityGrants,
     pub linked_folders: Option<LinkedFolders>,
+    pub drive_store: Option<InMemoryDriveStore>,
     pub approval_policy: Arc<dyn ApprovalPolicy>,
     pub approval_timeout: Duration,
+    pub host_event_sink: Arc<dyn HostEventSink>,
     pub cancellation: Option<Arc<dyn CancellationToken>>,
 }
 
@@ -52,8 +55,10 @@ impl Default for DenoSandboxOptions {
                 .allow("http.get")
                 .allow("resources.read:artifact"),
             linked_folders: None,
+            drive_store: None,
             approval_policy: Arc::new(DefaultDenyApprovalPolicy),
             approval_timeout: Duration::from_secs(60),
+            host_event_sink: Arc::new(NoopHostEventSink),
             cancellation: None,
         }
     }
@@ -101,7 +106,13 @@ impl DenoSession {
             artifact_store.clone(),
         )));
         let mut grants = options.grants.clone();
-        if let Some(linked_folders) = options.linked_folders.clone() {
+        let linked_folders = options.linked_folders.clone().or_else(|| {
+            options
+                .drive_store
+                .as_ref()
+                .map(|_| LinkedFolders::default())
+        });
+        if let Some(linked_folders) = linked_folders.clone() {
             register_p0_linked_folder_functions(
                 &mut host_registry,
                 &mut resource_registry,
@@ -119,6 +130,26 @@ impl DenoSession {
                 "resources.read:linked",
             ]);
         }
+        if let Some(drive_store) = options.drive_store.clone() {
+            tm_drive::register_drive_functions(
+                &mut host_registry,
+                &mut resource_registry,
+                drive_store,
+                linked_folders,
+            );
+            grants = grants.allow_many([
+                "drive.put",
+                "drive.get",
+                "drive.ls",
+                "drive.move",
+                "drive.search",
+                "drive.tag",
+                "drive.link",
+                "drive.unlink",
+                "drive.organize",
+                "resources.read:drive",
+            ]);
+        }
         let host_state = RuntimeHostState {
             artifact_store: artifact_store.clone(),
             host_registry,
@@ -129,7 +160,8 @@ impl DenoSession {
                 options.approval_timeout,
             )
             .with_session_id(options.session_id.clone())
-            .with_actor_id(options.actor_id.clone()),
+            .with_actor_id(options.actor_id.clone())
+            .with_event_sink(options.host_event_sink.clone()),
         };
         let mut session = Self {
             runtime: Some(JsRuntime::new(RuntimeOptions {

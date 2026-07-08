@@ -7,14 +7,18 @@ class MikuApp extends StatelessWidget {
 
   final MikuSessionClient client;
   static const _fontFallbacks = [
+    'MikuCjkUi',
     '.SF Pro Text',
     'Segoe UI',
     'Roboto',
-    'MikuCjkUi',
     'PingFang TC',
+    'PingFang SC',
     'Noto Sans CJK TC',
+    'Noto Sans CJK SC',
     'Noto Sans TC',
+    'Noto Sans SC',
     'Microsoft JhengHei',
+    'Microsoft YaHei',
     'Arial',
     'sans-serif',
   ];

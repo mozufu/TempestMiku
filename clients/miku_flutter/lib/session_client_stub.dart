@@ -285,9 +285,25 @@ class ScriptedMikuClient implements MikuSessionClient {
         ),
       );
     }
-    final text = lower.contains('actor') || lower.contains('handoff')
-        ? 'Actor Worker0 completed child resource artifact://0'
-        : 'Miku heard: $content';
+    if (lower.contains('reasoning')) {
+      controller.add(MikuEvent(
+        type: 'reasoning',
+        id: _eventId(),
+        data: const {
+          'delta':
+              'Compare scheduler invariants, approval gates, and replay traces before answering.',
+        },
+      ));
+    }
+    final text = lower.contains('markdown')
+        ? '# P4 memo\n\n'
+            '> Proposal-first background work.\n\n'
+            '- **Keep approvals manual** for durable writes.\n'
+            '- [ ] Rebuild projections from the event log.\n\n'
+            'Use `write_proposal` before memory commit.'
+        : lower.contains('actor') || lower.contains('handoff')
+            ? 'Actor Worker0 completed child resource artifact://0'
+            : 'Miku heard: $content';
     controller.add(MikuEvent(type: 'text', id: _eventId(), data: {
       'delta': text,
     }));

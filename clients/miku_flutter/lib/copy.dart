@@ -53,12 +53,6 @@ class _UiCopy {
       };
   String connectionStatus(String label) =>
       pick('Connection status: $label', '連線狀態：$label');
-  String systemConnected(String? lastEventId) => pick(
-        'Connected to lumo${lastEventId != null ? ' · event #$lastEventId' : ''}',
-        '已連線到 lumo${lastEventId != null ? ' · 事件 #$lastEventId' : ''}',
-      );
-  String get systemOffline =>
-      pick('Offline · send to connect', '未連線 · 送出訊息以連線');
 
   String get emptyTitle => pick('Miku is here', 'Miku 在這裡');
   String get messageField => pick('Message Miku', '傳訊息給 Miku');
@@ -109,9 +103,9 @@ class _UiCopy {
   String get status => pick('Status', '狀態');
   String get promptActivity => pick('Prompt / Activity', '提示 / 活動');
   String get thinking => pick('Thinking', '思考過程');
-  String get thinkingTrace =>
-      pick('Private chain-of-thought from the model. Tap to expand or collapse.',
-          '模型的私密思考過程。點擊展開或收合。');
+  String get thinkingTrace => pick(
+      'Private chain-of-thought from the model. Tap to expand or collapse.',
+      '模型的私密思考過程。點擊展開或收合。');
   String get reasoningHidden =>
       pick('Reasoning hidden by the provider', '提供者未回傳推理過程');
 

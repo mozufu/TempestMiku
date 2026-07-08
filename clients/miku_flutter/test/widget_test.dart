@@ -305,13 +305,16 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('Agents · 0 running / 1 stopped'));
+    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
+    await tester.ensureVisible(activityCard);
+    await tester.pump();
+    await tester.tap(activityCard);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    final toolCall = find.text('呼叫工具 execute');
-    final cellStart = find.text('執行程式');
-    final actorCompleted = find.text('完成 Worker0');
+    final toolCall = find.text('呼叫工具 execute').last;
+    final cellStart = find.text('執行程式').last;
+    final actorCompleted = find.text('完成 Worker0').last;
     expect(toolCall, findsOneWidget);
     expect(cellStart, findsOneWidget);
     expect(actorCompleted, findsOneWidget);
@@ -326,12 +329,14 @@ void main() {
         find.byKey(const ValueKey('activity-resource:artifact://0'));
     final historyLink =
         find.byKey(const ValueKey('activity-resource:history://Worker0'));
-    expect(artifactLink, findsOneWidget);
-    expect(historyLink, findsOneWidget);
+    expect(artifactLink, findsWidgets);
+    expect(historyLink, findsWidgets);
     expect(find.text('artifact://0'), findsWidgets);
-    expect(find.text('history://Worker0'), findsOneWidget);
+    expect(find.text('history://Worker0'), findsWidgets);
 
-    await tester.tap(artifactLink);
+    await tester.ensureVisible(artifactLink.last);
+    await tester.pump();
+    await tester.tap(artifactLink.last);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('Scripted resource'), findsOneWidget);
@@ -341,7 +346,9 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    await tester.tap(historyLink);
+    await tester.ensureVisible(historyLink.last);
+    await tester.pump();
+    await tester.tap(historyLink.last);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('Scripted resource'), findsOneWidget);
@@ -376,7 +383,7 @@ void main() {
     expect(find.text('project://tempestmiku · 3 promoted'), findsOneWidget);
   });
 
-  testWidgets('expands activity trace until final then collapses it',
+  testWidgets('keeps activity trace visible after final',
       (WidgetTester tester) async {
     final client = ScriptedMikuClient(pauseBeforeFinal: true);
     await tester.pumpWidget(MikuApp(client: client));
@@ -390,29 +397,57 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('呼叫工具 execute'), findsOneWidget);
-    expect(find.text('執行程式'), findsOneWidget);
-    expect(find.text('完成 Worker0'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsWidgets);
+    expect(find.text('執行程式'), findsWidgets);
+    expect(find.text('完成 Worker0'), findsWidgets);
 
     client.completePausedTurn();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Agents · 0 running / 1 stopped'), findsOneWidget);
-    expect(find.text('呼叫工具 execute'), findsNothing);
-    expect(find.text('執行程式'), findsNothing);
-    expect(find.text('完成 Worker0'), findsNothing);
+    expect(find.text('呼叫工具 execute'), findsWidgets);
+    expect(find.text('執行程式'), findsWidgets);
+    expect(find.text('完成 Worker0'), findsOneWidget);
     expect(find.textContaining('Actor Worker0 completed', skipOffstage: false),
         findsOneWidget);
 
-    await tester.tap(find.text('Agents · 0 running / 1 stopped'));
+    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
+    await tester.ensureVisible(activityCard);
+    await tester.pump();
+    await tester.tap(activityCard);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('Prompt / Activity'), findsOneWidget);
-    expect(find.text('呼叫工具 execute'), findsOneWidget);
-    expect(find.text('執行程式'), findsOneWidget);
-    expect(find.text('完成 Worker0'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsWidgets);
+    expect(find.text('執行程式'), findsWidgets);
+    expect(find.text('完成 Worker0'), findsWidgets);
+  });
+
+  testWidgets('renders markdown and keeps reasoning visible after final',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(
+        find.byType(EditableText), 'markdown with reasoning');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('P4 memo', findRichText: true), findsOneWidget);
+    expect(find.text('•', findRichText: true), findsOneWidget);
+    expect(find.text('☐', findRichText: true), findsOneWidget);
+    expect(find.text('Thinking'), findsOneWidget);
+    expect(
+      find.textContaining('Compare scheduler invariants',
+          findRichText: true, skipOffstage: false),
+      findsOneWidget,
+    );
   });
 
   testWidgets('handles actor approval, child resource, and reconnect cursor',
@@ -432,19 +467,22 @@ void main() {
     expect(find.text('Agents · 0 running / 1 stopped'), findsOneWidget);
     expect(find.text('worker agent · Worker0'), findsOneWidget);
     expect(find.text('stopped'), findsOneWidget);
-    expect(find.text('呼叫工具 execute'), findsNothing);
+    expect(find.text('呼叫工具 execute'), findsOneWidget);
 
-    await tester.tap(find.text('Agents · 0 running / 1 stopped'));
+    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
+    await tester.ensureVisible(activityCard);
+    await tester.pump();
+    await tester.tap(activityCard);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('Agents · Round 1'), findsOneWidget);
     expect(find.text('Prompt / Activity'), findsOneWidget);
-    expect(find.text('呼叫工具 execute'), findsOneWidget);
-    expect(find.text('執行程式'), findsOneWidget);
-    expect(find.text('啟動 worker · Worker0'), findsOneWidget);
-    expect(find.text('完成 Worker0'), findsOneWidget);
-    expect(find.text('程式結果'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsWidgets);
+    expect(find.text('執行程式'), findsWidgets);
+    expect(find.text('啟動 worker · Worker0'), findsWidgets);
+    expect(find.text('完成 Worker0'), findsWidgets);
+    expect(find.text('程式結果'), findsWidgets);
 
     await tester.tap(find.byIcon(Icons.close).last);
     await tester.pump();
@@ -456,13 +494,14 @@ void main() {
     await tester.ensureVisible(actorReply);
     await tester.pump();
     expect(find.textContaining('Actor Worker0 completed'), findsOneWidget);
-    expect(find.text('artifact://0'), findsOneWidget);
-    expect(find.textContaining('Pending approval · proc.run cargo clean'),
-        findsOneWidget);
+    expect(find.text('artifact://0'), findsWidgets);
 
-    await tester.ensureVisible(find.text('artifact://0'));
+    final answerArtifactLink =
+        find.byKey(const ValueKey('resource:artifact://0'));
+    expect(answerArtifactLink, findsOneWidget);
+    await tester.ensureVisible(answerArtifactLink);
     await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('resource:artifact://0')));
+    await tester.tap(answerArtifactLink);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
@@ -473,9 +512,18 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
-    await tester.tap(
-      find.textContaining('Pending approval · proc.run cargo clean'),
+    final approvalCard =
+        find.byKey(const ValueKey('approval:proc.run cargo clean'));
+    await tester.scrollUntilVisible(
+      approvalCard,
+      220,
+      scrollable: find.byType(Scrollable).first,
     );
+    await tester.pump();
+    expect(approvalCard, findsOneWidget);
+    await tester.ensureVisible(approvalCard);
+    await tester.pump();
+    await tester.tap(approvalCard);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
@@ -486,8 +534,7 @@ void main() {
 
     expect(client.resolvedApprovals, hasLength(1));
     expect(client.resolvedApprovals.single, endsWith(':approve'));
-    expect(find.textContaining('Pending approval · proc.run cargo clean'),
-        findsNothing);
+    expect(approvalCard, findsNothing);
 
     final remembered = client.rememberedLastEventIds.values.single;
     await tester.pumpWidget(MikuApp(key: UniqueKey(), client: client));
@@ -495,6 +542,5 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(client.eventResumeIds.last, remembered);
-    expect(find.textContaining('event #$remembered'), findsOneWidget);
   });
 }

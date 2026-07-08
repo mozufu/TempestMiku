@@ -347,56 +347,6 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _SystemLine extends StatelessWidget {
-  const _SystemLine({required this.tok, required this.text});
-
-  final _Tok tok;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: tok.surface.withOpacity(0.6),
-            border: Border.all(color: tok.border.withOpacity(0.7)),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: tok.cool,
-                ),
-              ),
-              const SizedBox(width: 7),
-              Flexible(
-                child: Text(
-                  text,
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _RoundLabel extends StatelessWidget {
   const _RoundLabel({
     required this.tok,
@@ -530,14 +480,10 @@ class _MikuBubble extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 5),
-              Text(
-                text,
-                style: TextStyle(
-                  color: tok.text,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  height: 1.62,
-                ),
+              _MarkdownMessage(
+                tok: tok,
+                accent: accent,
+                text: text,
               ),
               if (resources.isNotEmpty) ...[
                 const SizedBox(height: 8),
@@ -606,6 +552,369 @@ class _MikuBubble extends StatelessWidget {
       ],
     );
   }
+}
+
+class _MarkdownMessage extends StatelessWidget {
+  const _MarkdownMessage({
+    required this.tok,
+    required this.accent,
+    required this.text,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final blocks = _parseMarkdown(text);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < blocks.length; i++) ...[
+          _MarkdownBlockView(tok: tok, accent: accent, block: blocks[i]),
+          if (i != blocks.length - 1) SizedBox(height: blocks[i].spacingAfter),
+        ],
+      ],
+    );
+  }
+}
+
+class _MarkdownBlockView extends StatelessWidget {
+  const _MarkdownBlockView({
+    required this.tok,
+    required this.accent,
+    required this.block,
+  });
+
+  final _Tok tok;
+  final Color accent;
+  final _MarkdownBlock block;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (block.kind) {
+      case _MarkdownBlockKind.heading:
+        final level = block.level.clamp(1, 4);
+        final size = switch (level) {
+          1 => 20.0,
+          2 => 17.0,
+          3 => 15.5,
+          _ => 14.5,
+        };
+        return Text.rich(
+          TextSpan(
+            children: _inlineSpans(block.text, tok, accent,
+                baseStyle: TextStyle(
+                  color: tok.text,
+                  fontSize: size,
+                  fontWeight: FontWeight.w900,
+                  height: 1.34,
+                )),
+          ),
+        );
+      case _MarkdownBlockKind.paragraph:
+        return Text.rich(
+          TextSpan(
+            children: _inlineSpans(block.text, tok, accent,
+                baseStyle: TextStyle(
+                  color: tok.text,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  height: 1.62,
+                )),
+          ),
+        );
+      case _MarkdownBlockKind.bullet:
+      case _MarkdownBlockKind.ordered:
+      case _MarkdownBlockKind.checkbox:
+        final marker = block.kind == _MarkdownBlockKind.ordered
+            ? '${block.index}.'
+            : block.kind == _MarkdownBlockKind.checkbox
+                ? (block.checked ? '☑' : '☐')
+                : '•';
+        return Padding(
+          padding: EdgeInsets.only(left: block.indent * 14.0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: block.kind == _MarkdownBlockKind.ordered ? 30 : 22,
+                child: Text(
+                  marker,
+                  style: TextStyle(
+                    color: block.kind == _MarkdownBlockKind.checkbox
+                        ? accent
+                        : tok.muted,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    children: _inlineSpans(block.text, tok, accent,
+                        baseStyle: TextStyle(
+                          color: tok.text,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w400,
+                          height: 1.5,
+                        )),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      case _MarkdownBlockKind.quote:
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
+          decoration: BoxDecoration(
+            color: tok.surface.withOpacity(0.72),
+            border: Border(
+              left: BorderSide(color: accent, width: 3),
+            ),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text.rich(
+            TextSpan(
+              children: _inlineSpans(block.text, tok, accent,
+                  baseStyle: TextStyle(
+                    color: tok.muted,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.55,
+                    fontStyle: FontStyle.italic,
+                  )),
+            ),
+          ),
+        );
+      case _MarkdownBlockKind.code:
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+          decoration: BoxDecoration(
+            color: tok.bg.withOpacity(0.78),
+            border: Border.all(color: tok.border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            block.text,
+            style: TextStyle(
+              color: tok.text,
+              fontSize: 12.5,
+              height: 1.46,
+              fontFamily: 'monospace',
+            ),
+          ),
+        );
+      case _MarkdownBlockKind.rule:
+        return Container(
+          height: 1,
+          color: tok.border.withOpacity(0.72),
+        );
+      case _MarkdownBlockKind.gap:
+        return const SizedBox.shrink();
+    }
+  }
+}
+
+enum _MarkdownBlockKind {
+  paragraph,
+  heading,
+  bullet,
+  ordered,
+  checkbox,
+  quote,
+  code,
+  rule,
+  gap,
+}
+
+class _MarkdownBlock {
+  const _MarkdownBlock({
+    required this.kind,
+    this.text = '',
+    this.level = 0,
+    this.index = 0,
+    this.indent = 0,
+    this.checked = false,
+  });
+
+  final _MarkdownBlockKind kind;
+  final String text;
+  final int level;
+  final int index;
+  final int indent;
+  final bool checked;
+
+  double get spacingAfter {
+    return switch (kind) {
+      _MarkdownBlockKind.heading => level <= 2 ? 12 : 8,
+      _MarkdownBlockKind.rule => 12,
+      _MarkdownBlockKind.gap => 8,
+      _MarkdownBlockKind.code => 10,
+      _MarkdownBlockKind.quote => 9,
+      _ => 6,
+    };
+  }
+}
+
+List<_MarkdownBlock> _parseMarkdown(String source) {
+  final lines = source.replaceAll('\r\n', '\n').split('\n');
+  final blocks = <_MarkdownBlock>[];
+  final paragraph = <String>[];
+  final code = <String>[];
+  var inCode = false;
+
+  void flushParagraph() {
+    if (paragraph.isEmpty) return;
+    blocks.add(_MarkdownBlock(
+      kind: _MarkdownBlockKind.paragraph,
+      text: paragraph.join(' '),
+    ));
+    paragraph.clear();
+  }
+
+  void flushCode() {
+    blocks.add(_MarkdownBlock(
+      kind: _MarkdownBlockKind.code,
+      text: code.join('\n').trimRight(),
+    ));
+    code.clear();
+  }
+
+  for (final raw in lines) {
+    final line = raw.trimRight();
+    final trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      if (inCode) {
+        flushCode();
+      } else {
+        flushParagraph();
+      }
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) {
+      code.add(raw);
+      continue;
+    }
+    if (trimmed.isEmpty) {
+      flushParagraph();
+      if (blocks.isNotEmpty && blocks.last.kind != _MarkdownBlockKind.gap) {
+        blocks.add(const _MarkdownBlock(kind: _MarkdownBlockKind.gap));
+      }
+      continue;
+    }
+    final heading = RegExp(r'^(#{1,4})\s+(.+)$').firstMatch(trimmed);
+    if (heading != null) {
+      flushParagraph();
+      blocks.add(_MarkdownBlock(
+        kind: _MarkdownBlockKind.heading,
+        level: heading.group(1)!.length,
+        text: heading.group(2)!.trim(),
+      ));
+      continue;
+    }
+    if (RegExp(r'^[-*_]{3,}$').hasMatch(trimmed)) {
+      flushParagraph();
+      blocks.add(const _MarkdownBlock(kind: _MarkdownBlockKind.rule));
+      continue;
+    }
+    if (trimmed.startsWith('>')) {
+      flushParagraph();
+      blocks.add(_MarkdownBlock(
+        kind: _MarkdownBlockKind.quote,
+        text: trimmed.replaceFirst(RegExp(r'^>\s?'), ''),
+      ));
+      continue;
+    }
+    final checkbox =
+        RegExp(r'^(\s*)[-*]\s+\[([ xX])\]\s+(.+)$').firstMatch(line);
+    if (checkbox != null) {
+      flushParagraph();
+      blocks.add(_MarkdownBlock(
+        kind: _MarkdownBlockKind.checkbox,
+        indent: checkbox.group(1)!.length ~/ 2,
+        checked: checkbox.group(2)!.trim().isNotEmpty,
+        text: checkbox.group(3)!.trim(),
+      ));
+      continue;
+    }
+    final bullet = RegExp(r'^(\s*)[-*]\s+(.+)$').firstMatch(line);
+    if (bullet != null) {
+      flushParagraph();
+      blocks.add(_MarkdownBlock(
+        kind: _MarkdownBlockKind.bullet,
+        indent: bullet.group(1)!.length ~/ 2,
+        text: bullet.group(2)!.trim(),
+      ));
+      continue;
+    }
+    final ordered = RegExp(r'^(\s*)(\d+)[.)]\s+(.+)$').firstMatch(line);
+    if (ordered != null) {
+      flushParagraph();
+      blocks.add(_MarkdownBlock(
+        kind: _MarkdownBlockKind.ordered,
+        indent: ordered.group(1)!.length ~/ 2,
+        index: int.tryParse(ordered.group(2)!) ?? 1,
+        text: ordered.group(3)!.trim(),
+      ));
+      continue;
+    }
+    paragraph.add(trimmed);
+  }
+  if (inCode) flushCode();
+  flushParagraph();
+  while (blocks.isNotEmpty && blocks.last.kind == _MarkdownBlockKind.gap) {
+    blocks.removeLast();
+  }
+  return blocks;
+}
+
+List<InlineSpan> _inlineSpans(
+  String text,
+  _Tok tok,
+  Color accent, {
+  required TextStyle baseStyle,
+}) {
+  final spans = <InlineSpan>[];
+  final pattern = RegExp(r'(\*\*[^*]+\*\*|`[^`]+`)');
+  var index = 0;
+  for (final match in pattern.allMatches(text)) {
+    if (match.start > index) {
+      spans.add(TextSpan(
+        text: text.substring(index, match.start),
+        style: baseStyle,
+      ));
+    }
+    final token = match.group(0)!;
+    if (token.startsWith('**')) {
+      spans.add(TextSpan(
+        text: token.substring(2, token.length - 2),
+        style: baseStyle.copyWith(fontWeight: FontWeight.w900),
+      ));
+    } else {
+      spans.add(TextSpan(
+        text: token.substring(1, token.length - 1),
+        style: baseStyle.copyWith(
+          color: accent,
+          fontFamily: 'monospace',
+          fontWeight: FontWeight.w700,
+          backgroundColor: tok.surface.withOpacity(0.85),
+        ),
+      ));
+    }
+    index = match.end;
+  }
+  if (index < text.length) {
+    spans.add(TextSpan(text: text.substring(index), style: baseStyle));
+  }
+  return spans;
 }
 
 class _PulsingDot extends StatefulWidget {
@@ -744,6 +1053,7 @@ class _AgentStatusBar extends StatelessWidget {
     required this.copy,
     required this.accent,
     required this.anim,
+    required this.roundIndex,
     required this.agents,
     required this.activities,
     required this.expanded,
@@ -755,6 +1065,7 @@ class _AgentStatusBar extends StatelessWidget {
   final _UiCopy copy;
   final Color accent;
   final AnimationController anim;
+  final int roundIndex;
   final List<_AgentStatus> agents;
   final List<_ActivityItem> activities;
   final bool expanded;
@@ -774,6 +1085,7 @@ class _AgentStatusBar extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
+          key: ValueKey('agent-activity:$roundIndex'),
           onTap: onTap,
           borderRadius: BorderRadius.circular(10),
           focusColor: tok.focus.withOpacity(0.18),
@@ -901,7 +1213,7 @@ class _AgentStatusBar extends StatelessWidget {
 // ─── Reasoning / chain-of-thought trace ───────────────────────────────────────
 
 /// A collapsible rendering of the private chain-of-thought a provider returned
-/// alongside the answer. Hidden by default once the turn finishes; tap to reveal.
+/// alongside the answer. The parent round controls whether it stays expanded.
 class _ThinkingTrace extends StatefulWidget {
   const _ThinkingTrace({
     required this.tok,
@@ -1008,9 +1320,7 @@ class _ThinkingTraceState extends State<_ThinkingTrace> {
                             const SizedBox(width: 6),
                           ],
                           Icon(
-                            _expanded
-                                ? Icons.expand_less
-                                : Icons.expand_more,
+                            _expanded ? Icons.expand_less : Icons.expand_more,
                             color: tok.muted,
                             size: 16,
                           ),
@@ -1373,6 +1683,7 @@ class _ApprovalCard extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
+          key: ValueKey('approval:${approval.action}'),
           onTap: onTap,
           borderRadius: BorderRadius.circular(13),
           focusColor: tok.focus.withOpacity(0.18),

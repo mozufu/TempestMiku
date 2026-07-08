@@ -14,6 +14,7 @@ class _ConversationRound {
   final List<_ActivityItem> activities = [];
   String assistantStreamedText = '';
   String assistantFinalText = '';
+
   /// Private chain-of-thought the provider returned alongside the answer. Streamed in
   /// `reasoning` events; persists so the user can expand it after the turn completes.
   String reasoningText = '';
@@ -282,6 +283,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       }
     }
   }
+
   void _applyEvent(MikuEvent e) {
     final activity = _activityFromEvent(e);
     if (activity != null) {
@@ -313,8 +315,6 @@ class _MikuHomePageState extends State<MikuHomePage>
         round.assistantFinalText = text;
         round.assistantStreamedText = '';
         round.isStreaming = false;
-        round.activityExpanded = false;
-        round.reasoningExpanded = false;
         _status = 'connected';
         _loadProject();
       case 'mode':
@@ -508,8 +508,8 @@ class _MikuHomePageState extends State<MikuHomePage>
   void _appendActivity(_ActivityItem item) {
     final round = _ensureAssistantRound();
     round.activities.add(item);
-    if (round.activities.length > 16) {
-      round.activities.removeRange(0, round.activities.length - 16);
+    if (round.activities.length > 128) {
+      round.activities.removeRange(0, round.activities.length - 128);
     }
     round.isStreaming = true;
     round.activityExpanded = true;
@@ -1086,16 +1086,6 @@ class _MikuHomePageState extends State<MikuHomePage>
     final copy = _copy;
     final items = <Widget>[];
 
-    // Connection system line
-    items.add(
-      _SystemLine(
-        tok: tok,
-        text: _sessionId != null
-            ? copy.systemConnected(_lastEventId)
-            : copy.systemOffline,
-      ),
-    );
-
     if (_rounds.isEmpty && _memoryProposals.isEmpty && _approvals.isEmpty) {
       items.add(
         _EmptyState(tok: tok, accent: accent, status: _status, copy: copy),
@@ -1113,13 +1103,18 @@ class _MikuHomePageState extends State<MikuHomePage>
         items.add(const SizedBox(height: 10));
       }
 
-      if (round.activities.isNotEmpty) {
+      final assistantText = round.assistantText;
+      final isCompleteWithAnswer = round.isComplete && assistantText.isNotEmpty;
+
+      void addActivityTrace() {
+        if (round.activities.isEmpty) return;
         items.add(
           _AgentStatusBar(
             tok: tok,
             copy: copy,
             accent: accent,
             anim: _dotAnim,
+            roundIndex: round.index,
             agents: _agentStatuses(round.activities),
             activities: round.activities,
             expanded: round.activityExpanded,
@@ -1130,7 +1125,8 @@ class _MikuHomePageState extends State<MikuHomePage>
         items.add(const SizedBox(height: 10));
       }
 
-      if (round.hasReasoning) {
+      void addReasoningTrace() {
+        if (!round.hasReasoning) return;
         items.add(
           _ThinkingTrace(
             tok: tok,
@@ -1146,8 +1142,8 @@ class _MikuHomePageState extends State<MikuHomePage>
         items.add(const SizedBox(height: 10));
       }
 
-      final assistantText = round.assistantText;
-      if (assistantText.isNotEmpty) {
+      void addAssistantAnswer() {
+        if (assistantText.isEmpty) return;
         final resources = _extractResources(assistantText);
         items.add(_MikuBubble(
           tok: tok,
@@ -1158,8 +1154,21 @@ class _MikuHomePageState extends State<MikuHomePage>
           onOpenResource: _openResource,
           isStreaming: round.assistantFinalText.isEmpty && round.isStreaming,
         ));
-      } else if (round.isStreaming && round.activities.isEmpty) {
-        items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
+      }
+
+      if (isCompleteWithAnswer) {
+        addAssistantAnswer();
+        items.add(const SizedBox(height: 10));
+        addActivityTrace();
+        addReasoningTrace();
+      } else {
+        addActivityTrace();
+        addReasoningTrace();
+        if (assistantText.isNotEmpty) {
+          addAssistantAnswer();
+        } else if (round.isStreaming && round.activities.isEmpty) {
+          items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
+        }
       }
       items.add(const SizedBox(height: 14));
     }

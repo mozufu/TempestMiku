@@ -1,17 +1,21 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
-use tm_memory::{DreamQueueRecord, DreamStatus, NewDreamQueueRecord};
+use tm_memory::{
+    DreamQueueRecord, DreamStatus, MemorySummaryRecord, NewDreamQueueRecord,
+    NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
+};
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
 
 use super::{
-    MessageRecord, ModeState, NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind,
-    ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store,
+    CronJobRecord, CronRunRecord, MessageRecord, ModeState, NewCronJobRecord, NewCronRunRecord,
+    NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind, ProjectItemRecord,
+    RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -28,6 +32,10 @@ struct Inner {
     recall_chunks: Vec<RecallChunkRecord>,
     project_items: Vec<ProjectItemRecord>,
     dream_queue: Vec<DreamQueueRecord>,
+    memory_summaries: Vec<MemorySummaryRecord>,
+    skill_proposals: Vec<SkillProposalRecord>,
+    cron_jobs: Vec<CronJobRecord>,
+    cron_runs: Vec<CronRunRecord>,
 }
 
 #[async_trait]
@@ -220,8 +228,20 @@ impl Store for InMemoryStore {
             .iter_mut()
             .find(|existing| existing.id == fact.id)
         {
-            *existing = fact.clone();
+            let mut updated = fact.clone();
+            if existing.valid_to.is_some() && updated.valid_to.is_none() {
+                updated.valid_to = existing.valid_to;
+            }
+            *existing = updated;
             return Ok(existing.clone());
+        }
+        for existing in inner.profile_facts.iter_mut().filter(|existing| {
+            existing.subject == fact.subject
+                && existing.predicate == fact.predicate
+                && existing.object != fact.object
+                && existing.valid_to.is_none()
+        }) {
+            existing.valid_to = Some(fact.valid_from);
         }
         inner.profile_facts.push(fact.clone());
         Ok(fact)
@@ -250,7 +270,12 @@ impl Store for InMemoryStore {
             .filter(|fact| fact.subject == subject && fact.valid_to.is_none())
             .cloned()
             .collect::<Vec<_>>();
-        facts.sort_by_key(|fact| std::cmp::Reverse(fact.valid_from));
+        facts.sort_by(|left, right| {
+            right
+                .importance
+                .total_cmp(&left.importance)
+                .then_with(|| right.valid_from.cmp(&left.valid_from))
+        });
         Ok(facts)
     }
 
@@ -259,7 +284,7 @@ impl Store for InMemoryStore {
             .lock()
             .profile_facts
             .iter()
-            .find(|fact| fact.subject == subject && fact.id == id && fact.valid_to.is_none())
+            .find(|fact| fact.subject == subject && fact.id == id)
             .cloned()
             .ok_or_else(|| ServerError::NotFound(format!("profile fact {subject}/{id}")))
     }
@@ -279,7 +304,12 @@ impl Store for InMemoryStore {
             .filter(|chunk| chunk.scope == scope && chunk.text.to_lowercase().contains(&query))
             .cloned()
             .collect::<Vec<_>>();
-        chunks.sort_by_key(|chunk| std::cmp::Reverse(chunk.created_at));
+        chunks.sort_by(|left, right| {
+            right
+                .importance
+                .total_cmp(&left.importance)
+                .then_with(|| right.created_at.cmp(&left.created_at))
+        });
         chunks.truncate(limit);
         Ok(chunks)
     }
@@ -389,5 +419,400 @@ impl Store for InMemoryStore {
             .collect::<Vec<_>>();
         dreams.sort_by_key(|record| record.enqueued_at);
         Ok(dreams)
+    }
+
+    async fn dream_queue(&self, scope: &str, limit: usize) -> Result<Vec<DreamQueueRecord>> {
+        let mut dreams = self
+            .inner
+            .lock()
+            .dream_queue
+            .iter()
+            .filter(|record| record.scope == scope)
+            .cloned()
+            .collect::<Vec<_>>();
+        dreams.sort_by_key(|record| std::cmp::Reverse(record.enqueued_at));
+        dreams.truncate(limit);
+        Ok(dreams)
+    }
+
+    async fn dream(&self, dream_id: Uuid) -> Result<DreamQueueRecord> {
+        self.inner
+            .lock()
+            .dream_queue
+            .iter()
+            .find(|record| record.id == dream_id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("dream {dream_id}")))
+    }
+
+    async fn claim_ready_dream(
+        &self,
+        now: DateTime<Utc>,
+        lease_timeout: Duration,
+    ) -> Result<Option<DreamQueueRecord>> {
+        let stale_before = now - lease_timeout;
+        let mut inner = self.inner.lock();
+        let Some(index) = inner
+            .dream_queue
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| {
+                (record.status == DreamStatus::Queued && record.available_at <= now)
+                    || (record.status == DreamStatus::Running
+                        && record
+                            .locked_at
+                            .as_ref()
+                            .is_some_and(|locked_at| *locked_at <= stale_before))
+            })
+            .min_by(|(_, left), (_, right)| {
+                left.available_at
+                    .cmp(&right.available_at)
+                    .then_with(|| left.enqueued_at.cmp(&right.enqueued_at))
+            })
+            .map(|(index, _)| index)
+        else {
+            return Ok(None);
+        };
+
+        let record = &mut inner.dream_queue[index];
+        record.status = DreamStatus::Running;
+        record.attempts += 1;
+        record.locked_at = Some(now);
+        record.last_error = None;
+        Ok(Some(record.clone()))
+    }
+
+    async fn heartbeat_dream(
+        &self,
+        dream_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<DreamQueueRecord> {
+        let mut inner = self.inner.lock();
+        let record = inner
+            .dream_queue
+            .iter_mut()
+            .find(|record| record.id == dream_id && record.status == DreamStatus::Running)
+            .ok_or_else(|| ServerError::NotFound(format!("running dream {dream_id}")))?;
+        record.locked_at = Some(now);
+        Ok(record.clone())
+    }
+
+    async fn complete_dream(&self, dream_id: Uuid, now: DateTime<Utc>) -> Result<DreamQueueRecord> {
+        let mut inner = self.inner.lock();
+        let record = inner
+            .dream_queue
+            .iter_mut()
+            .find(|record| record.id == dream_id && record.status == DreamStatus::Running)
+            .ok_or_else(|| ServerError::NotFound(format!("running dream {dream_id}")))?;
+        record.status = DreamStatus::Completed;
+        record.available_at = now;
+        record.locked_at = None;
+        record.last_error = None;
+        Ok(record.clone())
+    }
+
+    async fn fail_dream(
+        &self,
+        dream_id: Uuid,
+        error: String,
+        next_available_at: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<DreamQueueRecord> {
+        let mut inner = self.inner.lock();
+        let record = inner
+            .dream_queue
+            .iter_mut()
+            .find(|record| record.id == dream_id && record.status == DreamStatus::Running)
+            .ok_or_else(|| ServerError::NotFound(format!("running dream {dream_id}")))?;
+        record.status = if record.attempts >= max_attempts {
+            DreamStatus::Failed
+        } else {
+            DreamStatus::Queued
+        };
+        record.available_at = next_available_at;
+        record.locked_at = None;
+        record.last_error = Some(error);
+        Ok(record.clone())
+    }
+
+    async fn upsert_memory_summary(
+        &self,
+        summary: NewMemorySummaryRecord,
+    ) -> Result<MemorySummaryRecord> {
+        if let Some(session_id) = summary.source_session_id {
+            self.get_session(session_id).await?;
+        }
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .memory_summaries
+            .iter_mut()
+            .find(|existing| existing.dedupe_key == summary.dedupe_key)
+        {
+            existing.kind = summary.kind;
+            existing.subject = summary.subject;
+            existing.scope = summary.scope;
+            existing.title = summary.title;
+            existing.body = summary.body;
+            existing.evidence = summary.evidence;
+            existing.source_dream_id = summary.source_dream_id;
+            existing.source_session_id = summary.source_session_id;
+            existing.updated_at = Utc::now();
+            return Ok(existing.clone());
+        }
+        let now = Utc::now();
+        let record = MemorySummaryRecord {
+            id: Uuid::new_v4(),
+            kind: summary.kind,
+            subject: summary.subject,
+            scope: summary.scope,
+            title: summary.title,
+            body: summary.body,
+            evidence: summary.evidence,
+            source_dream_id: summary.source_dream_id,
+            source_session_id: summary.source_session_id,
+            dedupe_key: summary.dedupe_key,
+            created_at: now,
+            updated_at: now,
+        };
+        inner.memory_summaries.push(record.clone());
+        Ok(record)
+    }
+
+    async fn memory_summary(&self, id: Uuid) -> Result<MemorySummaryRecord> {
+        self.inner
+            .lock()
+            .memory_summaries
+            .iter()
+            .find(|summary| summary.id == id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("memory summary {id}")))
+    }
+
+    async fn memory_summaries(
+        &self,
+        scope: &str,
+        limit: usize,
+    ) -> Result<Vec<MemorySummaryRecord>> {
+        let mut summaries = self
+            .inner
+            .lock()
+            .memory_summaries
+            .iter()
+            .filter(|summary| summary.scope == scope)
+            .cloned()
+            .collect::<Vec<_>>();
+        summaries.sort_by_key(|summary| std::cmp::Reverse(summary.updated_at));
+        summaries.truncate(limit);
+        Ok(summaries)
+    }
+
+    async fn upsert_skill_proposal(
+        &self,
+        proposal: NewSkillProposalRecord,
+    ) -> Result<SkillProposalRecord> {
+        self.get_session(proposal.source_session_id).await?;
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .skill_proposals
+            .iter_mut()
+            .find(|existing| existing.dedupe_key == proposal.dedupe_key)
+        {
+            existing.name = proposal.name;
+            existing.description = proposal.description;
+            existing.body = proposal.body;
+            existing.trigger = proposal.trigger;
+            existing.use_criteria = proposal.use_criteria;
+            existing.evidence = proposal.evidence;
+            existing.self_critique = proposal.self_critique;
+            existing.verification = proposal.verification;
+            existing.source_dream_id = proposal.source_dream_id;
+            existing.source_session_id = proposal.source_session_id;
+            existing.updated_at = Utc::now();
+            return Ok(existing.clone());
+        }
+        let now = Utc::now();
+        let record = SkillProposalRecord {
+            id: Uuid::new_v4(),
+            name: proposal.name,
+            description: proposal.description,
+            body: proposal.body,
+            trigger: proposal.trigger,
+            use_criteria: proposal.use_criteria,
+            evidence: proposal.evidence,
+            self_critique: proposal.self_critique,
+            verification: proposal.verification,
+            status: SkillProposalStatus::Pending,
+            dedupe_key: proposal.dedupe_key,
+            source_dream_id: proposal.source_dream_id,
+            source_session_id: proposal.source_session_id,
+            created_at: now,
+            updated_at: now,
+        };
+        inner.skill_proposals.push(record.clone());
+        Ok(record)
+    }
+
+    async fn update_skill_proposal_status(
+        &self,
+        id: Uuid,
+        status: SkillProposalStatus,
+    ) -> Result<SkillProposalRecord> {
+        let mut inner = self.inner.lock();
+        let record = inner
+            .skill_proposals
+            .iter_mut()
+            .find(|proposal| proposal.id == id)
+            .ok_or_else(|| ServerError::NotFound(format!("skill proposal {id}")))?;
+        record.status = status;
+        record.updated_at = Utc::now();
+        Ok(record.clone())
+    }
+
+    async fn skill_proposal(&self, id: Uuid) -> Result<SkillProposalRecord> {
+        self.inner
+            .lock()
+            .skill_proposals
+            .iter()
+            .find(|proposal| proposal.id == id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("skill proposal {id}")))
+    }
+
+    async fn skill_proposals_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<SkillProposalRecord>> {
+        self.get_session(session_id).await?;
+        let mut proposals = self
+            .inner
+            .lock()
+            .skill_proposals
+            .iter()
+            .filter(|proposal| proposal.source_session_id == session_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        proposals.sort_by_key(|proposal| std::cmp::Reverse(proposal.updated_at));
+        Ok(proposals)
+    }
+
+    async fn upsert_cron_job(&self, job: NewCronJobRecord) -> Result<CronJobRecord> {
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .cron_jobs
+            .iter_mut()
+            .find(|existing| existing.id == job.id)
+        {
+            existing.name = job.name;
+            existing.schedule = job.schedule;
+            existing.enabled = job.enabled;
+            existing.cron_mode = job.cron_mode;
+            existing.max_turns = job.max_turns;
+            existing.script_timeout_seconds = job.script_timeout_seconds;
+            existing.next_run_at = job.next_run_at;
+            existing.updated_at = Utc::now();
+            return Ok(existing.clone());
+        }
+        let record = CronJobRecord {
+            id: job.id,
+            name: job.name,
+            schedule: job.schedule,
+            enabled: job.enabled,
+            cron_mode: job.cron_mode,
+            max_turns: job.max_turns,
+            script_timeout_seconds: job.script_timeout_seconds,
+            next_run_at: job.next_run_at,
+            updated_at: Utc::now(),
+        };
+        inner.cron_jobs.push(record.clone());
+        Ok(record)
+    }
+
+    async fn cron_job(&self, id: &str) -> Result<CronJobRecord> {
+        self.inner
+            .lock()
+            .cron_jobs
+            .iter()
+            .find(|job| job.id == id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("cron job {id}")))
+    }
+
+    async fn cron_jobs(&self) -> Result<Vec<CronJobRecord>> {
+        let mut jobs = self.inner.lock().cron_jobs.clone();
+        jobs.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(jobs)
+    }
+
+    async fn claim_cron_run(&self, run: NewCronRunRecord) -> Result<(CronRunRecord, bool)> {
+        self.cron_job(&run.job_id).await?;
+        if let Some(session_id) = run.session_id {
+            self.get_session(session_id).await?;
+        }
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .cron_runs
+            .iter()
+            .find(|existing| {
+                existing.job_id == run.job_id && existing.scheduled_for == run.scheduled_for
+            })
+            .cloned()
+        {
+            return Ok((existing, false));
+        }
+        let record = CronRunRecord {
+            id: Uuid::new_v4(),
+            job_id: run.job_id,
+            scheduled_for: run.scheduled_for,
+            status: run.status,
+            session_id: run.session_id,
+            started_at: Utc::now(),
+            completed_at: None,
+            result_json: run.result_json,
+        };
+        inner.cron_runs.push(record.clone());
+        Ok((record, true))
+    }
+
+    async fn record_cron_run(&self, run: NewCronRunRecord) -> Result<CronRunRecord> {
+        let (record, _) = self.claim_cron_run(run).await?;
+        Ok(record)
+    }
+
+    async fn complete_cron_run(
+        &self,
+        run_id: Uuid,
+        status: &str,
+        session_id: Option<Uuid>,
+        result_json: Value,
+    ) -> Result<CronRunRecord> {
+        if let Some(session_id) = session_id {
+            self.get_session(session_id).await?;
+        }
+        let mut inner = self.inner.lock();
+        let record = inner
+            .cron_runs
+            .iter_mut()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| ServerError::NotFound(format!("cron run {run_id}")))?;
+        record.status = status.to_string();
+        record.session_id = session_id.or(record.session_id);
+        record.completed_at = Some(Utc::now());
+        record.result_json = result_json;
+        Ok(record.clone())
+    }
+
+    async fn cron_runs(&self, job_id: &str, limit: usize) -> Result<Vec<CronRunRecord>> {
+        self.cron_job(job_id).await?;
+        let mut runs = self
+            .inner
+            .lock()
+            .cron_runs
+            .iter()
+            .filter(|run| run.job_id == job_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        runs.sort_by_key(|run| std::cmp::Reverse(run.started_at));
+        runs.truncate(limit);
+        Ok(runs)
     }
 }

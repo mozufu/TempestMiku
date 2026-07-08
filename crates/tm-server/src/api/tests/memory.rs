@@ -10,6 +10,7 @@ async fn memory_context_injects_profile_facts_and_recall_chunks() {
             predicate: "prefers".to_string(),
             object: "boring Rust".to_string(),
             confidence: 0.9,
+            importance: 0.72,
             provenance: "test".to_string(),
             valid_from: Utc::now(),
             valid_to: None,
@@ -22,6 +23,7 @@ async fn memory_context_injects_profile_facts_and_recall_chunks() {
             scope: "global".to_string(),
             text: "hello project open loop".to_string(),
             source: "test".to_string(),
+            importance: 0.65,
             created_at: Utc::now(),
         })
         .await
@@ -384,6 +386,114 @@ async fn approved_memory_writes_are_idempotent_by_dedupe_key() {
 }
 
 #[tokio::test]
+async fn approved_recall_chunks_remain_scope_isolated() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let session_id = session.id;
+    let post_app = app.clone();
+    let request = json!({
+        "memoryKind": "recall_chunk",
+        "subject": "brian",
+        "scope": "project:tempestmiku",
+        "text": "Project-only release checklist lives here",
+        "source": "test-scope-isolation",
+        "timeoutMs": 5000
+    });
+    let proposal =
+        tokio::spawn(async move { post_memory_proposal(&post_app, session_id, request).await });
+    let approval = wait_for_event_payload(&store, session_id, "approval").await;
+    let approval_id = approval["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    resolve_test_approval(&app, session_id, approval_id, "approve").await;
+    let response = proposal.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["status"], json!("approved"));
+    assert!(
+        body["record"]["uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("memory://scopes/project:tempestmiku/chunks/")
+    );
+
+    let scoped = store
+        .recall_chunks("project:tempestmiku", "release checklist", 10)
+        .await
+        .unwrap();
+    assert_eq!(scoped.len(), 1);
+    let global = store
+        .recall_chunks("global", "release checklist", 10)
+        .await
+        .unwrap();
+    assert!(global.is_empty());
+}
+
+#[tokio::test]
+async fn approved_profile_fact_contradiction_supersedes_without_erasing_history() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let session_id = session.id;
+    let mut record_uris = Vec::new();
+
+    for (approval_index, object) in [
+        "small, reviewable patches",
+        "larger design-first changes when risk is high",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let post_app = app.clone();
+        let request = json!({
+            "memoryKind": "profile_fact",
+            "subject": "brian",
+            "predicate": "prefers",
+            "object": object,
+            "confidence": 0.9,
+            "provenanceLabel": format!("contradiction-{approval_index}"),
+            "timeoutMs": 5000
+        });
+        let proposal =
+            tokio::spawn(async move { post_memory_proposal(&post_app, session_id, request).await });
+        let approval =
+            wait_for_nth_event_payload(&store, session_id, "approval", approval_index).await;
+        let approval_id = approval["approvalId"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        resolve_test_approval(&app, session_id, approval_id, "approve").await;
+        let response = proposal.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["status"], json!("approved"));
+        record_uris.push(body["record"]["uri"].as_str().unwrap().to_string());
+    }
+
+    let facts = store.profile_facts("brian").await.unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].predicate, "prefers");
+    assert_eq!(
+        facts[0].object,
+        "larger design-first changes when risk is high"
+    );
+    assert_eq!(facts[0].valid_to, None);
+
+    let old = get_session_resource_json(&app, session_id, "resolve", &record_uris[0]).await;
+    let old_content = old["content"].as_str().unwrap();
+    assert!(old_content.contains("small, reviewable patches"));
+    assert!(old_content.contains("Valid to: "));
+    assert!(!old_content.contains("Valid to: active"));
+
+    let current = get_session_resource_json(&app, session_id, "resolve", &record_uris[1]).await;
+    let current_content = current["content"].as_str().unwrap();
+    assert!(current_content.contains("larger design-first changes when risk is high"));
+    assert!(current_content.contains("Valid to: active"));
+}
+
+#[tokio::test]
 async fn personal_assistant_state_capture_proposes_memory_through_approval_flow() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
@@ -409,6 +519,8 @@ async fn personal_assistant_state_capture_proposes_memory_through_approval_flow(
         pending["object"],
         json!("approval-backed state capture summaries")
     );
+    assert_eq!(pending["importanceScore"], json!(0.72));
+    assert_eq!(pending["provenance"]["importanceScore"], json!(0.72));
     assert!(store.profile_facts("brian").await.unwrap().is_empty());
 
     let approval = wait_for_event_payload(&store, session_id, "approval").await;
@@ -438,6 +550,7 @@ async fn personal_assistant_state_capture_proposes_memory_through_approval_flow(
     assert_eq!(facts[0].predicate, "prefers");
     assert_eq!(facts[0].object, "approval-backed state capture summaries");
     assert_eq!(facts[0].provenance, "personal-assistant-state-capture");
+    assert_eq!(facts[0].importance, 0.72);
 }
 
 #[tokio::test]
@@ -469,6 +582,8 @@ async fn personal_assistant_reminder_capture_persists_approved_recall_chunk() {
         pending["text"],
         json!("Reminder: review the P2 acceptance checklist by Friday")
     );
+    assert_eq!(pending["importanceScore"], json!(0.64));
+    assert_eq!(pending["provenance"]["importanceScore"], json!(0.64));
     assert!(
         store
             .recall_chunks("global", "P2 acceptance checklist", 5)
@@ -500,6 +615,7 @@ async fn personal_assistant_reminder_capture_persists_approved_recall_chunk() {
         chunks[0].text,
         "Reminder: review the P2 acceptance checklist by Friday"
     );
+    assert_eq!(chunks[0].importance, 0.64);
 
     let root_json = get_session_resource_json(&app, session_id, "resolve", "memory://root").await;
     assert!(

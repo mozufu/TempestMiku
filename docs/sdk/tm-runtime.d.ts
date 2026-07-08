@@ -4,10 +4,11 @@
  * P0/P2 surface: no ambient filesystem, process, network, secret, shell, or
  * host access. Every external effect goes through capability-checked SDK
  * namespaces. P2 memory is exposed as memory:// resources behind
- * resources.read:memory, not as a memory.* namespace. Bundled skill
- * markdown may be labeled skill://... inside composed prompts, but that
- * label is not a resources.read/list/preview surface until the P4/P7 skill
- * lifecycle work registers a handler and grants.
+ * resources.read:memory, not as a memory.* namespace. P4 adds constrained
+ * memory:// dream queues/records, summaries, and skill-proposal previews;
+ * bundled skill markdown may still be labeled skill://... inside composed
+ * prompts, but that label is not a resources.read/list/preview surface until
+ * the P7 import/reload lifecycle registers a handler and grants.
  *
  * P3/P3-plus agents surface: `agents` is defined only in sessions holding the required
  * agents.* grant. In ungranted sessions it remains `undefined`. Use
@@ -63,10 +64,20 @@ type SkillPromptLabel = `skill://${string}`;
 type MemoryResourceUri =
   | "memory://root"
   | "memory://user-model"
+  | "memory://dreams"
+  | `memory://dreams/${string}`
   | `memory://profile/${string}/facts/${string}`
-  | `memory://scopes/${string}/chunks/${string}`;
+  | `memory://scopes/${string}/chunks/${string}`
+  | `memory://summaries/${string}`
+  | `memory://skill-proposals/${string}`;
 
 type ProjectResourceUri = `project://${string}`;
+type CronResourceUri =
+  | "cron://"
+  | "cron://root"
+  | `cron://${string}`
+  | `cron://${string}/runs`
+  | `cron://${string}/runs/${string}`;
 
 type ResourceUri =
   | `artifact://${string}`
@@ -74,7 +85,7 @@ type ResourceUri =
   | `history://${string}`
   | MemoryResourceUri
   | `drive://${string}`
-  | `cron://${string}`
+  | CronResourceUri
   | `workspace://session/${string}`
   | `linked://${string}/${string}`
   | ProjectResourceUri;
@@ -220,10 +231,11 @@ interface ResourcesNamespace {
    * resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>
    *
    * Scheme-dispatched resource read. Current registered schemes include
-   * artifact://, linked://, workspace://session, project://, the P2 memory://
-   * surface, and the P3 agent:// / history:// handlers. Each scheme has its
-   * own grant such as resources.read:artifact, resources.read:linked,
-   * resources.read:memory, resources.read:agent, or resources.read:history;
+   * artifact://, linked://, workspace://session, project://, the P2/P4
+   * memory:// surface, the P3 agent:// / history:// handlers, and P4 cron://
+   * job/run previews. Each scheme has its own grant such as
+   * resources.read:artifact, resources.read:linked, resources.read:memory,
+   * resources.read:agent, resources.read:history, or resources.read:cron;
    * missing grants and unknown schemes fail closed.
    * skill://... is prompt-composition-only for now; drive:// and cron:// are
    * reserved URI shapes. Reads for unregistered schemes must fail closed until

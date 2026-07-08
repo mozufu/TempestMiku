@@ -5,8 +5,31 @@
 //! summaries, embeddings, and skill proposals attach here in later P4 slices.
 
 mod dream;
+mod embedding;
+mod input;
+mod records;
+mod redaction;
+mod skill;
+mod store;
+mod summary;
 
 pub use dream::{
     DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport, MemoryError,
     NewDreamQueueRecord, NoopDreamWorker,
+};
+pub use embedding::{EmbeddingConfig, EmbeddingConfigError, EmbeddingProvider};
+pub use input::{BudgetedDreamInput, DreamInputBudget, DreamInputChunk, DreamInputMessage};
+pub use records::{ProfileFactRecord, RecallChunkRecord};
+pub use redaction::{Redaction, RedactionReport, redact_dream_text};
+pub use skill::{
+    NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus, SkillVerification,
+    UnknownSkillProposalStatus,
+};
+pub use store::{
+    DreamLeaseStore, EpisodicMemoryStore, MemoryStoreError, MemoryStoreResult, MemorySummaryStore,
+    ProfileMemoryStore, SkillProposalStore,
+};
+pub use summary::{
+    MemoryEvidenceRef, MemorySummaryKind, MemorySummaryRecord, NewMemorySummaryRecord,
+    UnknownMemorySummaryKind,
 };

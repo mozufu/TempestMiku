@@ -136,8 +136,9 @@ where
         Some("memory") => read_memory_resource(state, session_id, uri, selector).await,
         Some("agent") => read_agent_resource(state, uri, selector).await,
         Some("history") => read_history_resource(state, uri, selector).await,
+        Some("cron") => read_cron_resource(state, uri).await,
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history"
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history, cron"
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
@@ -181,6 +182,7 @@ where
             "memory",
             "agent",
             "history",
+            "cron",
         ]
         .into_iter()
         .map(|scheme| ResourceEntry {
@@ -219,12 +221,135 @@ where
         Some("history") => Err(ServerError::Policy(
             "history:// listing not supported — read a specific history://<id>".to_string(),
         )),
+        Some("cron") => list_cron_resources(state, uri).await,
         Some(scheme) => Err(ServerError::Policy(format!(
-            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history"
+            "unknown resource scheme {scheme}; registered: artifact, linked, workspace, project, memory, agent, history, cron"
         ))),
         None => Err(ServerError::InvalidRequest(format!(
             "invalid resource uri {uri}"
         ))),
+    }
+}
+
+async fn read_cron_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let payload = match parse_cron_uri(uri)? {
+        CronUri::Root => serde_json::to_value(state.store.cron_jobs().await?)?,
+        CronUri::Job { job_id } => {
+            let job = state.store.cron_job(&job_id).await?;
+            let runs = state.store.cron_runs(&job_id, 20).await?;
+            json!({ "job": job, "runs": runs })
+        }
+        CronUri::Runs { job_id } => {
+            serde_json::to_value(state.store.cron_runs(&job_id, 50).await?)?
+        }
+        CronUri::Run { job_id, run_id } => {
+            let run = state
+                .store
+                .cron_runs(&job_id, 100)
+                .await?
+                .into_iter()
+                .find(|run| run.id == run_id)
+                .ok_or_else(|| ServerError::NotFound(format!("cron run {run_id}")))?;
+            serde_json::to_value(run)?
+        }
+    };
+    let content = serde_json::to_string_pretty(&payload)?;
+    Ok(ResourceContent {
+        uri: uri.to_string(),
+        kind: "cron_view".to_string(),
+        mime: "application/json".to_string(),
+        title: Some(uri.to_string()),
+        size_bytes: content.len(),
+        selector: None,
+        has_more: false,
+        preview: preview(&content, 1024),
+        content,
+    })
+}
+
+async fn list_cron_resources<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    match parse_cron_uri(uri)? {
+        CronUri::Root => Ok(state
+            .store
+            .cron_jobs()
+            .await?
+            .into_iter()
+            .map(|job| ResourceEntry {
+                uri: format!("cron://{}", job.id),
+                name: job.id,
+                kind: "cron_job".to_string(),
+                title: Some(job.name),
+                size_bytes: None,
+                modified_at: Some(job.updated_at.to_rfc3339()),
+            })
+            .collect()),
+        CronUri::Job { job_id } | CronUri::Runs { job_id } => Ok(state
+            .store
+            .cron_runs(&job_id, 50)
+            .await?
+            .into_iter()
+            .map(|run| ResourceEntry {
+                uri: format!("cron://{}/runs/{}", run.job_id, run.id),
+                name: run.id.to_string(),
+                kind: "cron_run".to_string(),
+                title: Some(run.status),
+                size_bytes: None,
+                modified_at: run
+                    .completed_at
+                    .or(Some(run.started_at))
+                    .map(|time| time.to_rfc3339()),
+            })
+            .collect()),
+        CronUri::Run { .. } => Err(ServerError::Policy(
+            "cron run listing not supported — list cron://<job>/runs".to_string(),
+        )),
+    }
+}
+
+enum CronUri {
+    Root,
+    Job { job_id: String },
+    Runs { job_id: String },
+    Run { job_id: String, run_id: Uuid },
+}
+
+fn parse_cron_uri(uri: &str) -> Result<CronUri> {
+    let path = uri
+        .strip_prefix("cron://")
+        .ok_or_else(|| ServerError::Policy(format!("unsupported cron uri {uri}")))?;
+    if path.is_empty() || path == "root" {
+        return Ok(CronUri::Root);
+    }
+    let parts = path.split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [job_id] if !job_id.is_empty() => Ok(CronUri::Job {
+            job_id: (*job_id).to_string(),
+        }),
+        [job_id, "runs"] if !job_id.is_empty() => Ok(CronUri::Runs {
+            job_id: (*job_id).to_string(),
+        }),
+        [job_id, "runs", run_id] if !job_id.is_empty() => Ok(CronUri::Run {
+            job_id: (*job_id).to_string(),
+            run_id: Uuid::parse_str(run_id)
+                .map_err(|_| ServerError::Policy(format!("invalid cron uri {uri}")))?,
+        }),
+        _ => Err(ServerError::Policy(format!("unsupported cron uri {uri}"))),
     }
 }
 

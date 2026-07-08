@@ -632,6 +632,7 @@ where
                     response.trim()
                 ),
                 source: format!("session:{session_id}:assistant"),
+                importance: 0.58,
                 created_at: Utc::now(),
             })
             .await?;

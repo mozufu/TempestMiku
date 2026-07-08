@@ -292,6 +292,38 @@ void main() {
     expect(find.text('Memory proposal'), findsNothing);
   });
 
+  testWidgets('phone view resolves a dream-origin memory proposal',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'dream captured this');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Memory proposal'), findsOneWidget);
+    expect(find.text('provenance post-session-dream'), findsOneWidget);
+    await tester.tap(find.text('Save memory'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(client.resolvedApprovals, hasLength(1));
+    expect(client.resolvedApprovals.single, endsWith(':approve'));
+    expect(find.text('Memory proposal'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('promotes actor completion resources from activity feed',
       (WidgetTester tester) async {
     final client = ScriptedMikuClient();

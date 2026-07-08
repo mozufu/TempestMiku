@@ -83,8 +83,8 @@ outputs out of both the model context and the mobile client render path.
 
 ## 9.3 Resource catalog
 
-Internal schemes (v1). The implemented P0-P3 session gateway currently registers `artifact://`,
-`workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, and `history://`.
+Internal schemes (v1). The implemented P0-P4 session gateway currently registers `artifact://`,
+`workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, `history://`, and `cron://`.
 Other catalog entries are reserved designs and must fail closed until their backing subsystem
 registers a handler and grant.
 
@@ -93,10 +93,10 @@ registers a handler and grant.
 | `artifact://<id>` | session-local tool output (monotonic int) | artifact store §25 | `tm-artifacts` |
 | `agent://<id>` | sub-agent output/record resource | agents §23 / §25 | `tm-agents` |
 | `history://<id>` | read-only sub-agent transcript | agents §23 | `tm-agents` |
-| `memory://…` | P2 memory gateway: `root`, `user-model`, approved profile facts, and scoped recall chunks (§22.9). Richer `MEMORY.md`, episodic query, project memory, and dream views remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
+| `memory://…` | P2/P4 memory gateway: `root`, `user-model`, approved profile facts, scoped recall chunks, dream queue/record previews, summaries, and skill proposal previews (§22.9). Richer `MEMORY.md`, episodic query, and project memory remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
 | `skill://<name>` | **Reserved prompt label only in P2**: composed system prompts may label injected `SKILL.md` sections this way, but `resources.read/list/preview("skill://...")` is not registered and must fail closed until P4/P7 defines the read lifecycle. | skills §22 / §26 | prompt composition now; no resource handler until P4/P7 |
 | `drive://<path>` | reserved P5 user document by canonical path §24 | drive §24 | `tm-drive` later |
-| `cron://[<id>]` | reserved P4 scheduler job table: list jobs / a job's def + run history §27.2 | scheduler §27 | `tm-server` later |
+| `cron://[<id>]` | P4 scheduler job table: list jobs / a job's definition + run history §27.2 | scheduler §27 | `tm-server` session resource gateway |
 | `workspace://session/<path>` | current session sandbox workspace read/list/preview | sandbox workspace §07 / §08 | `tm-sandbox` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
 | `project://<id>/<view>` | aggregate project surface: status, open loops, decisions, linked folders, artifacts, agents | server project layer §27 / memory §22 / host §25 | `tm-server` |

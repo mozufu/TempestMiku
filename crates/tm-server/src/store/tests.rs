@@ -1,6 +1,6 @@
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde_json::json;
-use tm_memory::{DreamReason, DreamStatus, NewDreamQueueRecord};
+use tm_memory::{DreamReason, DreamStatus, NewDreamQueueRecord, RecallChunkRecord};
 use tm_modes::{AssetStatus, ModeId};
 use uuid::Uuid;
 
@@ -149,6 +149,157 @@ async fn in_memory_end_session_enqueue_dream_is_idempotent() {
 }
 
 #[tokio::test]
+async fn in_memory_dream_claim_heartbeat_complete_and_stale_reclaim() {
+    let store = InMemoryStore::default();
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let now = Utc::now();
+    let queued = store
+        .enqueue_dream(NewDreamQueueRecord {
+            session_id: session.id,
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::ManualReflect,
+            dedupe_key: format!("dream:lifecycle:{}", session.id),
+            source_event_seq: None,
+            available_at: now - Duration::seconds(1),
+        })
+        .await
+        .unwrap();
+
+    let claimed = store
+        .claim_ready_dream(now, Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("ready dream");
+    assert_eq!(claimed.id, queued.id);
+    assert_eq!(claimed.status, DreamStatus::Running);
+    assert_eq!(claimed.attempts, 1);
+    assert_eq!(claimed.locked_at, Some(now));
+    assert!(
+        store
+            .claim_ready_dream(now + Duration::seconds(10), Duration::seconds(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let reclaimed = store
+        .claim_ready_dream(now + Duration::seconds(31), Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("stale running dream");
+    assert_eq!(reclaimed.id, queued.id);
+    assert_eq!(reclaimed.status, DreamStatus::Running);
+    assert_eq!(reclaimed.attempts, 2);
+
+    let heartbeat_at = now + Duration::seconds(35);
+    let heartbeated = store
+        .heartbeat_dream(queued.id, heartbeat_at)
+        .await
+        .unwrap();
+    assert_eq!(heartbeated.locked_at, Some(heartbeat_at));
+
+    let completed_at = now + Duration::seconds(40);
+    let completed = store.complete_dream(queued.id, completed_at).await.unwrap();
+    assert_eq!(completed.status, DreamStatus::Completed);
+    assert_eq!(completed.locked_at, None);
+    assert_eq!(completed.available_at, completed_at);
+    assert!(
+        store
+            .claim_ready_dream(now + Duration::seconds(90), Duration::seconds(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn in_memory_dream_failure_records_error_and_bounded_retry() {
+    let store = InMemoryStore::default();
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let now = Utc::now();
+    let queued = store
+        .enqueue_dream(NewDreamQueueRecord {
+            session_id: session.id,
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::ManualReflect,
+            dedupe_key: format!("dream:retry:{}", session.id),
+            source_event_seq: None,
+            available_at: now,
+        })
+        .await
+        .unwrap();
+
+    let first = store
+        .claim_ready_dream(now, Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("first attempt");
+    assert_eq!(first.attempts, 1);
+
+    let retry_at = now + Duration::seconds(60);
+    let retryable = store
+        .fail_dream(queued.id, "model timeout".to_string(), retry_at, 2)
+        .await
+        .unwrap();
+    assert_eq!(retryable.status, DreamStatus::Queued);
+    assert_eq!(retryable.attempts, 1);
+    assert_eq!(retryable.last_error.as_deref(), Some("model timeout"));
+    assert_eq!(retryable.available_at, retry_at);
+    assert!(
+        store
+            .claim_ready_dream(now + Duration::seconds(30), Duration::seconds(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let second = store
+        .claim_ready_dream(retry_at, Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("second attempt");
+    assert_eq!(second.attempts, 2);
+
+    let terminal = store
+        .fail_dream(
+            queued.id,
+            "redaction failed".to_string(),
+            retry_at + Duration::seconds(60),
+            2,
+        )
+        .await
+        .unwrap();
+    assert_eq!(terminal.status, DreamStatus::Failed);
+    assert_eq!(terminal.locked_at, None);
+    assert_eq!(terminal.last_error.as_deref(), Some("redaction failed"));
+    assert!(
+        store
+            .claim_ready_dream(retry_at + Duration::seconds(120), Duration::seconds(30))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
     let Some(dsn) = postgres_test_dsn() else {
         return;
@@ -193,6 +344,130 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
             .unwrap()
             .len(),
         1
+    );
+    let session_end_claim = store
+        .claim_ready_dream(Utc::now(), Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("postgres session-end dream");
+    assert_eq!(session_end_claim.id, dream.id);
+    let completed_session_end = store
+        .complete_dream(session_end_claim.id, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(completed_session_end.status, DreamStatus::Completed);
+    let duplicate_after_complete = store
+        .enqueue_dream(NewDreamQueueRecord::session_end(
+            session.id,
+            "brian",
+            "global",
+            Some(3),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(duplicate_after_complete.id, dream.id);
+    assert_eq!(duplicate_after_complete.status, DreamStatus::Completed);
+
+    let lifecycle = store
+        .enqueue_dream(NewDreamQueueRecord {
+            session_id: session.id,
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::ManualReflect,
+            dedupe_key: format!("dream:postgres-lifecycle:{}", Uuid::new_v4()),
+            source_event_seq: None,
+            available_at: Utc::now() - Duration::days(3650),
+        })
+        .await
+        .unwrap();
+    let claimed = store
+        .claim_ready_dream(Utc::now(), Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("postgres ready dream");
+    assert_eq!(claimed.id, lifecycle.id);
+    assert_eq!(claimed.status, DreamStatus::Running);
+    assert_eq!(claimed.attempts, 1);
+    let heartbeat_at = Utc::now() + Duration::seconds(1);
+    let heartbeated = store
+        .heartbeat_dream(claimed.id, heartbeat_at)
+        .await
+        .unwrap();
+    assert_eq!(heartbeated.locked_at, Some(heartbeat_at));
+    let retry_at = Utc::now() + Duration::seconds(60);
+    let retryable = store
+        .fail_dream(
+            claimed.id,
+            "postgres transient failure".to_string(),
+            retry_at,
+            2,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retryable.status, DreamStatus::Queued);
+    assert_eq!(
+        retryable.last_error.as_deref(),
+        Some("postgres transient failure")
+    );
+    let second = store
+        .claim_ready_dream(retry_at, Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("postgres retry dream");
+    assert_eq!(second.id, lifecycle.id);
+    assert_eq!(second.attempts, 2);
+    let completed = store.complete_dream(second.id, Utc::now()).await.unwrap();
+    assert_eq!(completed.status, DreamStatus::Completed);
+    assert_eq!(completed.locked_at, None);
+
+    let stale = store
+        .enqueue_dream(NewDreamQueueRecord {
+            session_id: session.id,
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::ManualReflect,
+            dedupe_key: format!("dream:postgres-stale:{}", Uuid::new_v4()),
+            source_event_seq: None,
+            available_at: Utc::now() - Duration::days(3650),
+        })
+        .await
+        .unwrap();
+    let stale_now = Utc::now();
+    let first_stale_claim = store
+        .claim_ready_dream(stale_now, Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("postgres stale test dream");
+    assert_eq!(first_stale_claim.id, stale.id);
+    assert_eq!(first_stale_claim.attempts, 1);
+    assert!(
+        store
+            .claim_ready_dream(stale_now + Duration::seconds(10), Duration::seconds(30))
+            .await
+            .unwrap()
+            .is_none(),
+        "fresh running lock must not be reclaimed"
+    );
+    let reclaimed = store
+        .claim_ready_dream(stale_now + Duration::seconds(31), Duration::seconds(30))
+        .await
+        .unwrap()
+        .expect("postgres stale dream reclaimed");
+    assert_eq!(reclaimed.id, stale.id);
+    assert_eq!(reclaimed.attempts, 2);
+    let terminal = store
+        .fail_dream(
+            reclaimed.id,
+            "postgres terminal failure".to_string(),
+            Utc::now(),
+            2,
+        )
+        .await
+        .unwrap();
+    assert_eq!(terminal.status, DreamStatus::Failed);
+    assert_eq!(
+        terminal.last_error.as_deref(),
+        Some("postgres terminal failure")
     );
 
     let mut mode_state = session.mode_state.clone();
@@ -295,6 +570,7 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
             scope: "project:postgres-test".to_string(),
             text: "memory row for P1 project view".to_string(),
             source: format!("session:{}", session.id),
+            importance: 0.65,
             created_at: Utc::now(),
         })
         .await
@@ -347,4 +623,45 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn gated_postgres_recall_chunks_use_fts_with_substring_fallback() {
+    let Some(dsn) = postgres_test_dsn() else {
+        return;
+    };
+    let store = PostgresStore::connect(&dsn).await.unwrap();
+    let scope = format!("postgres-fts-{}", Uuid::new_v4());
+    store
+        .add_recall_chunk(RecallChunkRecord {
+            id: Uuid::new_v4(),
+            scope: scope.clone(),
+            text: "Ship ledger keeps approvals deferred for review.".to_string(),
+            source: "postgres-fts".to_string(),
+            importance: 0.7,
+            created_at: Utc::now() - Duration::minutes(5),
+        })
+        .await
+        .unwrap();
+    store
+        .add_recall_chunk(RecallChunkRecord {
+            id: Uuid::new_v4(),
+            scope: scope.clone(),
+            text: "Ship approvals are contiguous here.".to_string(),
+            source: "postgres-ilike".to_string(),
+            importance: 0.4,
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let fts = store
+        .recall_chunks(&scope, "ship review", 10)
+        .await
+        .unwrap();
+    assert_eq!(fts.len(), 1);
+    assert_eq!(fts[0].source, "postgres-fts");
+    let substring = store.recall_chunks(&scope, "contigu", 10).await.unwrap();
+    assert_eq!(substring.len(), 1);
+    assert_eq!(substring[0].source, "postgres-ilike");
 }

@@ -1,8 +1,12 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tm_memory::{DreamQueueRecord, NewDreamQueueRecord};
+use tm_memory::{
+    DreamQueueRecord, MemorySummaryRecord, NewDreamQueueRecord, NewMemorySummaryRecord,
+    NewSkillProposalRecord, ProfileFactRecord, RecallChunkRecord, SkillProposalRecord,
+    SkillProposalStatus,
+};
 use tm_modes::{AssetStatus, ModeId};
 use uuid::Uuid;
 
@@ -143,27 +147,6 @@ pub struct SessionSummaryRecord {
     pub last_event_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ProfileFactRecord {
-    pub id: Uuid,
-    pub subject: String,
-    pub predicate: String,
-    pub object: String,
-    pub confidence: f32,
-    pub provenance: String,
-    pub valid_from: DateTime<Utc>,
-    pub valid_to: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RecallChunkRecord {
-    pub id: Uuid,
-    pub scope: String,
-    pub text: String,
-    pub source: String,
-    pub created_at: DateTime<Utc>,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectItemKind {
@@ -244,6 +227,54 @@ pub struct NewProjectItem {
     pub provenance_json: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CronJobRecord {
+    pub id: String,
+    pub name: String,
+    pub schedule: String,
+    pub enabled: bool,
+    pub cron_mode: String,
+    pub max_turns: i32,
+    pub script_timeout_seconds: i32,
+    pub next_run_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewCronJobRecord {
+    pub id: String,
+    pub name: String,
+    pub schedule: String,
+    pub enabled: bool,
+    pub cron_mode: String,
+    pub max_turns: i32,
+    pub script_timeout_seconds: i32,
+    pub next_run_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CronRunRecord {
+    pub id: Uuid,
+    pub job_id: String,
+    pub scheduled_for: DateTime<Utc>,
+    pub status: String,
+    pub session_id: Option<Uuid>,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub result_json: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewCronRunRecord {
+    pub job_id: String,
+    pub scheduled_for: DateTime<Utc>,
+    pub status: String,
+    pub session_id: Option<Uuid>,
+    pub result_json: Value,
+}
+
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
     async fn create_session(&self, new: NewSession) -> Result<SessionRecord>;
@@ -294,6 +325,57 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<Vec<ProjectItemRecord>>;
     async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord>;
     async fn dream_queue_for_session(&self, session_id: Uuid) -> Result<Vec<DreamQueueRecord>>;
+    async fn dream_queue(&self, scope: &str, limit: usize) -> Result<Vec<DreamQueueRecord>>;
+    async fn dream(&self, dream_id: Uuid) -> Result<DreamQueueRecord>;
+    async fn claim_ready_dream(
+        &self,
+        now: DateTime<Utc>,
+        lease_timeout: Duration,
+    ) -> Result<Option<DreamQueueRecord>>;
+    async fn heartbeat_dream(&self, dream_id: Uuid, now: DateTime<Utc>)
+    -> Result<DreamQueueRecord>;
+    async fn complete_dream(&self, dream_id: Uuid, now: DateTime<Utc>) -> Result<DreamQueueRecord>;
+    async fn fail_dream(
+        &self,
+        dream_id: Uuid,
+        error: String,
+        next_available_at: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<DreamQueueRecord>;
+    async fn upsert_memory_summary(
+        &self,
+        summary: NewMemorySummaryRecord,
+    ) -> Result<MemorySummaryRecord>;
+    async fn memory_summary(&self, id: Uuid) -> Result<MemorySummaryRecord>;
+    async fn memory_summaries(&self, scope: &str, limit: usize)
+    -> Result<Vec<MemorySummaryRecord>>;
+    async fn upsert_skill_proposal(
+        &self,
+        proposal: NewSkillProposalRecord,
+    ) -> Result<SkillProposalRecord>;
+    async fn update_skill_proposal_status(
+        &self,
+        id: Uuid,
+        status: SkillProposalStatus,
+    ) -> Result<SkillProposalRecord>;
+    async fn skill_proposal(&self, id: Uuid) -> Result<SkillProposalRecord>;
+    async fn skill_proposals_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<SkillProposalRecord>>;
+    async fn upsert_cron_job(&self, job: NewCronJobRecord) -> Result<CronJobRecord>;
+    async fn cron_job(&self, id: &str) -> Result<CronJobRecord>;
+    async fn cron_jobs(&self) -> Result<Vec<CronJobRecord>>;
+    async fn claim_cron_run(&self, run: NewCronRunRecord) -> Result<(CronRunRecord, bool)>;
+    async fn record_cron_run(&self, run: NewCronRunRecord) -> Result<CronRunRecord>;
+    async fn complete_cron_run(
+        &self,
+        run_id: Uuid,
+        status: &str,
+        session_id: Option<Uuid>,
+        result_json: Value,
+    ) -> Result<CronRunRecord>;
+    async fn cron_runs(&self, job_id: &str, limit: usize) -> Result<Vec<CronRunRecord>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

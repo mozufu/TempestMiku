@@ -113,11 +113,35 @@ Each turn, only a small block is auto-injected; everything else is pull-on-deman
 
 There is no external deriver/dreamer to depend on or fall behind: steps 2–6 *are* the dream.
 
-**Implemented P4.0 slice:** `tm-memory` now owns the dream queue record shape
-(`DreamQueueRecord`, `DreamReason`, `DreamStatus`) and the explicit no-op worker contract.
-`tm-server` persists a `dream_queue` row when `POST /sessions/:id/end` ends a session, emits
-replayable `session_end` + `dream_queued` events, and keeps extraction / reflection / summary /
-skill-proposal work intentionally stubbed for the next P4 slices.
+**Implemented P4 slice:** `tm-memory` owns the dream queue, summary, skill-proposal, evidence, and
+redaction data contracts. `tm-server` persists a `dream_queue` row when `POST /sessions/:id/end` ends a
+session, emits replayable `session_end` + `dream_queued` events, and exposes a server-owned
+`ServerDreamWorker` plus `DreamWorkerDaemon` runner. The current worker is deterministic and
+external-service-free: it leases ready dreams, emits `dream_started` / `dream_progress` /
+`dream_completed` or `dream_failed`, records timeout failures back to the queue for bounded retry or
+terminal failure, collects session messages/events through `DreamInputBudget` chunks, redacts obvious
+secrets/credentials/PII before derived writes, writes a session summary with evidence links and input
+budget metadata, reuses the existing approval/default-deny memory proposal path for durable
+facts/chunks with deterministic `importanceScore` metadata in provenance, and creates a constrained
+approval-gated skill proposal when the session contains reusable-workflow signal. The `dream_progress`
+`input_collected` payload reports total/included
+messages, omitted/truncated messages, chunk count, redaction count, and input chars so clients can
+inspect bounded dream context without raw transcript dumps. The daemon loops by poll interval, honors
+configured concurrency, and exits on shutdown without leaving completed work locked.
+When extracted candidates cross the configured cumulative importance threshold, the worker writes a
+derived `reflection` summary that cites source evidence instead of storing a raw assertion. Each dream
+also updates an idempotent `topic_project` rollup for the scope by folding recent session/reflection
+summaries, keeping older context recallable without loading full logs.
+`StoreMemoryProvider` now includes recent scoped `memory_summaries` alongside profile facts and scoped
+recall chunks in the bounded session-start memory prompt, so later sessions can see open loops and next
+actions without loading raw transcripts. Scoped recall uses exact/substring lexical matching, then
+orders by deterministic importance and recency; empty optional recall stores return an empty context
+instead of failing. Approved profile facts dedupe by normalized assertion, and a new active fact with
+the same `(subject, predicate)` but a different object supersedes the older active fact by setting
+`valid_to`; exact `memory://profile/.../facts/<id>` resources remain resolvable for history. Dense
+embeddings, graph extraction, and LLM-backed extraction remain later P4 hardening. When Postgres is
+enabled, scoped recall also uses a `simple` `tsvector`/`plainto_tsquery` path with substring fallback;
+the in-memory store keeps deterministic substring matching for normal tests.
 
 ## 22.6 Storage substrate & embeddings (decisions)
 
@@ -126,9 +150,9 @@ skill-proposal work intentionally stubbed for the next P4 slices.
   `pg_search` / ParadeDB extension if needed)*; facts / episodic / summaries as tables; the **graph** as
   `nodes` + `edges` tables (bi-temporal columns) traversed by recursive CTEs *(optional `Apache AGE` for
   openCypher traversal)*. One DB, replayable; scopes are rows, not files.
-- **Embeddings:** an `embeddings` model role with a **config-selected provider** (`embeddings.provider:
-  api | local`) — `api` = OpenAI-compatible backend (§27.3); `local` = in-process embedder
-  (fastembed / candle). Dimension pinned per scope (switching provider ⇒ re-embed).
+- **Embeddings:** dense vectors/pgvector remain disabled by default while lexical + summaries harden.
+  The config surface already exists as `embeddings.provider: disabled | local | openai_compatible`;
+  any enabled provider must pin `embeddings.dimensions` (switching provider/dimension ⇒ re-embed).
 - **Scope:** a `scope` column on every row — a **global** scope (Brian) always, plus a
   **per-linked-project** scope when a folder/repo is linked (§24), so repo lore stays isolated.
 
@@ -143,16 +167,29 @@ engine while preserving project continuity:
 - `sessions(id, created_at, updated_at, status, mode, persona_status)`
 - `session_events(session_id, seq, event_type, payload_json, created_at)` — SSE replay source (§27)
 - `messages(session_id, seq, role, content, created_at)`
-- `profile_facts(id, subject, predicate, object, confidence, provenance, valid_from, valid_to)`
-- `recall_chunks(id, scope, text, source, created_at, embedding?)` — project summaries, decisions,
-  open loops, and profile/user recall
+- `profile_facts(id, subject, predicate, object, confidence, importance, provenance, valid_from,
+  valid_to)`
+- `recall_chunks(id, scope, text, source, importance, created_at, embedding?)` — project summaries,
+  decisions, open loops, and profile/user recall
 - `dream_queue(id, session_id, subject, scope, reason, status, dedupe_key, source_event_seq,
-  attempts, enqueued_at, available_at, locked_at, last_error)` — P4.0 session-end dream requests;
-  status stays `queued` until the real worker/extraction path ships
+  attempts, enqueued_at, available_at, locked_at, last_error)` — session-end/manual/scheduled dream
+  requests, with claim/heartbeat/complete/fail lifecycle, stale-lock recovery, bounded retry/backoff,
+  and idempotent `dedupe_key`
+- `memory_summaries(id, kind, subject, scope, title, body, evidence_json, source_dream_id,
+  source_session_id, dedupe_key, created_at, updated_at)` — P4 summary records; `kind` includes
+  session, reflection, daily, weekly, and topic-project rollups
+- `skill_proposals(id, name, description, body, trigger, use_criteria, evidence_json,
+  self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id,
+  created_at, updated_at)` — reviewable skill proposals; accepted/rejected status does not mutate the
+  live skill catalog
+- `cron_jobs` / `cron_runs` (§27.2) — scheduler job definitions, bounds, and run history for P4
+  proactive sessions
 
 P0/P1 recall is profile facts + scoped recall chunks, enough to remember what changed, why it changed,
-and what remains open between coding sessions and promoted projects. P4.0 adds the durable queue
-contract only; full dreaming, graph, RRF fusion, and skill generation remain later §22 work.
+and what remains open between coding sessions and promoted projects. P4 adds deterministic
+post-session summaries, proposal generation, and summary-aware session-start recall through the same
+prompt budgeter, plus deterministic reflection summaries and recursive topic/project rollups; full
+graph/RRF fusion, dense embeddings, and LLM-backed extraction/reranking remain later §22 work.
 
 ## 22.7 honcho.json behavior → `tm-memory` config
 
@@ -168,7 +205,11 @@ The current knobs become our config (now we own every one — none is an externa
 | `sessionStrategy: per-session` | one episodic session-scope per chat |
 | `observationMode` / `pinUserPeer` | single-user: Brian is the only modeled peer; pin = always-in core block |
 | `user_profile` / `write_approval` | facts store on; durable writes approval-gated (§22.8) |
-| *(new)* `rrf_k`, `weights{recency,importance,relevance}`, `topK`, `reflect_threshold` | fusion + stream tuning |
+| *(new)* `dream.redaction.enabled` | fail-closed redaction policy; disabled redaction fails the dream before derived writes |
+| *(new)* `dream.input_budget.{max_chunks,max_chunk_chars,max_message_chars}` | prompt budgeter for dream extraction input |
+| *(new)* `dream.summary_cadence.{session_every_dream,rollup_every_dream}` | deterministic session-summary and recursive-rollup cadence |
+| *(new)* `dream.retry_backoff`, `dream.max_attempts`, `dream.reflect_importance_threshold` | worker retry/terminal failure and reflection threshold |
+| *(new)* `rrf_k`, `weights{recency,importance,relevance}`, `topK` | fusion + stream tuning |
 | *(new)* `embeddings.provider: api\|local`, `graph.max_hops` | embedding backend toggle; graph-hop depth (§22.6, §22.3) |
 
 ## 22.8 Memory discipline & write-approval (SOUL.md + `personal-assistant-state-capture`)
@@ -194,8 +235,9 @@ The current knobs become our config (now we own every one — none is an externa
   facts, scoped recall chunks, provenance labels, and budget metadata. Durable profile facts and scoped
   recall chunks are created through `write_proposal` events plus the shared `approval` / `approval_resolved`
   path; approve writes idempotently by normalized content, while deny/timeout writes nothing and remains
-  replayable in `session_events`. Approved writes emit previewable `memory://profile/<subject>/facts/<id>`
-  and `memory://scopes/<scope>/chunks/<id>` record URIs.
+  replayable in `session_events`. Contradictory approved profile facts close the previous active fact
+  with `valid_to` rather than deleting it. Approved writes emit previewable
+  `memory://profile/<subject>/facts/<id>` and `memory://scopes/<scope>/chunks/<id>` record URIs.
 
 ## 22.9 `memory.*` capability + `memory://` resources
 
@@ -210,21 +252,26 @@ The current knobs become our config (now we own every one — none is an externa
 | `memory.card()` | current profile snapshot (top facts) |
 
 `memory://` URLs are resolved via the §9.2 registry and the session resource gateway. The implemented
-P2 surface is deliberately small and fail-closed: `memory://root` returns the current injected memory
-summary for Brian and the active session scope; `memory://user-model` returns the active profile/facts
-view; approved write proposals expose exact record views at `memory://profile/<subject>/facts/<id>` and
-`memory://scopes/<scope>/chunks/<id>`. The server grants these reads through `resources.read:memory`,
-and unknown memory paths or missing grants are denied. The JS/TS SDK types these as resource URIs;
-the global `memory` namespace remains `undefined` until an explicit `memory.*` API ships. Broader
-resources such as `…/MEMORY.md`,
-`…/episodic?q=…`, and `…/projects/<name>/…` remain later `tm-memory` work. Skills are prompt-composed
-under `skill://<name>` labels today, but those labels are not registered resource URIs; first-class
-`skill://` reads remain P4/P7 work (§9.3).
+P2/P4 surface remains deliberately small and fail-closed: `memory://root` returns the current injected
+memory summary for Brian and the active session scope; `memory://user-model` returns the active
+profile/facts view; approved write proposals expose exact record views at
+`memory://profile/<subject>/facts/<id>` and `memory://scopes/<scope>/chunks/<id>`; P4 dream outputs
+add `memory://dreams` queue status, exact `memory://dreams/<id>` dream records,
+`memory://summaries/<id>`, and `memory://skill-proposals/<id>` previews. The server grants these reads
+through `resources.read:memory`, and unknown memory paths or missing grants are denied. The JS/TS SDK
+types these as resource URIs; the global `memory` namespace remains `undefined` until an explicit
+`memory.*` API ships. Broader resources such as `…/MEMORY.md`, `…/episodic?q=…`, and
+`…/projects/<name>/…` remain later `tm-memory` work. Skills are prompt-composed under
+`skill://<name>` labels today, but those labels are still not registered resource URIs; live
+`skills.*` import/version/reload and first-class `skill://` reads remain P7 work (§9.3).
 
 ## 22.10 Crate layout (`tm-memory`, §28)
 
-- P4.0 landed the narrow ownership crate with `dream` queue types and `NoopDreamWorker`; the richer
-  modules below remain the target layout.
+- P4 landed the ownership crate with `dream` queue types, profile/recall record shapes,
+  summary/proposal/evidence records, `DreamInputBudget` chunking, redaction, `NoopDreamWorker`, and
+  logical store traits for episodic input, profile/recall, summaries, skill proposals, and dream
+  leases. `tm-server` still owns concrete durable store implementations and the deterministic dream
+  runner; the richer modules below remain the target layout.
 - `store` — Postgres + `pgvector` spine: `episodic`, `vector` (pgvector), `lexical` (Postgres FTS),
   `facts`, `summaries`, `graph` (`nodes` / `edges`); migrations; `scope`-column isolation.
 - `recall` — candidate generation, RRF fusion, memory-stream re-score, budgeter, rerank?
@@ -242,6 +289,8 @@ Dreaming/extraction use cheaper model roles (§27.3).
 - **A logical store empty/unavailable** (graph not yet populated, embeddings missing) — RRF still fuses the rest; recall degrades, never errors.
 - **Embeddings provider down** — switch to the `local` embedder, or BM25-only recall + cached profile.
 - **Postgres unreachable** — turn-time writes buffer locally + replay (§22.5); reads degrade to the in-context working set until it returns.
+- **P4 worker misconfig/failure** — missing dream model-role config, disabled redaction, timeout, or
+  store failure produces a replayable `dream_failed`/`last_error` path before partial unapproved writes.
 - **Stale facts** — memory is heuristic; prefer live repo/user signal on conflict; bi-temporal history
   lets a superseded fact be re-surfaced if needed.
 - **Idempotency** — content-hash dedup on episodic + chunk writes; reflection/extraction are re-runnable.

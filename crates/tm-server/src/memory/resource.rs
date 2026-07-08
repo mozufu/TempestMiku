@@ -5,6 +5,8 @@ use tm_artifacts::{ResourceContent, preview};
 use tm_host::{HostError, InvocationCtx, ResourceEntry, ResourceHandler, Result as HostResult};
 use uuid::Uuid;
 
+use tm_memory::{DreamQueueRecord, MemorySummaryRecord, SkillProposalRecord};
+
 use crate::store::{ProfileFactRecord, RecallChunkRecord};
 use crate::{ServerError, Store};
 
@@ -74,6 +76,17 @@ where
         match parse_memory_uri(uri)? {
             MemoryUri::Root => self.root_resource(selector).await,
             MemoryUri::UserModel => self.user_model_resource(selector).await,
+            MemoryUri::Dreams => self.dream_queue_resource(selector).await,
+            MemoryUri::Dream { id } => {
+                let dream = self.store.dream(id).await.map_err(map_memory_store_error)?;
+                self.text_resource(
+                    &dream_uri(&dream),
+                    "memory_dream",
+                    Some(format!("dream {}", short_id(dream.id))),
+                    render_dream(&dream),
+                    selector,
+                )
+            }
             MemoryUri::ProfileFact { subject, id } => {
                 let fact = self
                     .store
@@ -102,6 +115,34 @@ where
                     selector,
                 )
             }
+            MemoryUri::Summary { id } => {
+                let summary = self
+                    .store
+                    .memory_summary(id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                self.text_resource(
+                    &summary_uri(&summary),
+                    "memory_summary",
+                    Some(summary.title.clone()),
+                    render_summary(&summary),
+                    selector,
+                )
+            }
+            MemoryUri::SkillProposal { id } => {
+                let proposal = self
+                    .store
+                    .skill_proposal(id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                self.text_resource(
+                    &skill_proposal_uri(&proposal),
+                    "memory_skill_proposal",
+                    Some(proposal.name.clone()),
+                    render_skill_proposal(&proposal),
+                    selector,
+                )
+            }
         }
     }
 
@@ -123,6 +164,8 @@ where
             MemoryListUri::Root => self.root_entries().await,
             MemoryListUri::UserModel => self.profile_fact_entries().await,
             MemoryListUri::ScopeChunks { scope } => self.recall_chunk_entries(&scope).await,
+            MemoryListUri::Summaries => self.summary_entries(&self.scope).await,
+            MemoryListUri::Dreams => self.dream_entries(&self.scope).await,
         }
     }
 }
@@ -142,14 +185,27 @@ where
             .recall_chunks(&self.scope, "", self.recall_limit)
             .await
             .map_err(map_memory_store_error)?;
-        let context = MemoryContext::from_records(
+        let summaries = self
+            .store
+            .memory_summaries(&self.scope, self.recall_limit)
+            .await
+            .map_err(map_memory_store_error)?;
+        let context = MemoryContext::from_records_with_summaries(
             &self.subject,
             &self.scope,
             facts.clone(),
+            summaries.clone(),
             chunks.clone(),
             self.prompt_budget_tokens,
         );
-        let content = render_memory_root(&self.subject, &self.scope, &context, &facts, &chunks);
+        let content = render_memory_root(
+            &self.subject,
+            &self.scope,
+            &context,
+            &facts,
+            &summaries,
+            &chunks,
+        );
         self.text_resource(
             "memory://root",
             "memory_root",
@@ -174,6 +230,21 @@ where
         )
     }
 
+    async fn dream_queue_resource(&self, selector: Option<&str>) -> HostResult<ResourceContent> {
+        let dreams = self
+            .store
+            .dream_queue(&self.scope, self.recall_limit)
+            .await
+            .map_err(map_memory_store_error)?;
+        self.text_resource(
+            "memory://dreams",
+            "memory_dream_queue",
+            Some(format!("{} dream queue", self.scope)),
+            render_dream_queue(&self.scope, &dreams),
+            selector,
+        )
+    }
+
     async fn root_entries(&self) -> HostResult<Vec<ResourceEntry>> {
         let mut entries = vec![
             ResourceEntry {
@@ -192,9 +263,19 @@ where
                 size_bytes: None,
                 modified_at: None,
             },
+            ResourceEntry {
+                uri: "memory://dreams".to_string(),
+                name: "dreams".to_string(),
+                kind: "memory_dream_queue".to_string(),
+                title: Some(format!("{} dream queue", self.scope)),
+                size_bytes: None,
+                modified_at: None,
+            },
         ];
+        entries.extend(self.dream_entries(&self.scope).await?);
         entries.extend(self.profile_fact_entries().await?);
         entries.extend(self.recall_chunk_entries(&self.scope).await?);
+        entries.extend(self.summary_entries(&self.scope).await?);
         Ok(entries)
     }
 
@@ -220,6 +301,25 @@ where
             .collect())
     }
 
+    async fn dream_entries(&self, scope: &str) -> HostResult<Vec<ResourceEntry>> {
+        let dreams = self
+            .store
+            .dream_queue(scope, self.recall_limit)
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(dreams
+            .into_iter()
+            .map(|dream| ResourceEntry {
+                uri: dream_uri(&dream),
+                name: short_id(dream.id),
+                kind: "memory_dream".to_string(),
+                title: Some(format!("{} {}", dream.reason, dream.status)),
+                size_bytes: None,
+                modified_at: Some(dream.enqueued_at.to_rfc3339()),
+            })
+            .collect())
+    }
+
     async fn recall_chunk_entries(&self, scope: &str) -> HostResult<Vec<ResourceEntry>> {
         let chunks = self
             .store
@@ -235,6 +335,25 @@ where
                 title: Some(preview(&chunk.text, 120)),
                 size_bytes: Some(chunk.text.len()),
                 modified_at: Some(chunk.created_at.to_rfc3339()),
+            })
+            .collect())
+    }
+
+    async fn summary_entries(&self, scope: &str) -> HostResult<Vec<ResourceEntry>> {
+        let summaries = self
+            .store
+            .memory_summaries(scope, self.recall_limit)
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(summaries
+            .into_iter()
+            .map(|summary| ResourceEntry {
+                uri: summary_uri(&summary),
+                name: short_id(summary.id),
+                kind: "memory_summary".to_string(),
+                title: Some(summary.title),
+                size_bytes: Some(summary.body.len()),
+                modified_at: Some(summary.updated_at.to_rfc3339()),
             })
             .collect())
     }
@@ -266,14 +385,20 @@ where
 enum MemoryUri {
     Root,
     UserModel,
+    Dreams,
+    Dream { id: Uuid },
     ProfileFact { subject: String, id: Uuid },
     RecallChunk { scope: String, id: Uuid },
+    Summary { id: Uuid },
+    SkillProposal { id: Uuid },
 }
 
 enum MemoryListUri {
     Root,
     UserModel,
     ScopeChunks { scope: String },
+    Summaries,
+    Dreams,
 }
 
 fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
@@ -286,14 +411,26 @@ fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
     if path == "user-model" {
         return Ok(MemoryUri::UserModel);
     }
+    if path == "dreams" {
+        return Ok(MemoryUri::Dreams);
+    }
     let parts = path.split('/').collect::<Vec<_>>();
     match parts.as_slice() {
+        ["dreams", id] => Ok(MemoryUri::Dream {
+            id: parse_memory_uuid(id, uri)?,
+        }),
         ["profile", subject, "facts", id] => Ok(MemoryUri::ProfileFact {
             subject: decode_memory_segment(subject)?,
             id: parse_memory_uuid(id, uri)?,
         }),
         ["scopes", scope, "chunks", id] => Ok(MemoryUri::RecallChunk {
             scope: decode_memory_segment(scope)?,
+            id: parse_memory_uuid(id, uri)?,
+        }),
+        ["summaries", id] => Ok(MemoryUri::Summary {
+            id: parse_memory_uuid(id, uri)?,
+        }),
+        ["skill-proposals", id] => Ok(MemoryUri::SkillProposal {
             id: parse_memory_uuid(id, uri)?,
         }),
         _ => Err(unsupported_memory_uri(uri)),
@@ -310,11 +447,15 @@ fn parse_memory_list_uri(uri: &str) -> HostResult<MemoryListUri> {
     if path == "user-model" {
         return Ok(MemoryListUri::UserModel);
     }
+    if path == "dreams" {
+        return Ok(MemoryListUri::Dreams);
+    }
     let parts = path.split('/').collect::<Vec<_>>();
     match parts.as_slice() {
         ["scopes", scope, "chunks"] => Ok(MemoryListUri::ScopeChunks {
             scope: decode_memory_segment(scope)?,
         }),
+        ["summaries"] => Ok(MemoryListUri::Summaries),
         _ => Err(unsupported_memory_uri(uri)),
     }
 }
@@ -343,11 +484,87 @@ fn recall_chunk_uri(chunk: &RecallChunkRecord) -> String {
     )
 }
 
+fn dream_uri(dream: &DreamQueueRecord) -> String {
+    format!("memory://dreams/{}", dream.id)
+}
+
+fn summary_uri(summary: &MemorySummaryRecord) -> String {
+    format!("memory://summaries/{}", summary.id)
+}
+
+fn skill_proposal_uri(proposal: &SkillProposalRecord) -> String {
+    format!("memory://skill-proposals/{}", proposal.id)
+}
+
+fn render_dream_queue(scope: &str, dreams: &[DreamQueueRecord]) -> String {
+    let mut lines = vec![
+        "Dream queue".to_string(),
+        format!("Scope: {scope}"),
+        format!("Dreams: {}", dreams.len()),
+    ];
+    if dreams.is_empty() {
+        lines.push("No dreams in this scope.".to_string());
+    } else {
+        lines.extend(dreams.iter().map(|dream| {
+            format!(
+                "- {} :: status={} reason={} session={} attempts={} available_at={} locked_at={} last_error={}",
+                dream_uri(dream),
+                dream.status,
+                dream.reason,
+                dream.session_id,
+                dream.attempts,
+                dream.available_at.to_rfc3339(),
+                dream.locked_at
+                    .map(|time| time.to_rfc3339())
+                    .unwrap_or_else(|| "none".to_string()),
+                dream.last_error.as_deref().unwrap_or("none")
+            )
+        }));
+    }
+    lines.join("\n")
+}
+
+fn render_dream(dream: &DreamQueueRecord) -> String {
+    [
+        format!("Dream {}", dream.id),
+        format!("URI: {}", dream_uri(dream)),
+        format!("Session: {}", dream.session_id),
+        format!("Subject: {}", dream.subject),
+        format!("Scope: {}", dream.scope),
+        format!("Reason: {}", dream.reason),
+        format!("Status: {}", dream.status),
+        format!("Dedupe key: {}", dream.dedupe_key),
+        format!(
+            "Source event seq: {}",
+            dream
+                .source_event_seq
+                .map(|seq| seq.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!("Attempts: {}", dream.attempts),
+        format!("Enqueued at: {}", dream.enqueued_at.to_rfc3339()),
+        format!("Available at: {}", dream.available_at.to_rfc3339()),
+        format!(
+            "Locked at: {}",
+            dream
+                .locked_at
+                .map(|time| time.to_rfc3339())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
+            "Last error: {}",
+            dream.last_error.as_deref().unwrap_or("none")
+        ),
+    ]
+    .join("\n")
+}
+
 fn render_memory_root(
     subject: &str,
     scope: &str,
     context: &MemoryContext,
     facts: &[ProfileFactRecord],
+    summaries: &[MemorySummaryRecord],
     chunks: &[RecallChunkRecord],
 ) -> String {
     let mut lines = vec![
@@ -356,11 +573,13 @@ fn render_memory_root(
         format!("Scope: {scope}"),
         format!("User model: memory://user-model"),
         format!(
-            "Budget: {}/{} estimated tokens; profile facts: {}/{}; scoped recall: {}/{}; truncated: {}",
+            "Budget: {}/{} estimated tokens; profile facts: {}/{}; summaries: {}/{}; scoped recall: {}/{}; truncated: {}",
             context.budget.used_estimated_tokens,
             context.budget.max_tokens,
             context.budget.included_profile_facts,
             context.budget.available_profile_facts,
+            context.budget.included_summaries,
+            context.budget.available_summaries,
             context.budget.included_recall_chunks,
             context.budget.available_recall_chunks,
             context.budget.truncated
@@ -372,13 +591,28 @@ fn render_memory_root(
         lines.push("Profile facts:".to_string());
         lines.extend(facts.iter().map(|fact| {
             format!(
-                "- {} :: {} {} {} (confidence {:.2}; provenance: {})",
+                "- {} :: {} {} {} (confidence {:.2}; importance {:.2}; provenance: {})",
                 profile_fact_uri(fact),
                 fact.subject,
                 fact.predicate,
                 fact.object,
                 fact.confidence,
+                fact.importance,
                 fact.provenance
+            )
+        }));
+    }
+    if summaries.is_empty() {
+        lines.push("Recent summaries: none".to_string());
+    } else {
+        lines.push("Recent summaries:".to_string());
+        lines.extend(summaries.iter().map(|summary| {
+            format!(
+                "- {} :: {} summary: {} (source dream: {})",
+                summary_uri(summary),
+                summary.kind,
+                summary.title,
+                summary.source_dream_id
             )
         }));
     }
@@ -388,10 +622,11 @@ fn render_memory_root(
         lines.push("Scoped recall chunks:".to_string());
         lines.extend(chunks.iter().map(|chunk| {
             format!(
-                "- {} :: {} (source: {})",
+                "- {} :: {} (source: {}; importance: {:.2})",
                 recall_chunk_uri(chunk),
                 chunk.text,
-                chunk.source
+                chunk.source,
+                chunk.importance
             )
         }));
     }
@@ -409,12 +644,13 @@ fn render_user_model(subject: &str, facts: &[ProfileFactRecord]) -> String {
     } else {
         lines.extend(facts.iter().map(|fact| {
             format!(
-                "- {} :: {} {} {} (confidence {:.2}; provenance: {}; valid from: {})",
+                "- {} :: {} {} {} (confidence {:.2}; importance {:.2}; provenance: {}; valid from: {})",
                 profile_fact_uri(fact),
                 fact.subject,
                 fact.predicate,
                 fact.object,
                 fact.confidence,
+                fact.importance,
                 fact.provenance,
                 fact.valid_from.to_rfc3339()
             )
@@ -431,6 +667,7 @@ fn render_profile_fact(fact: &ProfileFactRecord) -> String {
         format!("Predicate: {}", fact.predicate),
         format!("Object: {}", fact.object),
         format!("Confidence: {:.2}", fact.confidence),
+        format!("Importance: {:.2}", fact.importance),
         format!("Provenance: {}", fact.provenance),
         format!("Valid from: {}", fact.valid_from.to_rfc3339()),
         format!(
@@ -449,10 +686,85 @@ fn render_recall_chunk(chunk: &RecallChunkRecord) -> String {
         format!("URI: {}", recall_chunk_uri(chunk)),
         format!("Scope: {}", chunk.scope),
         format!("Source: {}", chunk.source),
+        format!("Importance: {:.2}", chunk.importance),
         format!("Created at: {}", chunk.created_at.to_rfc3339()),
         format!("Text: {}", chunk.text),
     ]
     .join("\n")
+}
+
+fn render_summary(summary: &MemorySummaryRecord) -> String {
+    let mut lines = vec![
+        format!("Memory summary {}", summary.id),
+        format!("URI: {}", summary_uri(summary)),
+        format!("Kind: {}", summary.kind),
+        format!("Subject: {}", summary.subject),
+        format!("Scope: {}", summary.scope),
+        format!("Title: {}", summary.title),
+        format!("Source dream: {}", summary.source_dream_id),
+        format!(
+            "Source session: {}",
+            summary
+                .source_session_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!("Updated at: {}", summary.updated_at.to_rfc3339()),
+        "Evidence:".to_string(),
+    ];
+    if summary.evidence.is_empty() {
+        lines.push("- none".to_string());
+    } else {
+        lines.extend(summary.evidence.iter().map(|evidence| {
+            format!(
+                "- {} event={:?} message={:?} uri={}",
+                evidence.label,
+                evidence.event_seq,
+                evidence.message_seq,
+                evidence.uri.as_deref().unwrap_or("none")
+            )
+        }));
+    }
+    lines.push("Body:".to_string());
+    lines.push(summary.body.clone());
+    lines.join("\n")
+}
+
+fn render_skill_proposal(proposal: &SkillProposalRecord) -> String {
+    let mut lines = vec![
+        format!("Skill proposal {}", proposal.id),
+        format!("URI: {}", skill_proposal_uri(proposal)),
+        format!("Name: {}", proposal.name),
+        format!("Status: {}", proposal.status),
+        format!("Description: {}", proposal.description),
+        format!("Trigger: {}", proposal.trigger),
+        format!("Use criteria: {}", proposal.use_criteria),
+        format!("Source dream: {}", proposal.source_dream_id),
+        format!("Source session: {}", proposal.source_session_id),
+        format!("Verification passed: {}", proposal.verification.passed),
+        format!(
+            "Verification checks: {}",
+            proposal.verification.checks.join(", ")
+        ),
+        format!("Self critique: {}", proposal.self_critique),
+        "Evidence:".to_string(),
+    ];
+    if proposal.evidence.is_empty() {
+        lines.push("- none".to_string());
+    } else {
+        lines.extend(proposal.evidence.iter().map(|evidence| {
+            format!(
+                "- {} event={:?} message={:?} uri={}",
+                evidence.label,
+                evidence.event_seq,
+                evidence.message_seq,
+                evidence.uri.as_deref().unwrap_or("none")
+            )
+        }));
+    }
+    lines.push("Body:".to_string());
+    lines.push(proposal.body.clone());
+    lines.join("\n")
 }
 
 fn select_memory_text(content: &str, selector: Option<&str>) -> HostResult<(String, bool)> {

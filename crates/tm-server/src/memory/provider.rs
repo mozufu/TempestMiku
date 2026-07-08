@@ -20,6 +20,7 @@ pub trait MemoryProvider: Send + Sync + 'static {
 pub struct StoreMemoryProvider<S> {
     store: Arc<S>,
     recall_limit: usize,
+    summary_limit: usize,
     prompt_budget_tokens: usize,
 }
 
@@ -28,12 +29,18 @@ impl<S> StoreMemoryProvider<S> {
         Self {
             store,
             recall_limit: 5,
+            summary_limit: 3,
             prompt_budget_tokens: DEFAULT_MEMORY_PROMPT_BUDGET_TOKENS,
         }
     }
 
     pub fn with_recall_limit(mut self, recall_limit: usize) -> Self {
         self.recall_limit = recall_limit;
+        self
+    }
+
+    pub fn with_summary_limit(mut self, summary_limit: usize) -> Self {
+        self.summary_limit = summary_limit;
         self
     }
 
@@ -59,10 +66,15 @@ where
             .store
             .recall_chunks(scope, query, self.recall_limit)
             .await?;
-        Ok(MemoryContext::from_records(
+        let summaries = self
+            .store
+            .memory_summaries(scope, self.summary_limit)
+            .await?;
+        Ok(MemoryContext::from_records_with_summaries(
             subject,
             scope,
             facts,
+            summaries,
             chunks,
             self.prompt_budget_tokens,
         ))

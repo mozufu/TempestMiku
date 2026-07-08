@@ -53,6 +53,8 @@ the server **extends** it with product events the core trait doesn't carry:
 | `mode` | `{from, to, reason, locked}` | **product** — mode router (§21) |
 | `approval` | `{action, scope, timeout}` | **product** — `ApprovalPolicy` (§08, §27.6) |
 | `write_proposal` | memory / skill / drive write awaiting OK | **product** (§22 / §24 / §26) |
+| `dream_started` / `dream_progress` / `dream_completed` / `dream_failed` | dream queue worker lifecycle, summaries, proposals, retry state | **product** (§22) |
+| `cron_run_started` / `cron_run_completed` | scheduled run lifecycle and bounds | **product** (§27.2) |
 | `final` | final text | core `on_final` |
 | `error` | `{message}` | server |
 
@@ -74,8 +76,9 @@ the server **extends** it with product events the core trait doesn't carry:
 
 Normal `cargo test` stays external-service-free: server persistence tests use the in-memory store unless
 Postgres coverage is explicitly enabled. To run the gated persistence checks for event replay, real
-memory `write_proposal` approval flows, profile fact / recall chunk rows, idempotent writes, and
-promoted artifact/resource references, set:
+memory `write_proposal` approval flows, profile fact / recall chunk rows, idempotent writes, Postgres
+FTS recall, dream claim/complete/fail/stale-lock behavior, and promoted artifact/resource references,
+set:
 
 ```sh
 TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server
@@ -93,20 +96,32 @@ P2 implements bounded proactivity without a scheduler: General-mode turns can pr
 and open-loop recall chunks through the existing `write_proposal` + approval path. Approved entries are
 memory records visible through `memory://`; they are not background jobs and never push on their own.
 
-In P4, a **scheduler** (cron lineage) will start sessions on a schedule: the **weekly ship ledger**
-(`weekly-ship-ledger` skill, §29), deadline nudges, post-session **dreaming** (§22.5), and the drive
-**organizer** (§24.3). Until that lands, `cron://` is a reserved resource shape and scheduled jobs are
-not part of the live server surface.
+In P4, a **scheduler** (cron lineage) can start sessions on a schedule. The implemented first job is
+the **weekly ship ledger** (`weekly-ship-ledger` skill, §29); deadline nudges and the drive organizer
+remain later surfaces.
 
-- **P4.0 session-end queue:** before cron lands, `POST /sessions/:id/end` marks a session `ended`,
-  writes a durable `dream_queue` record, and emits `session_end` + `dream_queued` events through the
-  same replay log. The worker is a no-op stub, so this slice does not yet extract facts, write
-  summaries, propose skills, or run on a schedule.
-- **P4 bounds.** Scheduled runs honor `goals.max_turns` (baseline **8**), the proactivity bounds (§21.3),
-  and `cron_mode: deny` — a scheduled run that hits an approval gate **defers** (queues for Brian),
-  never auto-acts. `cron.wrap_response: true`, `script_timeout_seconds: 120` (§29).
-- **P4 visibility.** A scheduled run emits through the same `EventSink` / SSE, so it is streamed,
-  audited, and replayable exactly like an interactive turn (#6).
+- **P4 dream queue + worker:** `POST /sessions/:id/end` marks a session `ended`, writes an idempotent
+  durable `dream_queue` record, and emits `session_end` + `dream_queued`. The server-owned
+  `ServerDreamWorker` / `DreamWorkerDaemon` leases ready dreams with stale-lock recovery, loops on a
+  poll interval with configured concurrency, exits on shutdown, emits replayable `dream_started` /
+  `dream_progress` / `dream_completed` / `dream_failed`, writes a bounded `memory://summaries/<id>`
+  session summary, and emits approval-gated memory/skill `write_proposal` events without blocking
+  normal chat turns.
+- **P4 scheduler tables:** `cron_jobs` stores cron-style job definitions, bounds, `next_run_at`, and
+  enabled state; `cron_runs` stores run history, status, result JSON, and linked session id. A
+  scheduled fire is claimed by `(job_id, scheduled_for)` before a session starts, so restart/retry of
+  an already running or completed fire returns the existing run instead of creating a duplicate
+  session. Missed-run catch-up is bounded from the stored schedule cursor; callers choose a
+  `max_catch_up` count (the weekly ship ledger uses a single-fire policy) rather than backfilling
+  unbounded offline history.
+- **P4 bounds.** Scheduled runs honor `goals.max_turns` (baseline **8**), bounded missed-run catch-up
+  (baseline **1**), the proactivity bounds (§21.3), and `cron_mode: deny` — a scheduled run that hits
+  an approval gate **defers** (queues for Brian), never auto-acts. `script_timeout_seconds` is capped
+  at **120** (§29).
+- **P4 visibility.** Dream and scheduled runs emit through the same `session_events` / SSE replay log,
+  so they are streamed, audited, and replayable like interactive turns (#6). The session resource
+  gateway exposes `cron://`, `cron://<job>`, `cron://<job>/runs`, and `cron://<job>/runs/<run>` for job
+  definitions and run history.
 
 ## 27.3 Model roles
 
@@ -118,7 +133,11 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   `code-review` (→ a distinct `codex-auto-review` model).
 - **Auxiliary roles** (10, mostly → `cheap` / `gpt-5.4-mini` with per-role timeouts + fallback
   chains): `compression`, `web_extract`, `title_generation`, `approval`, `skills_hub`, `mcp`,
-  `triage_specifier`, `kanban_decomposer`, `profile_describer`, `curator`.
+  `triage_specifier`, `kanban_decomposer`, `profile_describer`, `curator`. P4 dream worker config
+  exposes `extraction`, `reflection`, `summarization`, `skill_distillation`, `self_critique`,
+  `verification`, and future `embeddings` role names; defaults keep all dream aux roles on `cheap`
+  until a live-test configuration explicitly overrides them. Empty dream role names fail the dream
+  visibly with `last_error` before summaries/proposals are written.
 - **Resolution per call site.** Interactive turns → `daily` / `heavy`; engineer plan / review →
   `coding-plan` / `code-review`; memory / consolidation / aux passes → `cheap` / aux roles (§22);
   embeddings → the `embeddings` role (`api | local`, §22).
@@ -134,14 +153,15 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   read from the runtime `GET /modes` catalog and observable through debug/advanced controls, not a
   default badge in the normal chat surface. The web target is usable from a phone-sized browser
   because remote control of the computer-hosted agent is a first-class workflow.
-- **Mobile remote control (P1).** Phone/browser control uses the same server API as every client: SSE
+- **Mobile remote control (P1/P4).** Phone/browser control uses the same server API as every client: SSE
   for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
-  `project://`, `memory://`, and `history://` links. Reserved `drive://` and `cron://` links use the
-  same gateway shape once P5/P4 registers handlers and grants. The phone is only a view and controller;
+  `project://`, `memory://`, `history://`, and P4 `cron://` links. Reserved `drive://` links use the
+  same gateway shape once P5 registers handlers and grants. The phone is only a view and controller;
   the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
-  The P2 memory gateway currently exposes `memory://root`, `memory://user-model`, and exact approved
-  profile fact / scoped recall record URIs, with compact previews and fail-closed unknown paths (§22.9).
+  The P2/P4 memory gateway currently exposes `memory://root`, `memory://user-model`, exact approved
+  profile fact / scoped recall record URIs, dream queue/record previews, dream summaries, and skill
+  proposal previews, with compact previews and fail-closed unknown paths (§22.9).
 - **Android target (later).** The Android app is the same Flutter codebase packaged after the server API
   and product surfaces stabilize. It adds OS integrations — secure pairing storage, push approval
   notifications, app links, reconnect/resume polish — but **no on-device sandbox** and no second
@@ -161,10 +181,11 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
   a v1 blocker.
 
-The session resource gateway supports resolve/list/preview for the live P0-P3 schemes:
+The session resource gateway supports resolve/list/preview for the live P0-P4 schemes:
 `artifact://`, `workspace://session/...`, `linked://...`, `project://...`, the P2 `memory://`
-surface (§22.9), and the P3 `agent://` / `history://` actor resources (§23). Reserved `drive://`
-and `cron://` paths fail closed until their milestones register handlers and grants. `GET
+surface plus P4 summary/skill-proposal previews (§22.9), the P3 `agent://` / `history://` actor
+resources (§23), and P4 `cron://` job/run views. Reserved `drive://` paths fail closed until P5
+registers handlers and grants. `GET
 /sessions/:id/resources/preview` returns a bounded metadata envelope with empty `content`; clients
 resolve full content only on demand.
 
@@ -223,8 +244,10 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
   OpenAI-compatible endpoint (§27.5).
 - `store` — in-memory and Postgres-shaped session storage: sessions, messages, append-only events,
   approvals, project refs, P4.0 dream queue rows, and replay from `Last-Event-ID`.
-- Future `schedule` (P4) — cron-style scheduler, job table, bounds (`max_turns`, `cron_mode`), and
-  `cron://` handler (list jobs / a job's def + run history) in the §9.2 registry.
+- `scheduler` (P4) — cron-style scheduler, job/run tables, scheduled-fire claim/reuse, bounded
+  missed-run catch-up, bounds (`max_turns`, `cron_mode`, `script_timeout_seconds`), weekly
+  ship-ledger trigger, and `cron://` handler (list jobs / a job's
+  def + run history) in the session resource gateway.
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).
 - `auth` — local token / no-auth for dev plus trusted forwarded identity for reverse-proxy deployments.
 - `coding_backend` / `native_deno` / `omp_acp` — the common backend interface, native Serious
@@ -236,8 +259,10 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 
 - **SSE disconnect** — client reconnects with `Last-Event-ID`; server resumes from the replay log; no
   token loss; a finished turn replays `final`.
-- **Future scheduler fires while offline / approval pending** — P4 `cron_mode: deny` **defers**; the
-  job is queued and surfaced on next connect, never auto-acted.
+- **Offline / client-disconnected approvals** — unresolved `write_proposal` and `approval` events remain
+  in the replay log and are surfaced as `pendingEvents` when a client fetches the transcript or
+  reconnects with SSE replay. P4 `cron_mode: deny` defers approval-needed work into that same review
+  path and never auto-acts.
 - **Model role unavailable** — fallback chain (`gpt-5.5` → `gpt-5.4-mini`); an aux role down degrades
   to `cheap`.
 - **Approval timeout (60s)** — denied-by-default (manual mode), logged; the loop continues without the
@@ -262,7 +287,16 @@ Normal `cargo test` uses scripted API/actor coverage and an in-process `tm-serve
 network-free and does not require Flutter or Playwright. Live actor recordings require
 `TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native Deno engineering coverage remains in the
 focused server tests for `fs.*`, `code.*`, `proc.*`, artifacts, and approval approve/deny/timeout
-behavior.
+paths.
+
+Client smoke is split by cost:
+
+- `cd clients/miku_flutter && nix develop --command flutter test` runs the phone/widget smoke,
+  including dream-origin memory proposal approval.
+- `cd clients/miku_web && npm test` runs the normal Playwright API/web smoke. The heavier UI evidence
+  recording is opt-in: set `TM_E2E_RUN_DIR=<run-dir>` and `TM_E2E_BASE_URL=<server-url>` and run
+  `npm run test:evidence`.
+- `TM_WEB_SMOKE_PORT` overrides the normal web-smoke server port; by default it uses `8787`.
 
 ## 27.10 Mechanism provenance
 

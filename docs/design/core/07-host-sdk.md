@@ -16,10 +16,10 @@ First-pass globals:
   the op layer stays small.
 - `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2),
   including the live `artifact://`, `workspace://session`, `linked://`, `project://`, `memory://`,
-  `agent://`, and `history://` handlers when their grants are present. `skill://...` labels are
-  prompt-composition provenance only in the current runtime; `drive://` and `cron://` are reserved
-  URI shapes; reads for unregistered schemes must fail closed until the owning milestone registers a
-  handler and grants.
+  `agent://`, `history://`, and P4 session-gateway `cron://` handlers when their grants are present.
+  `skill://...` labels are prompt-composition provenance only in the current runtime; `drive://`
+  remains a reserved URI shape; reads for unregistered schemes must fail closed until the owning
+  milestone registers a handler and grants.
 - `artifacts.put/get/slice/list(...)` — session artifact store; large outputs return `artifact://`
   handles.
 - `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
@@ -64,8 +64,8 @@ of truth.
  * namespaces. P2 memory is exposed as memory:// resources behind
  * resources.read:memory, not as a memory.* namespace. Bundled skill
  * markdown may be labeled skill://... inside composed prompts, but that
- * label is not a resources.read/list/preview surface until the P4/P7 skill
- * lifecycle work registers a handler and grants.
+ * label is not a resources.read/list/preview surface until the P7 skill
+ * import/reload lifecycle work registers a handler and grants.
  *
  * P3/P3-plus agents surface: `agents` is defined only in sessions holding the
  * required agents.* grant. In ungranted sessions it remains `undefined`.

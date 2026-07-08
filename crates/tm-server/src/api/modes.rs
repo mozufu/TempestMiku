@@ -274,7 +274,7 @@ where
     Ok((updated, true))
 }
 
-pub(super) fn mode_changed_payload(
+pub(crate) fn mode_changed_payload(
     from: Option<ModeId>,
     mode_state: &ModeState,
     persona_status: crate::AssetStatus,
@@ -295,7 +295,7 @@ pub(super) fn mode_changed_payload(
     })?)
 }
 
-pub(super) fn mode_profile(persona: &ModesConfig, mode: &ModeId) -> ModeProfile {
+pub(crate) fn mode_profile(persona: &ModesConfig, mode: &ModeId) -> ModeProfile {
     persona.load_assets().profile_or_unknown(mode)
 }
 
@@ -321,7 +321,7 @@ pub(super) fn validate_mode(persona: &ModesConfig, mode: ModeId) -> Result<ModeI
     }
 }
 
-pub(super) fn build_turn_prompt<S, M, C>(
+pub(crate) fn build_turn_prompt<S, M, C>(
     state: &AppState<S, M, C>,
     mode: &ModeId,
     message: &str,

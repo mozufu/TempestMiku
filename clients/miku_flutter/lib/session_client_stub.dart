@@ -312,7 +312,8 @@ class ScriptedMikuClient implements MikuSessionClient {
       return;
     }
     _emitFinal(sessionId, text);
-    if (content.toLowerCase().contains('remember')) {
+    if (lower.contains('remember') || lower.contains('dream')) {
+      final dreamOrigin = lower.contains('dream');
       final proposalId = 'proposal-${_nextEventId++}';
       final approvalId = 'approval-${_nextEventId++}';
       final proposal = <String, Object?>{
@@ -326,9 +327,14 @@ class ScriptedMikuClient implements MikuSessionClient {
         'predicate': 'prefers',
         'object': 'approval-backed memory writes',
         'confidence': 0.82,
-        'source': 'scripted-widget-test',
-        'provenanceLabel': 'scripted chat turn',
-        'provenance': {'sessionId': sessionId},
+        'source':
+            dreamOrigin ? 'dream:scripted-widget-test' : 'scripted-widget-test',
+        'provenanceLabel':
+            dreamOrigin ? 'post-session-dream' : 'scripted chat turn',
+        'provenance': {
+          'sessionId': sessionId,
+          if (dreamOrigin) 'sourceDream': 'dream-scripted',
+        },
         'dedupeKey': 'scripted-memory-proposal',
         'recordId': 'record-scripted',
       };

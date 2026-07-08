@@ -57,6 +57,7 @@ pub struct MemoryWriteProposal {
     pub predicate: Option<String>,
     pub object: Option<String>,
     pub confidence: Option<f32>,
+    pub importance_score: f32,
     pub source: String,
     pub provenance_label: String,
     pub provenance: Value,
@@ -89,6 +90,8 @@ impl MemoryWriteProposal {
         let object = clean_required("object", object)?;
         let text = format!("{subject} {predicate} {object}");
         let dedupe_key = memory_dedupe_key(&["profile_fact", &subject, &predicate, &object]);
+        let importance_score = default_importance_score(MemoryWriteKind::ProfileFact, &text);
+        let provenance = provenance_with_importance(provenance, importance_score);
         Ok(Self {
             proposal_id: Uuid::new_v4(),
             memory_kind: MemoryWriteKind::ProfileFact,
@@ -98,6 +101,7 @@ impl MemoryWriteProposal {
             predicate: Some(predicate),
             object: Some(object),
             confidence: Some(confidence.clamp(0.0, 1.0)),
+            importance_score,
             source,
             provenance_label,
             provenance,
@@ -120,6 +124,8 @@ impl MemoryWriteProposal {
         let scope = clean_required("scope", scope)?;
         let text = clean_required("text", text)?;
         let dedupe_key = memory_dedupe_key(&["recall_chunk", &scope, &text]);
+        let importance_score = default_importance_score(MemoryWriteKind::RecallChunk, &text);
+        let provenance = provenance_with_importance(provenance, importance_score);
         Ok(Self {
             proposal_id: Uuid::new_v4(),
             memory_kind: MemoryWriteKind::RecallChunk,
@@ -129,6 +135,7 @@ impl MemoryWriteProposal {
             predicate: None,
             object: None,
             confidence: None,
+            importance_score,
             source,
             provenance_label,
             provenance,
@@ -136,6 +143,12 @@ impl MemoryWriteProposal {
             dedupe_key,
             created_at,
         })
+    }
+
+    pub fn with_importance_score(mut self, importance_score: f32) -> Self {
+        self.importance_score = clamp_importance(importance_score);
+        self.provenance = provenance_with_importance(self.provenance, self.importance_score);
+        self
     }
 
     pub fn event_payload(
@@ -154,6 +167,7 @@ impl MemoryWriteProposal {
             "predicate": self.predicate,
             "object": self.object,
             "confidence": self.confidence,
+            "importanceScore": importance_json(self.importance_score),
             "source": self.source,
             "provenanceLabel": self.provenance_label,
             "provenance": self.provenance,
@@ -175,6 +189,7 @@ impl MemoryWriteProposal {
             "predicate": self.predicate,
             "object": self.object,
             "confidence": self.confidence,
+            "importanceScore": importance_json(self.importance_score),
             "provenanceLabel": self.provenance_label,
             "dedupeKey": self.dedupe_key,
             "recordId": self.record_id,
@@ -221,6 +236,7 @@ pub fn profile_fact_record(proposal: &MemoryWriteProposal) -> Result<ProfileFact
             ServerError::InvalidRequest("profile fact proposal is missing object".to_string())
         })?,
         confidence: proposal.confidence.unwrap_or(0.8),
+        importance: proposal.importance_score,
         provenance: proposal.provenance_label.clone(),
         valid_from: proposal.created_at,
         valid_to: None,
@@ -238,6 +254,48 @@ pub fn recall_chunk_record(proposal: &MemoryWriteProposal) -> Result<RecallChunk
         scope: proposal.scope.clone(),
         text: proposal.text.clone(),
         source: proposal.source.clone(),
+        importance: proposal.importance_score,
         created_at: proposal.created_at,
     })
+}
+
+fn default_importance_score(kind: MemoryWriteKind, text: &str) -> f32 {
+    let lower = text.to_lowercase();
+    let mut score: f32 = match kind {
+        MemoryWriteKind::ProfileFact => 0.72,
+        MemoryWriteKind::RecallChunk => 0.62,
+    };
+    for (needle, bump) in [
+        ("deadline", 0.16),
+        ("due", 0.12),
+        ("decision", 0.12),
+        ("shipped", 0.1),
+        ("artifact://", 0.1),
+        ("workflow", 0.08),
+        ("open loop", 0.08),
+        ("reminder", 0.06),
+    ] {
+        if lower.contains(needle) {
+            score += bump;
+        }
+    }
+    clamp_importance(score)
+}
+
+fn clamp_importance(value: f32) -> f32 {
+    (value * 100.0).round().clamp(0.0, 100.0) / 100.0
+}
+
+fn provenance_with_importance(mut provenance: Value, importance_score: f32) -> Value {
+    if let Value::Object(map) = &mut provenance {
+        map.insert(
+            "importanceScore".to_string(),
+            importance_json(importance_score),
+        );
+    }
+    provenance
+}
+
+fn importance_json(importance_score: f32) -> Value {
+    json!(((importance_score as f64) * 100.0).round() / 100.0)
 }

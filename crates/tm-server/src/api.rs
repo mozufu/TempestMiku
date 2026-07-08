@@ -77,7 +77,7 @@ impl ActorResourceLinkSeed {
 mod approvals;
 mod events;
 mod mode_suggest;
-mod modes;
+pub(crate) mod modes;
 mod projects;
 mod resources;
 mod sessions;
@@ -179,7 +179,27 @@ impl<S, M, C> AppState<S, M, C> {
         self
     }
 
-    fn sender(&self, session_id: Uuid) -> broadcast::Sender<SessionEvent> {
+    pub fn dream_worker(&self, config: crate::DreamWorkerConfig) -> crate::ServerDreamWorker<S>
+    where
+        S: Store + Send + Sync + 'static,
+    {
+        let live_events = Arc::clone(&self.live_events);
+        let sender_for = Arc::new(move |session_id| {
+            live_events
+                .lock()
+                .entry(session_id)
+                .or_insert_with(|| broadcast::channel(256).0)
+                .clone()
+        });
+        crate::ServerDreamWorker::new(
+            Arc::clone(&self.store),
+            Arc::clone(&self.approval_broker),
+            sender_for,
+            config,
+        )
+    }
+
+    pub(crate) fn sender(&self, session_id: Uuid) -> broadcast::Sender<SessionEvent> {
         self.live_events
             .lock()
             .entry(session_id)

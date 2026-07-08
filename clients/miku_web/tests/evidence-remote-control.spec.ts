@@ -4,17 +4,13 @@ import path from 'node:path';
 
 const runDir = process.env.TM_E2E_RUN_DIR;
 const baseURL = process.env.TM_E2E_BASE_URL;
-
-if (!runDir || !baseURL) {
-  throw new Error('TM_E2E_RUN_DIR and TM_E2E_BASE_URL are required for the evidence UI test');
-}
-
-const uiDir = path.join(runDir, 'ui');
+const evidenceTest = runDir && baseURL ? test : test.skip;
+const uiDir = path.join(runDir ?? '.', 'ui');
 const resultPath = path.join(uiDir, 'ui-result.json');
 const consolePath = path.join(uiDir, 'console.ndjson');
 const networkPath = path.join(uiDir, 'network.ndjson');
 
-test('real Flutter UI remote-control flow records user-visible evidence', async ({ page }) => {
+evidenceTest('real Flutter UI remote-control flow records user-visible evidence', async ({ page }) => {
   await fs.mkdir(uiDir, { recursive: true });
   const consoleRecords: unknown[] = [];
   const networkRecords: unknown[] = [];

@@ -60,253 +60,260 @@ resource, approval, mode, and actor contracts; it does not fork a second orchest
 - [x] P4.0: `tm-server` persists `dream_queue` rows in memory/Postgres stores.
 - [x] P4.0: `POST /sessions/:id/end` marks the session ended, enqueues one idempotent dream record,
       and emits replayable `session_end` + `dream_queued` events.
-- [x] P4.0: worker/extraction is explicitly stubbed; no background LLM calls, facts, summaries,
-      skills, or cron jobs run yet.
+- [x] P4.1/P4.7 store spine: in-memory/Postgres stores include dream lifecycle operations,
+      `memory_summaries`, `skill_proposals`, `cron_jobs`, and `cron_runs`.
+- [x] P4 deterministic worker: `ServerDreamWorker` leases dreams, redacts input, writes bounded
+      session summaries, emits approval-gated memory/skill proposals, and records replayable dream
+      lifecycle events without external services.
+- [x] P4 scheduler slice: weekly ship ledger can run through a normal session under
+      `cron_mode: deny`, `max_turns <= 8`, and a 120-second script bound; `cron://` resources expose
+      job/run previews.
 
 ## P4 Acceptance Gate
 
-- [ ] Post-session dream writes a bounded session summary with evidence/provenance links.
-- [ ] Post-session dream extracts durable memory candidates, applies redaction/dedup rules, and uses
+- [x] Post-session dream writes a bounded session summary with evidence/provenance links.
+- [x] Post-session dream extracts durable memory candidates, applies redaction/dedup rules, and uses
       existing approval/default-deny semantics before writing durable facts or scoped recall chunks.
-- [ ] Post-session dream emits at least one self-verified skill proposal when the session contains a
+- [x] Post-session dream emits at least one self-verified skill proposal when the session contains a
       reusable workflow; the proposal is approval-gated and not silently installed.
-- [ ] Weekly ship ledger runs from cron under `cron_mode: deny`, `goals.max_turns <= 8`, and the
+- [x] Weekly ship ledger runs from cron under `cron_mode: deny`, `goals.max_turns <= 8`, and the
       120-second script bound; approval-needed actions are deferred, not auto-applied.
-- [ ] Dream and cron runs are visible through the same event log/SSE replay path as interactive
+- [x] Dream and cron runs are visible through the same event log/SSE replay path as interactive
       sessions.
-- [ ] Parity §29.5 still holds: Miku voice, mode router, memory recall/profile, manual approvals,
+- [x] Parity §29.5 still holds: Miku voice, mode router, memory recall/profile, manual approvals,
       project continuity, and Serious Engineer coding reach are preserved.
-- [ ] Normal `cargo test` passes without external services; gated Postgres/live/browser tests document
+- [x] Normal `cargo test` passes without external services; gated Postgres/live/browser tests document
       their env vars and stay opt-in.
 
 ## P4.1 Store And Migration Spine
 
-- [ ] Move more P2 memory record ownership from `tm-server::memory` toward `tm-memory` only where
+- [x] Move more P2 memory record ownership from `tm-server::memory` toward `tm-memory` only where
       there is a concrete P4 worker/retrieval user; avoid churny extraction for its own sake.
-- [ ] Define `tm-memory::store` traits for the P4 logical stores needed now:
+- [x] Define `tm-memory::store` traits for the P4 logical stores needed now:
       episodic messages/events, summaries, profile/fact candidates, scoped recall chunks, skill
       proposals, and dream leases.
-- [ ] Extend `Store` with dream-queue worker operations:
+- [x] Extend `Store` with dream-queue worker operations:
       `claim_ready_dream`, `heartbeat_dream`, `complete_dream`, `fail_dream`, and retry/backoff
       metadata.
-- [ ] Preserve `enqueue_dream` idempotency by `dedupe_key`; duplicate session-end calls must not
+- [x] Preserve `enqueue_dream` idempotency by `dedupe_key`; duplicate session-end calls must not
       duplicate work or events.
-- [ ] Add in-memory store support for the full worker lifecycle so unit tests remain external-free.
-- [ ] Add Postgres schema additions behind gated tests:
+- [x] Add in-memory store support for the full worker lifecycle so unit tests remain external-free.
+- [x] Add Postgres schema additions behind gated tests:
       `memory_summaries`, `skill_proposals`, and any normalized P4 worker tables required before
       pgvector/FTS.
-- [ ] Add ready-queue indexes for `(status, available_at)`, stale-lock recovery, and session/scope
+- [x] Add ready-queue indexes for `(status, available_at)`, stale-lock recovery, and session/scope
       queries.
-- [ ] Add JSON wire tests for every new event/resource payload before exposing it to clients.
-- [ ] Add gated Postgres tests for dream claim/complete/fail idempotency, stale lock recovery, and
+- [x] Add JSON wire tests for every new event/resource payload before exposing it to clients.
+- [x] Add gated Postgres tests for dream claim/complete/fail idempotency, stale lock recovery, and
       duplicate enqueue behavior.
 
 Acceptance:
 
-- [ ] A queued dream can be claimed exactly once, heartbeated, completed, and replayed using both
+- [x] A queued dream can be claimed exactly once, heartbeated, completed, and replayed using both
       in-memory and Postgres stores.
-- [ ] A failed dream records `attempts`, `last_error`, and next `available_at`; retries are bounded and
+- [x] A failed dream records `attempts`, `last_error`, and next `available_at`; retries are bounded and
       deterministic.
-- [ ] Normal tests do not require Postgres.
+- [x] Normal tests do not require Postgres.
 
 ## P4.2 Dream Worker Runtime
 
-- [ ] Replace `NoopDreamWorker` usage with a real worker implementation while keeping the trait usable
+- [x] Replace `NoopDreamWorker` usage with a real worker implementation while keeping the trait usable
       in tests.
-- [ ] Add a server-owned worker runner that can run once in tests and loop in daemon mode without
+- [x] Add a server-owned worker runner that can run once in tests and loop in daemon mode without
       blocking request handling.
-- [ ] Ensure every worker state transition emits replayable events:
+- [x] Ensure every worker state transition emits replayable events:
       `dream_started`, `dream_progress`, `dream_completed`, `dream_failed`, and proposal events where
       applicable.
-- [ ] Add a worker config block for enable/disable, poll interval, lease timeout, max attempts,
+- [x] Add a worker config block for enable/disable, poll interval, lease timeout, max attempts,
       concurrency, per-dream timeout, and model-role names.
-- [ ] Wire cancellation/shutdown so the server can stop cleanly without leaving permanent locks.
-- [ ] Make worker output bounded. Large summaries, extracted evidence, or verification logs should
+- [x] Wire cancellation/shutdown so the server can stop cleanly without leaving permanent locks.
+- [x] Make worker output bounded. Large summaries, extracted evidence, or verification logs should
       spill to `artifact://` or resource rows, not into model context.
-- [ ] Add scripted test workers/LLM clients for extraction, summary, critique, and error cases.
-- [ ] Add failure-mode tests for model error, timeout, redaction failure, approval timeout, store
+- [x] Add scripted test workers/LLM clients for extraction, summary, critique, and error cases.
+- [x] Add failure-mode tests for model error, timeout, redaction failure, approval timeout, store
       failure, and duplicate worker race.
 
 Acceptance:
 
-- [ ] `DreamWorker::run_once` can process one ready record end-to-end in a deterministic test.
-- [ ] Two concurrent workers cannot complete the same dream twice.
-- [ ] Worker failure is replayable and leaves the queue retryable or terminal according to config.
+- [x] `DreamWorker::run_once` can process one ready record end-to-end in a deterministic test.
+- [x] Two concurrent workers cannot complete the same dream twice.
+- [x] Worker failure is replayable and leaves the queue retryable or terminal according to config.
 
 ## P4.3 Episodic Capture And Redaction
 
-- [ ] Build the dream input collector from the existing session tables/event log:
+- [x] Build the dream input collector from the existing session tables/event log:
       messages, final answer, mode changes, approvals, memory proposals, actor digests, project
       promotions, artifact/resource links, and session-end metadata.
-- [ ] Keep child-agent transcripts out of dream prompt context by default; include `agent://` /
+- [x] Keep child-agent transcripts out of dream prompt context by default; include `agent://` /
       `history://` / `artifact://` handles and bounded previews only when useful.
-- [ ] Add deterministic redaction before any dream prompt or durable derived write:
+- [x] Add deterministic redaction before any dream prompt or durable derived write:
       secrets/tokens, obvious credentials, private keys, raw auth headers, and sensitive PII patterns.
-- [ ] Preserve negative-state discipline: distress-only sessions may summarize supportively but must
+- [x] Preserve negative-state discipline: distress-only sessions may summarize supportively but must
       not create durable profile facts unless Brian explicitly asked to remember stable signal.
-- [ ] Attach provenance to every candidate: source session id, event sequence(s), message ids,
+- [x] Attach provenance to every candidate: source session id, event sequence(s), message ids,
       resource URIs, scope, and subject.
-- [ ] Add a compact prompt budgeter so long sessions are chunked before LLM extraction.
-- [ ] Add tests for redaction, bounded previews, provenance, and negative-state no-write behavior.
+- [x] Add a compact prompt budgeter so long sessions are chunked before LLM extraction.
+- [x] Add tests for redaction, bounded previews, provenance, and negative-state no-write behavior.
 
 Acceptance:
 
-- [ ] Dream input is sufficient for extraction but never contains unbounded transcripts or obvious
+- [x] Dream input is sufficient for extraction but never contains unbounded transcripts or obvious
       secrets.
-- [ ] Every candidate durable write can be traced back to exact session/event/resource evidence.
+- [x] Every candidate durable write can be traced back to exact session/event/resource evidence.
 
 ## P4.4 Extraction, Importance, And Memory Writes
 
-- [ ] Implement extraction passes for the P4-worthy durable memory classes:
+- [x] Implement extraction passes for the P4-worthy durable memory classes:
       stable preferences, commitments/deadlines, decisions, shipped artifacts, reusable workflows,
       project open loops, and recurring blind spots.
-- [ ] Score importance/poignancy for extracted candidates and store the score with provenance.
-- [ ] Add dedupe and contradiction handling:
+- [x] Score importance/poignancy for extracted candidates and store the score with provenance.
+- [x] Add dedupe and contradiction handling:
       normalize candidate text, merge duplicates, supersede obsolete facts with `valid_to`, never
       erase history.
-- [ ] Keep project-specific commands and repo lore scoped to the active project scope, not global user
+- [x] Keep project-specific commands and repo lore scoped to the active project scope, not global user
       memory.
-- [ ] Use the existing `write_proposal` + `approval` route for durable fact/chunk writes unless config
+- [x] Use the existing `write_proposal` + `approval` route for durable fact/chunk writes unless config
       explicitly grants safe auto-write for the record class.
-- [ ] Ensure approval deny/timeout writes nothing and emits resolved proposal status.
-- [ ] Add exact `memory://` resource previews for new summary/fact/chunk records.
-- [ ] Add tests for approve, deny, timeout/default-deny, idempotent re-run, contradiction supersede,
+- [x] Ensure approval deny/timeout writes nothing and emits resolved proposal status.
+- [x] Add exact `memory://` resource previews for new summary/fact/chunk records.
+- [x] Add tests for approve, deny, timeout/default-deny, idempotent re-run, contradiction supersede,
       scope isolation, and provenance replay.
 
 Acceptance:
 
-- [ ] A dream can propose and, after approval, persist durable facts/chunks without blocking normal
+- [x] A dream can propose and, after approval, persist durable facts/chunks without blocking normal
       chat turns.
-- [ ] Re-running the same dream does not duplicate facts, chunks, or approvals.
-- [ ] Sensitive or transient content is skipped before proposal creation.
+- [x] Re-running the same dream does not duplicate facts, chunks, or approvals.
+- [x] Sensitive or transient content is skipped before proposal creation.
 
 ## P4.5 Summaries, Reflection, And Recall
 
-- [ ] Add summary record types for session, daily, weekly, and topic/project rollups.
-- [ ] Implement the first session-summary dream output:
+- [x] Add summary record types for session, daily, weekly, and topic/project rollups.
+- [x] Implement the first session-summary dream output:
       what happened, shipped artifacts, decisions, open loops, unresolved approvals, and next likely
       actions.
-- [ ] Add reflection synthesis when cumulative importance crosses a threshold; reflections must cite
+- [x] Add reflection synthesis when cumulative importance crosses a threshold; reflections must cite
       evidence and be stored as derived memory, not raw assertion.
-- [ ] Add recursive summary update logic so old sessions can be folded without loading full logs.
-- [ ] Extend recall to use P4 summaries alongside P2 profile facts and scoped recall chunks.
-- [ ] Add a hybrid retrieval stepping-stone before full pgvector:
+- [x] Add recursive summary update logic so old sessions can be folded without loading full logs.
+- [x] Extend recall to use P4 summaries alongside P2 profile facts and scoped recall chunks.
+- [x] Add a hybrid retrieval stepping-stone before full pgvector:
       exact/FTS-style lexical query plus scoped recency and importance scoring.
-- [ ] Add Postgres FTS coverage when the Postgres gate is enabled; keep in-memory fallback deterministic.
-- [ ] Defer dense embeddings/pgvector until the lexical + summary path is stable, then add provider
+- [x] Add Postgres FTS coverage when the Postgres gate is enabled; keep in-memory fallback deterministic.
+- [x] Defer dense embeddings/pgvector until the lexical + summary path is stable, then add provider
       config and dimension pinning.
-- [ ] Add tests that session-start memory context can include a recent summary with provenance and
+- [x] Add tests that session-start memory context can include a recent summary with provenance and
       bounded token budget.
 
 Acceptance:
 
-- [ ] Ending a productive session creates a reusable summary visible through `memory://`.
-- [ ] A later session in the same scope can recall the summary/open loops without loading raw logs.
-- [ ] Recall degrades gracefully when optional vector/FTS stores are empty or unavailable.
+- [x] Ending a productive session creates a reusable summary visible through `memory://`.
+- [x] A later session in the same scope can recall the summary/open loops without loading raw logs.
+- [x] Recall degrades gracefully when optional vector/FTS stores are empty or unavailable.
 
 ## P4.6 Skill Proposal Generation
 
-- [ ] Define `SkillProposal` data in `tm-memory`:
+- [x] Define `SkillProposal` data in `tm-memory`:
       id, name, description, body, trigger/use criteria, evidence, self-critique, verification result,
       status, dedupe key, created/updated timestamps, and source dream id.
-- [ ] Distill skill candidates only from repeated or clearly reusable workflows, not one-off commands
+- [x] Distill skill candidates only from repeated or clearly reusable workflows, not one-off commands
       or project-local trivia.
-- [ ] Generate skill bodies in the existing `SKILL.md` style with concise trigger rules and procedural
+- [x] Generate skill bodies in the existing `SKILL.md` style with concise trigger rules and procedural
       steps.
-- [ ] Add self-critique/refine pass before surfacing a proposal.
-- [ ] Add self-verification:
+- [x] Add self-critique/refine pass before surfacing a proposal.
+- [x] Add self-verification:
       dry-run the skill against the source scenario, check frontmatter/body shape, check no forbidden
       capability claims, and ensure it does not mutate `SOUL.md`, modes, or grants.
-- [ ] Emit `write_proposal` with `kind: "skill"` and use the shared approval/default-deny flow.
-- [ ] Store approved proposals as pending skill assets or reviewable files according to the eventual
+- [x] Emit `write_proposal` with `kind: "skill"` and use the shared approval/default-deny flow.
+- [x] Store approved proposals as pending skill assets or reviewable files according to the eventual
       P4/P7 split; do not install/reload them into the live prompt catalog automatically.
-- [ ] Add `skill_proposal://` or a constrained `memory://.../skill-proposals/...` preview resource
+- [x] Add `skill_proposal://` or a constrained `memory://.../skill-proposals/...` preview resource
       before exposing full `skill://` reads.
-- [ ] Add tests for low-value candidate rejection, self-critique refinement, verification failure,
+- [x] Add tests for low-value candidate rejection, self-critique refinement, verification failure,
       approval approve/deny/timeout, dedupe on re-run, and no live skill reload.
 
 Acceptance:
 
-- [ ] At least one representative post-session dream produces a self-verified skill proposal.
-- [ ] Approval can accept or reject the proposal; rejection leaves the live skill catalog unchanged.
-- [ ] P7-owned `skills.*` import/version/reload remains unimplemented and fail-closed.
+- [x] At least one representative post-session dream produces a self-verified skill proposal.
+- [x] Approval can accept or reject the proposal; rejection leaves the live skill catalog unchanged.
+- [x] P7-owned `skills.*` import/version/reload remains unimplemented and fail-closed.
 
 ## P4.7 Scheduler And Cron
 
-- [ ] Add a scheduler module under `tm-server` with cron-style job definitions, next-run calculation,
+- [x] Add a scheduler module under `tm-server` with cron-style job definitions, next-run calculation,
       job state, run history, and per-job bounds.
-- [ ] Add persistent job/run tables to in-memory and Postgres stores.
-- [ ] Model reserved `cron://` resources:
+- [x] Add persistent job/run tables to in-memory and Postgres stores.
+- [x] Model reserved `cron://` resources:
       job list, job definition preview, run history, and last result.
-- [ ] Register `cron://` with the resource gateway only when grants/docs/tests are in place; until then
+- [x] Register `cron://` with the resource gateway only when grants/docs/tests are in place; until then
       reserved paths must keep failing closed.
-- [ ] Implement the weekly ship ledger job using the existing `weekly-ship-ledger` skill.
-- [ ] Start scheduled runs through the same session API/agent loop/event stream as interactive work.
-- [ ] Enforce `cron_mode: deny`: any approval-needed action in a scheduled run is deferred and
+- [x] Implement the weekly ship ledger job using the existing `weekly-ship-ledger` skill.
+- [x] Start scheduled runs through the same session API/agent loop/event stream as interactive work.
+- [x] Enforce `cron_mode: deny`: any approval-needed action in a scheduled run is deferred and
       surfaced for Brian; it is never auto-approved.
-- [ ] Enforce `goals.max_turns <= 8`, script timeout <= 120 seconds, bounded model role, and one-run
+- [x] Enforce `goals.max_turns <= 8`, script timeout <= 120 seconds, bounded model role, and one-run
       per scheduled fire.
-- [ ] Handle offline/client-disconnected mode by logging queued/pending approvals for later review.
-- [ ] Add tests for cron parsing, missed-run policy, duplicate-fire prevention, approval deferral,
+- [x] Handle offline/client-disconnected mode by logging queued/pending approvals for later review.
+- [x] Add tests for cron parsing, missed-run policy, duplicate-fire prevention, approval deferral,
       bounds enforcement, event replay, and `cron://` resource previews.
 
 Acceptance:
 
-- [ ] A deterministic weekly ship ledger run can be triggered in tests and emits a replayable session.
-- [ ] Scheduled runs share the normal approval, memory, artifact, and resource pathways.
-- [ ] Scheduler restart does not double-run completed or currently leased jobs.
+- [x] A deterministic weekly ship ledger run can be triggered in tests and emits a replayable session.
+- [x] Scheduled runs share the normal approval, memory, artifact, and resource pathways.
+- [x] Scheduler restart does not double-run completed or currently leased jobs.
 
 ## P4.8 Resource, API, And Client Surface
 
-- [ ] Add dream inspection endpoints or resources:
-      queue status, dream record, dream run events, produced summary, and proposals.
-- [ ] Prefer the session resource gateway for previews over bespoke debug routes.
-- [ ] Add event payload docs for all new P4 event types.
-- [ ] Update `docs/sdk/tm-runtime.d.ts` for any new resource URI shape or approved `memory.*` /
+- [x] Add full dream inspection endpoints or resources:
+      queue status and exact dream records are visible through `memory://dreams`; dream run events,
+      produced summaries, and proposals are visible through `session_events` / `memory://`.
+- [x] Prefer the session resource gateway for previews over bespoke debug routes.
+- [x] Add event payload docs for all new P4 event types.
+- [x] Update `docs/sdk/tm-runtime.d.ts` for any new resource URI shape or approved `memory.*` /
       scheduler surface in the same change as host docs/tests.
-- [ ] Add compact mobile-friendly payloads for pending memory/skill proposals and scheduled-run
+- [x] Add compact mobile-friendly payloads for pending memory/skill proposals and scheduled-run
       status.
-- [ ] Add Flutter/Web smoke coverage only after the server event/resource shape is stable:
+- [x] Add Flutter/Web smoke coverage only after the server event/resource shape is stable:
       pending dream/proposal display, approval resolution, cron run replay, and resource open.
-- [ ] Keep clients thin; no client gains direct write authority over memory, skills, files, or cron.
+- [x] Keep clients thin; no client gains direct write authority over memory, skills, files, or cron.
 
 Acceptance:
 
-- [ ] A browser/phone can see a dream or cron proposal, resolve it through the existing approval route,
+- [x] A browser/phone can see a dream or cron proposal, resolve it through the existing approval route,
       open the produced memory/summary/proposal resource, and reconnect via `Last-Event-ID`.
 
 ## P4.9 Model Roles And Configuration
 
-- [ ] Add config for model roles used by dreaming:
+- [x] Add config for model roles used by dreaming:
       extraction, reflection, summarization, skill distillation, self-critique, verification, and
       embeddings if/when dense recall lands.
-- [ ] Keep aux dream roles on cheaper/fallback-capable models by default.
-- [ ] Add config for redaction, token budgets, summary cadence, reflect threshold, retry/backoff, and
+- [x] Keep aux dream roles on cheaper/fallback-capable models by default.
+- [x] Add config for redaction, token budgets, summary cadence, reflect threshold, retry/backoff, and
       scheduler bounds.
-- [ ] Ensure missing model config degrades visibly and safely:
+- [x] Ensure missing model config degrades visibly and safely:
       queue remains pending or failed with `last_error`, no partial unapproved writes.
-- [ ] Add docs for env vars and gated live tests.
+- [x] Add docs for env vars and gated live tests.
 
 Acceptance:
 
-- [ ] P4 can run deterministically with scripted model clients in normal tests and with real model
+- [x] P4 can run deterministically with scripted model clients in normal tests and with real model
       roles only under explicit live-test configuration.
 
 ## P4.10 Documentation And Verification
 
-- [ ] Update §22 when storage/worker behavior changes:
+- [x] Update §22 when storage/worker behavior changes:
       implemented tables, event names, failure modes, and recall behavior.
-- [ ] Update §26 when the skill proposal lifecycle is concretely implemented.
-- [ ] Update §27 when scheduler jobs, bounds, `cron://`, or client surfaces land.
-- [ ] Update `ROADMAP.md` only when P4 acceptance checks are actually satisfied.
-- [ ] Add focused unit tests before broad `cargo test`:
+- [x] Update §26 when the skill proposal lifecycle is concretely implemented.
+- [x] Update §27 when scheduler jobs, bounds, `cron://`, or client surfaces land.
+- [x] Update `ROADMAP.md` only when P4 acceptance checks are actually satisfied.
+- [x] Add focused unit tests before broad `cargo test`:
       dream queue lifecycle, extraction filters, redaction, summary write, skill proposal gate, and
       scheduler fire.
-- [ ] Run `cargo test` before marking any P4 slice complete.
-- [ ] Run gated Postgres tests for schema/lease/replay work:
+- [x] Run `cargo test` before marking any P4 slice complete.
+- [x] Run gated Postgres tests for schema/lease/replay work:
       `TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server`.
-- [ ] Run tm-e2e/Flutter smoke only after public API/event shapes change and need client proof.
-- [ ] Keep live OpenAI tests opt-in and skipped by default.
+- [x] Run tm-e2e/Flutter smoke only after public API/event shapes change and need client proof.
+- [x] Keep live OpenAI tests opt-in and skipped by default.
 
 ## Deferred Namespace Placement
 
@@ -316,7 +323,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 |---|---|---|
 | `memory.*` | **P4, only when justified** | P2 uses `memory://` resources plus server-side write proposals. P4 may add `memory.recall` / `memory.reflect` only after grants, host docs, SDK typings, denial tests, and approval policy exist. |
 | `skills.*` / full `skill://` reads | **P4/P7 split** | P4 produces approval-gated skill proposals and may expose constrained proposal previews. P7 owns import/version/reload, live catalog mutation, MCP import gates, and full audit/replay semantics. |
-| `cron://` | **P4** | Lands with the scheduler once job definitions, run history, bounds, grants, and replay are implemented. Until then it remains reserved and fail-closed. |
+| `cron://` | **P4 ✓** | Session resource gateway exposes scheduler job definitions and run history with bounds and replay tests. Sandbox/runtime `cron.*` write authority remains absent. |
 | `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
 | `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as deterministic allowlist helper until P7 hardening. |
 | `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
@@ -329,8 +336,9 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 - Summary/recall can land before dense embeddings; lexical + recency + importance is enough for the
   first P4 acceptance path.
 - Skill proposal generation can use stored summaries/evidence before full graph recall exists.
-- Scheduler/job tables can land before the weekly ledger job, provided `cron://` stays unregistered
-  or fail-closed until the resource shape is tested.
+- Scheduler/job tables and the deterministic weekly ledger trigger are now in place; future scheduler
+  work should focus on daemon looping, missed-run policy, restart duplicate prevention, and client
+  smoke.
 - Flutter smoke can wait until the server event/resource contract stabilizes.
 
 ## Do-Not-Start-Yet List
@@ -353,8 +361,9 @@ Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host
 
 P4 ownership:
 
-- `tm-memory`: dream queue, worker contracts, extraction/summary/proposal data types, recall logic,
-  redaction, future embeddings/FTS/graph modules.
+- `tm-memory`: dream queue, worker contracts, profile/recall record shapes,
+  extraction/summary/proposal data types, input budgeting, recall logic, redaction, future
+  embeddings/FTS/graph modules.
 - `tm-server`: durable store implementations, session/dream/scheduler APIs, event log/SSE emission,
   approval broker integration, resource registration, model-role wiring, daemon worker loop.
 - `tm-modes`: existing skill assets and prompt catalog. P4 must not mutate the live catalog without

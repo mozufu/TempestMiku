@@ -95,6 +95,18 @@ conservative.** Tiers are **attenuated write-capabilities** (object-capability l
 edits are versioned and replayable (#6). **This human-in-the-loop is what stands in for the Gödel
 machine's proof obligation** — Brian's approval, not a formal proof, certifies a self-change.
 
+**Implemented P4 conservative skill-proposal path:** post-session dreaming can distill a reusable
+workflow into a `SkillProposalRecord` with name, description, trigger/use criteria, `SKILL.md`-style
+body, evidence links, self-critique, verification checks, status, dedupe key, and source dream/session
+ids. The proposal emits `write_proposal` with `kind: "skill"` and uses the shared approval/default-deny
+path. Approval updates the proposal status only; rejection/timeout leaves it pending/denied/timed-out;
+neither path installs, imports, reloads, or mutates the live skill catalog. Low-value sessions do not
+create skill proposals, and candidates that fail self-verification emit a replayable
+`skill_proposal_rejected` dream progress event instead of failing the whole dream or surfacing an unsafe
+proposal. Completed dream re-runs reuse the existing queued dream/skill records and do not duplicate
+skill approvals. The constrained preview resource is `memory://skill-proposals/<id>`; `skill://<name>`
+remains prompt-composition-only until P7.
+
 ## 26.5 Crate layout
 
 Self-evolution is **not a new crate** — it's a **policy layer** spanning existing ones:

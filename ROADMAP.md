@@ -36,7 +36,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
 
-## Execution plan from current workspace (2026-07-07)
+## Execution plan from current workspace (2026-07-08)
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
 `tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
@@ -44,8 +44,8 @@ Current implementation has advanced past the original M0-only substrate. The wor
 `clients/`. The implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP
 bridging, the native P0 Serious Engineer dogfood slice, the CLI native cutover proof for
 linked-repo edit/run/artifact workflows, native Deno HTTP approvals for the Serious Engineer backend,
-the P1 project-manager remote-control surface, the P2 personal-assistant baseline, and the full P3
-actor orchestration surface. P3 ships `agents.run/spawn/parallel/msg`, the `agent://` + `history://`
+the P1 project-manager remote-control surface, the P2 personal-assistant baseline, the full P3
+actor orchestration surface, and the P4 dreaming/scheduler slice. P3 ships `agents.run/spawn/parallel/msg`, the `agent://` + `history://`
 resource handlers, child artifact spill + transcript history, actor lifecycle events in the SSE
 stream, Handoff mode wired from the mode catalog, and `CapabilityGrants` glob permit support. P3+
 is also closed: bounded per-actor inbox queues, `Agent::run` inbox draining,
@@ -55,14 +55,17 @@ events, actor-id threading through `InvocationCtx`, child approvals routed throu
 tokens with replayable `actor_cancelled` events, active restart supervision (`one_for_one`,
 `one_for_all`, `rest_for_one`), wall-clock actor timeouts, fail-fast sibling-subtree supervision,
 typed parent `SessionEvent` resource links, `actor_resources_linked` provenance events, and
-tm-e2e/Flutter actor smoke coverage.
+tm-e2e/Flutter actor smoke coverage. P4 ships durable dream leases, deterministic dream extraction,
+redaction/config guardrails, session/reflection/rollup summaries, approval-gated memory and skill
+proposals, Postgres FTS recall coverage, cron-backed scheduled proactivity, and Flutter/Web smoke
+coverage for dream-origin proposals and replay.
 Normal Rust tests pass when local loopback networking is available; managed sandboxes may need
 elevated permissions for tests that bind `127.0.0.1`.
 
-Still not production-complete: `tm-mcp`, `tm-trace`, full `tm-memory`, and `tm-drive` crates;
-scheduler/dreaming beyond the P4.0 session-end queue; product approval surfaces for future drive/skill writes and richer memory APIs;
-Android OS packaging; generated SDK docs from the runtime registry; and production egress/secret
-hardening.
+Still not production-complete: `tm-mcp`, `tm-trace`, fuller `tm-memory` mechanisms beyond the P4
+acceptance slice (pgvector dense retrieval, graph extraction, LLM-backed extraction, richer scoped
+`memory.*` APIs), and `tm-drive`; first-class skill import/reload/write surfaces; Android OS
+packaging; generated SDK docs from the runtime registry; and production egress/secret hardening.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -78,7 +81,7 @@ each milestone is done only when its acceptance checks pass.
 | 5 | **DONE — P2 personal assistant baseline** | 5–8d | Added the companion baseline: full persona overlay via SOUL + mode skill bundles, configurable Hermes asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminder/open-loop capture through approval-backed memory writes. | Tests cover token/text streaming over SSE, active mode profiles loading SOUL + dedicated skills, profile/recall context injection, characterful non-serious voice caps, approval-gated profile/recall/reminder writes, `memory://` resources, negative-state no-write guardrails, and health-over-productivity/proactivity prompt bounds. |
 | 6 | **DONE — P3: handoff + sub-agent actors** | 6–10d | Added `tm-agents` with actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` + `history://` resources, child artifact spill + transcript history, actor lifecycle events in SSE stream, supervision defaults, Handoff mode wired from catalog, `CapabilityGrants` glob permit. | ✓ Fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ child crash isolated + `actor_failed` in SSE log; ✓ handoff matches `oh-my-pi-handoff`. |
 | 6+ | **DONE — P3+ live actor mailbox + supervision** | 4–8d | Landed per-actor bounded inbox + `Agent::run` inbox draining, `agents.send/broadcast/wait/inbox/list/cancel/pipeline`, child approval routing through the live broker, parent-session child artifacts, parent-driven cancel tokens with replayable `actor_cancelled`, plain-prose enforcement, live-wait DAG acyclicity checks, pipeline digest-reference wiring, active restart strategies (`one_for_one`, `one_for_all`, `rest_for_one`), wall-clock budget enforcement, fail-fast sibling-subtree supervision, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and tm-e2e/Flutter actor smoke coverage. | Tests prove live sibling coordination, cancel/replay, child approval routing, restart decisions, actor timeouts, fail-fast sibling-subtree cancellation, event-log resource provenance, and Flutter attach/approve/reconnect smoke coverage. |
-| 7 | **P4 — dreaming + scheduler** | 6–10d | P4.0 landed `tm-memory` ownership, durable `dream_queue` records, `POST /sessions/:id/end`, replayable `session_end` / `dream_queued` events, and a no-op worker contract. Remaining: expand to Postgres/pgvector + FTS, async episodic writes, extraction, reflection, summaries, skill proposal, and cron scheduler. | Session end enqueues dream; dream writes summary + at least one approval-gated skill proposal; weekly ship ledger runs under cron bounds. |
+| 7 | **DONE — P4 dreaming + scheduler** | 6–10d | Landed `tm-memory` ownership, durable `dream_queue` records, `POST /sessions/:id/end`, replayable `session_end` / `dream_queued` events, the server-owned dream worker, deterministic extraction/redaction/reflection/summaries, approval-gated memory and skill proposals, Postgres FTS recall, cron jobs/runs, bounded missed-run catch-up, model-role/config fail-closed paths, and client smoke coverage. | Tests prove idempotent session-end dreams, dream lease/complete/fail/stale-lock paths, summary + reflection + recursive rollup writes, approval-gated memory and self-verified skill proposals, config/failure guardrails, gated Postgres schema/replay/FTS coverage, and the weekly ship ledger under cron bounds. |
 | 8 | **P5 — drive + research workspace** | 5–9d | Add `tm-drive`, `drive.*`, local-first file metadata, transducers, virtual dirs, project memory scopes, drive organizer. | Dropped file auto-files by derived attributes after approval; project link mints `FsPolicy` + memory scope; offline local-first path works. |
 | 9 | **P6 — Android package + OS integrations** | 4–7d | Package the existing Flutter client for Android; add mobile OS integrations such as secure pairing storage, push approval notifications, app links, and reconnect/resume polish. No on-device sandbox. | Android and Web/PWA attach to the same server/session stream; the Android build reuses the same chat, approval, artifact/resource, memory, drive, and agent-browser components rather than duplicating client code. |
 | 10 | **P7 — self-evolution + hardening** | 6–12d | Implement evolution tiers; write-scope switches; audit trail; MCP import/reload gates; egress/isolation hardening; add replay checks. | Tier switch changes allowed writes; conservative writes only memory+skills proposals; audit/replay can explain every gated write. |
@@ -88,9 +91,8 @@ each milestone is done only when its acceptance checks pass.
 1. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
    artifacts, and HTTP-routed manual approvals.
-2. **Continue P4 from the settled actor surface** — the session-end dream queue now builds on the
-   P3+ event-log/resource contracts; next slices should attach extraction/summary work and cron
-   without adding a second orchestration path.
+2. **Start P5 from the settled P4 surface** — drive, research workspace, and project file memory should
+   layer on the same event-log/resource/approval contracts instead of adding a second orchestration path.
 3. **Defer drive, MCP, trace, Android, and self-evolution surfaces until their roadmap stages** —
    `tm-drive`, `tm-mcp`, `tm-trace`, Android packaging, and P7 hardening should layer on the same
    server/resource surface.
@@ -101,9 +103,9 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 | Namespace / surface | Target milestone | Placement note |
 |---|---|---|
-| `memory.*` | **P2/P4 split** | P2 exposes the minimum profile/user recall and personal-assistant state-capture surface. P4.0 owns `tm-memory` and session-end dream queue writes; fuller pgvector/FTS, graph recall, worker extraction, and richer scoped memory APIs remain P4. |
+| `memory.*` | **P2/P4 shipped; richer APIs later** | P2 exposes the minimum profile/user recall and personal-assistant state-capture surface. P4 owns `tm-memory` contracts, session-end dream queue writes, deterministic worker extraction, summaries, Postgres FTS, and skill/memory proposals; pgvector dense retrieval, graph recall, LLM-backed extraction, and richer scoped memory APIs remain later hardening. |
 | `agents.*` | **P3 ✓ / P3+ ✓** | P3 MVP shipped: `agents.run/spawn/parallel/msg`, actor lifecycle, mailbox/roster, `agent://`+`history://` resources, SSE lifecycle events, Handoff mode. P3+ shipped bounded live inbox delivery plus `send`, `broadcast`, `wait`, `inbox`, `list`, `cancel`, and `pipeline` with digest-reference stage wiring, child approval routing, plain-prose enforcement, live-wait DAG acyclicity checks, active restart supervision, sibling-subtree cancellation policy, wall-clock budgets, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and actor smoke coverage. |
-| `skills.*` / `skill://` reads | **P4/P7 split** | Current `skill://...` use is prompt-composition-only. P4 can emit approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, MCP import gates, and any first-class read/list/preview handler. |
+| `skills.*` / `skill://` reads | **P4/P7 split** | Current `skill://...` use is prompt-composition-only. P4 emits approval-gated skill proposals from dreaming; P7 owns safe import/version/reload semantics, provenance, audit/replay, MCP import gates, and any first-class read/list/preview handler. |
 | `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
 | `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as the deterministic allowlist helper until P7 hardening. |
 | `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |

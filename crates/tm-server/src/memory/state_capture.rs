@@ -59,27 +59,33 @@ pub fn personal_assistant_state_capture_proposals(
         });
         match candidate.category {
             StateCaptureCategory::StablePreference => {
-                proposals.push(MemoryWriteProposal::profile_fact(
-                    subject.to_string(),
-                    "prefers".to_string(),
-                    candidate.body,
-                    0.82,
-                    source.clone(),
-                    STATE_CAPTURE_PROVENANCE_LABEL.to_string(),
-                    provenance,
-                    created_at,
-                )?);
+                proposals.push(
+                    MemoryWriteProposal::profile_fact(
+                        subject.to_string(),
+                        "prefers".to_string(),
+                        candidate.body,
+                        0.82,
+                        source.clone(),
+                        STATE_CAPTURE_PROVENANCE_LABEL.to_string(),
+                        provenance,
+                        created_at,
+                    )?
+                    .with_importance_score(candidate.category.importance_score()),
+                );
             }
             _ => {
-                proposals.push(MemoryWriteProposal::recall_chunk(
-                    subject.to_string(),
-                    scope.to_string(),
-                    candidate.recall_text(),
-                    source.clone(),
-                    STATE_CAPTURE_PROVENANCE_LABEL.to_string(),
-                    provenance,
-                    created_at,
-                )?);
+                proposals.push(
+                    MemoryWriteProposal::recall_chunk(
+                        subject.to_string(),
+                        scope.to_string(),
+                        candidate.recall_text(),
+                        source.clone(),
+                        STATE_CAPTURE_PROVENANCE_LABEL.to_string(),
+                        provenance,
+                        created_at,
+                    )?
+                    .with_importance_score(candidate.category.importance_score()),
+                );
             }
         }
     }
@@ -122,6 +128,19 @@ impl StateCaptureCategory {
             Self::ShippedArtifact => "Shipped artifact",
             Self::ReusableWorkflow => "Reusable workflow",
             Self::RecurringBlindSpot => "Recurring blind spot",
+        }
+    }
+
+    fn importance_score(self) -> f32 {
+        match self {
+            Self::StablePreference => 0.72,
+            Self::PersonalReminder => 0.64,
+            Self::ActiveProjectOpenLoop => 0.78,
+            Self::CommitmentDeadline => 0.9,
+            Self::Decision => 0.86,
+            Self::ShippedArtifact => 0.84,
+            Self::ReusableWorkflow => 0.82,
+            Self::RecurringBlindSpot => 0.8,
         }
     }
 }

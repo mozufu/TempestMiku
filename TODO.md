@@ -2,526 +2,380 @@
 
 Last aligned: **2026-07-08**.
 
-Active milestone: **P4** (P3-plus actor/mailbox/supervision/provenance closeout is complete;
-see deferred catalog work at the end for post-P3+ scope).
+Active milestone: **P4 — dreaming + proactivity**.
 
 `ROADMAP.md` remains the canonical milestone order. This file is the working execution checklist for
-the P4 slices after the P3-plus closeout. Keep it aligned with core docs §07/§09 and
-product docs §21, §22, §23, §25, §26, §27, and §29.
+finishing P4 after the P3-plus actor/mailbox/supervision/provenance closeout and the landed P4.0
+dream-queue slice. Keep it aligned with core docs §07/§09 and product docs §21, §22, §26, §27, and
+§29.
 
-P2 is closed in the roadmap. New work starts from the runtime catalog system now in the tree; do not
-reintroduce hardcoded mode prompts, hidden capability grants, or chat-native tool sprawl.
+## P4 North Star
 
-## Catalog invariants
+Ship a replayable, approval-bound dreaming and scheduler loop:
+
+- Ending a session enqueues durable dream work.
+- A worker leases queued dreams, extracts useful memory, summarizes what happened, reflects on
+  reusable lessons, and proposes at least one self-verified skill when the session contains a stable
+  recurring workflow.
+- Durable facts, summaries, and skill proposals are redacted, deduped, provenance-linked, and
+  approval-gated where the docs require it.
+- The weekly ship ledger runs from cron under proactivity bounds, streams through the same SSE/event
+  log, and defers on approvals instead of auto-acting.
+
+P4 is not a drive, MCP, Android, or self-rewrite milestone. It extends the existing server, store,
+resource, approval, mode, and actor contracts; it does not fork a second orchestration path.
+
+## Non-Negotiable Invariants
 
 - The model still gets one chat-native tool: `execute(code)`.
-- Runtime capability discovery is the host capability catalog exposed through
-  `tools.search(...)`, `tools.docs(...)`, and `tools.call(...)`.
-- Persona/routing discovery is the mode + skill catalog:
-  - `SOUL.md` is the constant identity and boundary layer.
-  - `modes.json` is the source of truth for runtime mode ids, labels, route triggers, default scope,
-    voice cap, declared capabilities, and `activeSkills`.
-  - Mode ids are loaded strings, not Rust enum variants.
-  - `skills/<name>/SKILL.md` files are procedural assets loaded as `skill://<name>` prompt sections.
-  - Skills are not new chat-native tools and do not grant host capabilities by themselves.
-- First-pass reserved sandbox namespaces stay explicit: `secrets`, `memory`, `skills`, and `agents`
-  are `undefined` until their owning milestones add grants, docs, tests, and policy.
-  - P2 memory reads are `resources.read("memory://...")`, not a `memory.*` global.
-  - P3 is the point where `agents.*` may become defined, but only in granted sessions.
-  - `skills.*` remains reserved until the P4/P7 split owns proposal/import/version/reload policy,
-    provenance, approval, and audit.
-- `skill://<name>` is a first-class resource URI in the design docs. Today it is implemented for
-  persona prompt composition only; broader read/import/reload semantics belong to the future skills
-  store, and unregistered `skill://` resource reads fail closed through the unknown-scheme path.
-- Mode-declared capabilities are catalog metadata and grant inputs. Unknown capability names, unknown
-  resource schemes, and missing grants fail closed.
+- Streaming remains the source of truth. Dream, approval, and scheduler progress must be represented
+  as replayable `session_events` and SSE frames.
+- Capabilities are config and grants, not prompts. Unknown capability names and resource schemes fail
+  closed.
+- `skill://<name>` is prompt-composition-only until a P4/P7-approved read/preview surface lands with
+  grants, provenance, and tests.
+- `skills.*` import/version/reload remains P7. P4 may produce approval-gated skill proposals, but it
+  must not silently install or reload skills.
+- `memory://` resources remain the public read surface for existing P2 memory records. Any P4
+  `memory.*` API must ship with host-catalog docs, SDK typings, grant tests, and denial behavior.
+- Scheduled proactivity honors §21.3: safe summarize/organize/review work may run; destructive,
+  external, commitment, spend, sensitive, or publish/send actions defer through approvals.
+- Serious Engineer, Handoff, and child-agent approval behavior from P0-P3+ must not regress.
+- Normal `cargo test` stays external-service-free. Live LLM, Postgres, and browser/Flutter coverage
+  stay opt-in or gated.
 
-## Current baseline
+## Current Baseline
 
 - [x] P0/P1/P2 are complete per `ROADMAP.md`.
-- [x] P0 Serious Engineer dogfood remains on the native Deno SDK path for `fs.*`, `code.*`,
-      `proc.*`, artifacts, and HTTP-routed manual approvals; OMP ACP stays replaceable.
-- [x] P1 project-manager and remote-control surfaces cover mode routing/locks, project views,
-      session promotion, resource gateway access, approvals, and SSE replay.
-- [x] Bundled persona assets include `SOUL.md`, `modes.json`, and the seven default skills under
-      `crates/tm-modes/assets/`.
-- [x] Configured persona assets can override the bundle through `TM_MODES_PATH`.
-- [x] Missing or unreadable persona assets degrade with visible warnings and bundled fallbacks.
-- [x] `ModeCatalog` / `ModeProfile` load runtime string ids from `modes.json`.
-- [x] `GET /modes`, session responses, mode responses, and `ModeChanged` events expose
-      `activeSkills`.
-- [x] Per-turn prompts compose core runtime notes, `SOUL.md`, active mode profile, active
-      `skill://<name>` markdown, runtime capability notes, and persona warnings in stable order.
-- [x] P2 memory context injects bounded profile facts and scoped recall with provenance.
-- [x] P2 memory writes are approval-gated `write_proposal` flows; approve writes durable records,
-      deny/timeout writes nothing, and outcomes replay as events.
-- [x] Personal-assistant state capture proposes stable preferences, reminders, open loops,
-      commitments/deadlines, decisions, shipped artifacts, and workflows while skipping transient,
-      sensitive, raw-log, and negative-state content by default.
-- [x] Negative-State Grounding routes as a conversational posture, keeps health over productivity,
-      and forbids unsolicited memory writes.
-- [x] P2 memory reads are exposed through `memory://` resources; the `memory` global remains
-      `undefined`.
-- [x] `docs/sdk/tm-runtime.d.ts` includes `skill://` resource URI typing and keeps `skills`
-      reserved.
-- [x] Gated Postgres coverage exists for the P2 memory approval flow while normal `cargo test`
-      stays external-service-free.
-- [x] P4.0 dream queue slice: `tm-memory` owns `DreamQueueRecord` / `DreamReason` /
-      `DreamStatus`, `tm-server` persists `dream_queue` rows in memory/Postgres stores, and
-      `POST /sessions/:id/end` emits replayable `session_end` + `dream_queued` events.
-- [x] P4.0 worker/extraction path is explicitly stubbed with `NoopDreamWorker`; no facts,
-      summaries, skills, cron jobs, or background LLM calls run yet.
-- [x] P3-plus foundation slice: `MailboxRegistry` now has bounded per-actor inbox queues,
-      `Agent::run` can drain actor inbox messages into the next model turn, `InvocationCtx` carries
-      live actor ids, and `agents.send/wait/inbox/list/cancel` are registered SDK calls.
-
-## P3 catalog preflight
-
-- [x] Keep `docs/sdk/tm-runtime.d.ts` as a checked-in SDK snapshot verified by exhaustive
-      `tools.docs` parity tests.
-- [x] Enrich `tools.docs` entries so every available direct namespace method documents signature,
-      schemas, examples, errors, grants, and approval policy.
-- [x] Add coverage comparing `tools.docs` with `docs/sdk/tm-runtime.d.ts` for `tools`, `resources`,
-      `artifacts`, `fs`, `code`, `proc`, and `http`.
-- [x] Validate catalog skill references: every bundled `activeSkills` entry should resolve to
-      `skills/<name>/SKILL.md`; configured missing skills should emit an exact warning and stable
-      prompt fallback.
-- [x] Keep the fixture proving a new mode can be added through `modes.json` without a Rust enum or
-      callsite migration.
-- [x] Document the configured persona catalog layout: `SOUL.md`, `modes.json`, and
+- [x] P3 and P3-plus are complete: `agents.run/spawn/parallel/msg/send/broadcast/wait/inbox/list/cancel/pipeline`,
+      live inboxes, active supervision, child approvals, replayable actor/resource provenance, and
+      Flutter/tm-e2e actor smoke coverage are in place.
+- [x] Persona assets are catalog-driven from `SOUL.md`, `modes.json`, and bundled/configured
       `skills/<name>/SKILL.md`.
-- [x] Reconcile `http.get` docs and runtime behavior with the deferred production egress policy:
-      deterministic allowlist helper now, hardened egress later.
-- [x] Keep read-only `skill://<name>` resource reads deferred before P4/P7; for now `skill://` is
-      prompt-composition-only and unregistered resource reads fail closed.
-- [x] Reconcile the P3 MVP SDK subset with §23. **Decision:** ROADMAP is canonical; P3 MVP =
-      `agents.run / spawn / parallel / msg`. The §23 full surface (`pipeline`, `broadcast`, `send`,
-      `wait`, `inbox`, `list`) is documented as **P3 stretch / in-P3-plus** in P3.2 below.
-      Implementing MVP first satisfies the "concrete users first" scope-lock rule; the stretch items
-      extend only after the MVP acceptance gate passes.
+- [x] P2 memory context injects bounded profile facts and scoped recall with provenance.
+- [x] P2 memory writes use approval-gated `write_proposal` flows; deny/timeout writes nothing.
+- [x] `memory://` resources expose the current P2 profile/user-model and approved record views.
+- [x] P4.0: `tm-memory` owns `DreamQueueRecord`, `DreamReason`, `DreamStatus`,
+      `NewDreamQueueRecord`, `DreamWorker`, `DreamWorkerReport`, and `NoopDreamWorker`.
+- [x] P4.0: `tm-server` persists `dream_queue` rows in memory/Postgres stores.
+- [x] P4.0: `POST /sessions/:id/end` marks the session ended, enqueues one idempotent dream record,
+      and emits replayable `session_end` + `dream_queued` events.
+- [x] P4.0: worker/extraction is explicitly stubbed; no background LLM calls, facts, summaries,
+      skills, or cron jobs run yet.
+
+## P4 Acceptance Gate
+
+- [ ] Post-session dream writes a bounded session summary with evidence/provenance links.
+- [ ] Post-session dream extracts durable memory candidates, applies redaction/dedup rules, and uses
+      existing approval/default-deny semantics before writing durable facts or scoped recall chunks.
+- [ ] Post-session dream emits at least one self-verified skill proposal when the session contains a
+      reusable workflow; the proposal is approval-gated and not silently installed.
+- [ ] Weekly ship ledger runs from cron under `cron_mode: deny`, `goals.max_turns <= 8`, and the
+      120-second script bound; approval-needed actions are deferred, not auto-applied.
+- [ ] Dream and cron runs are visible through the same event log/SSE replay path as interactive
+      sessions.
+- [ ] Parity §29.5 still holds: Miku voice, mode router, memory recall/profile, manual approvals,
+      project continuity, and Serious Engineer coding reach are preserved.
+- [ ] Normal `cargo test` passes without external services; gated Postgres/live/browser tests document
+      their env vars and stay opt-in.
+
+## P4.1 Store And Migration Spine
+
+- [ ] Move more P2 memory record ownership from `tm-server::memory` toward `tm-memory` only where
+      there is a concrete P4 worker/retrieval user; avoid churny extraction for its own sake.
+- [ ] Define `tm-memory::store` traits for the P4 logical stores needed now:
+      episodic messages/events, summaries, profile/fact candidates, scoped recall chunks, skill
+      proposals, and dream leases.
+- [ ] Extend `Store` with dream-queue worker operations:
+      `claim_ready_dream`, `heartbeat_dream`, `complete_dream`, `fail_dream`, and retry/backoff
+      metadata.
+- [ ] Preserve `enqueue_dream` idempotency by `dedupe_key`; duplicate session-end calls must not
+      duplicate work or events.
+- [ ] Add in-memory store support for the full worker lifecycle so unit tests remain external-free.
+- [ ] Add Postgres schema additions behind gated tests:
+      `memory_summaries`, `skill_proposals`, and any normalized P4 worker tables required before
+      pgvector/FTS.
+- [ ] Add ready-queue indexes for `(status, available_at)`, stale-lock recovery, and session/scope
+      queries.
+- [ ] Add JSON wire tests for every new event/resource payload before exposing it to clients.
+- [ ] Add gated Postgres tests for dream claim/complete/fail idempotency, stale lock recovery, and
+      duplicate enqueue behavior.
 
 Acceptance:
 
-- [x] No duplicated source of truth between `modes.json`, docs, and Rust hardcoded mode lists.
-      **Audit note:** mode ids appear as `ModeId::from("string")` in test fixtures (acceptable) and in
-      `omp_acp.rs:675` and `state_capture.rs:53` as inline strings (coupling to be tracked). No Rust
-      enum variant or parallel routing table exists; the goal is to ensure these string references
-      load from or validate against the catalog rather than silently diverging.
-      **Resolved:** `state_capture.rs` now uses `const MODE_ID` validated by catalog test;
-      `omp_acp.rs:675` is test-only and remains acceptable per audit note.
-- [x] Unknown mode ids, missing skill refs, ungranted `skill://` reads, and future `skills.*`
-      operations fail closed or degrade with explicit warnings.
-      **Resolved:** `validate_mode` fails closed with `InvalidRequest`; tests added for both
-      known and unknown mode paths. Missing-skill and `skill://` fail-closed behavior has
-      existing test coverage in `tm-modes` and `tm-sandbox`.
-- [x] A contributor can add a local mode + skill bundle without changing Rust code.
-- [x] Normal `cargo test` stays external-service-free and live OpenAI/Postgres tests remain gated.
+- [ ] A queued dream can be claimed exactly once, heartbeated, completed, and replayed using both
+      in-memory and Postgres stores.
+- [ ] A failed dream records `attempts`, `last_error`, and next `available_at`; retries are bounded and
+      deterministic.
+- [ ] Normal tests do not require Postgres.
 
-## P3 goal
+## P4.2 Dream Worker Runtime
 
-Ship the handoff + sub-agent actor baseline without weakening the catalog boundaries:
-
-- Handoff remains a catalog mode, not a hardcoded side path.
-- `oh-my-pi-handoff` remains the procedural brief skill for handoff behavior.
-- `agents.run/spawn/parallel/msg` land as the first capability-gated SDK namespace, discoverable
-  through the host catalog.
-- Agent output returns as digests, artifacts, and `agent://` / `history://` resources, not raw
-  transcript dumps into parent context.
-- Actor orchestration extends the existing loop; it does not fork a second product runtime.
-
-## P3 acceptance gate
-
-- [x] `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` are registered in the host
-      catalog with docs, schemas, examples, grants, and denial behavior.
-      **Resolved:** All four HostFns registered with full docs/schemas/examples/grants. All four are
-      live with `ChatActorExecutor`. **P3-plus update:** `agents.send`, `agents.wait`,
-      `agents.inbox`, and `agents.list` are now registered with matching docs/schemas/examples/grants;
-      `agents.msg` delivers to live inboxes for running actors and keeps the seeded continuation
-      fallback for completed actors.
-- [x] `agents` is only defined in sandbox sessions with the required grants; other modes still see it
-      as `undefined` or fail closed.
-      **Resolved:** `AGENTS_PRELUDE` injected in `install_prelude` only when `grants.names().any(|n| n.starts_with("agents."))`; ungranted sessions keep the `undefined` placeholder. Tests: `deno_agents_namespace_wired_when_granted`, `deno_agents_namespace_undefined_without_grant`.
-- [x] Handoff mode uses `modes.json` for mode state and `skill://oh-my-pi-handoff` for the brief.
-      **Resolved:** Mode profile, default scope, voice cap, capabilities, and active skills live in
-      `modes.json`; no server-side hardcodes. System prompt is catalog-driven via
-      `ModesConfig::build_system_prompt`. `CapabilityGrants::permits` now supports glob patterns
-      so `"agents.*"` in a mode profile activates all `agents.*` sandbox grants. Capabilities flow
-      through `CodingTurn.capabilities` → `run_native_turn` → `options.grants`. Tests: persona
-      handoff profile assertions, `!contains("miku-voice")` for handoff turn, `agents.*` capability
-      declared, glob-permits unit tests in `tm-host`.
-- [x] Fan-out to multiple workers returns only bounded digests to the parent context.
-      **Resolved:** `agents.parallel` and `agents.run` return `ActorDigest` JSON (`actorId`, `summary`,
-      `artifactUri`, `historyUri`) — raw transcripts are never injected into parent context by design.
-      `ChatActorExecutor` runs sub-agents with `NullSink`; full output goes nowhere unless the actor
-      writes to an artifact URI. Test: `agents_parallel_runs_all_and_returns_ordered_digests`.
-- [x] Sibling agents can coordinate through explicit messages.
-      **P3-plus update:** live resident delivery now uses per-actor bounded inbox queues plus
-      `Agent::run` inbox draining. `agents.send/broadcast/wait/inbox/list/cancel/pipeline` are live;
-      restart supervision, wall-clock budgets, fail-fast sibling groups, `StatusChanged`, and
-      parent-event provenance links are now covered by the P3-plus closeout.
-- [x] A crashing child agent is isolated, restarted or degraded by supervision policy, and recorded in
-      replayable events.
-      **Resolved (P3-plus):** child failures are marked with structured `FailureReason`, persisted as
-      `actor_failed`, followed by replayable `actor_supervision` decisions. Restartable failures use
-      `one_for_one`, `one_for_all`, or `rest_for_one` policy; max-restart exhaustion escalates.
-- [x] `agent://` and `history://` resources resolve through the resource gateway with grants and
-      bounded previews.
-      **Resolved:** `agent://<id>` returns actor record JSON (including `artifact_uri`/`history_uri`);
-      `agent://` lists all actors; `history://<id>` serves real bounded transcripts (P3.3).
-- [x] Approval-gated effects inside child agents still route through the same approval broker and
-      timeout/default-deny behavior.
-      **Resolved (P3-plus):** Child actor sandboxes now use the live `HttpApprovalPolicy` +
-      `ApprovalBroker` when manual approvals are enabled. `RosterCodingEventSink` routes approval
-      and approval-resolution events from child worker threads into the parent session's replayable
-      SSE/event log; timeout/default-deny behavior still holds when no live policy is configured.
-- [x] Normal `cargo test` remains external-service-free.
-
-## P3.0 Scope lock
-
-- [x] Add `tm-agents` only after the actor lifecycle has concrete users: Handoff, parallel subtasks,
-      and resource replay.
-      **Resolved:** `agents.run` is live end-to-end (`ChatActorExecutor` → `Agent::run`).
-- [x] `tm-agents` module layout per §23.8: `actor` (identity, lifecycle, behavior binding), `mailbox`
-      (async queue, addressing, delivery + receipts, broadcast, wait/inbox), `orchestrate`
-      (`agents.*` constructors, DAG handles wired by reference, cancel token entry point), `supervise` (supervision tree,
-      restart strategies, budgets, depth cap, cost rollup), `resources` (`agent://` + `history://`
-      handler registration).
-- [x] Keep the existing agent loop as the single owner of message accumulation, tool-call execution,
-      result shaping, and `EventSink` callbacks.
-      **Resolved:** `ChatActorExecutor` creates a dedicated thread per actor and calls `Agent::run`
-      directly — no forked second product runtime; the existing loop contract is preserved.
-- [x] Do not fork a second runtime loop for sub-agents; each actor is a recursive runtime session
-      sharing the same loop contract (§05/§06).
-- [x] Preserve the native Deno Serious Engineer path for `fs.*`, `code.*`, `proc.*`, artifacts, and
-      HTTP-routed manual approvals.
-- [x] Keep OMP ACP replaceable; P3 should not make it the permanent SDK model.
+- [ ] Replace `NoopDreamWorker` usage with a real worker implementation while keeping the trait usable
+      in tests.
+- [ ] Add a server-owned worker runner that can run once in tests and loop in daemon mode without
+      blocking request handling.
+- [ ] Ensure every worker state transition emits replayable events:
+      `dream_started`, `dream_progress`, `dream_completed`, `dream_failed`, and proposal events where
+      applicable.
+- [ ] Add a worker config block for enable/disable, poll interval, lease timeout, max attempts,
+      concurrency, per-dream timeout, and model-role names.
+- [ ] Wire cancellation/shutdown so the server can stop cleanly without leaving permanent locks.
+- [ ] Make worker output bounded. Large summaries, extracted evidence, or verification logs should
+      spill to `artifact://` or resource rows, not into model context.
+- [ ] Add scripted test workers/LLM clients for extraction, summary, critique, and error cases.
+- [ ] Add failure-mode tests for model error, timeout, redaction failure, approval timeout, store
+      failure, and duplicate worker race.
 
 Acceptance:
 
-- [x] P3 can be reviewed as an additive orchestration layer over the current server, sandbox, host,
-      resource, artifact, and approval contracts.
-- [x] No raw shell escape hatch, ambient network, direct filesystem reach, or chat-native tool sprawl
-      is introduced.
+- [ ] `DreamWorker::run_once` can process one ready record end-to-end in a deterministic test.
+- [ ] Two concurrent workers cannot complete the same dream twice.
+- [ ] Worker failure is replayable and leaves the queue retryable or terminal according to config.
 
-## P3.1 Actor lifecycle
+## P4.3 Episodic Capture And Redaction
 
-- [x] Define actor ids (stable, CamelCase, ≤32 chars), parent/child links, status (`running` /
-      `idle` / `parked` / `terminated`), mode, capability grant, budget, started/completed
-      timestamps, and cancellation state.
-      **Resolved:** `ActorId`, `ActorRecord`, `ActorStatus`, `ActorBudget`, `ActorSpec` fully
-      defined in `actor.rs`. `MailboxRegistry` tracks records concurrently with `tokio::sync::RwLock`.
-- [x] Each actor has its own context window and a granted memory scope; no shared mutable state
-      between actors.
-      **Resolved:** Each actor gets fresh `Agent::run()` invocation with no shared message history.
-      **P3-plus update:** child `ActorSpec` grants still carry only caller `agents.*` grants for
-      mailbox coordination; linked-folder `fs.*` / `code.*` / `proc.*` grants come from the sandbox
-      config and remain approval-bound.
-- [x] Sub-agents start with no conversation history; everything needed is in the assignment + shared
-      context (encapsulation by design).
-- [x] Persist actor lifecycle events in the session event log for replay: spawns, messages, results,
-      supervision decisions.
-      **Resolved (P3.5):** `ActorLifecycleEvent` types defined and emitted (Spawned/Completed/Failed)
-      from all three actor functions; `AppState::wire_lifecycle_sink` routes events through
-      `store.append_event` + SSE broadcast. **P3-plus update:** `MessageSent` now emits for delivered
-      live mailbox messages. `Cancelled` is emitted by `agents.cancel`; failure paths now emit
-      replayable `Supervision` decisions after `Failed`; status transitions now emit replayable
-      `actor_status` events.
-- [x] Add cancellation and timeout handling that leaves a replayable terminal state.
-      **Resolved:** Failure paths in `agents.run` call `mark_failed` with structured `FailureReason`;
-      `actor_failed` events now reach the SSE log (P3.5). **P3-plus update:** `agents.cancel`
-      trips per-actor cancellation tokens and emits replayable `actor_cancelled`; wall-clock budget
-      timeouts now trip the same actor cancellation token and record `FailureReason::Timeout`.
-- [x] Add supervision defaults for crash, timeout, approval denial, and quota exhaustion, with restart
-      strategies: `one_for_one` (default — restart only the dead child), `one_for_all` (restart a
-      coupled group), `rest_for_one` (restart the dead child and those started after it).
-      **Resolved:** `FailureReason` and `RestartStrategy` types defined in `supervise.rs`.
-      **P3-plus update:** supervisor state now computes and emits strategy decisions, and `Cancel`
-      actions expand through sibling subtrees before tripping cancellation tokens. `Restart`
-      actions now respawn actors from stored restart templates with fresh cancellation/inbox state.
-- [x] Enforce a depth limit to bound recursion; cost accounting rolls up to the parent session.
-      **Resolved:** `ChatActorExecutor` checks `spec.depth >= spec.budget.max_depth` and returns
-      `DepthExceeded`. **P3-plus update:** real caller-id threading is now in `InvocationCtx` and
-      Deno child sandbox options; parent depth propagation remains deferred.
-- [x] Apply per-actor budgets: wall-clock, heap, and egress caps with conservative defaults.
-      **Resolved:** `ActorBudget { wall_ms: 120_000, max_depth: 4 }` as defaults.
-      **P3-plus update:** `wall_ms` is enforced around tracked actor executor calls
-      (`run`/`spawn`/`parallel`/`pipeline`). Heap/egress caps remain future hardening work.
-- [x] Keep actor transcript storage out of parent model context by default.
-      **Resolved:** `ChatActorExecutor` uses `NullSink` — no transcript reaches the parent context.
-      Only the bounded `summary` string is returned to the orchestrator.
+- [ ] Build the dream input collector from the existing session tables/event log:
+      messages, final answer, mode changes, approvals, memory proposals, actor digests, project
+      promotions, artifact/resource links, and session-end metadata.
+- [ ] Keep child-agent transcripts out of dream prompt context by default; include `agent://` /
+      `history://` / `artifact://` handles and bounded previews only when useful.
+- [ ] Add deterministic redaction before any dream prompt or durable derived write:
+      secrets/tokens, obvious credentials, private keys, raw auth headers, and sensitive PII patterns.
+- [ ] Preserve negative-state discipline: distress-only sessions may summarize supportively but must
+      not create durable profile facts unless Brian explicitly asked to remember stable signal.
+- [ ] Attach provenance to every candidate: source session id, event sequence(s), message ids,
+      resource URIs, scope, and subject.
+- [ ] Add a compact prompt budgeter so long sessions are chunked before LLM extraction.
+- [ ] Add tests for redaction, bounded previews, provenance, and negative-state no-write behavior.
 
 Acceptance:
 
-- [x] A parent session can spawn an actor, observe progress, cancel it, and replay the outcome after
-      reconnect.
-      **Resolved:** spawn, observe (`agent://` gateway), and replay (P3.5 lifecycle events in SSE)
-      all work. `agents.cancel` now covers parent-driven child cancellation and replay.
-- [x] Actor failure is visible but does not corrupt the parent session.
-      **Resolved:** `agents.run` catches executor errors, marks actor failed with `FailureReason`,
-      and returns `HostError::HostCall` — parent session is unaffected.
-- [x] "Let it crash" — a failing child aborts only its subtree; siblings continue.
-      **Resolved:** isolation holds — each actor runs in a dedicated thread, failures are caught and
-      marked via `mark_failed`; no parent corruption. **P3-plus update:** supervision `Cancel`
-      actions now trip sibling-subtree tokens, and restart actions respawn actors from stored
-      templates with fresh cancellation/inbox state.
+- [ ] Dream input is sufficient for extraction but never contains unbounded transcripts or obvious
+      secrets.
+- [ ] Every candidate durable write can be traced back to exact session/event/resource evidence.
 
-## P3.2 Agent SDK surface
+## P4.4 Extraction, Importance, And Memory Writes
 
-**P3 MVP (`agents.*` orchestration — ROADMAP authority):**
-
-- [x] Add capability names and grant checks for `agents.*`; `agents` global remains `undefined`
-      unless the session holds the required grant.
-- [x] Implement `agents.run(role, task, opts)` — spawn one actor, await its digest result.
-      **Resolved:** `AgentsRunFn` calls `ChatActorExecutor::run_to_digest`, tracks lifecycle in
-      `MailboxRegistry`, returns bounded `AgentDigest` JSON to the caller.
-- [x] Implement `agents.spawn(role, task) -> handle` — non-blocking; coordinate via handle/messages.
-      **Resolved:** Background `std::thread::spawn` with dedicated `current_thread` runtime; actor tracked
-      as `Running` immediately, roster updated to `Terminated` on completion. Tests: spawn denied,
-      not-impl without executor, invalid args, handle returned + background completion.
-- [x] Implement `agents.parallel([{role, task}, …])` — one-wave fan-out with bounded pool and ordered
-      digest results.
-      **Resolved:** Validates all args before executor check; tracks all actors as Running; fans out via
-      `tokio::spawn` per actor (all run concurrently); awaits handles in submission order so results[i]
-      matches tasks[i]; first actor failure returns error, remaining detached tasks update roster via Arc.
-      Tests: denied, not-impl, empty array, invalid args, 3-actor ordered digests.
-- [x] Implement `agents.msg(handle, text, opts?)` — send to a spawned actor (request/reply or
-      fire-and-forget).
-      **Resolved (P3.2 one-shot model, upgraded in first P3-plus slice):** P3 shipped a one-shot
-      compatibility model. Fire-and-forget now delivers to the live bounded inbox for running actors
-      while preserving the bounded message log; `opts.await = true` waits for a live reply when the
-      target is running, and falls back to the seeded-continuation path for already completed actors.
-      Unknown handle → `null` (unreachable receipt, §23.9). Continuation actors remain ephemeral.
-- [x] Update `docs/sdk/tm-runtime.d.ts` and `tools.docs` together; never one without the other.
-      **Resolved:** `tm-runtime.d.ts`, `AgentsMsgFn`/new mailbox HostFn `ToolDocs`, and
-      `23-agents-orchestration.md` are aligned for the live inbox surface.
-- [x] Add tests for: granted, denied, unknown method, invalid args, timeout, output-spill, and
-      unreachable-handle paths.
-      **Resolved:** `agents_run_denied_without_grant`, `agents_run_executor_not_configured_returns_not_implemented`,
-      `agents_run_invalid_args_returns_invalid_args_error`, `agents_run_with_executor_tracks_and_returns_digest`.
-
-**§23 full surface — see `## P3-plus` for the closed mailbox, supervision, and protocol checklist.**
+- [ ] Implement extraction passes for the P4-worthy durable memory classes:
+      stable preferences, commitments/deadlines, decisions, shipped artifacts, reusable workflows,
+      project open loops, and recurring blind spots.
+- [ ] Score importance/poignancy for extracted candidates and store the score with provenance.
+- [ ] Add dedupe and contradiction handling:
+      normalize candidate text, merge duplicates, supersede obsolete facts with `valid_to`, never
+      erase history.
+- [ ] Keep project-specific commands and repo lore scoped to the active project scope, not global user
+      memory.
+- [ ] Use the existing `write_proposal` + `approval` route for durable fact/chunk writes unless config
+      explicitly grants safe auto-write for the record class.
+- [ ] Ensure approval deny/timeout writes nothing and emits resolved proposal status.
+- [ ] Add exact `memory://` resource previews for new summary/fact/chunk records.
+- [ ] Add tests for approve, deny, timeout/default-deny, idempotent re-run, contradiction supersede,
+      scope isolation, and provenance replay.
 
 Acceptance:
 
-- [x] The model can discover and use `agents.*` from `tools.search/docs` without loading the entire
-      SDK catalog into the system prompt.
-      **Resolved:** P3 HostFns and the first P3-plus mailbox HostFns have full docs, schemas,
-      examples, and grants; discoverable via `tools.search("agents")` or `tools.docs("agents.run")`.
-- [x] Denied or unavailable `agents.*` calls fail closed with typed host errors.
-      **Resolved:** `check_grant!` macro returns `CapabilityDeniedError`; missing executor returns
-      `NotImplementedError`; invalid args return `InvalidArgsError`. Covered by test matrix.
+- [ ] A dream can propose and, after approval, persist durable facts/chunks without blocking normal
+      chat turns.
+- [ ] Re-running the same dream does not duplicate facts, chunks, or approvals.
+- [ ] Sensitive or transient content is skipped before proposal creation.
 
-## P3.3 Resources and artifacts
+## P4.5 Summaries, Reflection, And Recall
 
-- [x] Register `agent://<id>` for child output artifact previews.
-      **Resolved:** `AgentResourceHandler` reads `ActorRecord` JSON for `agent://<id>` and lists
-      all actors for `agent://`. Artifact content (full output) deferred below.
-- [x] Register `history://<id>` for read-only child transcript previews.
-      **Resolved:** `HistoryResourceHandler` serves real transcripts from `MailboxRegistry.transcripts`
-      with 50-line default pagination, `"start-end"` selector, `has_more` flag, and 1 KB preview.
-- [x] Spill large child output to `artifact://` rather than parent context; only bounded digests
-      return to the orchestrator's model context.
-      **Resolved:** `ChatActorExecutor::run_to_digest` uses `CollectingSink` to capture all events;
-      opens `ArtifactStore` for the parent session after run; new child artifact → `artifact_uri`;
-      transcript → `history://<actor>`. `ActorDigest.history_content`
-      carries the raw transcript (skipped from JSON so it never reaches the model); orchestrator
-      stores it via `MailboxRegistry.store_transcript`.
-- [x] Include provenance links from parent events to child resources.
-      **Resolved:** `ActorRecord` carries `artifact_uri` and `history_uri`; exposed via `agent://<id>`
-      resource JSON. **P3-plus update:** `actor_completed` events with child resource URIs are
-      followed by replayable `actor_resources_linked` events carrying `source_event_seq`,
-      `artifact_uri`, and `history_uri`, so audit/replay can recover links from one parent event log.
-- [x] Add bounded preview/list behavior for mobile clients.
-      **Resolved:** `HistoryResourceHandler::list` filters to actors with `history_uri` set;
-      `HistoryResourceHandler::read` returns selector-bounded content with `has_more` and `preview`.
+- [ ] Add summary record types for session, daily, weekly, and topic/project rollups.
+- [ ] Implement the first session-summary dream output:
+      what happened, shipped artifacts, decisions, open loops, unresolved approvals, and next likely
+      actions.
+- [ ] Add reflection synthesis when cumulative importance crosses a threshold; reflections must cite
+      evidence and be stored as derived memory, not raw assertion.
+- [ ] Add recursive summary update logic so old sessions can be folded without loading full logs.
+- [ ] Extend recall to use P4 summaries alongside P2 profile facts and scoped recall chunks.
+- [ ] Add a hybrid retrieval stepping-stone before full pgvector:
+      exact/FTS-style lexical query plus scoped recency and importance scoring.
+- [ ] Add Postgres FTS coverage when the Postgres gate is enabled; keep in-memory fallback deterministic.
+- [ ] Defer dense embeddings/pgvector until the lexical + summary path is stable, then add provider
+      config and dimension pinning.
+- [ ] Add tests that session-start memory context can include a recent summary with provenance and
+      bounded token budget.
 
 Acceptance:
 
-- [x] Parent turns contain summaries and handles, not large child transcripts.
-      **Resolved:** `ActorDigest.history_content` is `#[serde(skip)]`; model only sees `summary`.
-- [x] Resource reads enforce grants and return shaped `ResourceContent` envelopes.
-      **Resolved:** `HistoryResourceHandler` requires `CAP_HISTORY_READ`; returns `ResourceContent`
-      with all fields populated.
+- [ ] Ending a productive session creates a reusable summary visible through `memory://`.
+- [ ] A later session in the same scope can recall the summary/open loops without loading raw logs.
+- [ ] Recall degrades gracefully when optional vector/FTS stores are empty or unavailable.
 
-## P3.4 Handoff mode
+## P4.6 Skill Proposal Generation
 
-- [x] Keep Handoff's mode profile, default scope, voice cap, declared capabilities, and active skills
-      in `modes.json` (currently present; verify no server-side hardcode duplicates it).
-      **Resolved:** All state lives in `modes.json`; persona loading is fully catalog-driven.
-- [x] Use `oh-my-pi-handoff` for the handoff brief template and constraints.
-      **Resolved:** `active_skills: ["oh-my-pi-handoff"]` in catalog; `build_system_prompt` injects
-      `## skill://oh-my-pi-handoff` section from the bundled SKILL.md.
-- [x] Route implementation-heavy delegation prompts to Handoff without mutating identity.
-      **Resolved:** Router triggers `["handoff", "delegate"]` at priority 100 in modes.json.
-- [x] Preserve Serious Engineer voice cap `off` for the handoff/coding boundary.
-      **Resolved:** Both modes have `voice_cap: "off"`; no voice injection at the handoff boundary.
-- [x] Add tests that Handoff prompt composition includes `skill://oh-my-pi-handoff` and does not load
-      `miku-voice`.
-      **Resolved:** `coding_turn_prompt_uses_active_persona_bundle` asserts both.
-- [x] Capability `agents.*` is declared in `modes.json` for Handoff; verify the grant activates when
-      the sandbox session uses the Handoff mode profile.
-      **Resolved:** `CapabilityGrants::permits` now supports `.*` globs; `CodingTurn.capabilities`
-      carries mode-profile capabilities; `run_native_turn` merges them into sandbox grants. Tests:
-      `capability_grants_glob_match` in `tm-host`; persona handoff test asserts `has_capability("agents.run")`.
+- [ ] Define `SkillProposal` data in `tm-memory`:
+      id, name, description, body, trigger/use criteria, evidence, self-critique, verification result,
+      status, dedupe key, created/updated timestamps, and source dream id.
+- [ ] Distill skill candidates only from repeated or clearly reusable workflows, not one-off commands
+      or project-local trivia.
+- [ ] Generate skill bodies in the existing `SKILL.md` style with concise trigger rules and procedural
+      steps.
+- [ ] Add self-critique/refine pass before surfacing a proposal.
+- [ ] Add self-verification:
+      dry-run the skill against the source scenario, check frontmatter/body shape, check no forbidden
+      capability claims, and ensure it does not mutate `SOUL.md`, modes, or grants.
+- [ ] Emit `write_proposal` with `kind: "skill"` and use the shared approval/default-deny flow.
+- [ ] Store approved proposals as pending skill assets or reviewable files according to the eventual
+      P4/P7 split; do not install/reload them into the live prompt catalog automatically.
+- [ ] Add `skill_proposal://` or a constrained `memory://.../skill-proposals/...` preview resource
+      before exposing full `skill://` reads.
+- [ ] Add tests for low-value candidate rejection, self-critique refinement, verification failure,
+      approval approve/deny/timeout, dedupe on re-run, and no live skill reload.
 
 Acceptance:
 
-- [x] Handoff behavior changes can be made by editing the catalog assets, not by hardcoding prompt
-      strings in the server.
-      **Resolved:** Confirmed — zero handoff-specific strings in server Rust code.
-- [x] Handoff remains precise, replayable, and approval-bound.
-      **Resolved:** Child actors under Handoff use live HTTP approvals when manual approval mode is
-      configured, and otherwise fail closed through default-deny timeout behavior.
+- [ ] At least one representative post-session dream produces a self-verified skill proposal.
+- [ ] Approval can accept or reject the proposal; rejection leaves the live skill catalog unchanged.
+- [ ] P7-owned `skills.*` import/version/reload remains unimplemented and fail-closed.
 
-## P3.5 Client and replay support
+## P4.7 Scheduler And Cron
 
-- [x] Surface actor progress in SSE with compact mobile-friendly events.
-      **Resolved:** `ActorLifecycleEvent` (Spawned/Completed/Failed) emitted from `agents.run`,
-      `agents.spawn`, and `agents.parallel` via `MailboxRegistry::emit_lifecycle`. Hook installed
-      at startup by `AppState::wire_lifecycle_sink`; writes to store + broadcasts on session SSE
-      channel. `InvocationCtx` carries `session_id` wired from `DenoSandboxOptions.session_id`.
-      **P3-plus update:** delivered `agents.msg` / `agents.send` messages now emit `MessageSent`
-      lifecycle events through the same hook.
-- [x] Preserve reconnect/resume through `Last-Event-ID`.
-      **Resolved:** SSE endpoint already fully implemented in P1; actor lifecycle events flow
-      through the same `append_event` + broadcast path and are replayable.
-- [x] Expose child resource links without forcing transcript expansion.
-      **Resolved (P3.3):** `ActorDigest.artifact_uri` / `history_uri` returned in digests; served
-      via `artifact://` and `history://` resource handlers.
-- [x] Reuse the existing approval UI for child-agent permission requests.
-      **Resolved (P3-plus):** Child approval requests emit ordinary `approval` /
-      `approval_resolved` SSE events with `scope.actorId`, so existing server routes and Flutter
-      approval UI resolve them without a second approval path.
-- [x] Add Flutter Web/PWA smoke coverage for actor progress, approval, resource open, and reconnect.
-      **Resolved (P3-plus):** Flutter subscribes to actor lifecycle event types; widget smoke covers
-      actor progress, approval resolution, child `artifact://` open, and reconnect via remembered
-      `Last-Event-ID`.
+- [ ] Add a scheduler module under `tm-server` with cron-style job definitions, next-run calculation,
+      job state, run history, and per-job bounds.
+- [ ] Add persistent job/run tables to in-memory and Postgres stores.
+- [ ] Model reserved `cron://` resources:
+      job list, job definition preview, run history, and last result.
+- [ ] Register `cron://` with the resource gateway only when grants/docs/tests are in place; until then
+      reserved paths must keep failing closed.
+- [ ] Implement the weekly ship ledger job using the existing `weekly-ship-ledger` skill.
+- [ ] Start scheduled runs through the same session API/agent loop/event stream as interactive work.
+- [ ] Enforce `cron_mode: deny`: any approval-needed action in a scheduled run is deferred and
+      surfaced for Brian; it is never auto-approved.
+- [ ] Enforce `goals.max_turns <= 8`, script timeout <= 120 seconds, bounded model role, and one-run
+      per scheduled fire.
+- [ ] Handle offline/client-disconnected mode by logging queued/pending approvals for later review.
+- [ ] Add tests for cron parsing, missed-run policy, duplicate-fire prevention, approval deferral,
+      bounds enforcement, event replay, and `cron://` resource previews.
 
 Acceptance:
 
-- [x] A phone/browser can watch a delegated task, resolve approvals, open child artifacts, and resume
-      after disconnect.
-- [x] Clients do not gain direct write authority over agents, memory, skills, or files.
+- [ ] A deterministic weekly ship ledger run can be triggered in tests and emits a replayable session.
+- [ ] Scheduled runs share the normal approval, memory, artifact, and resource pathways.
+- [ ] Scheduler restart does not double-run completed or currently leased jobs.
 
-## P3-plus
+## P4.8 Resource, API, And Client Surface
 
-Items deferred from the P3 MVP. Ordering within each section is priority order at planning time;
-order between sections is not meaningful. No item here implies the previous milestone is incomplete —
-each was explicitly closed by deferral.
+- [ ] Add dream inspection endpoints or resources:
+      queue status, dream record, dream run events, produced summary, and proposals.
+- [ ] Prefer the session resource gateway for previews over bespoke debug routes.
+- [ ] Add event payload docs for all new P4 event types.
+- [ ] Update `docs/sdk/tm-runtime.d.ts` for any new resource URI shape or approved `memory.*` /
+      scheduler surface in the same change as host docs/tests.
+- [ ] Add compact mobile-friendly payloads for pending memory/skill proposals and scheduled-run
+      status.
+- [ ] Add Flutter/Web smoke coverage only after the server event/resource shape is stable:
+      pending dream/proposal display, approval resolution, cron run replay, and resource open.
+- [ ] Keep clients thin; no client gains direct write authority over memory, skills, files, or cron.
 
-### Actor mailbox — live resident messaging
+Acceptance:
 
-The §23 full messaging surface. The foundation is now in place: per-actor bounded inbox queues,
-`Agent::run` inbox draining, caller actor-id threading, and the first live mailbox SDK calls.
+- [ ] A browser/phone can see a dream or cron proposal, resolve it through the existing approval route,
+      open the produced memory/summary/proposal resource, and reconnect via `Last-Event-ID`.
 
-- [x] Live MPSC delivery: per-actor bounded inbox queue, `Agent::run` inbox draining loop,
-      and request/reply waits. Required before any other item in this section.
-      **Resolved:** `MailboxRegistry` creates bounded `tokio::mpsc` inboxes per actor, keeps a
-      compatibility message log, returns failed receipts with `unreachable` / `backpressured`
-      reasons for unreachable/full inboxes, and `tm-core`
-      exposes an `InboxDrain` hook used by `ChatActorExecutor`.
-- [x] `agents.send(to, text, opts?)` — fire-and-forget or request/reply to a live sibling.
-- [x] `agents.wait(from?, timeout)` — block until a matching message arrives in the inbox.
-- [x] `agents.inbox()` — drain all pending messages without blocking.
-- [x] `agents.list()` — roster: peer ids, statuses, unread count, last activity timestamp.
-- [x] `agents.broadcast(text)` — deliver a message to all currently live children.
-- [x] `agents.pipeline(items, ...stages)` — staged map with a barrier between stages.
-      **Resolved:** `agents.pipeline` is registered and prelude-backed. It runs ordered actor waves
-      stage-by-stage, waits at each barrier, and feeds compact digest references (`agent://`,
-      `history://`, artifact URI, bounded summary) into the next stage without re-inlining
-      transcripts. The namespace wrapper also supports per-stage task builder functions.
-- [x] Real caller actor-id threading through `InvocationCtx` (top-level orchestrator calls still use
-      synthetic `"Root"`; child sandboxes receive their real actor id).
+## P4.9 Model Roles And Configuration
 
-### Supervision and recovery
+- [ ] Add config for model roles used by dreaming:
+      extraction, reflection, summarization, skill distillation, self-critique, verification, and
+      embeddings if/when dense recall lands.
+- [ ] Keep aux dream roles on cheaper/fallback-capable models by default.
+- [ ] Add config for redaction, token budgets, summary cadence, reflect threshold, retry/backoff, and
+      scheduler bounds.
+- [ ] Ensure missing model config degrades visibly and safely:
+      queue remains pending or failed with `last_error`, no partial unapproved writes.
+- [ ] Add docs for env vars and gated live tests.
 
-- [x] Active restart behavior: `one_for_one`, `one_for_all`, `rest_for_one` strategies.
-      **Resolved:** `supervise.rs` computes replayable supervision decisions for restartable
-      crashes/timeouts, max-restart escalation, terminal cancellation, and strategy-specific
-      cancel/restart target sets. `MailboxRegistry` tracks parent supervisor state, stores restart
-      templates, emits replayable `actor_supervision` decisions after `actor_failed`, expands
-      `Cancel` actions through sibling subtrees, and respawns `Restart` actions with fresh
-      cancellation and inbox state.
-- [x] Wall-clock budget enforcement per actor.
-      **Resolved:** all `agents.run` / `spawn` / `parallel` / `pipeline` executor calls now pass
-      through a shared `ActorBudget.wall_ms` timeout wrapper. Timeout trips the actor cancellation
-      token and maps to `FailureReason::Timeout` for replayable failure/supervision handling.
-- [x] Cancel token: parent can cancel a running child and receive a replayable `Cancelled`
-      terminal event in the SSE stream.
-      **Resolved:** `agents.cancel(target)` is registered and prelude-backed. Direct parents
-      mark child actor records `terminated` + `cancelled`, trip the shared token used by
-      `ChatActorExecutor` and child Deno sandboxes, suppress late completion events, and emit
-      one replayable `actor_cancelled` event. `agent://<id>` exposes the terminal state on reconnect.
-- [x] Subtree cancel-on-sibling-failure for `agents.spawn` / `agents.parallel`
-      ("let it crash" — a failing child aborts its whole sibling group, not just itself).
-      **Resolved:** `agents.parallel` waves run under an isolated `one_for_all` / zero-restart
-      supervision group, so a failing branch cancels sibling wave members and their live
-      descendants without restarting the whole wave. `agents.spawn` accepts
-      `opts.supervision.group`, letting spawned siblings share the same fail-fast supervision
-      group; supervised cancel actions emit replayable `actor_cancelled` lifecycle events for
-      every newly terminated actor in the sibling subtree.
+Acceptance:
 
-### Child actor approvals
+- [ ] P4 can run deterministically with scripted model clients in normal tests and with real model
+      roles only under explicit live-test configuration.
 
-- [x] Wire child actors to the live `HttpApprovalPolicy` + `ApprovalBroker` so
-      approval-gated ops (file overwrite, unsafe `proc.run`) inside sub-agents can be
-      resolved by the user rather than auto-denied.
-      **Resolved:** `ChatActorExecutor` now receives the parent session id in `ActorSpec`,
-      constructs child sandboxes in the parent session artifact/event namespace, and uses
-      `RosterCodingEventSink` to emit replayable `approval` / `approval_resolved` events from
-      dedicated actor threads.
+## P4.10 Documentation And Verification
 
-### Messaging protocol invariants
+- [ ] Update §22 when storage/worker behavior changes:
+      implemented tables, event names, failure modes, and recall behavior.
+- [ ] Update §26 when the skill proposal lifecycle is concretely implemented.
+- [ ] Update §27 when scheduler jobs, bounds, `cron://`, or client surfaces land.
+- [ ] Update `ROADMAP.md` only when P4 acceptance checks are actually satisfied.
+- [ ] Add focused unit tests before broad `cargo test`:
+      dream queue lifecycle, extraction filters, redaction, summary write, skill proposal gate, and
+      scheduler fire.
+- [ ] Run `cargo test` before marking any P4 slice complete.
+- [ ] Run gated Postgres tests for schema/lease/replay work:
+      `TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server`.
+- [ ] Run tm-e2e/Flutter smoke only after public API/event shapes change and need client proof.
+- [ ] Keep live OpenAI tests opt-in and skipped by default.
 
-- [x] Enforce plain-prose-only messages at the `agents.msg` / `agents.send` boundary;
-      reject control-payload blobs (`{"type":"done"}` and similar) with `InvalidArgsError`.
-      **Resolved:** `agents.msg`, `agents.send`, and `agents.broadcast` now share a plain-prose
-      validator that rejects empty messages and complete JSON object/array payloads before delivery.
-- [x] DAG acyclicity check: detect and reject targeted live waits that would cause an actor to
-      wait on itself or its own descendant (structural deadlock prevention, not just timeout).
-      **Resolved:** `MailboxRegistry` exposes actor lineage checks. `agents.msg(..., {await:true})`,
-      `agents.send(..., {await:true})`, and targeted `agents.wait(from)` reject descendant wait
-      edges with `InvalidArgsError`; synthetic top-level `Root` waits remain allowed.
-- [x] Bounded mailbox + backpressure: drop or back-pressure senders when the inbox is full;
-      `agents.broadcast` targets only currently live peers.
-      **Resolved:** actor inboxes are bounded `tokio::mpsc` queues; `try_send` drops full-inbox
-      sends with `failed` / `reason: "backpressured"` receipts instead of silently succeeding,
-      unreachable targets use `reason: "unreachable"`, and broadcast filters through the registry's
-      direct-live-children helper with ordered failed receipts for backpressure.
+## Deferred Namespace Placement
 
-### Provenance
+These are roadmap-owned deferred tasks, not loose TODOs:
 
-- [x] Full parent-`SessionEvent` linking: `ActorRecord` carries `artifact_uri` /
-      `history_uri`, and parent event rows link those resources back to the producing
-      `actor_completed` `session_event` sequence. Needed for full audit/replay from a single
-      event log query.
-      **Resolved:** `AppState::wire_lifecycle_sink` appends a replayable
-      `actor_resources_linked` event immediately after each resource-bearing `actor_completed`
-      event. The link payload includes `actor_id`, `source_event_type`, `source_event_seq`,
-      `artifact_uri`, and `history_uri`; server smoke tests assert the link points at the
-      persisted `actor_completed` sequence.
-- [x] `StatusChanged` lifecycle events wired to SSE (`MessageSent` is now emitted for delivered
-      live mailbox messages; `Spawned` / `Completed` / `Failed` were already live).
-      **Resolved:** actor success, failure, cancellation, and restart paths emit `actor_status`
-      rows through the same lifecycle hook and SSE/event-log path.
+| Namespace / surface | Target milestone | Placement note |
+|---|---|---|
+| `memory.*` | **P4, only when justified** | P2 uses `memory://` resources plus server-side write proposals. P4 may add `memory.recall` / `memory.reflect` only after grants, host docs, SDK typings, denial tests, and approval policy exist. |
+| `skills.*` / full `skill://` reads | **P4/P7 split** | P4 produces approval-gated skill proposals and may expose constrained proposal previews. P7 owns import/version/reload, live catalog mutation, MCP import gates, and full audit/replay semantics. |
+| `cron://` | **P4** | Lands with the scheduler once job definitions, run history, bounds, grants, and replay are implemented. Until then it remains reserved and fail-closed. |
+| `drive.*` | **P5** | Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, and drive organizer flows. |
+| `http.*` hardening | **P5 or P7** | If deep research needs live egress, add byte/request caps, redirect policy, audit logging, and production allowlists in P5; otherwise keep `http.get` as deterministic allowlist helper until P7 hardening. |
+| `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
+| `code.ast` / `code.lsp` | **Post-critical tech slice** | Useful for coding-agent quality, but keep it out of P4 unless a concrete dream/scheduler user requires it. |
 
-### Client coverage
+## Parallelization Seams
 
-- [x] Flutter Web/PWA smoke tests for actor progress (SSE lifecycle events), approval
-      resolution, child resource open (`artifact://` / `history://`), and reconnect via
-      `Last-Event-ID`.
-      **Resolved:** `tm-e2e::run_actor_smoke` covers the public HTTP/SSE flow; Flutter widget
-      smoke covers actor event subscription, approval resolution, child resource preview, and
-      reattach with the remembered event cursor.
+- Dream queue leasing/store work can proceed independently from LLM extraction as long as the worker
+  trait stays scripted-testable.
+- Summary/recall can land before dense embeddings; lexical + recency + importance is enough for the
+  first P4 acceptance path.
+- Skill proposal generation can use stored summaries/evidence before full graph recall exists.
+- Scheduler/job tables can land before the weekly ledger job, provided `cron://` stays unregistered
+  or fail-closed until the resource shape is tested.
+- Flutter smoke can wait until the server event/resource contract stabilizes.
 
-## Deferred catalog work
+## Do-Not-Start-Yet List
 
-- [ ] Full `tm-memory` worker extraction, pgvector, BM25/RRF, graph recall, summaries,
-      approval-gated skill proposal generation, and cron scheduling remain P4.
-- [ ] `skills.*` import/version/reload, provenance, audit/replay, MCP import gates, and self-evolution
-      tiers remain P7.
-- [ ] `drive.*` remains P5.
-- [ ] Android OS packaging waits until the P3/P5 server and resource surfaces stabilize.
-- [ ] Secret broker work and production egress hardening remain scoped hardening milestones.
-- [ ] Do not relax manual approval, unknown-scheme fail-closed behavior, argv-vector `proc.run`, or
-      linked-folder grant boundaries.
+- Android OS packaging before P5/P6 server and resource surfaces stabilize.
+- Drive auto-organizer before P5 approval policy and memory scopes are in place.
+- `skills.*` live import/reload, MCP import gates, and tiered self-evolution writes before P7.
+- Secret broker work and production egress hardening outside their hardening milestone unless a P4
+  acceptance test truly requires a small prerequisite.
+- Research/deep orchestration beyond the existing P3+ actor surface before memory scopes, scheduler,
+  and drive surfaces are real.
+- Any relaxation of manual approval, unknown-scheme fail-closed behavior, argv-vector `proc.run`, or
+  linked-folder grant boundaries.
+
+## Crate Plan
+
+Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-modes`,
+`tm-agents`, `tm-memory`, `tm-server`, `apps/tm-cli`, `apps/tm-e2e`, and client scaffolds under
+`clients/`.
+
+P4 ownership:
+
+- `tm-memory`: dream queue, worker contracts, extraction/summary/proposal data types, recall logic,
+  redaction, future embeddings/FTS/graph modules.
+- `tm-server`: durable store implementations, session/dream/scheduler APIs, event log/SSE emission,
+  approval broker integration, resource registration, model-role wiring, daemon worker loop.
+- `tm-modes`: existing skill assets and prompt catalog. P4 must not mutate the live catalog without
+  the approved P4/P7 lifecycle.
+- `tm-host` / `tm-sandbox`: only touched if P4 exposes a new capability-gated SDK namespace; update
+  host docs, SDK typings, grants, and denial tests in the same change.
+- `clients/miku_flutter` and `apps/tm-e2e`: smoke coverage for visible P4 events/resources after the
+  server shape stabilizes.
+
+Planned product/support crates remain: `tm-drive`, `tm-mcp`, and `tm-trace`. Extract new crates only
+after a second concrete user exists.
+
+## Open Questions
+
+- Should P4 expose `memory.reflect()` to sandbox code, or keep manual reflection server-only until the
+  dream worker is stable?
+- Should approved skill proposals write to a configured review folder, a database row, or both before
+  P7 import/version/reload exists?
+- What is the first dense-embedding backend to support after lexical recall proves useful:
+  OpenAI-compatible embeddings, local `fastembed`/`candle`, or both behind config?
+- What missed-run policy should cron use on restart: run once immediately, skip missed windows, or
+  queue a bounded catch-up?
+- Which client surface should display pending dreams first: project view, session details, or a
+  dedicated proactivity/review inbox?

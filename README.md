@@ -13,6 +13,7 @@ proactivity.
 
 ## Project docs
 
+- [Running Miku](docs/running-miku.md)
 - [Design docs](docs/README.md)
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)

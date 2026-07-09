@@ -14,14 +14,14 @@ use tm_modes::{AssetStatus, ModeId, ModesConfig};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use super::*;
 use super::worker::SenderFactory;
+use super::*;
 use crate::{
     ApprovalBroker, ApprovalResolveDecision, CronJobRecord, CronRunRecord, InMemoryStore,
     MemoryWriteStatus, MessageRecord, NewCronJobRecord, NewCronRunRecord, NewProjectItem,
     NewSession, ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord,
-    ResolveApprovalRequest, Result, ServerError, SessionEvent, SessionRecord,
-    SessionSummaryRecord, Store,
+    ResolveApprovalRequest, Result, ServerError, SessionEvent, SessionRecord, SessionSummaryRecord,
+    Store,
 };
 
 struct ClaimFailureStore;
@@ -94,10 +94,7 @@ impl Store for ClaimFailureStore {
         panic!("unused store method upsert_profile_fact")
     }
 
-    async fn upsert_recall_chunk(
-        &self,
-        _chunk: RecallChunkRecord,
-    ) -> Result<RecallChunkRecord> {
+    async fn upsert_recall_chunk(&self, _chunk: RecallChunkRecord) -> Result<RecallChunkRecord> {
         panic!("unused store method upsert_recall_chunk")
     }
 
@@ -138,10 +135,7 @@ impl Store for ClaimFailureStore {
         panic!("unused store method enqueue_dream")
     }
 
-    async fn dream_queue_for_session(
-        &self,
-        _session_id: Uuid,
-    ) -> Result<Vec<DreamQueueRecord>> {
+    async fn dream_queue_for_session(&self, _session_id: Uuid) -> Result<Vec<DreamQueueRecord>> {
         panic!("unused store method dream_queue_for_session")
     }
 
@@ -1704,8 +1698,7 @@ async fn completed_dream_rerun_does_not_duplicate_skill_proposals() {
         events
             .iter()
             .filter(|event| {
-                event.event_type == "write_proposal"
-                    && event.payload_json["kind"] == json!("skill")
+                event.event_type == "write_proposal" && event.payload_json["kind"] == json!("skill")
             })
             .count(),
         2

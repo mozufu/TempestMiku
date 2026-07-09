@@ -11,8 +11,8 @@ use tm_memory::{
 
 use crate::memory::{MemoryRecordRef, MemoryWriteProposal, MemoryWriteStatus};
 use crate::{
-    ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, CodingEventSink, Result,
-    Store, StoreCodingEventSink,
+    ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, CodingEventSink, Result, Store,
+    StoreCodingEventSink,
 };
 
 use super::util::{

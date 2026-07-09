@@ -95,6 +95,26 @@ HTTP/SSE, sends discrete POST controls, and keeps execution on the server.
 For an emulator build, the app defaults to `http://10.0.2.2:3000`; override that target with
 `MIKU_SERVER_URL` at build time or from the in-app More -> Server target action.
 
+For a physical Android device, bind `tm-server` to a reachable interface and publish the URL that the
+phone should store:
+
+```sh
+TM_SERVER_ADDR=0.0.0.0:8787 \
+TM_PUBLIC_BASE_URL=http://<lan-or-tailnet-host>:8787 \
+nix develop --command cargo run -p tm-server
+```
+
+Then open the pairing page from a desktop browser:
+
+```text
+http://<lan-or-tailnet-host>:8787/pair
+```
+
+Scan the QR code or tap the `tempestmiku://pair?server=...` link from Android. The app stores the
+server URL, clears the old session cursor when the target changes, and reconnects to the same
+HTTP/SSE API used by Web/PWA. If the page shows a loopback warning, set `TM_PUBLIC_BASE_URL` to the
+LAN or tailnet address rather than `127.0.0.1`, `localhost`, or the emulator-only `10.0.2.2`.
+
 ```sh
 cd clients/miku_flutter/android
 nix develop --command ./gradlew \

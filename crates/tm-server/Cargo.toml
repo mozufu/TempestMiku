@@ -31,6 +31,7 @@ tokio-postgres.workspace = true
 bytes.workspace = true
 sha2.workspace = true
 hex.workspace = true
+qrcode.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 dotenvy.workspace = true

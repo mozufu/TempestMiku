@@ -11,6 +11,8 @@ class MikuHomePage extends StatefulWidget {
 
 class _MikuHomePageState extends State<MikuHomePage>
     with SingleTickerProviderStateMixin {
+  static const _pairingChannel = MethodChannel('dev.tempestmiku/pairing');
+
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final List<ApprovalPrompt> _approvals = [];
@@ -44,11 +46,13 @@ class _MikuHomePageState extends State<MikuHomePage>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
-    unawaited(_ensureSession());
+    _installPairingLinkHandler();
+    unawaited(_boot());
   }
 
   @override
   void dispose() {
+    _pairingChannel.setMethodCallHandler(null);
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _sub?.cancel();
@@ -64,6 +68,64 @@ class _MikuHomePageState extends State<MikuHomePage>
       widget.client is ServerTargetClient
           ? widget.client as ServerTargetClient
           : null;
+
+  Future<void> _boot() async {
+    final handled = await _handleInitialPairingLink();
+    if (!handled) {
+      await _ensureSession();
+    }
+  }
+
+  void _installPairingLinkHandler() {
+    if (kIsWeb || _serverTargetClient == null) return;
+    _pairingChannel.setMethodCallHandler((call) async {
+      if (call.method != 'link') return null;
+      final rawLink = call.arguments;
+      if (rawLink is String && rawLink.trim().isNotEmpty) {
+        await _applyPairingLink(rawLink);
+      }
+      return null;
+    });
+  }
+
+  Future<bool> _handleInitialPairingLink() async {
+    if (kIsWeb || _serverTargetClient == null) return false;
+    try {
+      final rawLink = await _pairingChannel.invokeMethod<String>('initialLink');
+      if (rawLink == null || rawLink.trim().isEmpty) return false;
+      return _applyPairingLink(rawLink);
+    } on MissingPluginException {
+      return false;
+    } catch (err) {
+      _showSnack(_copy.pairingLinkFailed(err));
+      return false;
+    }
+  }
+
+  Future<bool> _applyPairingLink(String rawLink) async {
+    final client = _serverTargetClient;
+    if (client == null) return false;
+    try {
+      final target = pairingServerBaseUrlFromLink(rawLink);
+      await _setServerTargetAndReconnect(
+        client,
+        target,
+        successMessage: _copy.pairedToServer(target),
+      );
+      return true;
+    } catch (err) {
+      _showSnack(_copy.pairingLinkFailed(err));
+      return false;
+    }
+  }
+
+  void _showSnack(String text) {
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    });
+  }
 
   // ── Session ────────────────────────────────────────────────────────────────
 
@@ -1076,30 +1138,42 @@ class _MikuHomePageState extends State<MikuHomePage>
     final trimmed = value?.trim();
     if (trimmed == null || trimmed.isEmpty) return;
     try {
-      await client.setServerBaseUrl(trimmed);
-      await _sub?.cancel();
-      _sub = null;
-      _sessionFuture = null;
-      if (mounted) {
-        setState(() {
-          _sessionId = null;
-          _lastEventId = null;
-          _status = 'connecting';
-          _approvals.clear();
-          _memoryProposals.clear();
-          _rounds.clear();
-          _nextActions.clear();
-          _projectStatus = '';
-          _driveFeed = null;
-          _driveError = '';
-        });
-      }
-      await _connectSession();
+      await _setServerTargetAndReconnect(client, trimmed);
     } catch (err) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(copy.serverTargetFailed(err))),
       );
+    }
+  }
+
+  Future<void> _setServerTargetAndReconnect(
+    ServerTargetClient client,
+    String target, {
+    String? successMessage,
+  }) async {
+    await client.setServerBaseUrl(target);
+    await _sub?.cancel();
+    _sub = null;
+    _sessionFuture = null;
+    if (mounted) {
+      setState(() {
+        _sessionId = null;
+        _lastEventId = null;
+        _status = 'connecting';
+        _canSend = false;
+        _approvals.clear();
+        _memoryProposals.clear();
+        _rounds.clear();
+        _nextActions.clear();
+        _projectStatus = '';
+        _driveFeed = null;
+        _driveError = '';
+      });
+    }
+    await _connectSession();
+    if (successMessage != null) {
+      _showSnack(successMessage);
     }
   }
 

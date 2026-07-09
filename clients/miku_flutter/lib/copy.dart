@@ -179,6 +179,9 @@ class _UiCopy {
   String get modeSettings => pick('Mode settings', '模式與鎖定');
   String get serverTarget => pick('Server target', 'Server 目標');
   String get serverUrl => pick('Server URL', 'Server URL');
+  String pairedToServer(String url) => pick('Paired to $url', '已配對到 $url');
+  String pairingLinkFailed(Object error) =>
+      pick('Could not use pairing link: $error', '配對連結無法使用：$error');
   String serverTargetFailed(Object error) =>
       pick('Could not update server target: $error', '更新 Server 目標失敗：$error');
   String get previewTruncated => pick('Preview truncated', '預覽已截斷');

@@ -79,6 +79,7 @@ mod approvals;
 mod events;
 mod mode_suggest;
 pub(crate) mod modes;
+pub(crate) mod pairing;
 mod projects;
 mod resources;
 mod sessions;
@@ -312,6 +313,8 @@ where
 {
     Router::<AppState<S, M, C>>::new()
         .route("/health", get(health))
+        .route("/pair", get(pairing::page))
+        .route("/pair/qr.svg", get(pairing::qr_svg))
         .route("/modes", get(modes::list_modes::<S, M, C>))
         .route(
             "/sessions",

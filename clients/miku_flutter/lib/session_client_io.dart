@@ -522,21 +522,7 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
   }
 
   String _normalizeServerBaseUrl(String value) {
-    var text = value.trim();
-    if (text.isEmpty) {
-      throw const FormatException('server target is empty');
-    }
-    if (!text.contains('://')) {
-      text = 'http://$text';
-    }
-    final uri = Uri.parse(text);
-    if (!uri.hasScheme || uri.host.isEmpty) {
-      throw const FormatException('server target must include a host');
-    }
-    final normalized = uri.replace(query: '', fragment: '').toString();
-    return normalized.endsWith('/')
-        ? normalized.substring(0, normalized.length - 1)
-        : normalized;
+    return normalizeMikuServerBaseUrl(value);
   }
 
   String? _nullableString(Object? value) {

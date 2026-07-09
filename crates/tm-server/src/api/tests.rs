@@ -504,5 +504,6 @@ mod auth;
 mod coding_native;
 mod core_flow;
 mod memory;
+mod pairing;
 mod project_resources;
 mod router;

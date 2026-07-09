@@ -1,12 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:miku_flutter/main.dart';
 import 'package:miku_flutter/ratex_formula.dart';
+import 'package:miku_flutter/session_client_io.dart' as io_client;
 import 'package:miku_flutter/session_client_stub.dart';
 import 'package:miku_flutter/session_models.dart';
 
 void main() {
+  test('pairing deep links parse and normalize server targets', () {
+    expect(
+      pairingServerBaseUrlFromLink(
+        'tempestmiku://pair?server=http%3A%2F%2F192.168.1.50%3A8787%2F',
+      ),
+      'http://192.168.1.50:8787',
+    );
+    expect(
+      pairingServerBaseUrlFromLink(
+        'tempestmiku://pair?server=miku.tailnet.test%3A8787',
+      ),
+      'http://miku.tailnet.test:8787',
+    );
+    expect(
+      () => pairingServerBaseUrlFromLink('tempestmiku://pair'),
+      throwsFormatException,
+    );
+    expect(
+      () => pairingServerBaseUrlFromLink(
+        'tempestmiku://pair?server=ftp%3A%2F%2Fexample.test',
+      ),
+      throwsFormatException,
+    );
+    expect(
+      () => pairingServerBaseUrlFromLink(
+        'https://example.test/pair?server=http%3A%2F%2Fhost',
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('native server target persistence clears the session cursor on change',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'tempestmiku.serverBaseUrl': 'http://old.example:8787',
+      'tempestmiku.sessionId': 'old-session',
+      'tempestmiku.lastEventId': '42',
+    });
+    final client = io_client.NativeMikuSessionClient();
+    await client.setServerBaseUrl('new.example:8787/');
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('tempestmiku.serverBaseUrl'),
+        'http://new.example:8787');
+    expect(prefs.getString('tempestmiku.sessionId'), isNull);
+    expect(prefs.getString('tempestmiku.lastEventId'), isNull);
+  });
+
   test('does not advance the persisted cursor past unresolved gates', () {
     expect(shouldRememberEventId('approval', const {}), isFalse);
     expect(

@@ -588,6 +588,39 @@ class ProjectPromotion {
   final int promotedCount;
 }
 
+String normalizeMikuServerBaseUrl(String value) {
+  var text = value.trim();
+  if (text.isEmpty) {
+    throw const FormatException('server target is empty');
+  }
+  if (!text.contains('://')) {
+    text = 'http://$text';
+  }
+  final uri = Uri.parse(text);
+  if (!uri.hasScheme || uri.host.isEmpty) {
+    throw const FormatException('server target must include a host');
+  }
+  if (uri.scheme != 'http' && uri.scheme != 'https') {
+    throw const FormatException('server target must use http or https');
+  }
+  final normalized = uri.replace(query: null, fragment: null).toString();
+  return normalized.endsWith('/')
+      ? normalized.substring(0, normalized.length - 1)
+      : normalized;
+}
+
+String pairingServerBaseUrlFromLink(String value) {
+  final uri = Uri.parse(value.trim());
+  if (uri.scheme != 'tempestmiku' || uri.host != 'pair') {
+    throw const FormatException('not a TempestMiku pairing link');
+  }
+  final server = uri.queryParameters['server']?.trim();
+  if (server == null || server.isEmpty) {
+    throw const FormatException('pairing link is missing a server target');
+  }
+  return normalizeMikuServerBaseUrl(server);
+}
+
 abstract class MikuSessionClient {
   Future<ModeCatalog> modeCatalog();
 

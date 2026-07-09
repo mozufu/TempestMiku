@@ -2224,6 +2224,9 @@ class _ResourceSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final title =
         (preview.title?.isNotEmpty == true) ? preview.title! : preview.uri;
+    final body =
+        preview.content.trim().isNotEmpty ? preview.content : preview.preview;
+    final isPreviewOnly = preview.content.trim().isEmpty;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -2264,7 +2267,7 @@ class _ResourceSheet extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: SelectableText(
-                  preview.preview.isEmpty ? copy.emptyPreview : preview.preview,
+                  body.isEmpty ? copy.emptyPreview : body,
                   style: TextStyle(
                     color: tok.text,
                     fontSize: 12,
@@ -2272,7 +2275,7 @@ class _ResourceSheet extends StatelessWidget {
                   ),
                 ),
               ),
-              if (preview.hasMore) ...[
+              if (isPreviewOnly && preview.hasMore) ...[
                 const SizedBox(height: 8),
                 Text(
                   copy.previewTruncated,

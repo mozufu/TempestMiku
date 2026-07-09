@@ -430,6 +430,7 @@ class _MikuHomePageState extends State<MikuHomePage>
               : _ActivityState.done,
           monospace: true,
           kind: 'cell',
+          resourceUris: _extractResources(shaped),
         );
       case 'actor_spawned':
         final actorId = _eventText(data, 'actor_id',
@@ -754,9 +755,10 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   List<String> _extractResources(String text) {
-    return RegExp(r'\b(?:artifact|workspace|linked|project|drive)://[^\s),\]]+')
+    return RegExp(
+            r'''\b(?:artifact|workspace|linked|project|drive)://[^\s),\]\}"']+''')
         .allMatches(text)
-        .map((m) => m.group(0)!.replaceAll(RegExp(r'[.。]+$'), ''))
+        .map((m) => _normalizeResourceUri(m.group(0)!))
         .toSet()
         .toList();
   }
@@ -783,13 +785,13 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   String _normalizeResourceUri(String uri) {
-    return uri.trim().replaceAll(RegExp(r'[.。]+$'), '');
+    return uri.trim().replaceAll(RegExp(r'''[.。,"'}]+$'''), '');
   }
 
   Future<void> _openResource(String uri) async {
     await _ensureSession();
     try {
-      final preview = await widget.client.previewResource(_sessionId!, uri);
+      final preview = await widget.client.resolveResource(_sessionId!, uri);
       if (!mounted) return;
       await showModalBottomSheet<void>(
         context: context,

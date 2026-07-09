@@ -257,6 +257,21 @@ class WebMikuSessionClient implements MikuSessionClient {
       'GET',
       '/sessions/$sessionId/resources/preview?$query',
     );
+    return _resourcePreviewFromJson(json, uri);
+  }
+
+  @override
+  Future<ResourcePreview> resolveResource(String sessionId, String uri) async {
+    final query = Uri(queryParameters: {'uri': uri}).query;
+    final json = await _request(
+      'GET',
+      '/sessions/$sessionId/resources/resolve?$query',
+    );
+    return _resourcePreviewFromJson(json, uri);
+  }
+
+  ResourcePreview _resourcePreviewFromJson(
+      Map<String, Object?> json, String uri) {
     return ResourcePreview(
       uri: json['uri'] as String? ?? uri,
       kind: json['kind'] as String? ?? '',
@@ -264,6 +279,7 @@ class WebMikuSessionClient implements MikuSessionClient {
       title: json['title'] as String?,
       sizeBytes: json['size_bytes'] as int? ?? json['sizeBytes'] as int? ?? 0,
       preview: json['preview'] as String? ?? '',
+      content: json['content'] as String? ?? '',
       hasMore: json['has_more'] as bool? ?? json['hasMore'] as bool? ?? false,
     );
   }

@@ -564,6 +564,7 @@ class ResourcePreview {
     required this.sizeBytes,
     required this.preview,
     required this.hasMore,
+    this.content = '',
     this.title,
   });
 
@@ -573,6 +574,7 @@ class ResourcePreview {
   final String? title;
   final int sizeBytes;
   final String preview;
+  final String content;
   final bool hasMore;
 }
 
@@ -625,6 +627,8 @@ abstract class MikuSessionClient {
   });
 
   Future<ResourcePreview> previewResource(String sessionId, String uri);
+
+  Future<ResourcePreview> resolveResource(String sessionId, String uri);
 
   Future<ProjectPromotion> promoteSession(
     String sessionId, {

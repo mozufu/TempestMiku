@@ -154,6 +154,25 @@ void main() {
     expect(find.textContaining('drive://projects/tempestmiku/research'),
         findsWidgets);
 
+    final activityResource = find.byKey(
+      const ValueKey(
+        'activity-resource:drive://projects/tempestmiku/research/p5-drive-workspace.md',
+      ),
+    );
+    expect(activityResource, findsWidgets);
+    await tester.ensureVisible(activityResource.first);
+    await tester.pump();
+    await tester.tap(activityResource.first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Scripted drive note'), findsOneWidget);
+    expect(find.textContaining('# Scripted drive note'), findsOneWidget);
+
+    await tester.tap(find.byType(ModalBarrier).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
     await tester.tap(find.bySemanticsLabel('Open drive feed'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
@@ -187,6 +206,46 @@ void main() {
       find.textContaining('Local citation corpus is ready.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('opens drive uri surfaced by a runtime cell result',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient(pauseBeforeFinal: true);
+    final session = await client.createSession();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'start runtime');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    client.emitEvent(
+      session.id,
+      const MikuEvent(
+        type: 'cell_result',
+        id: 'cell-result-drive-uri',
+        data: {
+          'shaped':
+              'stdout:\ndisplay: {"filedUri":"drive://projects/tempestmiku/research/p5-drive-workspace.md"}\n\nresult:\nnull',
+        },
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final resultResource = find.byKey(
+      const ValueKey(
+        'activity-resource:drive://projects/tempestmiku/research/p5-drive-workspace.md',
+      ),
+    );
+    expect(resultResource, findsOneWidget);
+    await tester.tap(resultResource);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Scripted drive note'), findsOneWidget);
+    expect(find.textContaining('# Scripted drive note'), findsOneWidget);
   });
 
   testWidgets('language switch toggles chrome without changing chat content',

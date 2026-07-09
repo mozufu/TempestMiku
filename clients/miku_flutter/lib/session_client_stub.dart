@@ -148,6 +148,10 @@ class ScriptedMikuClient implements MikuSessionClient {
     _pendingEvents.putIfAbsent(sessionId, () => []).add(event);
   }
 
+  void emitEvent(String sessionId, MikuEvent event) {
+    _controllers[sessionId]?.add(event);
+  }
+
   @override
   Future<List<SessionSummary>> listSessions({int limit = 30}) async {
     final ids = _sessions.keys.toList()
@@ -610,6 +614,23 @@ class ScriptedMikuClient implements MikuSessionClient {
       preview: 'Preview for $uri',
       hasMore: false,
     );
+  }
+
+  @override
+  Future<ResourcePreview> resolveResource(String sessionId, String uri) async {
+    if (uri.startsWith('drive://')) {
+      return ResourcePreview(
+        uri: uri,
+        kind: 'drive_document',
+        mime: 'text/markdown',
+        title: 'Scripted drive note',
+        sizeBytes: 128,
+        preview: 'Preview for $uri\n\nLocal citation corpus is ready.',
+        content: '# Scripted drive note\n\nLocal citation corpus is ready.',
+        hasMore: false,
+      );
+    }
+    return previewResource(sessionId, uri);
   }
 
   @override

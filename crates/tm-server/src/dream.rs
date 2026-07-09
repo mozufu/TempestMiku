@@ -5,9 +5,7 @@ mod util;
 mod worker;
 
 pub use config::{DreamModelRoles, DreamRedactionConfig, DreamSummaryCadence, DreamWorkerConfig};
-pub use worker::{
-    DreamWorkerDaemon, DreamWorkerDaemonHandle, ServerDreamWorker,
-};
+pub use worker::{DreamWorkerDaemon, DreamWorkerDaemonHandle, ServerDreamWorker};
 
 #[cfg(test)]
 mod tests;

@@ -13,6 +13,7 @@ class ScriptedMikuClient implements MikuSessionClient {
   final Map<String, DateTime> _updatedAt = {};
   final Map<String, List<SessionMessage>> _messages = {};
   final Map<String, List<MikuEvent>> _pendingEvents = {};
+  final Map<String, DriveFeed> _driveFeeds = {};
   final Map<String, String> _approvalSessions = {};
   final Map<String, String> _approvalProposals = {};
   final Map<String, String> _approvalBackends = {};
@@ -24,6 +25,7 @@ class ScriptedMikuClient implements MikuSessionClient {
   final List<String> overriddenModes = [];
   final List<List<String>> promotedResources = [];
   final List<String?> promotedSummaries = [];
+  int driveFeedRequests = 0;
   final Map<String, String> _pausedFinalTexts = {};
   int unlockCount = 0;
   int _nextId = 0;
@@ -107,6 +109,12 @@ class ScriptedMikuClient implements MikuSessionClient {
     _updatedAt[id] = now;
     _messages[id] = [];
     _pendingEvents[id] = [];
+    _driveFeeds[id] = DriveFeed(
+      recent: const [],
+      virtualDirs: _defaultDriveVirtualDirs(),
+      proposals: const [],
+      pendingApprovals: const [],
+    );
     _controllers[id] = StreamController<MikuEvent>.broadcast();
     _currentId = id;
     return session;
@@ -323,15 +331,23 @@ class ScriptedMikuClient implements MikuSessionClient {
         },
       ));
     }
-    final text = lower.contains('markdown')
-        ? '# P4 memo\n\n'
-            '> Proposal-first background work.\n\n'
-            '- **Keep approvals manual** for durable writes.\n'
-            '- [ ] Rebuild projections from the event log.\n\n'
-            'Use `write_proposal` before memory commit.'
-        : lower.contains('actor') || lower.contains('handoff')
-            ? 'Actor Worker0 completed child resource artifact://0'
-            : 'Miku heard: $content';
+    final wantsDriveWorkspace =
+        lower.contains('drive') || lower.contains('research');
+    if (wantsDriveWorkspace) {
+      _emitDriveWorkspace(sessionId, controller);
+    }
+    final text = wantsDriveWorkspace
+        ? 'Drive research workspace ready: '
+            'drive://projects/tempestmiku/research/p5-drive-workspace.md'
+        : lower.contains('markdown')
+            ? '# P4 memo\n\n'
+                '> Proposal-first background work.\n\n'
+                '- **Keep approvals manual** for durable writes.\n'
+                '- [ ] Rebuild projections from the event log.\n\n'
+                'Use `write_proposal` before memory commit.'
+            : lower.contains('actor') || lower.contains('handoff')
+                ? 'Actor Worker0 completed child resource artifact://0'
+                : 'Miku heard: $content';
     controller.add(MikuEvent(type: 'text', id: _eventId(), data: {
       'delta': text,
     }));
@@ -546,7 +562,45 @@ class ScriptedMikuClient implements MikuSessionClient {
   }
 
   @override
+  Future<DriveFeed> driveFeed(
+    String sessionId, {
+    int limit = 20,
+    String? project,
+  }) async {
+    driveFeedRequests++;
+    final feed = _driveFeeds[sessionId] ??
+        DriveFeed(
+          recent: const [],
+          virtualDirs: _defaultDriveVirtualDirs(),
+          proposals: const [],
+          pendingApprovals: const [],
+        );
+    if (project == null || project.trim().isEmpty) return feed;
+    final normalized = project.trim().toLowerCase();
+    return DriveFeed(
+      recent: feed.recent
+          .where((item) => item.project?.toLowerCase() == normalized)
+          .take(limit)
+          .toList(),
+      virtualDirs: feed.virtualDirs,
+      proposals: feed.proposals,
+      pendingApprovals: feed.pendingApprovals,
+    );
+  }
+
+  @override
   Future<ResourcePreview> previewResource(String sessionId, String uri) async {
+    if (uri.startsWith('drive://')) {
+      return ResourcePreview(
+        uri: uri,
+        kind: 'drive_document',
+        mime: 'text/markdown',
+        title: 'Scripted drive note',
+        sizeBytes: 128,
+        preview: 'Preview for $uri\n\nLocal citation corpus is ready.',
+        hasMore: false,
+      );
+    }
     return ResourcePreview(
       uri: uri,
       kind: 'text',
@@ -595,6 +649,209 @@ class ScriptedMikuClient implements MikuSessionClient {
       'handoff' => const ['oh-my-pi-handoff'],
       _ => const ['miku-voice', 'personal-assistant-state-capture'],
     };
+  }
+
+  void _emitDriveWorkspace(
+    String sessionId,
+    StreamController<MikuEvent> controller,
+  ) {
+    const path = 'projects/tempestmiku/research/p5-drive-workspace.md';
+    const uri = 'drive://projects/tempestmiku/research/p5-drive-workspace.md';
+    const movedFrom = 'inbox/raw-research.md';
+    const movedFromUri = 'drive://inbox/raw-research.md';
+    const proposalId = 'drive-proposal-scripted';
+    final item = DriveFeedItem(
+      uri: uri,
+      path: path,
+      title: 'P5 drive research notes',
+      docKind: 'note',
+      project: 'TempestMiku',
+      tags: const ['research', 'p5'],
+      contentHash: 'sha256:scripted-drive',
+      summary: 'Local drive corpus for P5 research with bounded citations.',
+      sizeBytes: 128,
+      updatedAt: DateTime.now().toIso8601String(),
+    );
+    const proposal = DriveOrganizerProposal(
+      proposalId: proposalId,
+      action: 'move',
+      status: 'pending',
+      sourcePath: movedFrom,
+      sourceUri: movedFromUri,
+      proposedPath: path,
+      proposedUri: uri,
+      confidence: 0.91,
+      previewTitle: 'Move drive document',
+      previewSubtitle:
+          'inbox/raw-research.md -> projects/tempestmiku/research/p5-drive-workspace.md',
+      previewSnippet: 'Organizer found the project-scoped research note.',
+    );
+    _driveFeeds[sessionId] = DriveFeed(
+      recent: [item],
+      virtualDirs: _defaultDriveVirtualDirs(),
+      proposals: [proposal],
+      pendingApprovals: const [],
+    );
+
+    Map<String, Object?> entryPayload(String action, String title) => {
+          'action': action,
+          'path': path,
+          'uri': uri,
+          'title': item.title,
+          'docKind': item.docKind,
+          'project': item.project,
+          'tags': item.tags,
+          'mime': 'text/markdown',
+          'sizeBytes': item.sizeBytes,
+          'contentHash': item.contentHash,
+          'preview': {
+            'title': title,
+            'subtitle': path,
+            'snippet': item.summary,
+          },
+          'resourceRefs': [
+            {
+              'role': 'document',
+              'uri': uri,
+              'kind': 'drive_document',
+              'title': item.title,
+              'path': path,
+            },
+          ],
+        };
+
+    final proposalPayload = {
+      'proposalId': proposalId,
+      'action': 'move',
+      'status': 'pending',
+      'sourcePath': movedFrom,
+      'sourceUri': movedFromUri,
+      'proposedPath': path,
+      'proposedUri': uri,
+      'confidence': 0.91,
+      'preview': {
+        'title': 'Move drive document',
+        'subtitle': '$movedFrom -> $path',
+        'snippet': 'Organizer found the project-scoped research note.',
+      },
+      'resourceRefs': [
+        {
+          'role': 'source',
+          'uri': movedFromUri,
+          'kind': 'drive_document',
+          'title': 'raw-research.md',
+        },
+        {
+          'role': 'proposed',
+          'uri': uri,
+          'kind': 'drive_document',
+          'title': 'p5-drive-workspace.md',
+        },
+      ],
+    };
+
+    controller.add(MikuEvent(
+      type: 'drive_linked',
+      id: _eventId(),
+      data: const {
+        'action': 'link',
+        'alias': 'tempestmiku',
+        'linkedUri': 'linked://tempestmiku',
+        'mode': 'rw',
+        'project': 'TempestMiku',
+        'memoryScope': 'project:tempestmiku',
+        'preview': {
+          'title': 'Linked project folder',
+          'subtitle': 'TempestMiku -> linked://tempestmiku',
+          'snippet': '/Users/brian/TempestMiku',
+        },
+        'resourceRefs': [
+          {
+            'role': 'linked',
+            'uri': 'linked://tempestmiku',
+            'kind': 'linked_folder',
+            'title': 'TempestMiku',
+          },
+        ],
+      },
+    ));
+    controller.add(MikuEvent(
+      type: 'drive_put',
+      id: _eventId(),
+      data: entryPayload('put', 'Filed drive document'),
+    ));
+    controller.add(MikuEvent(
+      type: 'drive_tagged',
+      id: _eventId(),
+      data: entryPayload('tag', 'Tagged drive document'),
+    ));
+    controller.add(MikuEvent(
+      type: 'drive_moved',
+      id: _eventId(),
+      data: {
+        ...entryPayload('move', 'Moved drive document'),
+        'fromPath': movedFrom,
+        'fromUri': movedFromUri,
+        'toPath': path,
+        'toUri': uri,
+      },
+    ));
+    controller.add(MikuEvent(
+      type: 'drive_organizer_started',
+      id: _eventId(),
+      data: const {
+        'apply': false,
+        'tier': 'conservative',
+        'autoApplyRules': 0,
+      },
+    ));
+    controller.add(MikuEvent(
+      type: 'drive_organizer_completed',
+      id: _eventId(),
+      data: {
+        'apply': false,
+        'tier': 'conservative',
+        'runId': 'scripted-run',
+        'proposalCount': 1,
+        'proposals': [proposalPayload],
+        'resourceRefs': proposalPayload['resourceRefs'],
+      },
+    ));
+  }
+
+  static List<DriveVirtualDir> _defaultDriveVirtualDirs() {
+    return const [
+      DriveVirtualDir(
+        uri: 'drive://recent',
+        name: 'recent',
+        kind: 'virtual_dir',
+        title: 'Recent documents',
+      ),
+      DriveVirtualDir(
+        uri: 'drive://by-project',
+        name: 'by-project',
+        kind: 'virtual_dir',
+        title: 'Documents by project',
+      ),
+      DriveVirtualDir(
+        uri: 'drive://by-type',
+        name: 'by-type',
+        kind: 'virtual_dir',
+        title: 'Documents by type',
+      ),
+      DriveVirtualDir(
+        uri: 'drive://by-tag',
+        name: 'by-tag',
+        kind: 'virtual_dir',
+        title: 'Documents by tag',
+      ),
+      DriveVirtualDir(
+        uri: 'drive://by-date',
+        name: 'by-date',
+        kind: 'virtual_dir',
+        title: 'Documents by date',
+      ),
+    ];
   }
 
   MikuSession _sessionForMode(

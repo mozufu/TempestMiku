@@ -107,6 +107,14 @@ class WebMikuSessionClient implements MikuSessionClient {
       'actor_failed',
       'actor_cancelled',
       'write_proposal',
+      'drive_put',
+      'drive_linked',
+      'drive_unlinked',
+      'drive_moved',
+      'drive_tagged',
+      'drive_organizer_started',
+      'drive_organizer_completed',
+      'drive_organizer_failed',
       'error',
     ]) {
       source.addEventListener(type, (Event event) {
@@ -221,6 +229,25 @@ class WebMikuSessionClient implements MikuSessionClient {
           .where((text) => text.isNotEmpty)
           .toList(),
     );
+  }
+
+  @override
+  Future<DriveFeed> driveFeed(
+    String sessionId, {
+    int limit = 20,
+    String? project,
+  }) async {
+    final trimmedProject = project?.trim();
+    final query = Uri(
+      queryParameters: {
+        'limit': '$limit',
+        if (trimmedProject != null && trimmedProject.isNotEmpty)
+          'project': trimmedProject,
+      },
+    ).query;
+    final json =
+        await _request('GET', '/sessions/$sessionId/drive/feed?$query');
+    return DriveFeed.fromJson(json);
   }
 
   @override

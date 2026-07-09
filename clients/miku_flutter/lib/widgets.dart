@@ -521,13 +521,19 @@ class _MikuBubble extends StatelessWidget {
                                       color: accent,
                                     ),
                                     const SizedBox(width: 6),
-                                    Text(
-                                      uri,
-                                      style: TextStyle(
-                                        color: accent,
-                                        fontSize: 11.5,
-                                        fontWeight: FontWeight.w700,
-                                        fontFamily: 'monospace',
+                                    ConstrainedBox(
+                                      constraints:
+                                          const BoxConstraints(maxWidth: 260),
+                                      child: Text(
+                                        uri,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: accent,
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w700,
+                                          fontFamily: 'monospace',
+                                        ),
                                       ),
                                     ),
                                     const SizedBox(width: 4),
@@ -1609,13 +1615,19 @@ class _ActivityRow extends StatelessWidget {
                                       color: accent,
                                     ),
                                     const SizedBox(width: 5),
-                                    Text(
-                                      uri,
-                                      style: TextStyle(
-                                        color: accent,
-                                        fontSize: 10.8,
-                                        fontWeight: FontWeight.w800,
-                                        fontFamily: 'monospace',
+                                    ConstrainedBox(
+                                      constraints:
+                                          const BoxConstraints(maxWidth: 230),
+                                      child: Text(
+                                        uri,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: accent,
+                                          fontSize: 10.8,
+                                          fontWeight: FontWeight.w800,
+                                          fontFamily: 'monospace',
+                                        ),
                                       ),
                                     ),
                                     const SizedBox(width: 4),

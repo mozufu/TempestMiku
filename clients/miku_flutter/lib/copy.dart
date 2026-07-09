@@ -21,6 +21,8 @@ class _UiCopy {
 
   String get sessions => pick('Sessions', '歷史');
   String get openSessions => pick('Open sessions', '開啟歷史');
+  String get driveFeed => pick('Drive', 'Drive');
+  String get openDriveFeed => pick('Open drive feed', '開啟 Drive 動態');
   String get more => pick('More', '更多');
   String get openMore => pick('Open more actions', '開啟更多操作');
   String get close => pick('Close', '關閉');
@@ -152,6 +154,26 @@ class _UiCopy {
   String get darkMode => pick('Dark mode', '深色模式');
   String get refreshProject => pick('Refresh project', '重新整理專案');
   String get promoteSession => pick('Promote Session', '推廣 Session');
+  String get refreshDrive => pick('Refresh Drive', '重新整理 Drive');
+  String get closeDriveFeed => pick('Close drive feed', '關閉 Drive 動態');
+  String get driveFeedHelper => pick(
+      'Recent docs, virtual folders, and organizer proposals',
+      '最近文件、虛擬資料夾與整理提案');
+  String get loadingDriveFeed =>
+      pick('Loading drive feed...', '載入 Drive 動態...');
+  String get noDriveFeed => pick('No drive documents yet', '還沒有 Drive 文件');
+  String driveFeedLoadFailed(Object error) =>
+      pick('Could not load Drive: $error', 'Drive 讀取失敗：$error');
+  String get recentDocuments => pick('Recent documents', '最近文件');
+  String get virtualDirs => pick('Virtual folders', '虛擬資料夾');
+  String get organizerProposals => pick('Organizer proposals', '整理提案');
+  String get pendingDriveApprovals =>
+      pick('Pending drive approvals', '待核可 Drive 操作');
+  String driveDocs(int count) => pick('$count docs', '$count 份文件');
+  String driveProposals(int count) => pick('$count proposals', '$count 個提案');
+  String driveConfidence(double value) => pick(
+      '${(value * 100).round()}% confidence', '${(value * 100).round()}% 信心');
+  String driveTags(int count) => pick('$count tags', '$count 個標籤');
   String get modeSettings => pick('Mode settings', '模式與鎖定');
   String get previewTruncated => pick('Preview truncated', '預覽已截斷');
   String get emptyPreview => pick('(empty preview)', '（空白預覽）');

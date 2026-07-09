@@ -92,6 +92,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   final List<String> _nextActions = [];
   final List<_ConversationRound> _rounds = [];
   final List<_Mode> _modes = [];
+  DriveFeed? _driveFeed;
 
   Future<void>? _sessionFuture;
   StreamSubscription<MikuEvent>? _sub;
@@ -101,7 +102,9 @@ class _MikuHomePageState extends State<MikuHomePage>
   String _defaultModeId = '';
   String _status = 'idle';
   String _projectStatus = '';
+  String _driveError = '';
   bool _isDark = true;
+  bool _driveLoading = false;
   bool _modeLocked = false;
   bool _canSend = false;
   _UiLanguage _language = _UiLanguage.en;
@@ -182,6 +185,9 @@ class _MikuHomePageState extends State<MikuHomePage>
       _status = 'connected';
       _approvals.clear();
       _memoryProposals.clear();
+      _driveFeed = null;
+      _driveError = '';
+      _driveLoading = false;
       _rounds
         ..clear()
         ..addAll(_roundsFromMessages(messages));
@@ -196,6 +202,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       if (mounted) setState(() => _status = 'reconnecting');
     });
     await _loadProject();
+    await _loadDriveFeed(silent: true);
     if (mounted) setState(() {});
     _scrollToBottom();
   }
@@ -268,6 +275,9 @@ class _MikuHomePageState extends State<MikuHomePage>
   void _onEvent(MikuEvent e) {
     _rememberEventCursor(e);
     setState(() => _applyEvent(e));
+    if (_shouldRefreshDriveFeed(e)) {
+      unawaited(_loadDriveFeed(silent: true));
+    }
     _scrollToBottom();
   }
 
@@ -501,6 +511,56 @@ class _MikuHomePageState extends State<MikuHomePage>
           kind: 'actor',
           actorId: actorId,
         );
+      case 'write_proposal':
+        if (_eventText(data, 'kind') != 'drive') return null;
+        final preview = _eventMap(data['preview']);
+        return _ActivityItem(
+          icon: Icons.rule_folder_outlined,
+          title: _eventText(preview ?? const <String, Object?>{}, 'title',
+              fallback: 'Drive organizer proposal'),
+          detail: _joinedDetail([
+            _eventText(preview ?? const <String, Object?>{}, 'subtitle'),
+            _eventText(preview ?? const <String, Object?>{}, 'snippet'),
+          ]),
+          state: _ActivityState.info,
+          kind: 'drive',
+          resourceUris: _resourceUrisFromEvent(data),
+        );
+      case 'drive_put':
+      case 'drive_moved':
+      case 'drive_tagged':
+      case 'drive_linked':
+      case 'drive_unlinked':
+        return _driveActivityFromEvent(e);
+      case 'drive_organizer_started':
+        final tier = _eventText(data, 'tier', fallback: 'conservative');
+        final apply = data['apply'] == true ? 'apply' : 'propose';
+        return _ActivityItem(
+          icon: Icons.rule_folder_outlined,
+          title: 'Drive organizer started',
+          detail: '$tier · $apply',
+          state: _ActivityState.running,
+          kind: 'drive',
+        );
+      case 'drive_organizer_completed':
+        return _ActivityItem(
+          icon: Icons.task_alt,
+          title: 'Drive organizer completed',
+          detail: _driveOrganizerDetail(data),
+          state: _ActivityState.done,
+          kind: 'drive',
+          resourceUris: _resourceUrisFromEvent(data),
+        );
+      case 'drive_organizer_failed':
+        return _ActivityItem(
+          icon: Icons.error_outline,
+          title: 'Drive organizer failed',
+          detail:
+              _eventText(data, 'error', fallback: _driveOrganizerDetail(data)),
+          state: _ActivityState.failed,
+          kind: 'drive',
+          resourceUris: _resourceUrisFromEvent(data),
+        );
     }
     return null;
   }
@@ -616,6 +676,16 @@ class _MikuHomePageState extends State<MikuHomePage>
         _memoryProposals.any((proposal) => proposal.proposalId == proposalId);
   }
 
+  List<ApprovalPrompt> get _driveApprovals =>
+      _approvals.where(_isDriveApproval).toList();
+
+  bool _isDriveApproval(ApprovalPrompt approval) {
+    if (approval.action.startsWith('drive.')) return true;
+    if (approval.backend == 'drive') return true;
+    final capability = approval.scope['capability']?.toString() ?? '';
+    return capability.startsWith('drive.');
+  }
+
   Future<void> _loadProject() async {
     final id = _sessionId;
     if (id == null) return;
@@ -627,6 +697,38 @@ class _MikuHomePageState extends State<MikuHomePage>
         ..clear()
         ..addAll(ov.nextActions);
     });
+  }
+
+  Future<DriveFeed> _fetchDriveFeed() async {
+    final id = _sessionId;
+    if (id == null) return DriveFeed.empty;
+    return widget.client.driveFeed(id, limit: 12);
+  }
+
+  Future<void> _loadDriveFeed({bool silent = false}) async {
+    final id = _sessionId;
+    if (id == null) return;
+    if (!silent && mounted) {
+      setState(() {
+        _driveLoading = true;
+        _driveError = '';
+      });
+    }
+    try {
+      final feed = await widget.client.driveFeed(id, limit: 12);
+      if (!mounted || _sessionId != id) return;
+      setState(() {
+        _driveFeed = feed;
+        _driveLoading = false;
+        _driveError = '';
+      });
+    } catch (err) {
+      if (!mounted || _sessionId != id) return;
+      setState(() {
+        _driveLoading = false;
+        _driveError = '$err';
+      });
+    }
   }
 
   Future<void> _promoteSession() async {
@@ -652,7 +754,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   List<String> _extractResources(String text) {
-    return RegExp(r'\b(?:artifact|workspace|linked|project)://[^\s),\]]+')
+    return RegExp(r'\b(?:artifact|workspace|linked|project|drive)://[^\s),\]]+')
         .allMatches(text)
         .map((m) => m.group(0)!.replaceAll(RegExp(r'[.。]+$'), ''))
         .toSet()
@@ -902,6 +1004,51 @@ class _MikuHomePageState extends State<MikuHomePage>
     );
   }
 
+  void _showDriveSheet() {
+    final tok = _tok;
+    unawaited(_loadDriveFeed(silent: true));
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: tok.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
+        ),
+        child: _DriveFeedSheet(
+          tok: tok,
+          copy: _copy,
+          accent: _accent,
+          initialFeed: _driveFeed,
+          initialError: _driveError,
+          initialLoading: _driveLoading,
+          approvals: _driveApprovals,
+          loadFeed: () async {
+            final feed = await _fetchDriveFeed();
+            if (mounted) {
+              setState(() {
+                _driveFeed = feed;
+                _driveError = '';
+                _driveLoading = false;
+              });
+            }
+            return feed;
+          },
+          onOpenResource: _openResource,
+          onOpenApproval: (approval) {
+            Navigator.pop(sheetContext);
+            Timer(const Duration(milliseconds: 320), () {
+              if (mounted) _showApprovalSheet(approval);
+            });
+          },
+        ),
+      ),
+    );
+  }
+
   void _showOverflowSheet() {
     final tok = _tok;
     showModalBottomSheet<void>(
@@ -923,6 +1070,12 @@ class _MikuHomePageState extends State<MikuHomePage>
         onPromote: () {
           Navigator.pop(context);
           _promoteSession();
+        },
+        onDrive: () {
+          Navigator.pop(context);
+          Timer(const Duration(milliseconds: 320), () {
+            if (mounted) _showDriveSheet();
+          });
         },
         onThemeToggle: () {
           Navigator.pop(context);
@@ -1060,6 +1213,16 @@ class _MikuHomePageState extends State<MikuHomePage>
                 },
               ),
               SizedBox(width: compact ? 6 : 8),
+              if (!compact) ...[
+                _TokIconBtn(
+                  tok: tok,
+                  icon: Icons.folder_outlined,
+                  tooltip: copy.driveFeed,
+                  semanticLabel: copy.openDriveFeed,
+                  onTap: _showDriveSheet,
+                ),
+                SizedBox(width: compact ? 6 : 8),
+              ],
               _TokIconBtn(
                 tok: tok,
                 icon: Icons.history,
@@ -1331,6 +1494,81 @@ String _eventText(
   final value = data[key] ?? (camelKey == null ? null : data[camelKey]);
   final text = value?.toString() ?? '';
   return text.isEmpty ? fallback : text;
+}
+
+Map<String, Object?>? _eventMap(Object? value) {
+  if (value is Map<String, Object?>) return value;
+  if (value is Map) return value.cast<String, Object?>();
+  return null;
+}
+
+bool _shouldRefreshDriveFeed(MikuEvent e) {
+  if (e.type.startsWith('drive_')) return true;
+  return e.type == 'write_proposal' && _eventText(e.data, 'kind') == 'drive';
+}
+
+_ActivityItem? _driveActivityFromEvent(MikuEvent e) {
+  final data = e.data;
+  final preview = _eventMap(data['preview']) ?? const <String, Object?>{};
+  final title = _eventText(
+    preview,
+    'title',
+    fallback: switch (e.type) {
+      'drive_put' => 'Filed drive document',
+      'drive_moved' => 'Moved drive document',
+      'drive_tagged' => 'Tagged drive document',
+      'drive_linked' => 'Linked project folder',
+      'drive_unlinked' => 'Unlinked project folder',
+      _ => 'Drive updated',
+    },
+  );
+  return _ActivityItem(
+    icon: switch (e.type) {
+      'drive_linked' => Icons.folder_shared_outlined,
+      'drive_unlinked' => Icons.link_off,
+      'drive_moved' => Icons.drive_file_move_outlined,
+      'drive_tagged' => Icons.label_outline,
+      _ => Icons.insert_drive_file_outlined,
+    },
+    title: title,
+    detail: _joinedDetail([
+      _eventText(preview, 'subtitle', fallback: _eventText(data, 'path')),
+      _eventText(preview, 'snippet'),
+    ]),
+    state: _ActivityState.done,
+    kind: 'drive',
+    resourceUris: _resourceUrisFromEvent(data),
+  );
+}
+
+String _driveOrganizerDetail(Map<String, Object?> data) {
+  final count = (data['proposalCount'] ?? data['proposal_count'])?.toString();
+  final tier = _eventText(data, 'tier');
+  final apply = data['apply'] == true ? 'apply' : 'propose';
+  final parts = [
+    if (count != null && count.isNotEmpty) '$count proposals',
+    if (tier.isNotEmpty) tier,
+    apply,
+  ];
+  return parts.join(' · ');
+}
+
+List<String> _resourceUrisFromEvent(Map<String, Object?> data) {
+  final refs =
+      ((data['resourceRefs'] ?? data['resource_refs']) as List?) ?? const [];
+  final uris = <String>[];
+  for (final ref in refs.whereType<Map>()) {
+    final uri = _eventText(ref.cast<String, Object?>(), 'uri');
+    if (uri.isNotEmpty && !uris.contains(uri)) uris.add(uri);
+  }
+  return uris;
+}
+
+String _joinedDetail(List<String> parts) {
+  return parts
+      .map((part) => part.trim())
+      .where((part) => part.isNotEmpty)
+      .join('\n');
 }
 
 List<_AgentStatus> _agentStatuses(List<_ActivityItem> activities) {

@@ -22,6 +22,7 @@ void main() {
       ),
       isTrue,
     );
+    expect(shouldRememberEventId('drive_put', const {}), isTrue);
   });
 
   testWidgets('compact mobile chrome stays readable at 390px',
@@ -96,6 +97,16 @@ void main() {
     expect(find.text('Pending approval · drive.put inbox/approval-drop.md'),
         findsOneWidget);
 
+    await tester.tap(find.bySemanticsLabel('Open drive feed'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Pending drive approvals'), findsOneWidget);
+    expect(find.text('drive.put inbox/approval-drop.md'), findsOneWidget);
+    expect(find.text('drive.put inbox/blocked-drop.md'), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel('Close drive feed'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
     await tester.ensureVisible(approvalCard);
     await tester.tap(approvalCard);
     await tester.pump();
@@ -121,6 +132,61 @@ void main() {
 
     expect(client.resolvedApprovals, contains('approval-drive-deny:deny'));
     expect(denyCard, findsNothing);
+  });
+
+  testWidgets('dogfoods drive research feed from remote control UI',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(
+      find.byType(EditableText),
+      'research drive workspace for p5',
+    );
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+
+    expect(find.text('Drive organizer completed'), findsWidgets);
+    expect(find.textContaining('drive://projects/tempestmiku/research'),
+        findsWidgets);
+
+    await tester.tap(find.bySemanticsLabel('Open drive feed'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(client.driveFeedRequests, greaterThan(0));
+    expect(find.text('Drive'), findsWidgets);
+    expect(find.text('Recent documents'), findsWidgets);
+    expect(find.text('P5 drive research notes'), findsOneWidget);
+    expect(find.text('Organizer proposals'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'inbox/raw-research.md -> projects/tempestmiku/research',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Virtual folders'), findsOneWidget);
+
+    final row = find.byKey(
+      const ValueKey(
+        'drive-feed:drive://projects/tempestmiku/research/p5-drive-workspace.md',
+      ),
+    );
+    await tester.ensureVisible(row);
+    await tester.pump();
+    await tester.tap(row);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Scripted drive note'), findsOneWidget);
+    expect(
+      find.textContaining('Local citation corpus is ready.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('language switch toggles chrome without changing chat content',

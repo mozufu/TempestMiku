@@ -559,4 +559,3 @@ class _MikuBubble extends StatelessWidget {
     );
   }
 }
-

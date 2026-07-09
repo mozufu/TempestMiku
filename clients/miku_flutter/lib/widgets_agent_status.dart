@@ -594,4 +594,3 @@ class _StatusGlyph extends StatelessWidget {
     return Icon(icon, color: color, size: 15);
   }
 }
-

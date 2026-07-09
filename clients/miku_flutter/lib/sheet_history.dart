@@ -399,4 +399,3 @@ class _Toggle extends StatelessWidget {
     );
   }
 }
-

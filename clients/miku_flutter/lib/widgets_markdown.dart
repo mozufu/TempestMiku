@@ -583,4 +583,3 @@ _InlineToken? _inlineMathTokenAt(String text, int index) {
   }
   return null;
 }
-

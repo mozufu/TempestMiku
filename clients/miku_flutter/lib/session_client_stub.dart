@@ -348,6 +348,10 @@ class ScriptedMikuClient implements MikuSessionClient {
                 '> Proposal-first background work.\n\n'
                 '- **Keep approvals manual** for durable writes.\n'
                 '- [ ] Rebuild projections from the event log.\n\n'
+                r'\\[ \\sin z = \\frac{e^{iz}-e^{-iz}}{2i} \\]'
+                '\n\n'
+                r'Inline math \(e^{i\pi}+1=0\).'
+                '\n\n'
                 'Use `write_proposal` before memory commit.'
             : lower.contains('actor') || lower.contains('handoff')
                 ? 'Actor Worker0 completed child resource artifact://0'

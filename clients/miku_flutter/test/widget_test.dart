@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:miku_flutter/main.dart';
+import 'package:miku_flutter/ratex_formula.dart';
 import 'package:miku_flutter/session_client_stub.dart';
 import 'package:miku_flutter/session_models.dart';
 
@@ -659,6 +660,10 @@ void main() {
     expect(find.text('P4 memo', findRichText: true), findsOneWidget);
     expect(find.text('•', findRichText: true), findsOneWidget);
     expect(find.text('☐', findRichText: true), findsOneWidget);
+    expect(find.byType(RaTeXFormula), findsNWidgets(2));
+    expect(find.text(r'\sin z = \frac{e^{iz}-e^{-iz}}{2i}'), findsOneWidget);
+    expect(find.text(r'e^{i\pi}+1=0'), findsOneWidget);
+    expect(find.textContaining(r'\\['), findsNothing);
     expect(find.text('Thinking'), findsOneWidget);
     expect(
       find.textContaining('Compare scheduler invariants',

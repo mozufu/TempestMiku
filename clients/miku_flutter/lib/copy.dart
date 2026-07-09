@@ -26,6 +26,8 @@ class _UiCopy {
   String get more => pick('More', '更多');
   String get openMore => pick('Open more actions', '開啟更多操作');
   String get close => pick('Close', '關閉');
+  String get cancel => pick('Cancel', '取消');
+  String get save => pick('Save', '儲存');
   String get refresh => pick('Refresh', '重新整理');
   String get newSession => pick('New session', '新 session');
   String get createNewSession => pick('Create new session', '建立新 session');
@@ -175,6 +177,10 @@ class _UiCopy {
       '${(value * 100).round()}% confidence', '${(value * 100).round()}% 信心');
   String driveTags(int count) => pick('$count tags', '$count 個標籤');
   String get modeSettings => pick('Mode settings', '模式與鎖定');
+  String get serverTarget => pick('Server target', 'Server 目標');
+  String get serverUrl => pick('Server URL', 'Server URL');
+  String serverTargetFailed(Object error) =>
+      pick('Could not update server target: $error', '更新 Server 目標失敗：$error');
   String get previewTruncated => pick('Preview truncated', '預覽已截斷');
   String get emptyPreview => pick('(empty preview)', '（空白預覽）');
 }

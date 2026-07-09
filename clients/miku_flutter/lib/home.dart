@@ -134,6 +134,10 @@ class _MikuHomePageState extends State<MikuHomePage>
   _Tok get _tok => _isDark ? _Tok.dark : _Tok.light;
   Color get _accent => _tok.accentSoft;
   _UiCopy get _copy => _UiCopy(_language);
+  ServerTargetClient? get _serverTargetClient =>
+      widget.client is ServerTargetClient
+          ? widget.client as ServerTargetClient
+          : null;
 
   // ── Session ────────────────────────────────────────────────────────────────
 
@@ -1056,6 +1060,7 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   void _showOverflowSheet() {
     final tok = _tok;
+    final serverTargetClient = _serverTargetClient;
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: tok.surface,
@@ -1092,8 +1097,84 @@ class _MikuHomePageState extends State<MikuHomePage>
             if (mounted) _showModeSheet();
           });
         },
+        onServerTarget: serverTargetClient == null
+            ? null
+            : () {
+                Navigator.pop(context);
+                Timer(const Duration(milliseconds: 320), () {
+                  if (mounted) _showServerTargetDialog(serverTargetClient);
+                });
+              },
       ),
     );
+  }
+
+  Future<void> _showServerTargetDialog(ServerTargetClient client) async {
+    final copy = _copy;
+    String initial;
+    try {
+      initial = await client.serverBaseUrl();
+    } catch (_) {
+      initial = '';
+    }
+    if (!mounted) return;
+    final controller = TextEditingController(text: initial);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: _tok.surface,
+        title: Text(copy.serverTarget),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.url,
+          textInputAction: TextInputAction.done,
+          decoration: InputDecoration(
+            labelText: copy.serverUrl,
+            hintText: 'http://10.0.2.2:3000',
+          ),
+          onSubmitted: (text) => Navigator.pop(dialogContext, text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(copy.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: Text(copy.save),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) return;
+    try {
+      await client.setServerBaseUrl(trimmed);
+      await _sub?.cancel();
+      _sub = null;
+      _sessionFuture = null;
+      if (mounted) {
+        setState(() {
+          _sessionId = null;
+          _lastEventId = null;
+          _status = 'connecting';
+          _approvals.clear();
+          _memoryProposals.clear();
+          _rounds.clear();
+          _nextActions.clear();
+          _projectStatus = '';
+          _driveFeed = null;
+          _driveError = '';
+        });
+      }
+      await _connectSession();
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(copy.serverTargetFailed(err))),
+      );
+    }
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────

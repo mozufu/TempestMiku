@@ -1208,6 +1208,7 @@ class _OverflowSheet extends StatelessWidget {
     required this.onDrive,
     required this.onThemeToggle,
     required this.onModeSettings,
+    this.onServerTarget,
   });
 
   final _Tok tok;
@@ -1220,6 +1221,7 @@ class _OverflowSheet extends StatelessWidget {
       onDrive,
       onThemeToggle,
       onModeSettings;
+  final VoidCallback? onServerTarget;
 
   @override
   Widget build(BuildContext context) {
@@ -1324,6 +1326,15 @@ class _OverflowSheet extends StatelessWidget {
             label: copy.modeSettings,
             onTap: onModeSettings,
           ),
+          if (onServerTarget != null) ...[
+            const SizedBox(height: 8),
+            _ActionRow(
+              tok: tok,
+              icon: Icons.dns_outlined,
+              label: copy.serverTarget,
+              onTap: onServerTarget!,
+            ),
+          ],
         ],
       ),
     );

@@ -639,6 +639,12 @@ abstract class MikuSessionClient {
   });
 }
 
+abstract class ServerTargetClient {
+  Future<String> serverBaseUrl();
+
+  Future<void> setServerBaseUrl(String baseUrl);
+}
+
 Map<String, Object?>? _mapValue(Object? value) {
   if (value is Map<String, Object?>) return value;
   if (value is Map) return value.cast<String, Object?>();

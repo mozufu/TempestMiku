@@ -87,6 +87,34 @@ TM_OMP_ACP_ENABLED=0
 Without `TM_DATABASE_URL`, sessions and memory use the non-durable in-memory store. That is the
 normal local default.
 
+## Android Debug Client
+
+The Android app is the same Flutter remote-control client as Web/PWA: it connects to `tm-server` over
+HTTP/SSE, sends discrete POST controls, and keeps execution on the server.
+
+For an emulator build, the app defaults to `http://10.0.2.2:3000`; override that target with
+`MIKU_SERVER_URL` at build time or from the in-app More -> Server target action.
+
+```sh
+cd clients/miku_flutter/android
+nix develop --command ./gradlew \
+  -Ptarget-platform=android-arm,android-arm64,android-x64 \
+  -Ptarget=lib/main.dart \
+  -Pbase-application-name=android.app.Application \
+  -Pdart-defines=TUlLVV9TRVJWRVJfVVJMPWh0dHA6Ly8xMC4wLjIuMjozMDAw \
+  -Pdart-obfuscation=false \
+  -Ptrack-widget-creation=true \
+  -Ptree-shake-icons=false \
+  assembleDebug
+```
+
+The debug APK is written to `clients/miku_flutter/build/app/outputs/apk/debug/app-debug.apk`.
+If `adb` is not on `PATH`, use the SDK copy directly:
+
+```sh
+~/Library/Android/sdk/platform-tools/adb devices
+```
+
 ## API Smoke
 
 Health check:

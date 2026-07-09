@@ -161,10 +161,12 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   The P2/P4 memory gateway currently exposes `memory://root`, `memory://user-model`, exact approved
   profile fact / scoped recall record URIs, dream queue/record previews, dream summaries, and skill
   proposal previews, with compact previews and fail-closed unknown paths (§22.9).
-- **Android target (later).** The Android app is the same Flutter codebase packaged after the server API
-  and product surfaces stabilize. It adds OS integrations — secure pairing storage, push approval
-  notifications, app links, reconnect/resume polish — but **no on-device sandbox** and no second
-  execution path.
+- **Android target (P6 starter).** The Android app is now packaged from the same Flutter codebase with
+  a native `dart:io` HTTP/SSE client, main-manifest network permission, cleartext local-dev support,
+  and persisted server target / session cursor state. It keeps the same chat, approval, resource,
+  memory, drive, and actor-browser surfaces as Web/PWA. Later P6 hardening owns secure pairing
+  storage, push approval notifications, app links, and deeper reconnect polish; there is still **no
+  on-device sandbox** and no second execution path.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 
@@ -301,6 +303,8 @@ Client smoke is split by cost:
 
 - `cd clients/miku_flutter && nix develop --command flutter test` runs the phone/widget smoke,
   including dream-origin memory proposal approval.
+- `cd clients/miku_flutter/android && nix develop --command ./gradlew ... assembleDebug` packages the
+  Android debug APK from the same client code; see `docs/running-miku.md` for the full command.
 - `cd clients/miku_web && npm test` runs the normal Playwright API/web smoke. The heavier UI evidence
   recording is opt-in: set `TM_E2E_RUN_DIR=<run-dir>` and `TM_E2E_BASE_URL=<server-url>` and run
   `npm run test:evidence`.

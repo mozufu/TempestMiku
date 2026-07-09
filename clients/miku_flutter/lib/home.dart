@@ -785,13 +785,16 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   String _normalizeResourceUri(String uri) {
-    return uri.trim().replaceAll(RegExp(r'''[.。,"'}]+$'''), '');
+    return _cleanResourceUri(uri);
   }
 
   Future<void> _openResource(String uri) async {
     await _ensureSession();
+    final normalized = _normalizeResourceUri(uri);
+    if (normalized.isEmpty) return;
     try {
-      final preview = await widget.client.resolveResource(_sessionId!, uri);
+      final preview =
+          await widget.client.resolveResource(_sessionId!, normalized);
       if (!mounted) return;
       await showModalBottomSheet<void>(
         context: context,
@@ -803,8 +806,8 @@ class _MikuHomePageState extends State<MikuHomePage>
       );
     } catch (err) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not open $uri: $err')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open $normalized: $err')));
     }
   }
 
@@ -1559,11 +1562,41 @@ List<String> _resourceUrisFromEvent(Map<String, Object?> data) {
   final refs =
       ((data['resourceRefs'] ?? data['resource_refs']) as List?) ?? const [];
   final uris = <String>[];
+
+  void add(Object? value) {
+    final uri = _cleanResourceUri(value?.toString() ?? '');
+    if (_isOpenableResourceUri(uri) && !uris.contains(uri)) uris.add(uri);
+  }
+
   for (final ref in refs.whereType<Map>()) {
-    final uri = _eventText(ref.cast<String, Object?>(), 'uri');
-    if (uri.isNotEmpty && !uris.contains(uri)) uris.add(uri);
+    add(_eventText(ref.cast<String, Object?>(), 'uri'));
+  }
+  for (final key in const [
+    'uri',
+    'sourceUri',
+    'source_uri',
+    'proposedUri',
+    'proposed_uri',
+    'fromUri',
+    'from_uri',
+    'toUri',
+    'to_uri',
+    'linkedUri',
+    'linked_uri',
+  ]) {
+    add(data[key]);
   }
   return uris;
+}
+
+String _cleanResourceUri(String uri) {
+  return uri.trim().replaceAll(RegExp(r'''[.。,"'};:]+$'''), '');
+}
+
+bool _isOpenableResourceUri(String uri) {
+  return RegExp(
+          r'^(?:artifact|workspace|linked|project|drive|agent|history)://')
+      .hasMatch(uri);
 }
 
 String _joinedDetail(List<String> parts) {

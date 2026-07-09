@@ -249,6 +249,58 @@ void main() {
     expect(find.textContaining('# Scripted drive note'), findsOneWidget);
   });
 
+  testWidgets('opens drive uri surfaced by a direct activity payload',
+      (WidgetTester tester) async {
+    final client = ScriptedMikuClient(pauseBeforeFinal: true);
+    final session = await client.createSession();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'file note');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    client.emitEvent(
+      session.id,
+      const MikuEvent(
+        type: 'drive_put',
+        id: 'drive-put-direct-uri',
+        data: {
+          'action': 'put',
+          'uri': 'drive://projects/tempestmiku/research/p5-drive-workspace.md',
+          'sourceUri': 'drop://browser/raw-research.md',
+          'preview': {
+            'title': 'Filed drive document',
+            'subtitle': 'projects/tempestmiku/research/p5-drive-workspace.md',
+            'snippet': 'Drive document content is ready.',
+          },
+        },
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final activityResource = find.byKey(
+      const ValueKey(
+        'activity-resource:drive://projects/tempestmiku/research/p5-drive-workspace.md',
+      ),
+    );
+    expect(activityResource, findsOneWidget);
+    expect(
+      find.byKey(
+          const ValueKey('activity-resource:drop://browser/raw-research.md')),
+      findsNothing,
+    );
+
+    await tester.tap(activityResource);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Scripted drive note'), findsOneWidget);
+    expect(find.textContaining('# Scripted drive note'), findsOneWidget);
+  });
+
   testWidgets('language switch toggles chrome without changing chat content',
       (WidgetTester tester) async {
     await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));

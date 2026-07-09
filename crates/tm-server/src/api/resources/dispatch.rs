@@ -1,11 +1,12 @@
-use super::*;
 use super::schemes::{
     compact_resource_preview, list_agent_resources, list_cron_resources, list_drive_resources,
-    list_linked_resources, list_memory_resources, list_workspace_resources, preview_memory_resource,
-    read_agent_resource, read_cron_resource, read_drive_resource, read_history_resource,
-    read_linked_resource, read_memory_resource, read_workspace_resource, resource_scheme,
+    list_linked_resources, list_memory_resources, list_workspace_resources,
+    preview_memory_resource, read_agent_resource, read_cron_resource, read_drive_resource,
+    read_history_resource, read_linked_resource, read_memory_resource, read_workspace_resource,
+    resource_scheme,
 };
 use super::util::map_artifact_error;
+use super::*;
 
 pub(crate) async fn read_resource_content<S, M, C>(
     state: &AppState<S, M, C>,
@@ -29,7 +30,9 @@ where
             read_workspace_resource(&state.artifact_root, session_id, uri, selector)
         }
         Some("linked") => read_linked_resource(&state.linked_folders, uri, selector).await,
-        Some("project") => super::util::read_project_resource(state, session_id, uri, selector).await,
+        Some("project") => {
+            super::util::read_project_resource(state, session_id, uri, selector).await
+        }
         Some("memory") => read_memory_resource(state, session_id, uri, selector).await,
         Some("agent") => read_agent_resource(state, uri, selector).await,
         Some("history") => read_history_resource(state, uri, selector).await,
@@ -139,4 +142,3 @@ pub(super) fn registered_resource_schemes<S, M, C>(state: &AppState<S, M, C>) ->
     }
     schemes
 }
-

@@ -438,4 +438,3 @@ fn camel_to_snake(value: &str) -> String {
     }
     snake
 }
-

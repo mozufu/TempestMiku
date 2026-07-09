@@ -342,4 +342,3 @@ fn stable_drive_recall_id(scope: &str, content_hash: &str) -> Uuid {
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Uuid::from_bytes(bytes)
 }
-

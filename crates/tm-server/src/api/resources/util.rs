@@ -1,5 +1,5 @@
-use super::*;
 use super::schemes::{list_linked_resources, read_linked_resource};
+use super::*;
 
 pub(crate) fn validate_relative_path(path: &str) -> Result<PathBuf> {
     if path.contains('\0') {

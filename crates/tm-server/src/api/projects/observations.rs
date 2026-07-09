@@ -151,4 +151,3 @@ pub(crate) fn project_id_from_scope(scope: &str) -> String {
         .unwrap_or("tempestmiku")
         .to_string()
 }
-

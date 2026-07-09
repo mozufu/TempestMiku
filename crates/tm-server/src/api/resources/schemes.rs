@@ -1,6 +1,6 @@
-use super::*;
 use super::dispatch::registered_resource_schemes;
 use super::util::{map_host_error, select_text};
+use super::*;
 
 pub(super) async fn read_cron_resource<S, M, C>(
     state: &AppState<S, M, C>,
@@ -435,4 +435,3 @@ fn workspace_relative(uri: &str) -> Result<PathBuf> {
         .ok_or_else(|| ServerError::Policy(format!("unsupported workspace uri {uri}")))?;
     super::util::validate_relative_path(path)
 }
-

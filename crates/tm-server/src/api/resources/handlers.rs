@@ -1,6 +1,6 @@
-use super::*;
 use super::dispatch::{list_resource_entries, preview_resource_content, read_resource_content};
 use super::util::map_artifact_error;
+use super::*;
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct ArtifactReadQuery {
@@ -208,4 +208,3 @@ where
         .await
         .map(Json)
 }
-

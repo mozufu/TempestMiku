@@ -4,12 +4,22 @@ TempestMiku is a Rust rewrite of the running `hermes-agent` Tempest Miku deploym
 self-hosted, single-user, characterful AI companion built on a streaming code-execution agent
 runtime.
 
-Current implementation status: the workspace has the M0 streaming skeleton, M1 `deno_core`
-sandbox, host/artifact foundation, P0a OMP ACP bridge, native P0 Serious Engineer dogfood slice,
-native Deno HTTP approvals, and the P1 project-manager remote-control surface in place with Rust
-test coverage. The next product work is P2: the full personal-assistant baseline for Miku voice,
-profile/user recall, personal-assistant state capture, negative-state grounding, and bounded
-proactivity.
+Current implementation status: the workspace contains the M0/M1 runtime, P0-P3+ product slices,
+the P4 dreaming/scheduler and P5 drive/research mechanisms, and the audit hardening implementation.
+Postgres now uses ordered checksummed migrations and backs sessions, turns, approvals/effects,
+dream/cron leases, and drive metadata/link tombstones. `tm-server` supports explicit `api`, `worker`,
+and `all` roles, durable `202` message turns, one replayable `session_event` SSE envelope, and secure
+single-owner device pairing for Web and Android.
+
+The complete verification matrix passes: strict Rust checks, clean-schema Postgres tests, split
+API/worker restart recovery, Flutter tests, signed Android APK builds, Playwright pairing/replay,
+RustSec, secret-leak checks, and a physical Android release canary over Tailscale Serve HTTPS. The
+canary proved in-app QR confirmation, durable chat, cold-start credential/session recovery,
+exact-once offline SSE replay, and immediate device revocation. The audit hardening gate is closed
+for the documented single-owner deployment. Production exposure must remain loopback-only behind
+an HTTPS reverse proxy or Tailscale Serve; Postgres is mandatory outside loopback and for
+`worker`/`all` roles. Broader P6/P7 work such as push notifications, MCP/trace, cloud drive sync,
+live egress, and self-evolution remains out of scope.
 
 ## Project docs
 

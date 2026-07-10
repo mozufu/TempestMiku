@@ -1,12 +1,16 @@
 # TODO
 
-Last aligned: **2026-07-08**.
+Last aligned: **2026-07-10**.
 
-Active milestone: **P5 — drive + research workspace**.
+Active milestone: **audit hardening closed; remaining P6 sequencing**.
 
-`ROADMAP.md` remains the canonical milestone order. This file is the working implementation
-checklist for P5 after the completed P4 dreaming/scheduler slice. Keep it aligned with core docs
-§07/§09 and product docs §22, §23, §24, §25, §27, and §29.
+`ROADMAP.md` remains the canonical milestone order. The P4/P5 mechanism slices and their deterministic
+acceptance coverage have landed, as has the production-hardening implementation: supervised roles,
+durable approvals/effects, fenced leases, ordered checksummed migrations, authoritative session
+scope, durable turns/SSE replay, and Postgres drive metadata/link state. The complete automated and
+physical-device verification matrix now passes, so P4/P5 are production-complete for the documented
+single-owner deployment. Keep this checklist aligned with core docs
+§05/§06/§07/§09/§11 and product docs §21, §22, §23, §24, §25, §27, and §29.
 
 ## P5 North Star
 
@@ -30,11 +34,11 @@ the existing host registry, resource gateway, approval broker, memory store, eve
 ## Non-Negotiable Invariants
 
 - The model still gets one chat-native tool: `execute(code)`.
-- Streaming remains the source of truth. Drive ingestion, organizer decisions, approvals, research
-  progress, and resource links must be represented as replayable `session_events` and SSE frames when
-  user-visible.
+- Streaming remains the source of truth. Every user-visible event uses the versioned
+  `event: session_event` envelope with durable numeric sequence, `turnId`, payload, and timestamp.
 - Capabilities are config and grants, not prompts. Unknown capability names and unknown or ungranted
-  resource schemes fail closed.
+  resource schemes fail closed; handler registration never grants authority and every turn replaces
+  rather than unions its exact grant set.
 - `drive://` is a user-document resource route, not a host path and not a blob hash. Raw host paths
   must never become model-visible.
 - Default drive storage is sandbox/local-first. Real folders are reachable only through explicit
@@ -55,7 +59,7 @@ the existing host registry, resource gateway, approval broker, memory store, eve
       `agents.run/spawn/parallel/msg/send/broadcast/wait/inbox/list/cancel/pipeline`, live inboxes,
       active supervision, child approvals, replayable actor/resource provenance, and client smoke
       coverage are in place.
-- [x] P4 is complete: `tm-memory`, dream queue/worker, summaries, skill proposals, Postgres FTS
+- [x] P4 mechanisms exist: `tm-memory`, dream queue/worker, summaries, skill proposals, Postgres FTS
       coverage, cron jobs/runs, `cron://` resources, and replayable proactivity are in place.
 - [x] `tm-host` already owns linked-folder `FsPolicy`, `fs.*`, `code.*`, `proc.*`, and `linked://`
       resource behavior.
@@ -68,7 +72,48 @@ the existing host registry, resource gateway, approval broker, memory store, eve
 - [x] Drive metadata, transducers, virtual dirs, organizer proposal records, and first project
       memory-scope recall coupling exist.
 
-## P5 Acceptance Gate
+## Production Hardening Gate
+
+- [x] Repository CI covers formatting, strict clippy, workspace tests, gated Postgres tests,
+      Flutter analysis/tests, Flutter Web, Android debug builds, Playwright smoke, and Cargo audit.
+- [x] Replace startup schema bootstrap with ordered, checksummed migrations and upgrade/backfill tests.
+- [x] Make session end, lifecycle events, and dream enqueue one atomic durable transition.
+- [x] Persist approval requests and resumable effects; cancel non-resumable waits cleanly on restart.
+- [x] Fence dream and cron claims by owner/epoch, heartbeat active work, and reject stale completion.
+- [x] Supervise turn/dream/scheduler/effect workers through `api|worker|all` runtime roles with
+      graceful shutdown; require Postgres for `worker` and `all`.
+- [x] Enforce cron deny-only approval mode, turn budget, exact capabilities, and timeout in code.
+- [x] Use Postgres-backed drive metadata/organizer/link state when Postgres is configured, and hydrate
+      validated active links on startup.
+- [x] Add deterministic and gated restart/two-store tests for leases, approvals, drive state, and
+      legacy-schema upgrades.
+- [x] Complete the local Rust, clean-schema Postgres, split-process crash/restart, Flutter,
+      authenticated Playwright, signed Android debug/release build, release-certificate, RustSec,
+      and secret-leak gates.
+- [x] Run the final authenticated Android device/emulator canary over HTTPS: scan and confirm a
+      one-time pairing code, chat through a durable turn, reconnect SSE without gaps/duplicates, and
+      prove revocation immediately removes access.
+
+Final verification commands/evidence:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server
+cargo audit
+nix develop --command bash -lc 'cd clients/miku_flutter && flutter analyze && flutter test'
+cd clients/miku_web && npm test
+git diff --check
+```
+
+The local two-process Postgres recovery case, authenticated Playwright pairing/replay smoke, arm64
+debug/release APK builds, and non-debug release certificate check pass. The physical Android 15
+release canary over Tailscale Serve HTTPS proved QR confirmation, durable chat, cold-start recovery,
+exact-once replay of a turn completed while the app was stopped, SSE termination/send disablement
+after revocation, and a clean post-canary secret scan.
+
+## P5 Mechanism Acceptance Gate
 
 - [x] A dropped or `drive.put(..., { auto: true })` file is stored locally, transduced into
       field-value attributes, deduped by content hash, assigned a proposed canonical path, and filed
@@ -109,7 +154,7 @@ the existing host registry, resource gateway, approval broker, memory store, eve
 - [x] Define organizer proposal records:
       proposed move/tag/dedupe action, evidence, confidence, policy decision, approval id,
       status, source run id, and replay metadata.
-- [x] Decide exact event names and payloads before client work:
+- [x] Decide exact `session_event.data.type` values and payloads before client work:
       `drive_put`, `drive_transduced`, `drive_path_proposed`, `drive_write_proposed`,
       `drive_filed`, `drive_moved`, `drive_tagged`, `drive_linked`, `drive_organizer_started`,
       `drive_organizer_completed`, and `drive_organizer_failed`.
@@ -432,7 +477,9 @@ Acceptance:
 
 ## P5.14 Documentation And Verification
 
-- [x] Update `ROADMAP.md` only when P5 acceptance checks actually pass.
+- [x] Update `ROADMAP.md` when the P5 mechanism acceptance checks pass.
+- [x] Mark P4/P5 production-complete after the complete automated matrix and physical Android HTTPS
+      canary pass.
 - [x] Update §24 when concrete store, transducer, organizer, resource, and link behavior lands.
 - [x] Update §07 when `drive.*` host catalog/SDK/grant behavior changes.
 - [x] Update §09 when `drive://` is registered and no longer only reserved.
@@ -464,14 +511,14 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 | Namespace / surface | Target milestone | Placement note |
 |---|---|---|
-| `drive.*` | **P5** | Current active milestone. Lands with `tm-drive`, virtual dirs, transducers, project memory scopes, resource handler, and organizer flows. |
-| `drive://` | **P5** | Reserved today. Register only with `tm-drive` handler, grants, paging, previews, fail-closed tests, and client gateway coverage. |
+| `drive.*` | **P5 production-complete** | `tm-drive`, virtual dirs, transducers, project memory scopes, resource handling, durable Postgres metadata/organizer/link state, CAS application, startup link hydration, and restart/client verification pass. |
+| `drive://` | **P5 production-complete** | The handler, grants, paging, previews, fail-closed tests, client gateway, and Postgres persistence pass; the no-database in-memory metadata path remains the documented local-development exception. |
 | `memory.*` richer APIs | **After P5 need is concrete** | P5 should feed existing memory/resource surfaces first. Add new global memory methods only with grants, SDK typings, denial tests, and bounded context behavior. |
 | `skills.*` / full `skill://` reads | **P7** | P4 can produce skill proposals. P7 owns import/version/reload, live catalog mutation, MCP import gates, and audit/replay semantics. |
 | `http.*` hardening | **P5 or P7** | Do it in P5 only if research needs live egress. Otherwise defer to P7 hardening. |
 | `secrets.use` | **P7** | Requires opaque egress-scoped handles and audit guarantees that never expose secret values to JS/model/artifacts/drive. |
 | `tm-mcp` | **P7 or explicit later slice** | External resources/tools can feed the same resource/approval model later; do not block local-first drive. |
-| Android OS integrations | **P6** | Wait until P5 drive/resource surfaces stabilize, then package existing Flutter client without a second execution path. |
+| Android OS integrations | **P6** | Secure QR pairing, credential storage, HTTPS release policy, backup exclusion, signing enforcement, and the physical-device canary pass in the shared Flutter client; push notifications and broader OS integration remain P6 work. |
 
 ## Parallelization Seams
 
@@ -487,7 +534,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 ## Do-Not-Start-Yet List
 
-- Android OS packaging before P5 server/resource surfaces stabilize.
+- Remaining Android push/OS integration inside P5; it belongs to P6.
 - Cloud sync or CRDT replication in P5 v1; local-first/offline is the acceptance path.
 - Generic networked filesystem behavior; drive is the user document space, not ambient host access.
 - `skills.*` live import/reload, MCP import gates, and tiered self-evolution writes before P7.
@@ -501,7 +548,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 ## Crate Plan
 
 Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-modes`,
-`tm-agents`, `tm-memory`, `tm-server`, `apps/tm-cli`, `apps/tm-e2e`, and client scaffolds under
+`tm-agents`, `tm-memory`, `tm-drive`, `tm-server`, `apps/tm-cli`, `apps/tm-e2e`, and clients under
 `clients/`.
 
 P5 ownership:
@@ -524,18 +571,11 @@ P5 ownership:
 Planned product/support crates after P5 remain: `tm-mcp` and `tm-trace`. Avoid extracting more crates
 until a second concrete user exists.
 
-## Open Questions
+## Deferred Product Questions
 
-- Should `drive.put` accept raw bytes/content directly from the sandbox, or require artifact/blob refs
-  for large inputs and only allow inline text below a small cap?
-- What is the first canonical path convention set for TempestMiku's own repo/project docs?
-- How should future clients group shared `write_proposal` drive events with the richer
-  `drive_organizer_completed` run summary without duplicating proposal rows?
-- How should project memory scope ids be derived from `drive.link`: alias, canonical root hash,
-  project id, or explicit user-provided name?
-- Which drive-derived records should enter recall by default: summaries only, extracted attributes,
-  or both?
-- What is the minimum useful research workflow for dogfooding P5: local docs QA, project archaeology,
-  paper/note synthesis, or release-planning over project artifacts?
-- Is P5 the right moment for HTTP hardening, or should local-only research ship first and leave live
-  web egress to P7?
+The audit has no open implementation decisions. Later roadmap work may decide:
+
+- push-approval notification UX and broader Android OS integration as the next P6 slice;
+- cloud-drive synchronization/conflict UX after the local Postgres authority is proven;
+- pgvector/graph/LLM-backed memory retrieval and richer scoped APIs;
+- live external research, secret-broker, MCP import, and trace/replay surfaces under P7 gates.

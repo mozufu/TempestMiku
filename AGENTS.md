@@ -16,12 +16,25 @@
   - `crates/tm-artifacts`: session artifacts and content-addressed blob storage.
   - `crates/tm-host`: host registry, capability grants, approval policy, resource registry, linked folders, `fs.*`, `code.*`, and argv-vector `proc.run`.
   - `crates/tm-modes`: mode catalog, routing, voice caps, and configurable mode/skill asset status.
-  - `crates/tm-agents`: actor lifecycle, mailbox, `agents.run/spawn/parallel/msg/send/wait/inbox/list`, supervision defaults, and `agent://` / `history://` resources.
-  - `crates/tm-server`: axum session API, replayable SSE/event store, minimal memory provider, approvals, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
+  - `crates/tm-agents`: actor lifecycle, mailbox, `agents.run/spawn/parallel/msg/send/broadcast/wait/inbox/list/cancel/pipeline`, supervision defaults, and `agent://` / `history://` resources.
+  - `crates/tm-memory`: dream queue contracts, deterministic extraction/redaction, reflections, summaries, and proposal types.
+  - `crates/tm-drive`: local-first drive entries, transducers, virtual directories/search, organizer proposals, linked-folder policy, and `drive://` resources.
+  - `crates/tm-server`: authenticated axum session API, durable turn queue, replayable SSE/event store, ordered Postgres migrations, supervised runtime roles, durable approvals/dreams/cron/drive state, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
   - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and Deno sandbox by default; `--stub-sandbox` remains for protocol tests.
   - `apps/tm-e2e`: local/dev public-API workflow harness for scripted and opt-in live session smoke coverage.
   - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.
-- Not production-complete or not yet split into dedicated crates: `tm-mcp`, `tm-trace`, full `tm-memory`, `tm-drive`, scheduler/dreaming, remaining P3+ actor surface (`broadcast`/`pipeline`, restart/cancel, DAG/protocol enforcement, fuller provenance), richer drive/skill/memory approval surfaces, and Android OS packaging.
+- The P4/P5 production-hardening implementation has landed: ordered checksummed migrations,
+  transactional session end, durable approval effects, fenced dream/cron leases, `api|worker|all`
+  supervision, Postgres drive metadata/link tombstones, server-owned memory authority, durable turns,
+  and gap-free `session_event` replay. The local automated matrix, including gated/two-process
+  Postgres recovery, signed APK builds, certificate verification, and authenticated Playwright,
+  passes. A physical Android release canary over Tailscale Serve HTTPS also proves in-app QR pairing,
+  durable chat, cold-start recovery, exact-once offline replay, and immediate credential revocation.
+  The audit hardening gate is closed for the documented single-owner deployment.
+- Android now has in-app QR pairing, secure token storage, HTTPS-only release networking, backup
+  exclusion, and release-signing enforcement. Push notifications and broader OS integrations remain
+  P6 work. Also deferred: `tm-mcp`, `tm-trace`, pgvector/graph/LLM-backed memory expansion, cloud
+  drive sync, live egress, and self-evolution.
 
 ## Read before changing code
 
@@ -38,7 +51,9 @@ Start with the narrowest docs for the task:
 - Streaming is the source of truth. `LlmClient::chat_stream` drives the loop; non-streaming chat is just drain + assemble.
 - The agent loop owns message accumulation, tool-call execution, result shaping, and `EventSink` callbacks. Do not fork a second loop for product features.
 - Sandbox backends sit behind `Sandbox` / `Session`. Product code must not depend on the current stub behavior.
-- Capabilities are config and grants, not hardcoded privilege. Unknown capability/resource schemes fail closed.
+- Capabilities are config and exact per-turn grants, not hardcoded privilege. Handler/link/drive
+  registration never grants authority, previous turns never leak grants forward, and unknown
+  capability/resource schemes fail closed.
 - Real-repo reach is curated: `proc.run(cmd, args)` with argv-vector execution, allowlist, linked cwd, and approval. Never add a raw shell escape hatch.
 - Artifacts and large outputs should spill to the artifact store. Do not push large tool/sub-agent output into model context.
 - Product features extend the core; they do not weaken the core bet or bypass approval/security boundaries.
@@ -47,16 +62,16 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Continue P3+ actor work: `broadcast`/`pipeline`, restart strategies, cancel tokens, DAG/protocol enforcement, and fuller provenance.
+1. Resume the remaining P6 Android OS integrations on the authenticated durable-turn/SSE client
+   contract; push approvals and notification lifecycle are the next packaging slice.
 2. Keep the native/OMP coding backend boundary boring: OMP ACP remains replaceable, while native Deno remains the dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed manual approvals.
-3. Defer expansion crates and surfaces (`tm-memory`, `tm-drive`, `tm-mcp`, `tm-trace`, scheduler/dreaming, Android OS packaging) until the P3+ actor and server/resource surfaces are stable.
+3. Keep `tm-mcp`, `tm-trace`, fuller memory, cloud drive sync, live egress, and P7 self-evolution
+   deferred to their roadmap stages.
 
 Do not start yet unless explicitly requested:
 
-- Android OS packaging before the P2/P3 product surfaces stabilize.
-- Drive auto-organizer before approval policy and memory scopes exist.
 - Self-evolution writes before audit/replay and tier gates exist.
-- Deep research/orchestration before `agents.*`, artifacts, memory scopes, and scheduler are real.
+- MCP, trace, cloud drive sync, and live external research before their explicit roadmap stages.
 
 ## Coding conventions
 
@@ -71,6 +86,8 @@ Do not start yet unless explicitly requested:
 
 - Use the project dev shell for repo toolchains: run commands as `nix develop --command <cmd>` when a tool may be provided by Nix, especially Flutter/Dart/client commands or anything missing from the ambient PATH. Prefer this non-interactive form over entering a long-running `nix develop` shell.
 - Baseline command: `cargo test`.
+- Strict Rust quality gate: `cargo fmt --all --check` followed by
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
 - Add narrow tests for the behavior you change before relying on the full suite.
 - For streaming changes, use scripted streams; do not require network.
 - Live OpenAI tests must stay opt-in/gated by environment and must not run in normal `cargo test`.
@@ -88,3 +105,5 @@ Do not start yet unless explicitly requested:
 - Keep design docs and implementation aligned. If behavior changes milestone scope, update the relevant `docs/design/**` section in the same PR/change.
 - Cross-references use section numbers (`§NN`) and should remain path-independent.
 - Do not mark a roadmap stage done until its acceptance checks pass.
+- Keep the closed audit evidence accurate: the local command matrix and physical Android HTTPS
+  pairing/chat/replay/revocation canary must remain represented when contracts or gates change.

@@ -15,7 +15,7 @@ async fn posting_a_message_never_auto_switches_the_mode() {
     // The keyword-substring router used to silently flip modes per turn (and revert them just
     // as silently on the next non-triggering message). That mechanism is gone: a session's mode
     // only changes via an explicit user action (lock/apply/override) or, once wired, a
-    // model-proposed and user-confirmed `mode_suggest`. Posting a message alone must never
+    // model-proposed and user-confirmed `modes.suggest`. Posting a message alone must never
     // change it, no matter how code- or distress-flavored the content looks.
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
@@ -97,11 +97,11 @@ async fn legacy_suggest_route_does_not_apply_a_mode_switch() {
 }
 
 #[tokio::test]
-async fn locked_chat_turns_do_not_advertise_mode_suggest() {
+async fn only_unlocked_normal_chat_turns_receive_modes_suggest_authority() {
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(RecordingChatRunner::default());
-    let mediator_present = Arc::clone(&chat.mediator_present);
+    let turns = Arc::clone(&chat.turns);
     let state = AppState::new(
         store,
         memory,
@@ -113,7 +113,24 @@ async fn locked_chat_turns_do_not_advertise_mode_suggest() {
     let session = create(&app).await;
 
     post_user_message(&app, session.id, "hello").await;
-    assert_eq!(*mediator_present.lock(), vec![true]);
+    {
+        let turns = turns.lock();
+        assert_eq!(turns.len(), 1);
+        assert!(
+            turns[0]
+                .capabilities
+                .iter()
+                .any(|capability| capability == MODE_SUGGEST_CAPABILITY)
+        );
+        assert_eq!(
+            turns[0]
+                .host_functions
+                .iter()
+                .map(|function| function.name())
+                .collect::<Vec<_>>(),
+            vec![MODE_SUGGEST_CAPABILITY]
+        );
+    }
 
     let lock = app
         .clone()
@@ -130,7 +147,90 @@ async fn locked_chat_turns_do_not_advertise_mode_suggest() {
     assert_eq!(lock.status(), StatusCode::OK);
 
     post_user_message(&app, session.id, "this says repo but mode is locked").await;
-    assert_eq!(*mediator_present.lock(), vec![true, false]);
+    let turns = turns.lock();
+    assert_eq!(turns.len(), 2);
+    assert!(
+        turns[1]
+            .capabilities
+            .iter()
+            .all(|capability| capability != MODE_SUGGEST_CAPABILITY)
+    );
+    assert_eq!(
+        turns[1]
+            .host_functions
+            .iter()
+            .map(|function| function.name())
+            .collect::<Vec<_>>(),
+        vec![MODE_SUGGEST_CAPABILITY],
+        "handler registration alone must not confer authority"
+    );
+}
+
+#[tokio::test]
+async fn coding_actor_and_scheduler_profiles_never_receive_modes_suggest() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(RecordingChatRunner::default());
+    let turns = Arc::clone(&chat.turns);
+    let state = AppState::new(
+        store,
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let app = app(state);
+    let session = create(&app).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/mode/override", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"mode":"serious_engineer","reason":"test coding authority"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // With no native coding backend configured the request falls back to ChatRunner, but the
+    // engineering profile still must not acquire conversation-only mode-switch authority.
+    post_user_message(&app, session.id, "inspect the repository").await;
+    let turns = turns.lock();
+    assert_eq!(turns.len(), 1);
+    assert!(
+        turns[0]
+            .capabilities
+            .iter()
+            .any(|capability| capability == "backend.coding")
+    );
+    assert!(
+        turns[0]
+            .capabilities
+            .iter()
+            .all(|capability| capability != MODE_SUGGEST_CAPABILITY)
+    );
+
+    let assets = ModesConfig::default().load_assets();
+    for mode in ["serious_engineer", "handoff"] {
+        let profile = assets
+            .modes
+            .modes
+            .iter()
+            .find(|profile| profile.mode == ModeId::from(mode))
+            .unwrap();
+        assert!(
+            profile
+                .capabilities
+                .iter()
+                .all(|capability| capability != MODE_SUGGEST_CAPABILITY),
+            "actor and scheduler turns inherit static profile capabilities, so {mode} must not contain modes.suggest"
+        );
+    }
 }
 
 #[tokio::test]
@@ -142,10 +242,12 @@ async fn message_chat_path_applies_approved_model_mode_suggestion() {
             StreamEvent::ToolCall {
                 index: 0,
                 id: Some("call_mode".to_string()),
-                name: Some("mode_suggest".to_string()),
+                name: Some("execute".to_string()),
                 arguments: Some(
-                    r#"{"target_mode":"serious_engineer","reason":"needs repository access"}"#
-                        .to_string(),
+                    serde_json::json!({
+                        "code": "await modes.suggest('serious_engineer', 'needs repository access')"
+                    })
+                    .to_string(),
                 ),
             },
             StreamEvent::Finish {
@@ -160,14 +262,18 @@ async fn message_chat_path_applies_approved_model_mode_suggestion() {
         ],
     ]));
     let llm_client: Arc<dyn LlmClient> = llm.clone();
-    let chat = Arc::new(AgentChatRunner::new_with_sandbox_factory(
+    let temp = tempfile::tempdir().unwrap();
+    let chat = Arc::new(AgentChatRunner::deno(
         llm_client,
         AgentConfig {
             model: "fake".to_string(),
             max_turns: 4,
             ..AgentConfig::default()
         },
-        |_session_id| Arc::new(tm_sandbox::StubSandbox) as Arc<dyn tm_core::Sandbox>,
+        DenoSandboxOptions {
+            artifact_root: temp.path().join("artifacts"),
+            ..DenoSandboxOptions::default()
+        },
     ));
     let state = AppState::new(
         store.clone(),
@@ -180,32 +286,29 @@ async fn message_chat_path_applies_approved_model_mode_suggestion() {
     let session = create(&app).await;
     let session_id = session.id;
 
-    let app_for_message = app.clone();
-    let post = tokio::spawn(async move {
-        app_for_message
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/sessions/{session_id}/messages"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"content":"please switch if this needs repo work"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .body(message_body("please switch if this needs repo work"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
 
-    let approval = wait_for_event_payload(&store, session_id, "approval").await;
+    let approval = wait_for_mode_approval(&store, session_id, turn_id).await;
     assert_eq!(approval["backend"], json!("mode"));
     assert_eq!(approval["scope"]["targetMode"], json!("serious_engineer"));
     assert_eq!(approval["scope"]["currentMode"], json!("general"));
     let approval_id: Uuid = serde_json::from_value(approval["approvalId"].clone()).unwrap();
 
     resolve_test_approval(&app, session_id, approval_id, "approve").await;
-    let response = post.await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let completed = wait_for_turn(&app, session_id, turn_id).await;
+    assert_eq!(completed["status"], json!("completed"));
 
     let latest = store.get_session(session_id).await.unwrap();
     assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
@@ -235,10 +338,48 @@ async fn message_chat_path_applies_approved_model_mode_suggestion() {
     );
     assert!(
         events.iter().any(|event| {
-            event.event_type == "tool_call" && event.payload_json["name"] == json!("mode_suggest")
+            event.event_type == "tool_call" && event.payload_json["name"] == json!("execute")
         }),
-        "chat sink should record the mediated tool call"
+        "chat sink should record only the execute tool call"
     );
+    assert!(events.iter().all(|event| {
+        event.event_type != "tool_call" || event.payload_json["name"] != json!("mode_suggest")
+    }));
+    let advertised = llm.tools.lock();
+    assert!(
+        advertised
+            .iter()
+            .all(|tools| { tools.len() == 1 && tools[0].function.name == "execute" })
+    );
+}
+
+async fn wait_for_mode_approval(
+    store: &Arc<InMemoryStore>,
+    session_id: Uuid,
+    turn_id: Uuid,
+) -> Value {
+    for _ in 0..500 {
+        if let Some(event) = store
+            .events_after(session_id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|event| event.event_type == "approval")
+        {
+            return event.payload_json;
+        }
+        let turn = store.turn(turn_id).await.unwrap();
+        if turn.status == "failed" {
+            let events = store.events_after(session_id, None).await.unwrap();
+            panic!(
+                "mode suggestion turn failed before approval: {}; events: {events:#?}",
+                turn.error.as_deref().unwrap_or("unknown turn error")
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let events = store.events_after(session_id, None).await.unwrap();
+    panic!("mode approval was not persisted; events: {events:#?}")
 }
 
 #[tokio::test]
@@ -427,19 +568,7 @@ async fn mode_events_only_come_from_explicit_actions_not_from_messages() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"please fix this Rust code bug"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "please fix this Rust code bug").await;
     let events = store.events_after(session.id, None).await.unwrap();
     let mode_events = events
         .iter()
@@ -520,19 +649,7 @@ async fn mode_events_only_come_from_explicit_actions_not_from_messages() {
         json!(["miku-voice", "personal-assistant-state-capture"])
     );
 
-    let locked_message = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"fix another code bug"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(locked_message.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "fix another code bug").await;
     let latest = store.get_session(session.id).await.unwrap();
     assert_eq!(
         latest.mode_state.mode,
@@ -554,19 +671,7 @@ async fn mode_events_only_come_from_explicit_actions_not_from_messages() {
         .unwrap();
     assert_eq!(unlock.status(), StatusCode::OK);
 
-    let reroute = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"fix the Rust code now"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(reroute.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "fix the Rust code now").await;
     let latest = store.get_session(session.id).await.unwrap();
     assert_eq!(
         latest.mode_state.mode,

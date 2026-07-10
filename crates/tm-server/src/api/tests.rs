@@ -12,7 +12,7 @@ use futures::stream::{self, BoxStream};
 use parking_lot::Mutex;
 use tm_core::{
     AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Message,
-    Result as CoreResult, Role, StreamEvent,
+    Result as CoreResult, Role, StreamEvent, ToolSpec,
 };
 use tm_host::{
     CapabilityGrants, FsMode, HostError, InvocationCtx, LinkedFolderConfig, LinkedFolders,
@@ -34,7 +34,16 @@ fn test_app(persona: ModesConfig, auth: AuthConfig) -> (Router, Arc<InMemoryStor
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
-    let state = AppState::new(store.clone(), memory, chat, persona, auth);
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: std::env::current_dir().expect("test workspace path"),
+        mode: FsMode::Ro,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .expect("test linked project");
+    let state =
+        AppState::new(store.clone(), memory, chat, persona, auth).with_linked_folders(linked);
     (app(state), store)
 }
 
@@ -51,6 +60,7 @@ fn postgres_test_dsn() -> Option<String> {
 async fn postgres_test_app() -> Option<(Router, Arc<PostgresStore>)> {
     let dsn = postgres_test_dsn()?;
     let store = Arc::new(PostgresStore::connect(&dsn).await.unwrap());
+    store.configure_owner_subject("brian").await.unwrap();
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
     let state = AppState::new(
@@ -83,6 +93,7 @@ enum ScriptedBackendKind {
 struct ScriptedLlm {
     scripts: Mutex<VecDeque<Vec<StreamEvent>>>,
     requests: Mutex<Vec<Vec<Message>>>,
+    tools: Mutex<Vec<Vec<ToolSpec>>>,
 }
 
 impl ScriptedLlm {
@@ -90,6 +101,7 @@ impl ScriptedLlm {
         Self {
             scripts: Mutex::new(scripts.into()),
             requests: Mutex::new(Vec::new()),
+            tools: Mutex::new(Vec::new()),
         }
     }
 }
@@ -101,6 +113,7 @@ impl LlmClient for ScriptedLlm {
         req: &ChatRequest,
     ) -> CoreResult<BoxStream<'static, CoreResult<StreamEvent>>> {
         self.requests.lock().push(req.messages.clone());
+        self.tools.lock().push(req.tools.clone());
         let script = self.scripts.lock().pop_front().unwrap_or_default();
         Ok(Box::pin(stream::iter(
             script.into_iter().map(Ok::<StreamEvent, CoreError>),
@@ -138,7 +151,7 @@ impl CodingBackend for ScriptedBackend {
         match &self.kind {
             ScriptedBackendKind::Events => {
                 assert_eq!(turn.mode, ModeId::from("serious_engineer"));
-                assert_eq!(turn.scope, "project:tempestmiku");
+                assert_eq!(turn.scope, "global");
                 sink.emit("text", json!({ "event": "text", "delta": "working" }))
                     .await?;
                 sink.emit(
@@ -250,7 +263,6 @@ impl CodingBackend for ScriptedBackend {
 #[derive(Default)]
 struct RecordingChatRunner {
     turns: Arc<Mutex<Vec<ChatTurn>>>,
-    mediator_present: Arc<Mutex<Vec<bool>>>,
 }
 
 #[async_trait]
@@ -259,9 +271,7 @@ impl ChatRunner for RecordingChatRunner {
         &self,
         turn: ChatTurn,
         sink: Arc<dyn tm_core::EventSink + Send + Sync>,
-        mediator: Option<Arc<dyn tm_core::ToolMediator>>,
     ) -> Result<String> {
-        self.mediator_present.lock().push(mediator.is_some());
         self.turns.lock().push(turn);
         let text = "recorded chat turn".to_string();
         sink.on_text(&text);
@@ -309,6 +319,14 @@ async fn create(app: &Router) -> CreateSessionResponse {
     create_with_body(app, Body::empty()).await
 }
 
+async fn create_project_session(app: &Router) -> CreateSessionResponse {
+    create_with_body(
+        app,
+        Body::from(r#"{"mode":"serious_engineer","scope":"project:tempestmiku"}"#),
+    )
+    .await
+}
+
 async fn create_with_body(app: &Router, body: Body) -> CreateSessionResponse {
     let res = app
         .clone()
@@ -329,6 +347,48 @@ async fn create_with_body(app: &Router, body: Body) -> CreateSessionResponse {
     serde_json::from_slice(&body).unwrap()
 }
 
+fn message_body(content: impl Into<String>) -> Body {
+    Body::from(
+        json!({
+            "clientMessageId": Uuid::new_v4().to_string(),
+            "content": content.into(),
+        })
+        .to_string(),
+    )
+}
+
+async fn accepted_turn_id(response: axum::response::Response) -> Uuid {
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    response_json(response).await["turnId"]
+        .as_str()
+        .expect("queued turn id")
+        .parse()
+        .expect("turn id is a UUID")
+}
+
+async fn wait_for_turn(app: &Router, session_id: Uuid, turn_id: Uuid) -> Value {
+    for _ in 0..500 {
+        let status = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{session_id}/turns/{turn_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let turn = response_json(status).await;
+        match turn["status"].as_str() {
+            Some("completed") | Some("failed") => return turn,
+            _ => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    panic!("durable turn {turn_id} did not finish")
+}
+
 async fn post_user_message(app: &Router, session_id: Uuid, content: &str) {
     let res = app
         .clone()
@@ -337,12 +397,14 @@ async fn post_user_message(app: &Router, session_id: Uuid, content: &str) {
                 .method(Method::POST)
                 .uri(format!("/sessions/{session_id}/messages"))
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "content": content }).to_string()))
+                .body(message_body(content))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    let turn_id = accepted_turn_id(res).await;
+    let turn = wait_for_turn(app, session_id, turn_id).await;
+    assert_eq!(turn["status"], json!("completed"), "{turn}");
 }
 
 async fn post_memory_proposal(

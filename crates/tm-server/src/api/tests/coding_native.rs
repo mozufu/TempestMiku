@@ -1,27 +1,15 @@
 use super::*;
 
 #[tokio::test]
-async fn serious_engineer_session_uses_project_scope_and_recalls_next_session() {
+async fn serious_engineer_session_uses_authoritative_global_scope_and_recalls_next_session() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
     assert_eq!(session_a.voice_cap, "off");
-    assert_eq!(session_a.default_scope, "project:tempestmiku");
+    assert_eq!(session_a.default_scope, "global");
     assert_eq!(session_a.active_skills, vec!["serious-engineer-ops"]);
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session_a.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"tempestmiku code open loop"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session_a.id, "tempestmiku code open loop").await;
     let chunks = store
-        .recall_chunks("project:tempestmiku", "tempestmiku", 5)
+        .recall_chunks("global", "tempestmiku", 5)
         .await
         .unwrap();
     assert_eq!(chunks.len(), 1);
@@ -31,19 +19,7 @@ async fn serious_engineer_session_uses_project_scope_and_recalls_next_session() 
             .contains("Project summary/open loop from session")
     );
     let session_b = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session_b.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"tempestmiku code open loop"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session_b.id, "tempestmiku code open loop").await;
     let events = store.events_after(session_b.id, None).await.unwrap();
     let final_event = events
         .iter()
@@ -73,19 +49,7 @@ async fn serious_engineer_uses_coding_backend_and_replays_events() {
     let (app, store) = test_app_with_state(state);
     let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
 
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"ship p0a production code"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "ship p0a production code").await;
 
     let events = store.events_after(session.id, None).await.unwrap();
     assert_eq!(
@@ -129,22 +93,19 @@ async fn approval_route_resolves_pending_backend_permission() {
     let (app, store) = test_app_with_state(state);
     let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
 
-    let post_app = app.clone();
-    let message = tokio::spawn(async move {
-        post_app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/sessions/{}/messages", session.id))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"content":"needs approval for a code patch"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/messages", session.id))
+                .header("content-type", "application/json")
+                .body(message_body("needs approval for a code patch"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
 
     let approval_id = wait_for_event_payload(&store, session.id, "approval").await["approvalId"]
         .as_str()
@@ -167,7 +128,10 @@ async fn approval_route_resolves_pending_backend_permission() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(message.await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        wait_for_turn(&app, session.id, turn_id).await["status"],
+        json!("completed")
+    );
 
     let resolved = store
         .events_after(session.id, None)
@@ -185,21 +149,20 @@ async fn approval_route_resolves_pending_backend_permission() {
 async fn native_deno_backend_approval_route_approves_proc_run() {
     let (app, store, llm, session, _temp) =
         native_deno_approval_app(Duration::from_secs(5), native_proc_script()).await;
-    let post_app = app.clone();
     let session_id = session.id;
-    let message = tokio::spawn(async move {
-        post_app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/sessions/{session_id}/messages"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"content":"run an unsafe proc command"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .body(message_body("run an unsafe proc command"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
 
     let approval = wait_for_event_payload(&store, session_id, "approval").await;
     assert_eq!(approval["backend"], json!("native-deno"));
@@ -222,7 +185,10 @@ async fn native_deno_backend_approval_route_approves_proc_run() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(message.await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        wait_for_turn(&app, session_id, turn_id).await["status"],
+        json!("completed")
+    );
 
     let resolved = store
         .events_after(session_id, None)
@@ -233,7 +199,7 @@ async fn native_deno_backend_approval_route_approves_proc_run() {
         .unwrap();
     assert_eq!(resolved.payload_json["backend"], json!("native-deno"));
     assert_eq!(resolved.payload_json["optionId"], json!("allow"));
-    assert!(native_tool_result(&llm).contains("\"ok\": true"));
+    assert!(native_tool_result(&llm).contains("\"ok\":true"));
     assert!(
         store
             .events_after(session_id, None)
@@ -249,21 +215,20 @@ async fn native_deno_backend_approval_route_approves_proc_run() {
 async fn native_deno_backend_approval_route_denies_proc_run() {
     let (app, store, llm, session, _temp) =
         native_deno_approval_app(Duration::from_secs(5), native_proc_script()).await;
-    let post_app = app.clone();
     let session_id = session.id;
-    let message = tokio::spawn(async move {
-        post_app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/sessions/{session_id}/messages"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"content":"deny an unsafe proc command"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .body(message_body("deny an unsafe proc command"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
 
     let approval_id = wait_for_event_payload(&store, session_id, "approval").await["approvalId"]
         .as_str()
@@ -283,7 +248,10 @@ async fn native_deno_backend_approval_route_denies_proc_run() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(message.await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        wait_for_turn(&app, session_id, turn_id).await["status"],
+        json!("completed")
+    );
     assert!(native_tool_result(&llm).contains("ApprovalDeniedError"));
     let resolved = store
         .events_after(session_id, None)
@@ -301,21 +269,7 @@ async fn native_deno_backend_approval_route_denies_proc_run() {
 async fn native_deno_backend_approval_timeout_defaults_to_deny() {
     let (app, store, llm, session, _temp) =
         native_deno_approval_app(Duration::from_millis(1), native_proc_script()).await;
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"timeout an unsafe proc command"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "timeout an unsafe proc command").await;
     assert!(native_tool_result(&llm).contains("ApprovalTimeoutError"));
     let events = store.events_after(session.id, None).await.unwrap();
     assert!(events.iter().any(|event| {
@@ -329,7 +283,7 @@ async fn native_deno_backend_approval_timeout_defaults_to_deny() {
 }
 
 #[tokio::test]
-async fn native_child_actor_approval_replays_and_child_resource_opens() {
+async fn native_child_actor_receives_only_delegated_grants() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
     let linked_root = temp.path().join("repo");
@@ -350,13 +304,18 @@ async fn native_child_actor_approval_replays_and_child_resource_opens() {
     .unwrap();
 
     let parent_code = r#"
-const digest = await agents.run("worker", "Run cargo clean with approval, then create a child artifact.");
+const digest = await agents.run("worker", "Verify undelegated repository capabilities are denied, then create a child artifact.");
 display(digest);
 "#;
     let child_code = r#"
-const run = await proc.run("cargo", ["clean"], { cwd: "repo:" });
+const denied = await Promise.all([
+  fs.read("repo:Cargo.toml").catch(err => err.name),
+  code.search({ pattern: "native-child", paths: ["repo:Cargo.toml"], regex: false }).catch(err => err.name),
+  proc.run("cargo", ["clean"], { cwd: "repo:" }).catch(err => err.name),
+  resources.read("linked://repo/Cargo.toml").catch(err => err.name)
+]);
 const artifact = artifacts.put("child resource open ok", { title: "child output" });
-display({ exitCode: run.exitCode, artifact: artifact.uri });
+display({ denied, artifact: artifact.uri });
 "#;
     let llm = Arc::new(ScriptedLlm::new(vec![
         vec![
@@ -441,14 +400,13 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
         Arc::new(crate::ChatActorExecutor::with_actor_context(
             llm_for_executor,
             cfg.clone(),
-            move |session_id, actor_id, grants, cancellation| {
+            move |session_id, actor_id, grants, session_scope, cancellation| {
                 let mut opts = executor_options.clone();
                 opts.session_id = session_id.to_string();
                 opts.actor_id = actor_id.map(str::to_string);
+                opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants = opts
-                    .grants
-                    .clone()
+                opts.grants = tm_sandbox::core_sandbox_grants()
                     .allow_many(grants.names().map(str::to_string));
                 let sink: Arc<dyn CodingEventSink> = Arc::new(crate::RosterCodingEventSink::new(
                     session_id,
@@ -479,38 +437,13 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
     let session = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
     let session_id = session.id;
 
-    let post_app = app.clone();
-    let post = tokio::spawn(async move {
-        post_app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/sessions/{session_id}/messages"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"content":"handoff child approval"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-    });
-
-    let approval = wait_for_event_payload(&store, session.id, "approval").await;
-    assert_eq!(approval["backend"], json!("native-deno"));
-    assert_eq!(approval["action"], json!("proc.run cargo clean"));
-    let actor_id = approval["scope"]["actorId"]
-        .as_str()
-        .expect("child approval should carry actorId")
-        .to_string();
-    let approval_id = approval["approvalId"]
-        .as_str()
-        .and_then(|value| value.parse::<uuid::Uuid>().ok())
-        .unwrap();
-    resolve_test_approval(&app, session.id, approval_id, "approve").await;
-
-    let response = post.await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    post_user_message(&app, session_id, "handoff child grant check").await;
 
     let completed = wait_for_event_payload(&store, session.id, "actor_completed").await;
+    let actor_id = completed["actor_id"]
+        .as_str()
+        .expect("completed child should carry actorId")
+        .to_string();
     assert_eq!(completed["actor_id"], json!(actor_id));
     assert_eq!(completed["artifact_uri"], json!("artifact://0"));
     assert_eq!(
@@ -558,25 +491,27 @@ display({ exitCode: run.exitCode, artifact: artifact.uri });
     );
     assert_eq!(linked["source_event_seq"], json!(completed_seq));
     assert!(kinds.contains(&"actor_spawned"));
-    assert!(kinds.contains(&"approval"));
-    assert!(kinds.contains(&"approval_resolved"));
+    assert!(!kinds.contains(&"approval"));
+    assert!(!kinds.contains(&"approval_resolved"));
     assert!(kinds.contains(&"actor_completed"));
     assert!(kinds.contains(&"actor_resources_linked"));
     assert!(kinds.contains(&"final"));
 
-    let replay_after_spawn = events
-        .iter()
-        .find(|event| event.event_type == "actor_spawned")
-        .and_then(|event| event.seq.checked_sub(1));
-    let replay = store
-        .events_after(session.id, replay_after_spawn)
-        .await
-        .unwrap();
-    assert!(
-        replay
+    let child_result_content = {
+        let requests = llm.requests.lock();
+        requests[2]
             .iter()
-            .any(|event| event.event_type == "approval_resolved"),
-        "Last-Event-ID replay should include child approval resolution"
+            .find(|message| message.role == Role::Tool)
+            .expect("child tool result is fed back before its final turn")
+            .content
+            .clone()
+    };
+    assert_eq!(
+        child_result_content
+            .matches("CapabilityDeniedError")
+            .count(),
+        4,
+        "child tool result: {child_result_content}"
     );
 
     let artifact = get_session_resource_json(&app, session.id, "resolve", "artifact://0").await;
@@ -670,6 +605,10 @@ async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
         .append_event(session.id, "final", json!({"text": "done"}))
         .await
         .unwrap();
+    store
+        .append_event(session.id, "session_end", json!({"status": "ended"}))
+        .await
+        .unwrap();
     let sse = app
         .oneshot(
             Request::builder()
@@ -689,8 +628,10 @@ async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
         .await
         .unwrap();
     let body = String::from_utf8(body.to_vec()).unwrap();
-    assert!(body.contains("event: actor_cancelled"), "{body}");
-    assert!(body.contains("event: final"), "{body}");
+    assert_eq!(body.matches("event: session_event").count(), 3, "{body}");
+    assert!(body.contains(r#""type":"actor_cancelled""#), "{body}");
+    assert!(body.contains(r#""type":"final""#), "{body}");
+    assert!(body.contains(r#""type":"session_end""#), "{body}");
 }
 
 #[tokio::test]
@@ -772,6 +713,10 @@ async fn actor_failed_event_replays_and_agent_resource_is_terminal() {
         .append_event(session.id, "final", json!({"text": "done"}))
         .await
         .unwrap();
+    store
+        .append_event(session.id, "session_end", json!({"status": "ended"}))
+        .await
+        .unwrap();
     let sse = app
         .oneshot(
             Request::builder()
@@ -791,8 +736,9 @@ async fn actor_failed_event_replays_and_agent_resource_is_terminal() {
         .await
         .unwrap();
     let body = String::from_utf8(body.to_vec()).unwrap();
-    assert!(body.contains("event: actor_failed"), "{body}");
-    assert!(body.contains("event: final"), "{body}");
+    assert!(body.contains(r#""type":"actor_failed""#), "{body}");
+    assert!(body.contains(r#""type":"final""#), "{body}");
+    assert!(body.contains(r#""type":"session_end""#), "{body}");
 }
 
 #[tokio::test]
@@ -814,19 +760,7 @@ async fn artifact_resource_route_reads_session_artifact() {
     let (app, _) = test_app_with_state(state);
     let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
 
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"write code transcript"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "write code transcript").await;
 
     let list = app
         .clone()
@@ -866,7 +800,111 @@ async fn artifact_resource_route_reads_session_artifact() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn server_agent_route_uses_deno_sdk_and_preserves_denials() {
+async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("repo");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    std::fs::write(
+        linked_root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\n",
+    )
+    .unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "repo".to_string(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: vec!["cargo".to_string()],
+        safe_args: vec![vec!["cargo".to_string(), "test".to_string()]],
+    }])
+    .unwrap();
+
+    let code = r#"
+const denied = await Promise.all([
+  fs.read("repo:Cargo.toml").catch(err => err.name),
+  code.search({ pattern: "workspace", paths: ["repo:Cargo.toml"], regex: false }).catch(err => err.name),
+  proc.run("cargo", ["test"], { cwd: "repo:" }).catch(err => err.name),
+  resources.read("linked://repo/Cargo.toml").catch(err => err.name)
+]);
+display({ denied });
+"#;
+    let tool_turn = || {
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_denied_linked".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(json!({ "code": code }).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ]
+    };
+    let final_turn = || {
+        vec![
+            StreamEvent::Text("denials checked".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ]
+    };
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        tool_turn(),
+        final_turn(),
+        tool_turn(),
+        final_turn(),
+    ]));
+    let chat = Arc::new(AgentChatRunner::deno(
+        llm.clone(),
+        AgentConfig {
+            model: "fake".to_string(),
+            max_turns: 3,
+            ..AgentConfig::default()
+        },
+        DenoSandboxOptions {
+            artifact_root,
+            linked_folders: Some(linked.clone()),
+            ..DenoSandboxOptions::default()
+        },
+    ));
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let state = AppState::new(
+        store,
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_linked_folders(linked);
+    let router = app(state);
+
+    for mode in ["general", "handoff"] {
+        let session =
+            create_with_body(&router, Body::from(json!({ "mode": mode }).to_string())).await;
+        post_user_message(&router, session.id, "inspect the linked project").await;
+    }
+
+    let requests = llm.requests.lock();
+    assert_eq!(requests.len(), 4);
+    for request_index in [1, 3] {
+        let tool_result = requests[request_index]
+            .iter()
+            .find(|message| message.role == Role::Tool)
+            .expect("tool result is fed back before final turn");
+        assert_eq!(
+            tool_result.content.matches("CapabilityDeniedError").count(),
+            4,
+            "tool result: {}",
+            tool_result.content
+        );
+    }
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn serious_server_agent_route_uses_deno_sdk_and_preserves_denials() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
     let linked_root = temp.path().join("repo");
@@ -953,49 +991,40 @@ display({
     .with_artifact_root(artifact_root.clone())
     .with_linked_folders(linked);
     let router = app(state);
-    let session = create(&router).await;
+    let session = create_with_body(
+        &router,
+        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+    )
+    .await;
 
-    let response = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"exercise the server sdk"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    post_user_message(&router, session.id, "exercise the server sdk").await;
 
-    let requests = llm.requests.lock();
-    assert_eq!(requests.len(), 2);
-    let tool_result = requests[1]
-        .iter()
-        .find(|message| message.role == Role::Tool)
-        .expect("tool result is fed back before final turn");
+    let tool_result_content = {
+        let requests = llm.requests.lock();
+        assert_eq!(requests.len(), 2);
+        requests[1]
+            .iter()
+            .find(|message| message.role == Role::Tool)
+            .expect("tool result is fed back before final turn")
+            .content
+            .clone()
+    };
     assert!(
-        tool_result.content.contains("\"ok\": true"),
-        "tool result: {}",
-        tool_result.content
+        tool_result_content.contains("\"ok\":true"),
+        "tool result: {tool_result_content}"
     );
     assert!(
-        tool_result.content.contains("artifact://0"),
-        "tool result: {}",
-        tool_result.content
+        tool_result_content.contains("artifact://0"),
+        "tool result: {tool_result_content}"
     );
     assert!(
-        tool_result.content.contains("ApprovalTimeoutError"),
-        "tool result: {}",
-        tool_result.content
+        tool_result_content.contains("ApprovalTimeoutError"),
+        "tool result: {tool_result_content}"
     );
     assert!(
-        tool_result.content.contains("CapabilityDeniedError"),
-        "tool result: {}",
-        tool_result.content
+        tool_result_content.contains("CapabilityDeniedError"),
+        "tool result: {tool_result_content}"
     );
-    drop(requests);
 
     let events = store.events_after(session.id, None).await.unwrap();
     assert!(events.iter().any(|event| event.event_type == "cell_start"));
@@ -1072,8 +1101,8 @@ async fn serious_engineer_native_deno_uses_linked_repo_and_scoped_drive_search()
             b"# Scoped Linked Brief\nScoped drive metadata for the linked project.",
             tm_drive::DrivePutOptions {
                 auto: true,
-                suggested_path: Some("projects/tempestmiku/notes/scoped-linked.md".to_string()),
-                project: Some("TempestMiku".to_string()),
+                suggested_path: Some("projects/repo/notes/scoped-linked.md".to_string()),
+                project: Some("repo".to_string()),
                 source_uri: Some("linked://repo/README.md".to_string()),
                 approval_mode: tm_drive::DriveApprovalMode::Auto,
                 ..tm_drive::DrivePutOptions::default()
@@ -1086,7 +1115,7 @@ async fn serious_engineer_native_deno_uses_linked_repo_and_scoped_drive_search()
 const read = await fs.read("repo:src/lib.rs");
 const hits = await code.search({{ pattern: "linked_answer", paths: ["repo:src/lib.rs"], regex: false }});
 const run = await proc.run("cargo", ["test", "--quiet"], {{ cwd: "repo:" }});
-const driveHits = await drive.search("Scoped", {{ project: "TempestMiku", returnSnippets: true }});
+const driveHits = await drive.search("Scoped", {{ project: "repo", returnSnippets: true }});
 display({{
   readOk: read.content.includes("linked_answer"),
   codeHits: hits.length,
@@ -1148,7 +1177,7 @@ display({{
         DenoSandboxOptions {
             artifact_root,
             linked_folders: Some(linked),
-            drive_store: Some(drive_store),
+            drive_store: Some(Arc::new(drive_store)),
             approval_timeout: Duration::from_secs(1),
             ..DenoSandboxOptions::default()
         },
@@ -1157,30 +1186,22 @@ display({{
     );
     state = state.with_coding_backend(Arc::new(backend));
     let router = app(state);
-    let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    let session = create_with_body(
+        &router,
+        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+    )
+    .await;
 
-    let response = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"inspect the linked project"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    post_user_message(&router, session.id, "inspect the linked project").await;
 
     let tool_result = native_tool_result(&llm);
-    assert!(tool_result.contains("\"readOk\": true"), "{tool_result}");
-    assert!(tool_result.contains("\"codeHits\": 1"), "{tool_result}");
-    assert!(tool_result.contains("\"exitCode\": 0"), "{tool_result}");
-    assert!(tool_result.contains("\"driveHits\": 1"), "{tool_result}");
+    assert!(tool_result.contains("\"readOk\":true"), "{tool_result}");
+    assert!(tool_result.contains("\"codeHits\":1"), "{tool_result}");
+    assert!(tool_result.contains("\"exitCode\":0"), "{tool_result}");
+    assert!(tool_result.contains("\"driveHits\":1"), "{tool_result}");
     assert!(tool_result.contains(&filed.uri), "{tool_result}");
     assert!(
-        tool_result.contains("\"driveProject\": \"TempestMiku\""),
+        tool_result.contains("\"driveProject\":\"repo\""),
         "{tool_result}"
     );
 }
@@ -1189,6 +1210,16 @@ display({{
 async fn native_deno_drive_organizer_events_are_persisted_for_replay() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("linked");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
     let drive_store = tm_drive::InMemoryDriveStore::new(
         tm_artifacts::ArtifactStore::open(temp.path(), "drive").unwrap(),
     );
@@ -1248,13 +1279,15 @@ display({
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone())
+    .with_linked_folders(linked.clone())
     .with_drive_store(drive_store.clone());
     let backend = NativeDenoBackend::new(
         llm_for_backend,
         cfg,
         DenoSandboxOptions {
             artifact_root,
-            drive_store: Some(drive_store),
+            drive_store: Some(Arc::new(drive_store)),
+            linked_folders: Some(linked),
             approval_timeout: Duration::from_secs(1),
             ..DenoSandboxOptions::default()
         },
@@ -1263,26 +1296,18 @@ display({
     );
     state = state.with_coding_backend(Arc::new(backend));
     let router = app(state);
-    let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    let session = create_with_body(
+        &router,
+        Body::from(r#"{"mode":"serious_engineer","scope":"project:tempestmiku"}"#),
+    )
+    .await;
 
-    let response = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"organize drive docs"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    post_user_message(&router, session.id, "organize drive docs").await;
 
     let tool_result = native_tool_result(&llm);
-    assert!(tool_result.contains("\"proposals\": 1"), "{tool_result}");
+    assert!(tool_result.contains("\"proposals\":1"), "{tool_result}");
     assert!(
-        tool_result.contains("\"status\": \"pending\""),
+        tool_result.contains("\"status\":\"pending\""),
         "{tool_result}"
     );
     let events = store.events_after(session.id, None).await.unwrap();
@@ -1454,7 +1479,11 @@ async fn native_deno_approval_app(
     );
     state = state.with_coding_backend(Arc::new(backend));
     let router = app(state);
-    let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    let session = create_with_body(
+        &router,
+        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+    )
+    .await;
     (router, store, llm, session, temp)
 }
 

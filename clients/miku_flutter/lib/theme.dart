@@ -78,6 +78,6 @@ Color _modeAccent(String temp, _Tok tok) {
 
 // Pick white or dark text for contrast on a given background.
 Color _textOn(Color bg) {
-  final lum = (0.299 * bg.red + 0.587 * bg.green + 0.114 * bg.blue) / 255;
+  final lum = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b;
   return lum > 0.55 ? const Color(0xFF2F2730) : Colors.white;
 }

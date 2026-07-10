@@ -192,7 +192,7 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
               borderRadius: BorderRadius.circular(999),
               child: LinearProgressIndicator(
                 value: _secs / _initialSecs,
-                backgroundColor: tok.border.withOpacity(0.6),
+                backgroundColor: tok.border.withValues(alpha: 0.6),
                 valueColor: AlwaysStoppedAnimation<Color>(accent),
                 minHeight: 5,
               ),
@@ -210,7 +210,7 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                         child: InkWell(
                           onTap: widget.onDeny,
                           borderRadius: BorderRadius.circular(13),
-                          focusColor: tok.focus.withOpacity(0.18),
+                          focusColor: tok.focus.withValues(alpha: 0.18),
                           child: Container(
                             height: 48,
                             decoration: BoxDecoration(
@@ -244,7 +244,7 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                         child: InkWell(
                           onTap: widget.onApprove,
                           borderRadius: BorderRadius.circular(13),
-                          focusColor: tok.focus.withOpacity(0.18),
+                          focusColor: tok.focus.withValues(alpha: 0.18),
                           child: Container(
                             height: 48,
                             decoration: BoxDecoration(
@@ -303,7 +303,7 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
                         child: InkWell(
                           onTap: () => widget.onOption(option),
                           borderRadius: BorderRadius.circular(13),
-                          focusColor: tok.focus.withOpacity(0.18),
+                          focusColor: tok.focus.withValues(alpha: 0.18),
                           child: Container(
                             width: double.infinity,
                             height: 46,
@@ -506,7 +506,7 @@ class _ActionRow extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(12),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             decoration: BoxDecoration(

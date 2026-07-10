@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
+// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
 
 import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
@@ -81,7 +81,7 @@ class _RaTeXFormulaState extends State<RaTeXFormula> {
 }
 
 String _hexColor(Color color) {
-  final value = color.value & 0x00ffffff;
+  final value = color.toARGB32() & 0x00ffffff;
   return '#${value.toRadixString(16).padLeft(6, '0')}';
 }
 

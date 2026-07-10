@@ -1,11 +1,18 @@
-// ignore: avoid_web_libraries_in_flutter
+// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
+
 import 'dart:html';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:js_util' as js_util;
 
 import 'session_models.dart';
+import 'session_sse.dart';
 
 MikuSessionClient createClient() => WebMikuSessionClient();
+
+class _AmbiguousWebTransportFailure implements Exception {
+  const _AmbiguousWebTransportFailure();
+}
 
 class WebMikuSessionClient implements MikuSessionClient {
   static const _sessionIdKey = 'tempestmiku.sessionId';
@@ -63,16 +70,18 @@ class WebMikuSessionClient implements MikuSessionClient {
     );
     final session = _sessionFromJson(json, lastEventId: lastEventId);
     _rememberSession(session);
-    final messages = ((json['messages'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((item) => _messageFromJson(item.cast<String, Object?>()))
-        .toList();
-    final pendingEvents = ((json['pendingEvents'] as List?) ??
-            (json['pending_events'] as List?) ??
-            const [])
-        .whereType<Map>()
-        .map((item) => _eventFromJson(item.cast<String, Object?>()))
-        .toList();
+    final messages =
+        ((json['messages'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((item) => _messageFromJson(item.cast<String, Object?>()))
+            .toList();
+    final pendingEvents =
+        ((json['pendingEvents'] as List?) ??
+                (json['pending_events'] as List?) ??
+                const [])
+            .whereType<Map>()
+            .map((item) => _eventFromJson(item.cast<String, Object?>()))
+            .toList();
     return LoadedSession(
       session: session,
       messages: messages,
@@ -83,79 +92,164 @@ class WebMikuSessionClient implements MikuSessionClient {
   @override
   Stream<MikuEvent> events(String sessionId, {String? lastEventId}) {
     final controller = StreamController<MikuEvent>();
-    final resumeId = lastEventId ?? window.localStorage[_lastEventIdKey];
-    final suffix = resumeId == null || resumeId.isEmpty
-        ? ''
-        : '?lastEventId=${Uri.encodeQueryComponent(resumeId)}';
-    final source = EventSource('/sessions/$sessionId/events$suffix');
-    for (final type in [
-      'text',
-      'final',
-      'mode',
-      'approval',
-      'approval_resolved',
-      'diff',
-      'artifact',
-      'tool_call',
-      'tool_call_update',
-      'cell_start',
-      'cell_result',
-      'actor_spawned',
-      'actor_status',
-      'actor_message',
-      'actor_completed',
-      'actor_failed',
-      'actor_cancelled',
-      'write_proposal',
-      'drive_put',
-      'drive_linked',
-      'drive_unlinked',
-      'drive_moved',
-      'drive_tagged',
-      'drive_organizer_started',
-      'drive_organizer_completed',
-      'drive_organizer_failed',
-      'error',
-    ]) {
-      source.addEventListener(type, (Event event) {
-        final message = event as MessageEvent;
-        final eventId = message.lastEventId;
-        final data =
-            (jsonDecode(message.data as String) as Map).cast<String, Object?>();
-        if (eventId.isNotEmpty && shouldRememberEventId(type, data)) {
-          rememberLastEventId(sessionId, eventId);
-        }
-        controller.add(
-          MikuEvent(
-            type: type,
-            id: eventId,
-            data: data,
-          ),
-        );
-      });
-    }
-    source.onOpen.listen((_) {
-      if (!controller.isClosed) {
-        controller.add(
-          const MikuEvent(
-            type: 'connection',
-            data: {'status': 'connected'},
-          ),
-        );
+    var closed = false;
+    Object? activeAbortController;
+    controller.onCancel = () {
+      closed = true;
+      final abortController = activeAbortController;
+      if (abortController != null) {
+        js_util.callMethod<void>(abortController, 'abort', const []);
       }
-    });
-    source.onError.listen((_) {
-      if (!controller.isClosed) {
-        controller.add(
-          const MikuEvent(
-            type: 'connection',
-            data: {'status': 'reconnecting'},
-          ),
-        );
-      }
-    });
-    controller.onCancel = source.close;
+    };
+    unawaited(
+      _pumpEvents(
+        controller,
+        () => closed || controller.isClosed,
+        (value) => activeAbortController = value,
+        sessionId,
+        lastEventId,
+      ),
+    );
     return controller.stream;
+  }
+
+  Future<void> _pumpEvents(
+    StreamController<MikuEvent> controller,
+    bool Function() isClosed,
+    void Function(Object? controller) setAbortController,
+    String sessionId,
+    String? initialLastEventId,
+  ) async {
+    var resumeId = initialLastEventId ?? window.localStorage[_lastEventIdKey];
+    if (numericEventId(resumeId) == null) resumeId = null;
+    final lifecycle = SessionEventLifecycle(resumeId);
+
+    while (!isClosed() && lifecycle.shouldReconnect) {
+      try {
+        final abortController = _newAbortController();
+        setAbortController(abortController);
+        final decoder = SessionEventSseDecoder();
+        eventStream:
+        await for (final chunk in _fetchEventChunks(
+          sessionId,
+          resumeId,
+          abortController,
+          () {
+            if (!isClosed()) {
+              controller.add(
+                const MikuEvent(
+                  type: 'connection',
+                  data: {'status': 'connected'},
+                ),
+              );
+            }
+          },
+        )) {
+          for (final event in decoder.add(chunk)) {
+            if (isClosed()) break;
+            if (!lifecycle.accept(event)) continue;
+            final eventId = event.id!;
+            if (shouldRememberEventId(event.type, event.data)) {
+              resumeId = eventId;
+              rememberLastEventId(sessionId, eventId);
+            }
+            controller.add(event);
+            if (lifecycle.isTerminal) break eventStream;
+          }
+          if (isClosed()) break;
+        }
+        if (!isClosed() && !lifecycle.isTerminal) {
+          for (final event in decoder.close()) {
+            if (!lifecycle.accept(event)) continue;
+            final eventId = event.id!;
+            if (shouldRememberEventId(event.type, event.data)) {
+              resumeId = eventId;
+              rememberLastEventId(sessionId, eventId);
+            }
+            controller.add(event);
+            if (lifecycle.isTerminal) break;
+          }
+        }
+      } catch (_) {
+        if (!isClosed() && lifecycle.shouldReconnect) {
+          controller.add(
+            const MikuEvent(
+              type: 'connection',
+              data: {'status': 'reconnecting'},
+            ),
+          );
+          await Future<void>.delayed(const Duration(seconds: 2));
+        }
+      } finally {
+        setAbortController(null);
+      }
+    }
+    if (lifecycle.isTerminal && !controller.isClosed) {
+      await controller.close();
+    }
+  }
+
+  Object _newAbortController() {
+    final constructor = js_util.getProperty<Object>(window, 'AbortController');
+    return js_util.callConstructor<Object>(constructor, const []);
+  }
+
+  Stream<String> _fetchEventChunks(
+    String sessionId,
+    String? lastEventId,
+    Object abortController,
+    void Function() onOpen,
+  ) async* {
+    final suffix =
+        lastEventId == null
+            ? ''
+            : '?lastEventId=${Uri.encodeQueryComponent(lastEventId)}';
+    final signal = js_util.getProperty<Object>(abortController, 'signal');
+    final init = js_util.jsify({
+      'method': 'GET',
+      'credentials': 'same-origin',
+      'cache': 'no-store',
+      'headers': {
+        'accept': 'text/event-stream',
+        'cache-control': 'no-cache',
+        if (lastEventId != null) 'Last-Event-ID': lastEventId,
+      },
+      'signal': signal,
+    });
+    final promise = js_util.callMethod<Object>(window, 'fetch', [
+      '/sessions/$sessionId/events$suffix',
+      init,
+    ]);
+    final response = await js_util.promiseToFuture<Object>(promise);
+    final status = js_util.getProperty<num>(response, 'status').toInt();
+    if (status < 200 || status >= 300) {
+      throw StateError('event stream failed: $status');
+    }
+    final body = js_util.getProperty<Object?>(response, 'body');
+    if (body == null) throw StateError('streaming fetch body is unavailable');
+    onOpen();
+    final reader = js_util.callMethod<Object>(body, 'getReader', const []);
+    final textDecoderConstructor = js_util.getProperty<Object>(
+      window,
+      'TextDecoder',
+    );
+    final textDecoder = js_util.callConstructor<Object>(
+      textDecoderConstructor,
+      ['utf-8'],
+    );
+    while (true) {
+      final readPromise = js_util.callMethod<Object>(reader, 'read', const []);
+      final result = await js_util.promiseToFuture<Object>(readPromise);
+      if (js_util.getProperty<bool>(result, 'done')) break;
+      final value = js_util.getProperty<Object>(result, 'value');
+      final chunk = js_util.callMethod<String>(textDecoder, 'decode', [
+        value,
+        js_util.jsify({'stream': true}),
+      ]);
+      if (chunk.isNotEmpty) yield chunk;
+    }
+    final tail = js_util.callMethod<String>(textDecoder, 'decode', const []);
+    if (tail.isNotEmpty) yield tail;
   }
 
   @override
@@ -167,10 +261,17 @@ class WebMikuSessionClient implements MikuSessionClient {
 
   @override
   Future<void> sendMessage(String sessionId, String content) async {
-    await _request(
-      'POST',
-      '/sessions/$sessionId/messages',
-      body: {'content': content},
+    final clientMessageId = newClientMessageId();
+    await sendIdempotentMessageWithRetry(
+      clientMessageId: clientMessageId,
+      isAmbiguousFailure: (error) => error is _AmbiguousWebTransportFailure,
+      send: (stableClientMessageId) async {
+        await _request(
+          'POST',
+          '/sessions/$sessionId/messages',
+          body: {'clientMessageId': stableClientMessageId, 'content': content},
+        );
+      },
     );
   }
 
@@ -184,10 +285,7 @@ class WebMikuSessionClient implements MikuSessionClient {
     await _request(
       'POST',
       '/sessions/$sessionId/approvals/$approvalId',
-      body: {
-        'decision': decision,
-        if (optionId != null) 'optionId': optionId,
-      },
+      body: {'decision': decision, if (optionId != null) 'optionId': optionId},
     );
   }
 
@@ -223,11 +321,12 @@ class WebMikuSessionClient implements MikuSessionClient {
     final json = await _request('GET', '/sessions/$sessionId/project');
     return ProjectOverview(
       status: json['status'] as String? ?? '',
-      nextActions: ((json['nextActions'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((item) => item['text'] as String? ?? '')
-          .where((text) => text.isNotEmpty)
-          .toList(),
+      nextActions:
+          ((json['nextActions'] as List?) ?? const [])
+              .whereType<Map>()
+              .map((item) => item['text'] as String? ?? '')
+              .where((text) => text.isNotEmpty)
+              .toList(),
     );
   }
 
@@ -238,15 +337,18 @@ class WebMikuSessionClient implements MikuSessionClient {
     String? project,
   }) async {
     final trimmedProject = project?.trim();
-    final query = Uri(
-      queryParameters: {
-        'limit': '$limit',
-        if (trimmedProject != null && trimmedProject.isNotEmpty)
-          'project': trimmedProject,
-      },
-    ).query;
-    final json =
-        await _request('GET', '/sessions/$sessionId/drive/feed?$query');
+    final query =
+        Uri(
+          queryParameters: {
+            'limit': '$limit',
+            if (trimmedProject != null && trimmedProject.isNotEmpty)
+              'project': trimmedProject,
+          },
+        ).query;
+    final json = await _request(
+      'GET',
+      '/sessions/$sessionId/drive/feed?$query',
+    );
     return DriveFeed.fromJson(json);
   }
 
@@ -271,7 +373,9 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   ResourcePreview _resourcePreviewFromJson(
-      Map<String, Object?> json, String uri) {
+    Map<String, Object?> json,
+    String uri,
+  ) {
     return ResourcePreview(
       uri: json['uri'] as String? ?? uri,
       kind: json['kind'] as String? ?? '',
@@ -314,15 +418,19 @@ class WebMikuSessionClient implements MikuSessionClient {
     String path, {
     Map<String, Object?>? body,
   }) async {
-    final response = await HttpRequest.request(
-      path,
-      method: method,
-      requestHeaders: {
-        if (body != null) 'content-type': 'application/json',
-      },
-      sendData: body == null ? null : jsonEncode(body),
-    );
+    late final HttpRequest response;
+    try {
+      response = await HttpRequest.request(
+        path,
+        method: method,
+        requestHeaders: {if (body != null) 'content-type': 'application/json'},
+        sendData: body == null ? null : jsonEncode(body),
+      );
+    } catch (_) {
+      throw const _AmbiguousWebTransportFailure();
+    }
     final status = response.status ?? 0;
+    if (status == 0) throw const _AmbiguousWebTransportFailure();
     if (status < 200 || status >= 300) {
       throw StateError('request failed: $status ${response.responseText}');
     }
@@ -335,23 +443,27 @@ class WebMikuSessionClient implements MikuSessionClient {
     Map<String, Object?> json, {
     String? lastEventId,
   }) {
-    final modeState = (json['mode_state'] as Map?)?.cast<String, Object?>() ??
+    final modeState =
+        (json['mode_state'] as Map?)?.cast<String, Object?>() ??
         (json['modeState'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
     return MikuSession(
       id: json['id'] as String,
+      status: json['status'] as String? ?? 'active',
       mode: (json['mode'] as String?) ?? (modeState['mode'] as String?) ?? '',
       label: json['label'] as String? ?? '',
       voiceCap:
           (json['voice_cap'] as String?) ?? (json['voiceCap'] as String?) ?? '',
-      defaultScope: (json['default_scope'] as String?) ??
+      defaultScope:
+          (json['default_scope'] as String?) ??
           (json['defaultScope'] as String?) ??
           'global',
-      activeSkills: ((json['activeSkills'] as List?) ??
-              (json['active_skills'] as List?) ??
-              const [])
-          .map((skill) => skill.toString())
-          .toList(),
+      activeSkills:
+          ((json['activeSkills'] as List?) ??
+                  (json['active_skills'] as List?) ??
+                  const [])
+              .map((skill) => skill.toString())
+              .toList(),
       locked:
           modeState['lockSource'] != null || modeState['lock_source'] != null,
       lastEventId: lastEventId,
@@ -365,11 +477,13 @@ class WebMikuSessionClient implements MikuSessionClient {
       preview: json['preview'] as String? ?? '',
       mode: json['mode'] as String? ?? '',
       label: json['label'] as String? ?? '',
-      updatedAt: (json['updatedAt'] as String?) ??
+      updatedAt:
+          (json['updatedAt'] as String?) ??
           (json['updated_at'] as String?) ??
           '',
       status: json['status'] as String? ?? '',
-      messageCount: (json['messageCount'] as int?) ??
+      messageCount:
+          (json['messageCount'] as int?) ??
           (json['message_count'] as int?) ??
           0,
       lastEventId: _nullableString(
@@ -383,14 +497,16 @@ class WebMikuSessionClient implements MikuSessionClient {
       seq: (json['seq'] as num?)?.toInt() ?? 0,
       role: json['role'] as String? ?? '',
       content: json['content'] as String? ?? '',
-      createdAt: (json['createdAt'] as String?) ??
+      createdAt:
+          (json['createdAt'] as String?) ??
           (json['created_at'] as String?) ??
           '',
     );
   }
 
   MikuEvent _eventFromJson(Map<String, Object?> json) {
-    final data = (json['data'] as Map?)?.cast<String, Object?>() ??
+    final data =
+        (json['data'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
     return MikuEvent(
       type: json['type'] as String? ?? '',

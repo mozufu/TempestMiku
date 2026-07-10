@@ -119,7 +119,7 @@ class _MarkdownBlockView extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
           decoration: BoxDecoration(
-            color: tok.surface.withOpacity(0.72),
+            color: tok.surface.withValues(alpha: 0.72),
             border: Border(
               left: BorderSide(color: accent, width: 3),
             ),
@@ -143,7 +143,7 @@ class _MarkdownBlockView extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
           decoration: BoxDecoration(
-            color: tok.bg.withOpacity(0.78),
+            color: tok.bg.withValues(alpha: 0.78),
             border: Border.all(color: tok.border),
             borderRadius: BorderRadius.circular(8),
           ),
@@ -162,7 +162,7 @@ class _MarkdownBlockView extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
           decoration: BoxDecoration(
-            color: tok.surface.withOpacity(0.42),
+            color: tok.surface.withValues(alpha: 0.42),
             borderRadius: BorderRadius.circular(8),
           ),
           child: RaTeXFormula(
@@ -181,7 +181,7 @@ class _MarkdownBlockView extends StatelessWidget {
       case _MarkdownBlockKind.rule:
         return Container(
           height: 1,
-          color: tok.border.withOpacity(0.72),
+          color: tok.border.withValues(alpha: 0.72),
         );
       case _MarkdownBlockKind.gap:
         return const SizedBox.shrink();
@@ -440,7 +440,7 @@ List<InlineSpan> _inlineSpans(
           color: accent,
           fontFamily: 'monospace',
           fontWeight: FontWeight.w700,
-          backgroundColor: tok.surface.withOpacity(0.85),
+          backgroundColor: tok.surface.withValues(alpha: 0.85),
         ),
       ));
     } else {

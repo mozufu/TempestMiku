@@ -181,11 +181,11 @@ class _HistorySessionRow extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(13),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: Container(
             padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
             decoration: BoxDecoration(
-              color: selected ? accent.withOpacity(0.11) : tok.bg,
+              color: selected ? accent.withValues(alpha: 0.11) : tok.bg,
               border: Border.all(color: selected ? accent : tok.border),
               borderRadius: BorderRadius.circular(13),
             ),
@@ -294,7 +294,7 @@ class _HistoryChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
       decoration: BoxDecoration(
-        color: tok.surface.withOpacity(0.68),
+        color: tok.surface.withValues(alpha: 0.68),
         border: Border.all(color: tok.border),
         borderRadius: BorderRadius.circular(999),
       ),
@@ -388,7 +388,7 @@ class _Toggle extends StatelessWidget {
               color: Colors.white,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
+                  color: Colors.black.withValues(alpha: 0.15),
                   blurRadius: 3,
                 ),
               ],

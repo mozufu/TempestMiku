@@ -26,8 +26,8 @@ class _ActivityRow extends StatelessWidget {
           width: 22,
           height: 22,
           decoration: BoxDecoration(
-            color: stateColor.withOpacity(0.12),
-            border: Border.all(color: stateColor.withOpacity(0.38)),
+            color: stateColor.withValues(alpha: 0.12),
+            border: Border.all(color: stateColor.withValues(alpha: 0.38)),
             borderRadius: BorderRadius.circular(7),
           ),
           child: Icon(item.icon, size: 13, color: stateColor),
@@ -77,7 +77,7 @@ class _ActivityRow extends StatelessWidget {
                               key: ValueKey('activity-resource:$uri'),
                               onTap: () => onOpenResource(uri),
                               borderRadius: BorderRadius.circular(8),
-                              focusColor: tok.focus.withOpacity(0.18),
+                              focusColor: tok.focus.withValues(alpha: 0.18),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 8,
@@ -180,12 +180,12 @@ class _ApprovalCard extends StatelessWidget {
           key: ValueKey('approval:${approval.action}'),
           onTap: onTap,
           borderRadius: BorderRadius.circular(13),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: Container(
             padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
             decoration: BoxDecoration(
-              color: tok.warning.withOpacity(0.11),
-              border: Border.all(color: tok.warning.withOpacity(0.52)),
+              color: tok.warning.withValues(alpha: 0.11),
+              border: Border.all(color: tok.warning.withValues(alpha: 0.52)),
               borderRadius: BorderRadius.circular(13),
             ),
             child: Row(
@@ -266,7 +266,7 @@ class _MemoryProposalCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
       decoration: BoxDecoration(
         color: tok.surface,
-        border: Border.all(color: accent.withOpacity(0.46)),
+        border: Border.all(color: accent.withValues(alpha: 0.46)),
         borderRadius: BorderRadius.circular(13),
       ),
       child: Row(
@@ -304,7 +304,7 @@ class _MemoryProposalCard extends StatelessWidget {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: accent.withOpacity(0.1),
+                        color: accent.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
@@ -465,7 +465,7 @@ class _ProposalActionButton extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(10),
-            focusColor: tok.focus.withOpacity(0.18),
+            focusColor: tok.focus.withValues(alpha: 0.18),
             child: Container(
               height: 38,
               padding: const EdgeInsets.symmetric(horizontal: 10),

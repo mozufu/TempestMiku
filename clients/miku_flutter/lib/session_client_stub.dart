@@ -154,20 +154,26 @@ class ScriptedMikuClient implements MikuSessionClient {
 
   @override
   Future<List<SessionSummary>> listSessions({int limit = 30}) async {
-    final ids = _sessions.keys.toList()
-      ..sort((a, b) => (_updatedAt[b] ?? DateTime.fromMillisecondsSinceEpoch(0))
-          .compareTo(_updatedAt[a] ?? DateTime.fromMillisecondsSinceEpoch(0)));
+    final ids =
+        _sessions.keys.toList()..sort(
+          (a, b) => (_updatedAt[b] ?? DateTime.fromMillisecondsSinceEpoch(0))
+              .compareTo(
+                _updatedAt[a] ?? DateTime.fromMillisecondsSinceEpoch(0),
+              ),
+        );
     return ids.take(limit).map((id) {
       final session = _sessions[id]!;
       final messages = _messages[id] ?? const [];
-      final firstUser = messages
-          .where((message) => message.role == 'user')
-          .map((message) => message.content)
-          .firstOrNull;
-      final summary = messages.reversed
-          .where((message) => message.role == 'assistant')
-          .map((message) => message.content)
-          .firstOrNull;
+      final firstUser =
+          messages
+              .where((message) => message.role == 'user')
+              .map((message) => message.content)
+              .firstOrNull;
+      final summary =
+          messages.reversed
+              .where((message) => message.role == 'assistant')
+              .map((message) => message.content)
+              .firstOrNull;
       final preview = messages.isEmpty ? '' : messages.last.content;
       return SessionSummary(
         id: id,
@@ -194,8 +200,9 @@ class ScriptedMikuClient implements MikuSessionClient {
     return LoadedSession(
       session: session,
       messages: List<SessionMessage>.from(_messages[session.id] ?? const []),
-      pendingEvents:
-          List<MikuEvent>.from(_pendingEvents[session.id] ?? const []),
+      pendingEvents: List<MikuEvent>.from(
+        _pendingEvents[session.id] ?? const [],
+      ),
     );
   }
 
@@ -246,19 +253,21 @@ class ScriptedMikuClient implements MikuSessionClient {
           data: const {
             'code':
                 'const worker = await agents.spawn("worker", "scripted actor smoke");\n'
-                    'display(await agents.wait(worker, 5000));',
+                'display(await agents.wait(worker, 5000));',
           },
         ),
       );
-      controller.add(MikuEvent(
-        type: 'actor_spawned',
-        id: _eventId(),
-        data: const {
-          'actor_id': 'Worker0',
-          'role': 'worker',
-          'task': 'scripted actor smoke',
-        },
-      ));
+      controller.add(
+        MikuEvent(
+          type: 'actor_spawned',
+          id: _eventId(),
+          data: const {
+            'actor_id': 'Worker0',
+            'role': 'worker',
+            'task': 'scripted actor smoke',
+          },
+        ),
+      );
       final approvalId = 'approval-${_nextEventId++}';
       _approvalSessions[approvalId] = sessionId;
       _approvalBackends[approvalId] = 'native-deno';
@@ -269,16 +278,9 @@ class ScriptedMikuClient implements MikuSessionClient {
           'approvalId': approvalId,
           'backend': 'native-deno',
           'action': 'proc.run cargo clean',
-          'scope': const {
-            'actorId': 'Worker0',
-            'capability': 'proc.run',
-          },
+          'scope': const {'actorId': 'Worker0', 'capability': 'proc.run'},
           'options': const [
-            {
-              'optionId': 'allow',
-              'name': 'Allow once',
-              'kind': 'allow_once',
-            },
+            {'optionId': 'allow', 'name': 'Allow once', 'kind': 'allow_once'},
             {
               'optionId': 'reject',
               'name': 'Reject once',
@@ -290,16 +292,18 @@ class ScriptedMikuClient implements MikuSessionClient {
       );
       controller.add(approvalEvent);
       _pendingEvents.putIfAbsent(sessionId, () => []).add(approvalEvent);
-      controller.add(MikuEvent(
-        type: 'actor_completed',
-        id: _eventId(),
-        data: const {
-          'actor_id': 'Worker0',
-          'summary': 'scripted actor complete',
-          'artifact_uri': 'artifact://0',
-          'history_uri': 'history://Worker0',
-        },
-      ));
+      controller.add(
+        MikuEvent(
+          type: 'actor_completed',
+          id: _eventId(),
+          data: const {
+            'actor_id': 'Worker0',
+            'summary': 'scripted actor complete',
+            'artifact_uri': 'artifact://0',
+            'history_uri': 'history://Worker0',
+          },
+        ),
+      );
       controller.add(
         MikuEvent(
           type: 'cell_result',
@@ -326,24 +330,27 @@ class ScriptedMikuClient implements MikuSessionClient {
       );
     }
     if (lower.contains('reasoning')) {
-      controller.add(MikuEvent(
-        type: 'reasoning',
-        id: _eventId(),
-        data: const {
-          'delta':
-              'Compare scheduler invariants, approval gates, and replay traces before answering.',
-        },
-      ));
+      controller.add(
+        MikuEvent(
+          type: 'reasoning',
+          id: _eventId(),
+          data: const {
+            'delta':
+                'Compare scheduler invariants, approval gates, and replay traces before answering.',
+          },
+        ),
+      );
     }
     final wantsDriveWorkspace =
         lower.contains('drive') || lower.contains('research');
     if (wantsDriveWorkspace) {
       _emitDriveWorkspace(sessionId, controller);
     }
-    final text = wantsDriveWorkspace
-        ? 'Drive research workspace ready: '
-            'drive://projects/tempestmiku/research/p5-drive-workspace.md'
-        : lower.contains('markdown')
+    final text =
+        wantsDriveWorkspace
+            ? 'Drive research workspace ready: '
+                'drive://projects/tempestmiku/research/p5-drive-workspace.md'
+            : lower.contains('markdown')
             ? '# P4 memo\n\n'
                 '> Proposal-first background work.\n\n'
                 '- **Keep approvals manual** for durable writes.\n'
@@ -354,11 +361,11 @@ class ScriptedMikuClient implements MikuSessionClient {
                 '\n\n'
                 'Use `write_proposal` before memory commit.'
             : lower.contains('actor') || lower.contains('handoff')
-                ? 'Actor Worker0 completed child resource artifact://0'
-                : 'Miku heard: $content';
-    controller.add(MikuEvent(type: 'text', id: _eventId(), data: {
-      'delta': text,
-    }));
+            ? 'Actor Worker0 completed child resource artifact://0'
+            : 'Miku heard: $content';
+    controller.add(
+      MikuEvent(type: 'text', id: _eventId(), data: {'delta': text}),
+    );
     if (pauseBeforeFinal) {
       _pausedFinalTexts[sessionId] = text;
       return;
@@ -408,16 +415,9 @@ class ScriptedMikuClient implements MikuSessionClient {
           'approvalId': approvalId,
           'backend': 'memory',
           'action': 'memory.write profile_fact',
-          'scope': {
-            'proposal': proposal,
-            'timeoutMs': 60000,
-          },
+          'scope': {'proposal': proposal, 'timeoutMs': 60000},
           'options': const [
-            {
-              'optionId': 'allow',
-              'name': 'Save memory',
-              'kind': 'allow_once',
-            },
+            {'optionId': 'allow', 'name': 'Save memory', 'kind': 'allow_once'},
             {
               'optionId': 'reject',
               'name': 'Reject memory',
@@ -441,10 +441,9 @@ class ScriptedMikuClient implements MikuSessionClient {
   }
 
   void _emitFinal(String sessionId, String text) {
-    _controllers[sessionId]
-        ?.add(MikuEvent(type: 'final', id: _eventId(), data: {
-      'text': text,
-    }));
+    _controllers[sessionId]?.add(
+      MikuEvent(type: 'final', id: _eventId(), data: {'text': text}),
+    );
     _appendMessage(sessionId, 'assistant', text);
   }
 
@@ -461,11 +460,14 @@ class ScriptedMikuClient implements MikuSessionClient {
       return;
     }
     final proposalId = _approvalProposals[approvalId];
-    _pendingEvents[sessionId]?.removeWhere((event) =>
-        (event.type == 'approval' && event.data['approvalId'] == approvalId) ||
-        (proposalId != null &&
-            event.type == 'write_proposal' &&
-            event.data['proposalId'] == proposalId));
+    _pendingEvents[sessionId]?.removeWhere(
+      (event) =>
+          (event.type == 'approval' &&
+              event.data['approvalId'] == approvalId) ||
+          (proposalId != null &&
+              event.type == 'write_proposal' &&
+              event.data['proposalId'] == proposalId),
+    );
     final approved = decision == 'approve';
     final backend = _approvalBackends[approvalId] ?? 'memory';
     controller.add(
@@ -576,7 +578,8 @@ class ScriptedMikuClient implements MikuSessionClient {
     String? project,
   }) async {
     driveFeedRequests++;
-    final feed = _driveFeeds[sessionId] ??
+    final feed =
+        _driveFeeds[sessionId] ??
         DriveFeed(
           recent: const [],
           virtualDirs: _defaultDriveVirtualDirs(),
@@ -586,10 +589,11 @@ class ScriptedMikuClient implements MikuSessionClient {
     if (project == null || project.trim().isEmpty) return feed;
     final normalized = project.trim().toLowerCase();
     return DriveFeed(
-      recent: feed.recent
-          .where((item) => item.project?.toLowerCase() == normalized)
-          .take(limit)
-          .toList(),
+      recent:
+          feed.recent
+              .where((item) => item.project?.toLowerCase() == normalized)
+              .take(limit)
+              .toList(),
       virtualDirs: feed.virtualDirs,
       proposals: feed.proposals,
       pendingApprovals: feed.pendingApprovals,
@@ -667,9 +671,9 @@ class ScriptedMikuClient implements MikuSessionClient {
     return switch (mode) {
       'ambiguity_grill' => const ['miku-voice', 'ambiguity-grill'],
       'negative_state_grounding' => const [
-          'miku-voice',
-          'negative-state-grounding',
-        ],
+        'miku-voice',
+        'negative-state-grounding',
+      ],
       'serious_engineer' => const [],
       'handoff' => const ['oh-my-pi-handoff'],
       _ => const ['miku-voice', 'personal-assistant-state-capture'],
@@ -719,31 +723,27 @@ class ScriptedMikuClient implements MikuSessionClient {
     );
 
     Map<String, Object?> entryPayload(String action, String title) => {
-          'action': action,
-          'path': path,
+      'action': action,
+      'path': path,
+      'uri': uri,
+      'title': item.title,
+      'docKind': item.docKind,
+      'project': item.project,
+      'tags': item.tags,
+      'mime': 'text/markdown',
+      'sizeBytes': item.sizeBytes,
+      'contentHash': item.contentHash,
+      'preview': {'title': title, 'subtitle': path, 'snippet': item.summary},
+      'resourceRefs': [
+        {
+          'role': 'document',
           'uri': uri,
+          'kind': 'drive_document',
           'title': item.title,
-          'docKind': item.docKind,
-          'project': item.project,
-          'tags': item.tags,
-          'mime': 'text/markdown',
-          'sizeBytes': item.sizeBytes,
-          'contentHash': item.contentHash,
-          'preview': {
-            'title': title,
-            'subtitle': path,
-            'snippet': item.summary,
-          },
-          'resourceRefs': [
-            {
-              'role': 'document',
-              'uri': uri,
-              'kind': 'drive_document',
-              'title': item.title,
-              'path': path,
-            },
-          ],
-        };
+          'path': path,
+        },
+      ],
+    };
 
     final proposalPayload = {
       'proposalId': proposalId,
@@ -775,73 +775,85 @@ class ScriptedMikuClient implements MikuSessionClient {
       ],
     };
 
-    controller.add(MikuEvent(
-      type: 'drive_linked',
-      id: _eventId(),
-      data: const {
-        'action': 'link',
-        'alias': 'tempestmiku',
-        'linkedUri': 'linked://tempestmiku',
-        'mode': 'rw',
-        'project': 'TempestMiku',
-        'memoryScope': 'project:tempestmiku',
-        'preview': {
-          'title': 'Linked project folder',
-          'subtitle': 'TempestMiku -> linked://tempestmiku',
-          'snippet': '/Users/brian/TempestMiku',
-        },
-        'resourceRefs': [
-          {
-            'role': 'linked',
-            'uri': 'linked://tempestmiku',
-            'kind': 'linked_folder',
-            'title': 'TempestMiku',
+    controller.add(
+      MikuEvent(
+        type: 'drive_linked',
+        id: _eventId(),
+        data: const {
+          'action': 'link',
+          'alias': 'tempestmiku',
+          'linkedUri': 'linked://tempestmiku',
+          'mode': 'rw',
+          'project': 'TempestMiku',
+          'memoryScope': 'project:tempestmiku',
+          'preview': {
+            'title': 'Linked project folder',
+            'subtitle': 'TempestMiku -> linked://tempestmiku',
+            'snippet': '/Users/brian/TempestMiku',
           },
-        ],
-      },
-    ));
-    controller.add(MikuEvent(
-      type: 'drive_put',
-      id: _eventId(),
-      data: entryPayload('put', 'Filed drive document'),
-    ));
-    controller.add(MikuEvent(
-      type: 'drive_tagged',
-      id: _eventId(),
-      data: entryPayload('tag', 'Tagged drive document'),
-    ));
-    controller.add(MikuEvent(
-      type: 'drive_moved',
-      id: _eventId(),
-      data: {
-        ...entryPayload('move', 'Moved drive document'),
-        'fromPath': movedFrom,
-        'fromUri': movedFromUri,
-        'toPath': path,
-        'toUri': uri,
-      },
-    ));
-    controller.add(MikuEvent(
-      type: 'drive_organizer_started',
-      id: _eventId(),
-      data: const {
-        'apply': false,
-        'tier': 'conservative',
-        'autoApplyRules': 0,
-      },
-    ));
-    controller.add(MikuEvent(
-      type: 'drive_organizer_completed',
-      id: _eventId(),
-      data: {
-        'apply': false,
-        'tier': 'conservative',
-        'runId': 'scripted-run',
-        'proposalCount': 1,
-        'proposals': [proposalPayload],
-        'resourceRefs': proposalPayload['resourceRefs'],
-      },
-    ));
+          'resourceRefs': [
+            {
+              'role': 'linked',
+              'uri': 'linked://tempestmiku',
+              'kind': 'linked_folder',
+              'title': 'TempestMiku',
+            },
+          ],
+        },
+      ),
+    );
+    controller.add(
+      MikuEvent(
+        type: 'drive_put',
+        id: _eventId(),
+        data: entryPayload('put', 'Filed drive document'),
+      ),
+    );
+    controller.add(
+      MikuEvent(
+        type: 'drive_tagged',
+        id: _eventId(),
+        data: entryPayload('tag', 'Tagged drive document'),
+      ),
+    );
+    controller.add(
+      MikuEvent(
+        type: 'drive_moved',
+        id: _eventId(),
+        data: {
+          ...entryPayload('move', 'Moved drive document'),
+          'fromPath': movedFrom,
+          'fromUri': movedFromUri,
+          'toPath': path,
+          'toUri': uri,
+        },
+      ),
+    );
+    controller.add(
+      MikuEvent(
+        type: 'drive_organizer_started',
+        id: _eventId(),
+        data: const {
+          'apply': false,
+          'tier': 'conservative',
+          'autoApplyRules': 0,
+        },
+      ),
+    );
+    controller.add(
+      MikuEvent(
+        type: 'drive_organizer_completed',
+        id: _eventId(),
+        data: {
+          'apply': false,
+          'tier': 'conservative',
+          'runId': 'scripted-run',
+          'proposalCount': 1,
+          'proposals': [proposalPayload],
+          'resourceRefs': proposalPayload['resourceRefs'],
+        },
+      ),
+    );
   }
 
   static List<DriveVirtualDir> _defaultDriveVirtualDirs() {
@@ -879,20 +891,17 @@ class ScriptedMikuClient implements MikuSessionClient {
     ];
   }
 
-  MikuSession _sessionForMode(
-    String id,
-    String mode, {
-    bool locked = false,
-  }) {
+  MikuSession _sessionForMode(String id, String mode, {bool locked = false}) {
     final lastEventId = _nextEventId > 1 ? '${_nextEventId - 1}' : null;
     return MikuSession(
       id: id,
       mode: mode,
       label: _label(mode),
       voiceCap: _voiceCap(mode),
-      defaultScope: mode == 'serious_engineer' || mode == 'handoff'
-          ? 'project:tempestmiku'
-          : 'global',
+      defaultScope:
+          mode == 'serious_engineer' || mode == 'handoff'
+              ? 'project:tempestmiku'
+              : 'global',
       activeSkills: _activeSkills(mode),
       locked: locked,
       lastEventId: lastEventId,
@@ -902,6 +911,7 @@ class ScriptedMikuClient implements MikuSessionClient {
   MikuSession _copySession(MikuSession session, {String? lastEventId}) {
     return MikuSession(
       id: session.id,
+      status: session.status,
       mode: session.mode,
       label: session.label,
       voiceCap: session.voiceCap,
@@ -936,6 +946,7 @@ class ScriptedMikuClient implements MikuSessionClient {
     if (session != null) {
       _sessions[sessionId] = MikuSession(
         id: session.id,
+        status: session.status,
         mode: session.mode,
         label: session.label,
         voiceCap: session.voiceCap,

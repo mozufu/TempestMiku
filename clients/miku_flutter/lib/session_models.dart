@@ -1,4 +1,37 @@
 import 'dart:async';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
+
+String newClientMessageId() {
+  final random = Random.secure();
+  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+  final encoded =
+      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  return 'm_$encoded';
+}
+
+/// Retries one ambiguous message transport failure without changing the idempotency key.
+Future<void> sendIdempotentMessageWithRetry({
+  required String clientMessageId,
+  required Future<void> Function(String clientMessageId) send,
+  required bool Function(Object error) isAmbiguousFailure,
+  int maxAttempts = 2,
+  Duration retryDelay = const Duration(milliseconds: 250),
+}) async {
+  if (maxAttempts < 1) {
+    throw ArgumentError.value(maxAttempts, 'maxAttempts', 'must be positive');
+  }
+  for (var attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await send(clientMessageId);
+      return;
+    } catch (error) {
+      if (attempt == maxAttempts || !isAmbiguousFailure(error)) rethrow;
+      if (retryDelay > Duration.zero) await Future<void>.delayed(retryDelay);
+    }
+  }
+}
 
 class MikuSession {
   const MikuSession({
@@ -6,6 +39,7 @@ class MikuSession {
     required this.mode,
     required this.label,
     required this.voiceCap,
+    this.status = 'active',
     this.defaultScope = 'global',
     this.activeSkills = const [],
     this.lastEventId,
@@ -13,6 +47,7 @@ class MikuSession {
   });
 
   final String id;
+  final String status;
   final String mode;
   final String label;
   final String voiceCap;
@@ -27,11 +62,15 @@ class MikuEvent {
     required this.type,
     required this.data,
     this.id,
+    this.turnId,
+    this.createdAt,
   });
 
   final String type;
   final Map<String, Object?> data;
   final String? id;
+  final String? turnId;
+  final String? createdAt;
 }
 
 class SessionSummary {
@@ -112,23 +151,29 @@ class DriveFeed {
 
   static DriveFeed fromJson(Map<String, Object?> json) {
     return DriveFeed(
-      recent: _mapList(json['recent'])
-          .map(DriveFeedItem.fromJson)
-          .where((item) => item.uri.isNotEmpty)
-          .toList(),
-      virtualDirs: _mapList(json['virtualDirs'] ?? json['virtual_dirs'])
-          .map(DriveVirtualDir.fromJson)
-          .where((dir) => dir.uri.isNotEmpty)
-          .toList(),
-      proposals: _mapList(json['proposals'])
-          .map(DriveOrganizerProposal.fromJson)
-          .where((proposal) => proposal.proposalId.isNotEmpty)
-          .toList(),
+      recent:
+          _mapList(json['recent'])
+              .map(DriveFeedItem.fromJson)
+              .where((item) => item.uri.isNotEmpty)
+              .toList(),
+      virtualDirs:
+          _mapList(json['virtualDirs'] ?? json['virtual_dirs'])
+              .map(DriveVirtualDir.fromJson)
+              .where((dir) => dir.uri.isNotEmpty)
+              .toList(),
+      proposals:
+          _mapList(json['proposals'])
+              .map(DriveOrganizerProposal.fromJson)
+              .where((proposal) => proposal.proposalId.isNotEmpty)
+              .toList(),
       pendingApprovals:
           _mapList(json['pendingApprovals'] ?? json['pending_approvals'])
               .map(DrivePendingApproval.fromJson)
-              .where((approval) =>
-                  approval.approvalId.isNotEmpty || approval.action.isNotEmpty)
+              .where(
+                (approval) =>
+                    approval.approvalId.isNotEmpty ||
+                    approval.action.isNotEmpty,
+              )
               .toList(),
     );
   }
@@ -269,13 +314,15 @@ class DriveOrganizerProposal {
     return DriveOrganizerProposal(
       proposalId: _stringValue(json['proposalId'] ?? json['id']),
       action: _stringValue(json['action']),
-      status: _stringValue(json['status']).isEmpty
-          ? 'pending'
-          : _stringValue(json['status']),
+      status:
+          _stringValue(json['status']).isEmpty
+              ? 'pending'
+              : _stringValue(json['status']),
       sourcePath: _stringValue(json['sourcePath'] ?? json['source_path']),
       sourceUri: _nullableString(json['sourceUri'] ?? json['source_uri']),
-      proposedPath:
-          _nullableString(json['proposedPath'] ?? json['proposed_path']),
+      proposedPath: _nullableString(
+        json['proposedPath'] ?? json['proposed_path'],
+      ),
       proposedUri: _nullableString(json['proposedUri'] ?? json['proposed_uri']),
       confidence: _doubleValue(json['confidence']),
       previewTitle: _nullableString(preview?['title']),
@@ -307,10 +354,7 @@ class DrivePendingApproval {
 }
 
 class ModeCatalog {
-  const ModeCatalog({
-    required this.defaultMode,
-    required this.modes,
-  });
+  const ModeCatalog({required this.defaultMode, required this.modes});
 
   final String defaultMode;
   final List<ModeProfile> modes;
@@ -323,16 +367,18 @@ class ModeCatalog {
   }
 
   static ModeCatalog fromJson(Map<String, Object?> json) {
-    final modes = ((json['modes'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((item) => ModeProfile.fromJson(item.cast<String, Object?>()))
-        .where((mode) => mode.id.isNotEmpty)
-        .toList();
+    final modes =
+        ((json['modes'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((item) => ModeProfile.fromJson(item.cast<String, Object?>()))
+            .where((mode) => mode.id.isNotEmpty)
+            .toList();
     final defaultMode = _stringValue(json['defaultMode']);
     return ModeCatalog(
-      defaultMode: defaultMode.isEmpty && modes.isNotEmpty
-          ? modes.first.id
-          : defaultMode,
+      defaultMode:
+          defaultMode.isEmpty && modes.isNotEmpty
+              ? modes.first.id
+              : defaultMode,
       modes: modes,
     );
   }
@@ -373,18 +419,22 @@ class ModeProfile {
       id: _stringValue(json['mode']),
       label: _stringValue(json['label']),
       voiceCap: _stringValue(json['voiceCap']),
-      defaultScope: _stringValue(json['defaultScope']).isEmpty
-          ? 'global'
-          : _stringValue(json['defaultScope']),
-      capabilityClass: _stringValue(json['capabilityClass']).isEmpty
-          ? 'conversation'
-          : _stringValue(json['capabilityClass']),
-      activeSkills: ((json['activeSkills'] as List?) ?? const [])
-          .map((skill) => skill.toString())
-          .toList(),
-      capabilities: ((json['capabilities'] as List?) ?? const [])
-          .map((capability) => capability.toString())
-          .toList(),
+      defaultScope:
+          _stringValue(json['defaultScope']).isEmpty
+              ? 'global'
+              : _stringValue(json['defaultScope']),
+      capabilityClass:
+          _stringValue(json['capabilityClass']).isEmpty
+              ? 'conversation'
+              : _stringValue(json['capabilityClass']),
+      activeSkills:
+          ((json['activeSkills'] as List?) ?? const [])
+              .map((skill) => skill.toString())
+              .toList(),
+      capabilities:
+          ((json['capabilities'] as List?) ?? const [])
+              .map((capability) => capability.toString())
+              .toList(),
       description: _stringValue(json['description']),
     );
   }
@@ -477,17 +527,19 @@ class MemoryWriteProposal {
   bool get isPending => status == 'pending';
 
   String get kindLabel => switch (memoryKind) {
-        'profile_fact' => 'profile fact',
-        'recall_chunk' => 'recall chunk',
-        _ => memoryKind.isEmpty ? 'memory' : memoryKind.replaceAll('_', ' '),
-      };
+    'profile_fact' => 'profile fact',
+    'recall_chunk' => 'recall chunk',
+    _ => memoryKind.isEmpty ? 'memory' : memoryKind.replaceAll('_', ' '),
+  };
 
   String get displayText {
     if (text.isNotEmpty) return text;
-    final parts = [subject, predicate, object]
-        .whereType<String>()
-        .where((part) => part.isNotEmpty)
-        .toList();
+    final parts =
+        [
+          subject,
+          predicate,
+          object,
+        ].whereType<String>().where((part) => part.isNotEmpty).toList();
     return parts.join(' ');
   }
 
@@ -507,9 +559,10 @@ class MemoryWriteProposal {
     return MemoryWriteProposal(
       proposalId: proposalId,
       memoryKind: _stringValue(data['memoryKind']),
-      status: _stringValue(data['status']).isEmpty
-          ? 'pending'
-          : _stringValue(data['status']),
+      status:
+          _stringValue(data['status']).isEmpty
+              ? 'pending'
+              : _stringValue(data['status']),
       text: _stringValue(data['text']),
       scope: _stringValue(data['scope']),
       subject: _stringValue(data['subject']),
@@ -547,10 +600,7 @@ bool shouldRememberEventId(String type, Map<String, Object?> data) {
 }
 
 class ProjectOverview {
-  const ProjectOverview({
-    required this.status,
-    required this.nextActions,
-  });
+  const ProjectOverview({required this.status, required this.nextActions});
 
   final String status;
   final List<String> nextActions;
@@ -588,7 +638,10 @@ class ProjectPromotion {
   final int promotedCount;
 }
 
-String normalizeMikuServerBaseUrl(String value) {
+String normalizeMikuServerBaseUrl(
+  String value, {
+  bool requireHttps = kReleaseMode,
+}) {
   var text = value.trim();
   if (text.isEmpty) {
     throw const FormatException('server target is empty');
@@ -603,22 +656,70 @@ String normalizeMikuServerBaseUrl(String value) {
   if (uri.scheme != 'http' && uri.scheme != 'https') {
     throw const FormatException('server target must use http or https');
   }
-  final normalized = uri.replace(query: null, fragment: null).toString();
+  if (requireHttps && uri.scheme != 'https') {
+    throw const FormatException(
+      'release builds require https for every server target',
+    );
+  }
+  if (uri.userInfo.isNotEmpty) {
+    throw const FormatException('server target must not contain credentials');
+  }
+  if ((uri.path.isNotEmpty && uri.path != '/') ||
+      uri.hasQuery ||
+      uri.hasFragment) {
+    throw const FormatException(
+      'server target must be an origin without a path, query, or fragment',
+    );
+  }
+  final normalized =
+      uri.replace(path: '', query: null, fragment: null).toString();
   return normalized.endsWith('/')
       ? normalized.substring(0, normalized.length - 1)
       : normalized;
 }
 
-String pairingServerBaseUrlFromLink(String value) {
+class MikuPairingTarget {
+  const MikuPairingTarget({required this.serverBaseUrl, required this.code});
+
+  final String serverBaseUrl;
+  final String code;
+
+  Uri get serverUri => Uri.parse(serverBaseUrl);
+
+  String get origin => serverUri.origin;
+
+  String get scheme => serverUri.scheme.toUpperCase();
+
+  String get host => serverUri.host;
+
+  int get effectivePort =>
+      serverUri.hasPort
+          ? serverUri.port
+          : serverUri.scheme == 'https'
+          ? 443
+          : 80;
+}
+
+MikuPairingTarget pairingTargetFromLink(String value) {
   final uri = Uri.parse(value.trim());
   if (uri.scheme != 'tempestmiku' || uri.host != 'pair') {
     throw const FormatException('not a TempestMiku pairing link');
+  }
+  if (uri.queryParameters['v'] != '1') {
+    throw const FormatException('unsupported TempestMiku pairing version');
   }
   final server = uri.queryParameters['server']?.trim();
   if (server == null || server.isEmpty) {
     throw const FormatException('pairing link is missing a server target');
   }
-  return normalizeMikuServerBaseUrl(server);
+  final code = uri.queryParameters['code']?.trim();
+  if (code == null || !RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(code)) {
+    throw const FormatException('pairing link has an invalid one-time code');
+  }
+  return MikuPairingTarget(
+    serverBaseUrl: normalizeMikuServerBaseUrl(server),
+    code: code,
+  );
 }
 
 abstract class MikuSessionClient {
@@ -673,9 +774,15 @@ abstract class MikuSessionClient {
 }
 
 abstract class ServerTargetClient {
+  String pairingDeviceName();
+
   Future<String> serverBaseUrl();
 
   Future<void> setServerBaseUrl(String baseUrl);
+
+  Future<void> pairWithCode(MikuPairingTarget target);
+
+  Future<void> logout();
 }
 
 Map<String, Object?>? _mapValue(Object? value) {

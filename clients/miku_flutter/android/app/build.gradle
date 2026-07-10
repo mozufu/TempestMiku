@@ -5,10 +5,42 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+def releaseRequested = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains("release")
+}
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+} else if (releaseRequested) {
+    throw new GradleException(
+        "Release signing is required. Create android/key.properties; debug signing is never used for release builds."
+    )
+}
+if (releaseRequested) {
+    ["keyAlias", "keyPassword", "storeFile", "storePassword"].each { key ->
+        if (!keystoreProperties[key]?.toString()?.trim()) {
+            throw new GradleException("Release signing property '${key}' is required.")
+        }
+    }
+    def releaseAlias = keystoreProperties["keyAlias"].toString().trim()
+    def releaseStore = file(keystoreProperties["storeFile"].toString())
+    if (releaseAlias.equalsIgnoreCase("androiddebugkey") ||
+            releaseStore.name.equalsIgnoreCase("debug.keystore")) {
+        throw new GradleException(
+            "Release signing must not use the Android debug key or debug keystore."
+        )
+    }
+    if (!releaseStore.isFile()) {
+        throw new GradleException("Release keystore does not exist: ${releaseStore}")
+    }
+}
+
 android {
     namespace = "dev.tempestmiku.miku_flutter"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // flutter_secure_storage 10.x and mobile_scanner's CameraX graph require API 36 headers.
+    compileSdk = 36
+    ndkVersion = "26.1.10909125"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
@@ -24,17 +56,28 @@ android {
         applicationId = "dev.tempestmiku.miku_flutter"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            release {
+                keyAlias = keystoreProperties["keyAlias"]
+                keyPassword = keystoreProperties["keyPassword"]
+                storeFile = file(keystoreProperties["storeFile"])
+                storePassword = keystoreProperties["storePassword"]
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.release
+            }
         }
     }
 }

@@ -2,7 +2,8 @@
   description = "TempestMiku — code-execution agent runtime and Flutter client";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    # Flutter on 25.05 carries Dart 3.7+, required by the pinned offline QR scanner.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";

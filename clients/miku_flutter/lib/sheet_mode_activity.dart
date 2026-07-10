@@ -83,14 +83,16 @@ class _ModeSheet extends StatelessWidget {
               child: InkWell(
                 onTap: onLockToggle,
                 borderRadius: BorderRadius.circular(13),
-                focusColor: tok.focus.withOpacity(0.18),
+                focusColor: tok.focus.withValues(alpha: 0.18),
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
                   decoration: BoxDecoration(
-                    color: locked ? currentAccent.withOpacity(0.1) : tok.bg,
+                    color:
+                        locked ? currentAccent.withValues(alpha: 0.1) : tok.bg,
                     border: Border.all(
-                      color:
-                          locked ? currentAccent.withOpacity(0.62) : tok.border,
+                      color: locked
+                          ? currentAccent.withValues(alpha: 0.62)
+                          : tok.border,
                     ),
                     borderRadius: BorderRadius.circular(13),
                   ),
@@ -152,11 +154,12 @@ class _ModeSheet extends StatelessWidget {
                   child: InkWell(
                     onTap: () => onPick(m.id),
                     borderRadius: BorderRadius.circular(13),
-                    focusColor: tok.focus.withOpacity(0.18),
+                    focusColor: tok.focus.withValues(alpha: 0.18),
                     child: Container(
                       padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
                       decoration: BoxDecoration(
-                        color: isActive ? mAccent.withOpacity(0.08) : tok.bg,
+                        color:
+                            isActive ? mAccent.withValues(alpha: 0.08) : tok.bg,
                         border: Border.all(
                           color: isActive ? mAccent : tok.border,
                         ),
@@ -362,7 +365,8 @@ class _AgentActivitySheet extends StatelessWidget {
                 ),
                 if (i != activities.length - 1) ...[
                   const SizedBox(height: 9),
-                  Container(height: 0.5, color: tok.border.withOpacity(0.7)),
+                  Container(
+                      height: 0.5, color: tok.border.withValues(alpha: 0.7)),
                   const SizedBox(height: 9),
                 ],
               ],

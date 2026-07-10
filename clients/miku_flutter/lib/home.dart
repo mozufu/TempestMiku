@@ -11,8 +11,6 @@ class MikuHomePage extends StatefulWidget {
 
 class _MikuHomePageState extends State<MikuHomePage>
     with SingleTickerProviderStateMixin {
-  static const _pairingChannel = MethodChannel('dev.tempestmiku/pairing');
-
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final List<ApprovalPrompt> _approvals = [];
@@ -46,13 +44,11 @@ class _MikuHomePageState extends State<MikuHomePage>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
-    _installPairingLinkHandler();
     unawaited(_boot());
   }
 
   @override
   void dispose() {
-    _pairingChannel.setMethodCallHandler(null);
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _sub?.cancel();
@@ -68,49 +64,46 @@ class _MikuHomePageState extends State<MikuHomePage>
       widget.client is ServerTargetClient
           ? widget.client as ServerTargetClient
           : null;
+  bool get _sessionEnded => _status == 'ended';
 
   Future<void> _boot() async {
-    final handled = await _handleInitialPairingLink();
-    if (!handled) {
-      await _ensureSession();
-    }
-  }
-
-  void _installPairingLinkHandler() {
-    if (kIsWeb || _serverTargetClient == null) return;
-    _pairingChannel.setMethodCallHandler((call) async {
-      if (call.method != 'link') return null;
-      final rawLink = call.arguments;
-      if (rawLink is String && rawLink.trim().isNotEmpty) {
-        await _applyPairingLink(rawLink);
-      }
-      return null;
-    });
-  }
-
-  Future<bool> _handleInitialPairingLink() async {
-    if (kIsWeb || _serverTargetClient == null) return false;
-    try {
-      final rawLink = await _pairingChannel.invokeMethod<String>('initialLink');
-      if (rawLink == null || rawLink.trim().isEmpty) return false;
-      return _applyPairingLink(rawLink);
-    } on MissingPluginException {
-      return false;
-    } catch (err) {
-      _showSnack(_copy.pairingLinkFailed(err));
-      return false;
-    }
+    await _ensureSession();
   }
 
   Future<bool> _applyPairingLink(String rawLink) async {
     final client = _serverTargetClient;
     if (client == null) return false;
     try {
-      final target = pairingServerBaseUrlFromLink(rawLink);
-      await _setServerTargetAndReconnect(
-        client,
-        target,
-        successMessage: _copy.pairedToServer(target),
+      final target = pairingTargetFromLink(rawLink);
+      final proposedDeviceName = client.pairingDeviceName();
+      if (!mounted) return false;
+      final approved = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder:
+            (dialogContext) => AlertDialog(
+              backgroundColor: _tok.surface,
+              title: const Text('Pair with this server?'),
+              content: PairingAuthorityDetails(
+                target: target,
+                deviceName: proposedDeviceName,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: Text(_copy.cancel),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Pair securely'),
+                ),
+              ],
+            ),
+      );
+      if (approved != true) return false;
+      await client.pairWithCode(target);
+      await _reconnectAfterPair(
+        successMessage: _copy.pairedToServer(target.serverBaseUrl),
       );
       return true;
     } catch (err) {
@@ -174,7 +167,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       _lastEventId = session.lastEventId;
       _modeId = session.mode.isEmpty ? _defaultModeId : session.mode;
       _modeLocked = session.locked;
-      _status = 'connected';
+      _status = session.status == 'ended' ? 'ended' : 'connected';
       _approvals.clear();
       _memoryProposals.clear();
       _driveFeed = null;
@@ -186,13 +179,24 @@ class _MikuHomePageState extends State<MikuHomePage>
       for (final event in pendingEvents) {
         _applyEvent(event);
       }
+      if (session.status == 'ended') {
+        _status = 'ended';
+        _canSend = false;
+      }
     });
     await previousSub?.cancel();
-    _sub = widget.client
-        .events(session.id, lastEventId: _lastEventId)
-        .listen(_onEvent, onError: (_) {
-      if (mounted) setState(() => _status = 'reconnecting');
-    });
+    if (session.status != 'ended') {
+      _sub = widget.client
+          .events(session.id, lastEventId: _lastEventId)
+          .listen(
+            _onEvent,
+            onError: (_) {
+              if (mounted && !_sessionEnded) {
+                setState(() => _status = 'reconnecting');
+              }
+            },
+          );
+    }
     await _loadProject();
     await _loadDriveFeed(silent: true);
     if (mounted) setState(() {});
@@ -224,9 +228,10 @@ class _MikuHomePageState extends State<MikuHomePage>
           label: session.label.isEmpty ? session.mode : session.label,
           voiceCap: session.voiceCap.isEmpty ? 'medium' : session.voiceCap,
           defaultScope: session.defaultScope,
-          capabilityClass: session.defaultScope.startsWith('project:')
-              ? 'engineering'
-              : 'conversation',
+          capabilityClass:
+              session.defaultScope.startsWith('project:')
+                  ? 'engineering'
+                  : 'conversation',
           activeSkills: session.activeSkills,
           capabilities: const [],
           description: 'Runtime mode profile from session.',
@@ -249,13 +254,14 @@ class _MikuHomePageState extends State<MikuHomePage>
         continue;
       }
       if (message.role != 'assistant') continue;
-      final round = rounds.isNotEmpty && rounds.last.assistantFinalText.isEmpty
-          ? rounds.last
-          : _ConversationRound(
-              index: rounds.length + 1,
-              userText: '',
-              isStreaming: false,
-            );
+      final round =
+          rounds.isNotEmpty && rounds.last.assistantFinalText.isEmpty
+              ? rounds.last
+              : _ConversationRound(
+                index: rounds.length + 1,
+                userText: '',
+                isStreaming: false,
+              );
       if (!rounds.contains(round)) rounds.add(round);
       round.assistantFinalText = message.content;
       round.assistantStreamedText = '';
@@ -319,6 +325,14 @@ class _MikuHomePageState extends State<MikuHomePage>
         round.isStreaming = false;
         _status = 'connected';
         _loadProject();
+      case 'session_end':
+        if (_rounds.isNotEmpty) {
+          _rounds.last.isStreaming = false;
+        }
+        _status = 'ended';
+        _canSend = false;
+        _approvals.clear();
+        _memoryProposals.clear();
       case 'mode':
         final newId = e.data['mode'] as String? ?? _modeId;
         _mergeSessionMode(
@@ -326,18 +340,22 @@ class _MikuHomePageState extends State<MikuHomePage>
             id: _sessionId ?? '',
             mode: newId,
             label: e.data['label'] as String? ?? newId,
-            voiceCap: (e.data['voice_cap'] as String?) ??
+            voiceCap:
+                (e.data['voice_cap'] as String?) ??
                 (e.data['voiceCap'] as String?) ??
                 'medium',
-            defaultScope: (e.data['defaultScope'] as String?) ??
+            defaultScope:
+                (e.data['defaultScope'] as String?) ??
                 (e.data['default_scope'] as String?) ??
                 'global',
-            activeSkills: ((e.data['activeSkills'] as List?) ?? const [])
-                .map((skill) => skill.toString())
-                .toList(),
+            activeSkills:
+                ((e.data['activeSkills'] as List?) ?? const [])
+                    .map((skill) => skill.toString())
+                    .toList(),
           ),
         );
-        _modeLocked = (e.data['locked'] as bool?) ??
+        _modeLocked =
+            (e.data['locked'] as bool?) ??
             (e.data['lockSource'] != null || e.data['lock_source'] != null);
         _modeId = newId;
       case 'approval':
@@ -346,20 +364,23 @@ class _MikuHomePageState extends State<MikuHomePage>
           action: e.data['action'] as String? ?? 'Approval requested',
           scope: (e.data['scope'] as Map?)?.cast<String, Object?>() ?? const {},
           backend: e.data['backend'] as String? ?? '',
-          options: ((e.data['options'] as List?) ?? const [])
-              .whereType<Map>()
-              .map(
-                (option) => ApprovalOption(
-                  optionId: (option['optionId'] as String?) ??
-                      (option['option_id'] as String?) ??
-                      '',
-                  name: (option['name'] as String?) ?? '',
-                  kind: (option['kind'] as String?) ?? '',
-                ),
-              )
-              .where((option) => option.optionId.isNotEmpty)
-              .toList(),
-          timeoutMs: (e.data['timeoutMs'] as num?)?.toInt() ??
+          options:
+              ((e.data['options'] as List?) ?? const [])
+                  .whereType<Map>()
+                  .map(
+                    (option) => ApprovalOption(
+                      optionId:
+                          (option['optionId'] as String?) ??
+                          (option['option_id'] as String?) ??
+                          '',
+                      name: (option['name'] as String?) ?? '',
+                      kind: (option['kind'] as String?) ?? '',
+                    ),
+                  )
+                  .where((option) => option.optionId.isNotEmpty)
+                  .toList(),
+          timeoutMs:
+              (e.data['timeoutMs'] as num?)?.toInt() ??
               (e.data['timeout_ms'] as num?)?.toInt(),
         );
         _upsertApproval(approval);
@@ -412,21 +433,27 @@ class _MikuHomePageState extends State<MikuHomePage>
       case 'cell_result':
         final shaped = _eventText(data, 'shaped');
         return _ActivityItem(
-          icon: shaped.startsWith('error:')
-              ? Icons.error_outline
-              : Icons.check_circle_outline,
+          icon:
+              shaped.startsWith('error:')
+                  ? Icons.error_outline
+                  : Icons.check_circle_outline,
           title: shaped.startsWith('error:') ? '程式失敗' : '程式結果',
           detail: shaped,
-          state: shaped.startsWith('error:')
-              ? _ActivityState.failed
-              : _ActivityState.done,
+          state:
+              shaped.startsWith('error:')
+                  ? _ActivityState.failed
+                  : _ActivityState.done,
           monospace: true,
           kind: 'cell',
           resourceUris: _extractResources(shaped),
         );
       case 'actor_spawned':
-        final actorId = _eventText(data, 'actor_id',
-            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final actorId = _eventText(
+          data,
+          'actor_id',
+          camelKey: 'actorId',
+          fallback: _eventText(data, 'id'),
+        );
         final role = _eventText(data, 'role', fallback: 'worker');
         return _ActivityItem(
           icon: Icons.account_tree_outlined,
@@ -438,39 +465,56 @@ class _MikuHomePageState extends State<MikuHomePage>
           role: role,
         );
       case 'actor_status':
-        final actorId = _eventText(data, 'actor_id',
-            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final actorId = _eventText(
+          data,
+          'actor_id',
+          camelKey: 'actorId',
+          fallback: _eventText(data, 'id'),
+        );
         final status = _eventText(data, 'status', fallback: 'updated');
         return _ActivityItem(
           icon: Icons.timeline,
           title: '$actorId 狀態 $status',
           detail: '',
-          state: status == 'terminated'
-              ? _ActivityState.done
-              : _ActivityState.running,
+          state:
+              status == 'terminated'
+                  ? _ActivityState.done
+                  : _ActivityState.running,
           kind: 'actor',
           actorId: actorId,
         );
       case 'actor_message':
-        final actorId = _eventText(data, 'actor_id',
-            camelKey: 'actorId', fallback: _eventText(data, 'from'));
+        final actorId = _eventText(
+          data,
+          'actor_id',
+          camelKey: 'actorId',
+          fallback: _eventText(data, 'from'),
+        );
         return _ActivityItem(
           icon: Icons.chat_bubble_outline,
           title: '$actorId 訊息',
-          detail:
-              _eventText(data, 'text', fallback: _eventText(data, 'message')),
+          detail: _eventText(
+            data,
+            'text',
+            fallback: _eventText(data, 'message'),
+          ),
           state: _ActivityState.info,
           kind: 'actor',
           actorId: actorId,
         );
       case 'actor_completed':
-        final actorId = _eventText(data, 'actor_id',
-            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final actorId = _eventText(
+          data,
+          'actor_id',
+          camelKey: 'actorId',
+          fallback: _eventText(data, 'id'),
+        );
         final summary = _eventText(data, 'summary');
-        final resources = [
-          _eventText(data, 'artifact_uri', camelKey: 'artifactUri'),
-          _eventText(data, 'history_uri', camelKey: 'historyUri'),
-        ].where((uri) => uri.isNotEmpty).toList();
+        final resources =
+            [
+              _eventText(data, 'artifact_uri', camelKey: 'artifactUri'),
+              _eventText(data, 'history_uri', camelKey: 'historyUri'),
+            ].where((uri) => uri.isNotEmpty).toList();
         return _ActivityItem(
           icon: Icons.task_alt,
           title: '完成 $actorId',
@@ -481,21 +525,35 @@ class _MikuHomePageState extends State<MikuHomePage>
           resourceUris: resources,
         );
       case 'actor_failed':
-        final actorId = _eventText(data, 'actor_id',
-            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final actorId = _eventText(
+          data,
+          'actor_id',
+          camelKey: 'actorId',
+          fallback: _eventText(data, 'id'),
+        );
         return _ActivityItem(
           icon: Icons.error_outline,
           title: '$actorId 失敗',
-          detail: _eventText(data, 'error',
-              fallback: _eventText(data, 'failure_reason',
-                  camelKey: 'failureReason')),
+          detail: _eventText(
+            data,
+            'error',
+            fallback: _eventText(
+              data,
+              'failure_reason',
+              camelKey: 'failureReason',
+            ),
+          ),
           state: _ActivityState.failed,
           kind: 'actor',
           actorId: actorId,
         );
       case 'actor_cancelled':
-        final actorId = _eventText(data, 'actor_id',
-            camelKey: 'actorId', fallback: _eventText(data, 'id'));
+        final actorId = _eventText(
+          data,
+          'actor_id',
+          camelKey: 'actorId',
+          fallback: _eventText(data, 'id'),
+        );
         return _ActivityItem(
           icon: Icons.cancel_outlined,
           title: '取消 $actorId',
@@ -509,8 +567,11 @@ class _MikuHomePageState extends State<MikuHomePage>
         final preview = _eventMap(data['preview']);
         return _ActivityItem(
           icon: Icons.rule_folder_outlined,
-          title: _eventText(preview ?? const <String, Object?>{}, 'title',
-              fallback: 'Drive organizer proposal'),
+          title: _eventText(
+            preview ?? const <String, Object?>{},
+            'title',
+            fallback: 'Drive organizer proposal',
+          ),
           detail: _joinedDetail([
             _eventText(preview ?? const <String, Object?>{}, 'subtitle'),
             _eventText(preview ?? const <String, Object?>{}, 'snippet'),
@@ -548,8 +609,11 @@ class _MikuHomePageState extends State<MikuHomePage>
         return _ActivityItem(
           icon: Icons.error_outline,
           title: 'Drive organizer failed',
-          detail:
-              _eventText(data, 'error', fallback: _driveOrganizerDetail(data)),
+          detail: _eventText(
+            data,
+            'error',
+            fallback: _driveOrganizerDetail(data),
+          ),
           state: _ActivityState.failed,
           kind: 'drive',
           resourceUris: _resourceUrisFromEvent(data),
@@ -573,10 +637,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     if (_rounds.isNotEmpty && !_rounds.last.isComplete) {
       return _rounds.last;
     }
-    final round = _ConversationRound(
-      index: _rounds.length + 1,
-      userText: '',
-    );
+    final round = _ConversationRound(index: _rounds.length + 1, userText: '');
     _rounds.add(round);
     return round;
   }
@@ -609,7 +670,8 @@ class _MikuHomePageState extends State<MikuHomePage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
         final media = MediaQuery.maybeOf(context);
-        final reduceMotion = media?.disableAnimations == true ||
+        final reduceMotion =
+            media?.disableAnimations == true ||
             media?.accessibleNavigation == true;
         if (reduceMotion) {
           _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
@@ -626,13 +688,12 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _sessionEnded) return;
     await _ensureSession();
     setState(() {
-      _rounds.add(_ConversationRound(
-        index: _rounds.length + 1,
-        userText: text,
-      ));
+      _rounds.add(
+        _ConversationRound(index: _rounds.length + 1, userText: text),
+      );
       _status = 'streaming';
       _canSend = false;
     });
@@ -726,9 +787,10 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _promoteSession() async {
     await _ensureSession();
-    final last = _rounds
-        .where((round) => round.assistantFinalText.isNotEmpty)
-        .lastOrNull;
+    final last =
+        _rounds
+            .where((round) => round.assistantFinalText.isNotEmpty)
+            .lastOrNull;
     final resources = _promotionResources(last?.assistantFinalText ?? '');
     try {
       final p = await widget.client.promoteSession(
@@ -737,18 +799,21 @@ class _MikuHomePageState extends State<MikuHomePage>
         resources: resources,
       );
       if (!mounted) return;
-      setState(() =>
-          _projectStatus = '${p.projectUri} · ${p.promotedCount} promoted');
+      setState(
+        () => _projectStatus = '${p.projectUri} · ${p.promotedCount} promoted',
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Promote failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Promote failed: $e')));
     }
   }
 
   List<String> _extractResources(String text) {
     return RegExp(
-            r'''\b(?:artifact|workspace|linked|project|drive)://[^\s),\]\}"']+''')
+          r'''\b(?:artifact|workspace|linked|project|drive)://[^\s),\]\}"']+''',
+        )
         .allMatches(text)
         .map((m) => _normalizeResourceUri(m.group(0)!))
         .toSet()
@@ -785,21 +850,24 @@ class _MikuHomePageState extends State<MikuHomePage>
     final normalized = _normalizeResourceUri(uri);
     if (normalized.isEmpty) return;
     try {
-      final preview =
-          await widget.client.resolveResource(_sessionId!, normalized);
+      final preview = await widget.client.resolveResource(
+        _sessionId!,
+        normalized,
+      );
       if (!mounted) return;
       await showModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
         isScrollControlled: true,
         backgroundColor: _tok.surface,
-        builder: (_) =>
-            _ResourceSheet(preview: preview, tok: _tok, copy: _copy),
+        builder:
+            (_) => _ResourceSheet(preview: preview, tok: _tok, copy: _copy),
       );
     } catch (err) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open $normalized: $err')));
+        SnackBar(content: Text('Could not open $normalized: $err')),
+      );
     }
   }
 
@@ -818,8 +886,9 @@ class _MikuHomePageState extends State<MikuHomePage>
     } catch (err) {
       if (!mounted) return;
       setState(() => _modeId = previousId);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Mode change failed: $err')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Mode change failed: $err')));
     }
   }
 
@@ -838,8 +907,9 @@ class _MikuHomePageState extends State<MikuHomePage>
     } catch (err) {
       if (!mounted) return;
       setState(() => _modeLocked = wasLocked);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Mode lock failed: $err')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Mode lock failed: $err')));
     }
   }
 
@@ -855,8 +925,9 @@ class _MikuHomePageState extends State<MikuHomePage>
     } catch (err) {
       if (!mounted) return;
       setState(() => _status = 'offline');
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('History load failed: $err')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('History load failed: $err')));
     }
   }
 
@@ -868,8 +939,9 @@ class _MikuHomePageState extends State<MikuHomePage>
     } catch (err) {
       if (!mounted) return;
       setState(() => _status = 'offline');
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('New session failed: $err')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('New session failed: $err')));
     }
   }
 
@@ -884,25 +956,26 @@ class _MikuHomePageState extends State<MikuHomePage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (sheetContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(sheetContext).size.height * 0.86,
-        ),
-        child: _SessionHistorySheet(
-          tok: tok,
-          copy: _copy,
-          currentSessionId: _sessionId,
-          loadSessions: () => widget.client.listSessions(),
-          onSelect: (id) {
-            Navigator.pop(sheetContext);
-            unawaited(_loadHistoricalSession(id));
-          },
-          onNewSession: () {
-            Navigator.pop(sheetContext);
-            unawaited(_startNewSession());
-          },
-        ),
-      ),
+      builder:
+          (sheetContext) => ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.86,
+            ),
+            child: _SessionHistorySheet(
+              tok: tok,
+              copy: _copy,
+              currentSessionId: _sessionId,
+              loadSessions: () => widget.client.listSessions(),
+              onSelect: (id) {
+                Navigator.pop(sheetContext);
+                unawaited(_loadHistoricalSession(id));
+              },
+              onNewSession: () {
+                Navigator.pop(sheetContext);
+                unawaited(_startNewSession());
+              },
+            ),
+          ),
     );
   }
 
@@ -918,26 +991,27 @@ class _MikuHomePageState extends State<MikuHomePage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (sheetContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
-        ),
-        child: _ModeSheet(
-          modes: _modes.isEmpty ? [_mode] : List<_Mode>.from(_modes),
-          currentId: _modeId,
-          locked: _modeLocked,
-          tok: tok,
-          copy: _copy,
-          onPick: (id) {
-            Navigator.pop(sheetContext);
-            unawaited(_applyModePick(id));
-          },
-          onLockToggle: () {
-            Navigator.pop(sheetContext);
-            unawaited(_toggleModeLock());
-          },
-        ),
-      ),
+      builder:
+          (sheetContext) => ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
+            ),
+            child: _ModeSheet(
+              modes: _modes.isEmpty ? [_mode] : List<_Mode>.from(_modes),
+              currentId: _modeId,
+              locked: _modeLocked,
+              tok: tok,
+              copy: _copy,
+              onPick: (id) {
+                Navigator.pop(sheetContext);
+                unawaited(_applyModePick(id));
+              },
+              onLockToggle: () {
+                Navigator.pop(sheetContext);
+                unawaited(_toggleModeLock());
+              },
+            ),
+          ),
     );
   }
 
@@ -948,30 +1022,32 @@ class _MikuHomePageState extends State<MikuHomePage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) => _ApprovalSheet(
-        approval: a,
-        tok: _tok,
-        copy: _copy,
-        accent: _accent,
-        onOption: (option) {
-          final isReject = option.kind.startsWith('reject') ||
-              option.kind.startsWith('deny');
-          _resolve(
-            a,
-            isReject ? 'deny' : 'approve',
-            optionId: option.optionId,
-          );
-          Navigator.pop(context);
-        },
-        onApprove: () {
-          _resolve(a, 'approve');
-          Navigator.pop(context);
-        },
-        onDeny: () {
-          _resolve(a, 'deny');
-          Navigator.pop(context);
-        },
-      ),
+      builder:
+          (_) => _ApprovalSheet(
+            approval: a,
+            tok: _tok,
+            copy: _copy,
+            accent: _accent,
+            onOption: (option) {
+              final isReject =
+                  option.kind.startsWith('reject') ||
+                  option.kind.startsWith('deny');
+              _resolve(
+                a,
+                isReject ? 'deny' : 'approve',
+                optionId: option.optionId,
+              );
+              Navigator.pop(context);
+            },
+            onApprove: () {
+              _resolve(a, 'approve');
+              Navigator.pop(context);
+            },
+            onDeny: () {
+              _resolve(a, 'deny');
+              Navigator.pop(context);
+            },
+          ),
     );
   }
 
@@ -984,20 +1060,21 @@ class _MikuHomePageState extends State<MikuHomePage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (sheetContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
-        ),
-        child: _AgentActivitySheet(
-          tok: tok,
-          copy: _copy,
-          accent: _accent,
-          roundIndex: round.index,
-          agents: _agentStatuses(round.activities),
-          activities: List<_ActivityItem>.from(round.activities),
-          onOpenResource: _openResource,
-        ),
-      ),
+      builder:
+          (sheetContext) => ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
+            ),
+            child: _AgentActivitySheet(
+              tok: tok,
+              copy: _copy,
+              accent: _accent,
+              roundIndex: round.index,
+              agents: _agentStatuses(round.activities),
+              activities: List<_ActivityItem>.from(round.activities),
+              onOpenResource: _openResource,
+            ),
+          ),
     );
   }
 
@@ -1011,38 +1088,39 @@ class _MikuHomePageState extends State<MikuHomePage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (sheetContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
-        ),
-        child: _DriveFeedSheet(
-          tok: tok,
-          copy: _copy,
-          accent: _accent,
-          initialFeed: _driveFeed,
-          initialError: _driveError,
-          initialLoading: _driveLoading,
-          approvals: _driveApprovals,
-          loadFeed: () async {
-            final feed = await _fetchDriveFeed();
-            if (mounted) {
-              setState(() {
-                _driveFeed = feed;
-                _driveError = '';
-                _driveLoading = false;
-              });
-            }
-            return feed;
-          },
-          onOpenResource: _openResource,
-          onOpenApproval: (approval) {
-            Navigator.pop(sheetContext);
-            Timer(const Duration(milliseconds: 320), () {
-              if (mounted) _showApprovalSheet(approval);
-            });
-          },
-        ),
-      ),
+      builder:
+          (sheetContext) => ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
+            ),
+            child: _DriveFeedSheet(
+              tok: tok,
+              copy: _copy,
+              accent: _accent,
+              initialFeed: _driveFeed,
+              initialError: _driveError,
+              initialLoading: _driveLoading,
+              approvals: _driveApprovals,
+              loadFeed: () async {
+                final feed = await _fetchDriveFeed();
+                if (mounted) {
+                  setState(() {
+                    _driveFeed = feed;
+                    _driveError = '';
+                    _driveLoading = false;
+                  });
+                }
+                return feed;
+              },
+              onOpenResource: _openResource,
+              onOpenApproval: (approval) {
+                Navigator.pop(sheetContext);
+                Timer(const Duration(milliseconds: 320), () {
+                  if (mounted) _showApprovalSheet(approval);
+                });
+              },
+            ),
+          ),
     );
   }
 
@@ -1055,45 +1133,49 @@ class _MikuHomePageState extends State<MikuHomePage>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => _OverflowSheet(
-        tok: tok,
-        copy: _copy,
-        projectStatus: _projectStatus,
-        nextActions: _nextActions,
-        isDark: _isDark,
-        onRefresh: () {
-          Navigator.pop(context);
-          _loadProject();
-        },
-        onPromote: () {
-          Navigator.pop(context);
-          _promoteSession();
-        },
-        onDrive: () {
-          Navigator.pop(context);
-          Timer(const Duration(milliseconds: 320), () {
-            if (mounted) _showDriveSheet();
-          });
-        },
-        onThemeToggle: () {
-          Navigator.pop(context);
-          setState(() => _isDark = !_isDark);
-        },
-        onModeSettings: () {
-          Navigator.pop(context);
-          Timer(const Duration(milliseconds: 320), () {
-            if (mounted) _showModeSheet();
-          });
-        },
-        onServerTarget: serverTargetClient == null
-            ? null
-            : () {
-                Navigator.pop(context);
-                Timer(const Duration(milliseconds: 320), () {
-                  if (mounted) _showServerTargetDialog(serverTargetClient);
-                });
-              },
-      ),
+      builder:
+          (_) => _OverflowSheet(
+            tok: tok,
+            copy: _copy,
+            projectStatus: _projectStatus,
+            nextActions: _nextActions,
+            isDark: _isDark,
+            onRefresh: () {
+              Navigator.pop(context);
+              _loadProject();
+            },
+            onPromote: () {
+              Navigator.pop(context);
+              _promoteSession();
+            },
+            onDrive: () {
+              Navigator.pop(context);
+              Timer(const Duration(milliseconds: 320), () {
+                if (mounted) _showDriveSheet();
+              });
+            },
+            onThemeToggle: () {
+              Navigator.pop(context);
+              setState(() => _isDark = !_isDark);
+            },
+            onModeSettings: () {
+              Navigator.pop(context);
+              Timer(const Duration(milliseconds: 320), () {
+                if (mounted) _showModeSheet();
+              });
+            },
+            onServerTarget:
+                serverTargetClient == null
+                    ? null
+                    : () {
+                      Navigator.pop(context);
+                      Timer(const Duration(milliseconds: 320), () {
+                        if (mounted) {
+                          _showServerTargetDialog(serverTargetClient);
+                        }
+                      });
+                    },
+          ),
     );
   }
 
@@ -1106,53 +1188,48 @@ class _MikuHomePageState extends State<MikuHomePage>
       initial = '';
     }
     if (!mounted) return;
-    final controller = TextEditingController(text: initial);
-    final value = await showDialog<String>(
+    final scan = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: _tok.surface,
-        title: Text(copy.serverTarget),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.url,
-          textInputAction: TextInputAction.done,
-          decoration: InputDecoration(
-            labelText: copy.serverUrl,
-            hintText: 'http://10.0.2.2:3000',
+      builder:
+          (dialogContext) => AlertDialog(
+            backgroundColor: _tok.surface,
+            title: Text(copy.serverTarget),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(copy.serverUrl),
+                const SizedBox(height: 6),
+                SelectableText(initial.isEmpty ? 'Not paired' : initial),
+                const SizedBox(height: 18),
+                const Text(
+                  'Changing servers requires a fresh one-time pairing code. '
+                  'Manual URL-only pairing is disabled.',
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: Text(copy.cancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Scan QR'),
+              ),
+            ],
           ),
-          onSubmitted: (text) => Navigator.pop(dialogContext, text),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: Text(copy.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: Text(copy.save),
-          ),
-        ],
-      ),
     );
-    controller.dispose();
-    final trimmed = value?.trim();
-    if (trimmed == null || trimmed.isEmpty) return;
-    try {
-      await _setServerTargetAndReconnect(client, trimmed);
-    } catch (err) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(copy.serverTargetFailed(err))),
-      );
+    if (scan != true || !mounted) return;
+    final rawLink = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const PairingScannerPage()),
+    );
+    if (rawLink != null && rawLink.trim().isNotEmpty) {
+      await _applyPairingLink(rawLink);
     }
   }
 
-  Future<void> _setServerTargetAndReconnect(
-    ServerTargetClient client,
-    String target, {
-    String? successMessage,
-  }) async {
-    await client.setServerBaseUrl(target);
+  Future<void> _reconnectAfterPair({String? successMessage}) async {
     await _sub?.cancel();
     _sub = null;
     _sessionFuture = null;
@@ -1205,7 +1282,7 @@ class _MikuHomePageState extends State<MikuHomePage>
                       width: 128,
                       height: 5,
                       decoration: BoxDecoration(
-                        color: tok.text.withOpacity(0.3),
+                        color: tok.text.withValues(alpha: 0.3),
                         borderRadius: BorderRadius.circular(999),
                       ),
                     ),
@@ -1229,8 +1306,10 @@ class _MikuHomePageState extends State<MikuHomePage>
           decoration: BoxDecoration(
             color: tok.bg,
             border: Border(
-              bottom:
-                  BorderSide(color: tok.border.withOpacity(0.6), width: 0.5),
+              bottom: BorderSide(
+                color: tok.border.withValues(alpha: 0.6),
+                width: 0.5,
+              ),
             ),
           ),
           padding: EdgeInsets.fromLTRB(compact ? 14 : 16, 8, 14, 10),
@@ -1247,14 +1326,17 @@ class _MikuHomePageState extends State<MikuHomePage>
                     borderRadius: BorderRadius.circular(10),
                     boxShadow: [
                       BoxShadow(
-                        color: accent.withOpacity(0.3),
+                        color: accent.withValues(alpha: 0.3),
                         blurRadius: 8,
                         offset: const Offset(0, 3),
                       ),
                     ],
                   ),
-                  child:
-                      Icon(Icons.smart_toy, color: _textOn(accent), size: 19),
+                  child: Icon(
+                    Icons.smart_toy,
+                    color: _textOn(accent),
+                    size: 19,
+                  ),
                 ),
               ),
               SizedBox(width: compact ? 8 : 10),
@@ -1292,9 +1374,10 @@ class _MikuHomePageState extends State<MikuHomePage>
                 copy: copy,
                 onTap: () {
                   setState(() {
-                    _language = _language == _UiLanguage.en
-                        ? _UiLanguage.zh
-                        : _UiLanguage.en;
+                    _language =
+                        _language == _UiLanguage.en
+                            ? _UiLanguage.zh
+                            : _UiLanguage.en;
                   });
                 },
               ),
@@ -1383,7 +1466,8 @@ class _MikuHomePageState extends State<MikuHomePage>
             accent: accent,
             text: round.reasoningText,
             expanded: round.reasoningExpanded,
-            isStreaming: round.assistantFinalText.isEmpty &&
+            isStreaming:
+                round.assistantFinalText.isEmpty &&
                 round.isStreaming &&
                 round.assistantStreamedText.isEmpty,
           ),
@@ -1394,15 +1478,17 @@ class _MikuHomePageState extends State<MikuHomePage>
       void addAssistantAnswer() {
         if (assistantText.isEmpty) return;
         final resources = _extractResources(assistantText);
-        items.add(_MikuBubble(
-          tok: tok,
-          copy: copy,
-          text: assistantText,
-          accent: accent,
-          resources: resources,
-          onOpenResource: _openResource,
-          isStreaming: round.assistantFinalText.isEmpty && round.isStreaming,
-        ));
+        items.add(
+          _MikuBubble(
+            tok: tok,
+            copy: copy,
+            text: assistantText,
+            accent: accent,
+            resources: resources,
+            onOpenResource: _openResource,
+            isStreaming: round.assistantFinalText.isEmpty && round.isStreaming,
+          ),
+        );
       }
 
       if (isCompleteWithAnswer) {
@@ -1473,6 +1559,7 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Widget _buildComposer(_Tok tok, Color accent) {
     final copy = _copy;
+    final canSubmit = _canSend && !_sessionEnded;
     return LayoutBuilder(
       builder: (context, constraints) {
         return Container(
@@ -1481,7 +1568,7 @@ class _MikuHomePageState extends State<MikuHomePage>
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [tok.bg.withOpacity(0), tok.bg],
+              colors: [tok.bg.withValues(alpha: 0), tok.bg],
               stops: const [0, 0.22],
             ),
           ),
@@ -1503,21 +1590,32 @@ class _MikuHomePageState extends State<MikuHomePage>
                         textField: true,
                         child: TextField(
                           controller: _inputCtrl,
+                          enabled: !_sessionEnded,
                           style: TextStyle(color: tok.text, fontSize: 13.5),
                           minLines: 1,
                           maxLines: 6,
                           keyboardType: TextInputType.multiline,
                           textInputAction: TextInputAction.send,
                           decoration: InputDecoration(
-                            hintText: copy.messageHint,
-                            hintStyle:
-                                TextStyle(color: tok.muted, fontSize: 13.5),
+                            hintText:
+                                _sessionEnded
+                                    ? copy.sessionEndedHint
+                                    : copy.messageHint,
+                            hintStyle: TextStyle(
+                              color: tok.muted,
+                              fontSize: 13.5,
+                            ),
                             border: InputBorder.none,
-                            contentPadding:
-                                const EdgeInsets.fromLTRB(14, 10, 8, 10),
+                            contentPadding: const EdgeInsets.fromLTRB(
+                              14,
+                              10,
+                              8,
+                              10,
+                            ),
                           ),
                           onChanged: (value) {
-                            final canSend = value.trim().isNotEmpty;
+                            final canSend =
+                                !_sessionEnded && value.trim().isNotEmpty;
                             if (canSend != _canSend) {
                               setState(() => _canSend = canSend);
                             }
@@ -1529,30 +1627,37 @@ class _MikuHomePageState extends State<MikuHomePage>
                     Padding(
                       padding: const EdgeInsets.all(5),
                       child: Tooltip(
-                        message: _canSend ? copy.send : copy.typeMessage,
+                        message:
+                            _sessionEnded
+                                ? copy.sessionEnded
+                                : canSubmit
+                                ? copy.send
+                                : copy.typeMessage,
                         child: Semantics(
                           button: true,
-                          enabled: _canSend,
+                          enabled: canSubmit,
                           label: copy.sendMessage,
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 140),
                             width: 40,
                             height: 40,
                             decoration: BoxDecoration(
-                              color: _canSend
-                                  ? accent
-                                  : tok.border.withOpacity(0.55),
+                              color:
+                                  canSubmit
+                                      ? accent
+                                      : tok.border.withValues(alpha: 0.55),
                               borderRadius: BorderRadius.circular(11),
                             ),
                             child: IconButton(
                               padding: EdgeInsets.zero,
                               constraints: const BoxConstraints(),
-                              onPressed: _canSend ? _send : null,
+                              onPressed: canSubmit ? _send : null,
                               icon: Icon(
                                 Icons.send,
-                                color: _canSend
-                                    ? _textOn(accent)
-                                    : tok.muted.withOpacity(0.72),
+                                color:
+                                    canSubmit
+                                        ? _textOn(accent)
+                                        : tok.muted.withValues(alpha: 0.72),
                                 size: 17,
                               ),
                             ),

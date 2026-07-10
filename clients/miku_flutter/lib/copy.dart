@@ -15,9 +15,9 @@ class _UiCopy {
   String get nextCode => isZh ? 'EN' : '中';
   String get languageTooltip => pick('Switch language', '切換語言');
   String get languageSemantic => pick(
-        'Current language: English. Switch to Traditional Chinese',
-        '目前語言：繁體中文。切換為英文',
-      );
+    'Current language: English. Switch to Traditional Chinese',
+    '目前語言：繁體中文。切換為英文',
+  );
 
   String get sessions => pick('Sessions', '歷史');
   String get openSessions => pick('Open sessions', '開啟歷史');
@@ -34,33 +34,33 @@ class _UiCopy {
 
   String get switchMode => pick('Switch mode', '切換模式');
   String get modeLocked => pick('Mode locked', '模式已鎖定');
-  String currentMode(_Mode mode) => pick(
-        'Current mode: ${mode.label}',
-        '目前模式：${mode.label}',
-      );
-  String currentModeLocked(_Mode mode) => pick(
-        'Current mode locked: ${mode.label}',
-        '目前鎖定模式：${mode.label}',
-      );
+  String currentMode(_Mode mode) =>
+      pick('Current mode: ${mode.label}', '目前模式：${mode.label}');
+  String currentModeLocked(_Mode mode) =>
+      pick('Current mode locked: ${mode.label}', '目前鎖定模式：${mode.label}');
   String modeChipLabel(_Mode mode, bool locked) =>
       locked ? pick('${mode.short} locked', '${mode.short} 鎖定') : mode.short;
 
   String statusLabel(String status) => switch (status) {
-        'idle' => pick('Offline', '未連線'),
-        'connecting' => pick('Connecting', '連線中'),
-        'connected' => pick('Online', '已連線'),
-        'streaming' => pick('Responding', '回應中'),
-        'reconnecting' => pick('Reconnecting', '重連中'),
-        'offline' => pick('Offline', '離線'),
-        'complete' => pick('Online', '已連線'),
-        _ => status,
-      };
+    'idle' => pick('Offline', '未連線'),
+    'connecting' => pick('Connecting', '連線中'),
+    'connected' => pick('Online', '已連線'),
+    'streaming' => pick('Responding', '回應中'),
+    'reconnecting' => pick('Reconnecting', '重連中'),
+    'offline' => pick('Offline', '離線'),
+    'ended' => pick('Ended', '已結束'),
+    'complete' => pick('Online', '已連線'),
+    _ => status,
+  };
   String connectionStatus(String label) =>
       pick('Connection status: $label', '連線狀態：$label');
 
   String get emptyTitle => pick('Miku is here', 'Miku 在這裡');
   String get messageField => pick('Message Miku', '傳訊息給 Miku');
   String get messageHint => pick('Message Miku...', '傳訊息給 Miku...');
+  String get sessionEndedHint =>
+      pick('This session has ended', '此 session 已結束');
+  String get sessionEnded => pick('Session ended', 'Session 已結束');
   String get send => pick('Send', '送出');
   String get typeMessage => pick('Type a message', '輸入訊息');
   String get sendMessage => pick('Send message', '送出訊息');
@@ -68,26 +68,26 @@ class _UiCopy {
   String round(int index) => pick('Round $index', '回合 $index');
   String get openAgentActivity => pick('Open agent activity', '開啟 agent 活動');
   String agentsSummary(int running, int stopped) => pick(
-        'Agents · $running running / $stopped stopped',
-        'Agents · $running 執行中 / $stopped 已停止',
-      );
+    'Agents · $running running / $stopped stopped',
+    'Agents · $running 執行中 / $stopped 已停止',
+  );
   String events(int count) => pick('$count events', '$count 個事件');
   String get runtimeStatus => pick('Runtime status', 'Runtime 狀態');
   String stateLabel(_ActivityState state) => switch (state) {
-        _ActivityState.running => pick('running', '執行中'),
-        _ActivityState.done => pick('stopped', '已停止'),
-        _ActivityState.failed => pick('failed', '失敗'),
-        _ActivityState.info => pick('updated', '已更新'),
-      };
+    _ActivityState.running => pick('running', '執行中'),
+    _ActivityState.done => pick('stopped', '已停止'),
+    _ActivityState.failed => pick('failed', '失敗'),
+    _ActivityState.info => pick('updated', '已更新'),
+  };
   String openResource(String uri) => pick('Open resource $uri', '開啟資源 $uri');
   String openActivityResource(String uri) =>
       pick('Open activity resource $uri', '開啟活動資源 $uri');
 
   String get modeSheetTitle => pick('Mode / Lock', '模式 / 鎖定');
   String get modeSheetHelper => pick(
-        'Pick a mode manually; lock keeps it until you unlock.',
-        '手動選擇模式；鎖定後會保持目前模式。',
-      );
+    'Pick a mode manually; lock keeps it until you unlock.',
+    '手動選擇模式；鎖定後會保持目前模式。',
+  );
   String get closeModeSheet => pick('Close mode sheet', '關閉模式選單');
   String lockMode(_Mode mode) => pick('Lock ${mode.short}', '鎖定 ${mode.short}');
   String unlockMode(_Mode mode) =>
@@ -108,8 +108,9 @@ class _UiCopy {
   String get promptActivity => pick('Prompt / Activity', '提示 / 活動');
   String get thinking => pick('Thinking', '思考過程');
   String get thinkingTrace => pick(
-      'Private chain-of-thought from the model. Tap to expand or collapse.',
-      '模型的私密思考過程。點擊展開或收合。');
+    'Private chain-of-thought from the model. Tap to expand or collapse.',
+    '模型的私密思考過程。點擊展開或收合。',
+  );
   String get reasoningHidden =>
       pick('Reasoning hidden by the provider', '提供者未回傳推理過程');
 
@@ -132,10 +133,8 @@ class _UiCopy {
   String get autoDeny => pick('Auto-deny on timeout', '逾時自動拒絕');
   String get deny => pick('Deny', '拒絕');
   String get approveOnce => pick('Approve once', '核可一次');
-  String pendingApproval(String action) => pick(
-        'Pending approval · $action',
-        '待核可 · $action',
-      );
+  String pendingApproval(String action) =>
+      pick('Pending approval · $action', '待核可 · $action');
   String pendingApprovalSemantics(String action) =>
       pick('Pending approval: $action', '待核可：$action');
   String get tapForDetails =>
@@ -159,8 +158,9 @@ class _UiCopy {
   String get refreshDrive => pick('Refresh Drive', '重新整理 Drive');
   String get closeDriveFeed => pick('Close drive feed', '關閉 Drive 動態');
   String get driveFeedHelper => pick(
-      'Recent docs, virtual folders, and organizer proposals',
-      '最近文件、虛擬資料夾與整理提案');
+    'Recent docs, virtual folders, and organizer proposals',
+    '最近文件、虛擬資料夾與整理提案',
+  );
   String get loadingDriveFeed =>
       pick('Loading drive feed...', '載入 Drive 動態...');
   String get noDriveFeed => pick('No drive documents yet', '還沒有 Drive 文件');
@@ -174,7 +174,9 @@ class _UiCopy {
   String driveDocs(int count) => pick('$count docs', '$count 份文件');
   String driveProposals(int count) => pick('$count proposals', '$count 個提案');
   String driveConfidence(double value) => pick(
-      '${(value * 100).round()}% confidence', '${(value * 100).round()}% 信心');
+    '${(value * 100).round()}% confidence',
+    '${(value * 100).round()}% 信心',
+  );
   String driveTags(int count) => pick('$count tags', '$count 個標籤');
   String get modeSettings => pick('Mode settings', '模式與鎖定');
   String get serverTarget => pick('Server target', 'Server 目標');

@@ -36,7 +36,7 @@ class _TokIconBtn extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(10),
-            focusColor: tok.focus.withOpacity(0.2),
+            focusColor: tok.focus.withValues(alpha: 0.2),
             child: Container(
               width: 40,
               height: 40,
@@ -74,8 +74,10 @@ class _ModeDropMenuButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final borderColor = locked ? accent.withOpacity(0.58) : tok.border;
-    final bg = locked ? accent.withOpacity(0.12) : tok.surface.withOpacity(0.6);
+    final borderColor = locked ? accent.withValues(alpha: 0.58) : tok.border;
+    final bg = locked
+        ? accent.withValues(alpha: 0.12)
+        : tok.surface.withValues(alpha: 0.6);
     final label = copy.modeChipLabel(mode, locked);
     return Tooltip(
       message: locked ? copy.modeLocked : copy.switchMode,
@@ -87,7 +89,7 @@ class _ModeDropMenuButton extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(999),
-            focusColor: tok.focus.withOpacity(0.18),
+            focusColor: tok.focus.withValues(alpha: 0.18),
             child: Container(
               height: 40,
               constraints: BoxConstraints(
@@ -261,7 +263,7 @@ class _LanguageToggle extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(10),
-            focusColor: tok.focus.withOpacity(0.2),
+            focusColor: tok.focus.withValues(alpha: 0.2),
             child: Container(
               width: 40,
               height: 40,
@@ -374,7 +376,7 @@ class _RoundLabel extends StatelessWidget {
         Expanded(
           child: Container(
             height: 0.5,
-            color: tok.border.withOpacity(0.7),
+            color: tok.border.withValues(alpha: 0.7),
           ),
         ),
       ],
@@ -501,7 +503,7 @@ class _MikuBubble extends StatelessWidget {
                               key: ValueKey('resource:$uri'),
                               onTap: () => onOpenResource(uri),
                               borderRadius: BorderRadius.circular(9),
-                              focusColor: tok.focus.withOpacity(0.18),
+                              focusColor: tok.focus.withValues(alpha: 0.18),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 10,

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'ratex_formula.dart';
 import 'session_client.dart';
@@ -27,7 +27,9 @@ part 'sheet_history.dart';
 part 'sheet_approval_overflow.dart';
 part 'sheet_drive.dart';
 part 'sheet_resource.dart';
+part 'pairing_scanner.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(MikuApp(client: createDefaultClient()));
 }

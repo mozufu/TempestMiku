@@ -171,7 +171,7 @@ class _AgentStatusBar extends StatelessWidget {
           key: ValueKey('agent-activity:$roundIndex'),
           onTap: onTap,
           borderRadius: BorderRadius.circular(10),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -191,8 +191,9 @@ class _AgentStatusBar extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
                   decoration: BoxDecoration(
-                    color: tok.surface.withOpacity(0.78),
-                    border: Border.all(color: tok.border.withOpacity(0.82)),
+                    color: tok.surface.withValues(alpha: 0.78),
+                    border:
+                        Border.all(color: tok.border.withValues(alpha: 0.82)),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
@@ -253,7 +254,7 @@ class _AgentStatusBar extends StatelessWidget {
                         const SizedBox(height: 9),
                         Container(
                           height: 0.5,
-                          color: tok.border.withOpacity(0.72),
+                          color: tok.border.withValues(alpha: 0.72),
                         ),
                         const SizedBox(height: 9),
                         for (var i = 0; i < activities.length; i++) ...[
@@ -268,7 +269,7 @@ class _AgentStatusBar extends StatelessWidget {
                             const SizedBox(height: 8),
                             Container(
                               height: 0.5,
-                              color: tok.border.withOpacity(0.55),
+                              color: tok.border.withValues(alpha: 0.55),
                             ),
                             const SizedBox(height: 8),
                           ],
@@ -351,7 +352,7 @@ class _ThinkingTraceState extends State<_ThinkingTrace> {
         child: InkWell(
           onTap: _toggle,
           borderRadius: BorderRadius.circular(10),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -374,8 +375,9 @@ class _ThinkingTraceState extends State<_ThinkingTrace> {
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
                   decoration: BoxDecoration(
-                    color: tok.surface.withOpacity(0.78),
-                    border: Border.all(color: tok.border.withOpacity(0.82)),
+                    color: tok.surface.withValues(alpha: 0.78),
+                    border:
+                        Border.all(color: tok.border.withValues(alpha: 0.82)),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
@@ -413,7 +415,7 @@ class _ThinkingTraceState extends State<_ThinkingTrace> {
                         const SizedBox(height: 8),
                         Container(
                           height: 0.5,
-                          color: tok.border.withOpacity(0.72),
+                          color: tok.border.withValues(alpha: 0.72),
                         ),
                         const SizedBox(height: 8),
                         Container(

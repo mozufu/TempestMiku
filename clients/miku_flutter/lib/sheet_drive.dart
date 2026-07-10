@@ -255,7 +255,7 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
             const SizedBox(height: 10),
             LinearProgressIndicator(
               minHeight: 3,
-              backgroundColor: tok.border.withOpacity(0.5),
+              backgroundColor: tok.border.withValues(alpha: 0.5),
               valueColor: AlwaysStoppedAnimation<Color>(widget.accent),
             ),
           ],
@@ -352,7 +352,7 @@ class _DriveFeedDocRow extends StatelessWidget {
           key: ValueKey('drive-feed:${item.uri}'),
           onTap: onOpen,
           borderRadius: BorderRadius.circular(12),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: Container(
             padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
             decoration: BoxDecoration(
@@ -367,8 +367,8 @@ class _DriveFeedDocRow extends StatelessWidget {
                   width: 34,
                   height: 34,
                   decoration: BoxDecoration(
-                    color: accent.withOpacity(0.14),
-                    border: Border.all(color: accent.withOpacity(0.42)),
+                    color: accent.withValues(alpha: 0.14),
+                    border: Border.all(color: accent.withValues(alpha: 0.42)),
                     borderRadius: BorderRadius.circular(9),
                   ),
                   child: Icon(
@@ -481,7 +481,7 @@ class _DriveVirtualDirChip extends StatelessWidget {
           key: ValueKey('drive-dir:${dir.uri}'),
           onTap: onOpen,
           borderRadius: BorderRadius.circular(999),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
             decoration: BoxDecoration(
@@ -547,8 +547,8 @@ class _DriveProposalRow extends StatelessWidget {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: accent.withOpacity(0.12),
-              border: Border.all(color: accent.withOpacity(0.38)),
+              color: accent.withValues(alpha: 0.12),
+              border: Border.all(color: accent.withValues(alpha: 0.38)),
               borderRadius: BorderRadius.circular(9),
             ),
             child: Icon(Icons.rule_folder_outlined, color: accent, size: 16),
@@ -635,7 +635,7 @@ class _DriveProposalRow extends StatelessWidget {
         child: InkWell(
           onTap: onOpen,
           borderRadius: BorderRadius.circular(12),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: row,
         ),
       ),
@@ -667,7 +667,7 @@ class _DriveApprovalRow extends StatelessWidget {
           key: ValueKey('drive-approval:${approval.approvalId}'),
           onTap: onTap,
           borderRadius: BorderRadius.circular(12),
-          focusColor: tok.focus.withOpacity(0.18),
+          focusColor: tok.focus.withValues(alpha: 0.18),
           child: _DrivePendingShell(
             tok: tok,
             icon: Icons.warning_amber_rounded,
@@ -718,8 +718,8 @@ class _DrivePendingShell extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
       decoration: BoxDecoration(
-        color: tok.warning.withOpacity(0.1),
-        border: Border.all(color: tok.warning.withOpacity(0.48)),
+        color: tok.warning.withValues(alpha: 0.1),
+        border: Border.all(color: tok.warning.withValues(alpha: 0.48)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -804,4 +804,3 @@ class _DriveEmptyLine extends StatelessWidget {
     );
   }
 }
-

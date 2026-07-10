@@ -2,23 +2,113 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'session_models.dart';
+import 'session_sse.dart';
 
 MikuSessionClient createClient() => NativeMikuSessionClient();
 
+class DeviceCredential {
+  const DeviceCredential({required this.serverBaseUrl, required this.token});
+
+  final String serverBaseUrl;
+  final String token;
+
+  String encode() => jsonEncode({
+    'version': 1,
+    'serverBaseUrl': serverBaseUrl,
+    'token': token,
+  });
+
+  static DeviceCredential? decode(String? value) {
+    if (value == null || value.isEmpty) return null;
+    try {
+      final json = jsonDecode(value);
+      if (json is! Map || json['version'] != 1) return null;
+      final serverBaseUrl = json['serverBaseUrl'];
+      final token = json['token'];
+      if (serverBaseUrl is! String ||
+          serverBaseUrl.isEmpty ||
+          token is! String ||
+          !token.startsWith('tmk_dev_')) {
+        return null;
+      }
+      return DeviceCredential(serverBaseUrl: serverBaseUrl, token: token);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+abstract class DeviceTokenStore {
+  Future<DeviceCredential?> read();
+
+  Future<void> write(DeviceCredential credential);
+
+  Future<void> delete();
+}
+
+class SecureDeviceTokenStore implements DeviceTokenStore {
+  SecureDeviceTokenStore({FlutterSecureStorage? storage})
+    : _storage = storage ?? const FlutterSecureStorage();
+
+  static const _key = 'tempestmiku.deviceCredential.v1';
+  static const _legacyUnboundKey = 'tempestmiku.deviceToken';
+  final FlutterSecureStorage _storage;
+
+  @override
+  Future<DeviceCredential?> read() async =>
+      DeviceCredential.decode(await _storage.read(key: _key));
+
+  @override
+  Future<void> write(DeviceCredential credential) async {
+    await _storage.delete(key: _legacyUnboundKey);
+    await _storage.write(key: _key, value: credential.encode());
+  }
+
+  @override
+  Future<void> delete() async {
+    await _storage.delete(key: _key);
+    await _storage.delete(key: _legacyUnboundKey);
+  }
+}
+
+class MemoryDeviceTokenStore implements DeviceTokenStore {
+  DeviceCredential? credential;
+
+  @override
+  Future<void> delete() async => credential = null;
+
+  @override
+  Future<DeviceCredential?> read() async => credential;
+
+  @override
+  Future<void> write(DeviceCredential credential) async =>
+      this.credential = credential;
+}
+
 class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
-  NativeMikuSessionClient();
+  NativeMikuSessionClient({DeviceTokenStore? tokenStore})
+    : _tokenStore = tokenStore ?? SecureDeviceTokenStore();
 
   static const _serverBaseUrlKey = 'tempestmiku.serverBaseUrl';
   static const _sessionIdKey = 'tempestmiku.sessionId';
   static const _lastEventIdKey = 'tempestmiku.lastEventId';
-  static const _configuredServerBaseUrl =
-      String.fromEnvironment('MIKU_SERVER_URL');
-  static const _defaultServerBaseUrl = 'http://10.0.2.2:3000';
+  static const _configuredServerBaseUrl = String.fromEnvironment(
+    'MIKU_SERVER_URL',
+  );
+  static const _defaultServerBaseUrl = 'http://10.0.2.2:8787';
 
   final HttpClient _http = HttpClient();
+  final DeviceTokenStore _tokenStore;
+  DeviceCredential? _cachedCredential;
+  bool _tokenLoaded = false;
+
+  @override
+  String pairingDeviceName() => 'TempestMiku ${Platform.operatingSystem}';
 
   @override
   Future<String> serverBaseUrl() async {
@@ -30,6 +120,9 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     if (_configuredServerBaseUrl.trim().isNotEmpty) {
       return _normalizeServerBaseUrl(_configuredServerBaseUrl);
     }
+    if (kReleaseMode) {
+      throw StateError('this device is not securely paired');
+    }
     return _defaultServerBaseUrl;
   }
 
@@ -38,8 +131,60 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     final normalized = _normalizeServerBaseUrl(baseUrl);
     final prefs = await SharedPreferences.getInstance();
     final previous = prefs.getString(_serverBaseUrlKey);
+    final previousNormalized =
+        previous == null ? null : _tryNormalizeServerBaseUrl(previous);
+    if (previousNormalized != normalized) {
+      // Publish the new target only after all authority and state for the previous origin is gone.
+      // A crash at any await before setString therefore leaves the old target unauthenticated.
+      await _clearDeviceToken();
+      await prefs.remove(_sessionIdKey);
+      await prefs.remove(_lastEventIdKey);
+      await prefs.setString(_serverBaseUrlKey, normalized);
+    }
+  }
+
+  @override
+  Future<void> pairWithCode(MikuPairingTarget target) async {
+    final normalized = _normalizeServerBaseUrl(target.serverBaseUrl);
+    final json = await _pairRequest(normalized, <String, Object?>{
+      'code': target.code,
+      'deviceName': pairingDeviceName(),
+      'platform': Platform.operatingSystem,
+    });
+    final token = json['token']?.toString().trim();
+    if (token == null || !token.startsWith('tmk_dev_')) {
+      throw const FormatException(
+        'pairing response did not include a device token',
+      );
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final previous = prefs.getString(_serverBaseUrlKey);
+    final previousNormalized =
+        previous == null ? null : _tryNormalizeServerBaseUrl(previous);
+    if (previousNormalized != normalized) {
+      await _clearDeviceToken();
+    }
+    await prefs.remove(_sessionIdKey);
+    await prefs.remove(_lastEventIdKey);
+    final credential = DeviceCredential(
+      serverBaseUrl: normalized,
+      token: token,
+    );
+    await _tokenStore.write(credential);
+    _cachedCredential = credential;
+    _tokenLoaded = true;
+    // The origin-bound credential is safe if a crash occurs before this final publication: it
+    // cannot authenticate requests to the still-selected old origin.
     await prefs.setString(_serverBaseUrlKey, normalized);
-    if (previous != normalized) {
+  }
+
+  @override
+  Future<void> logout() async {
+    try {
+      await _request('POST', '/auth/logout');
+    } finally {
+      await _clearDeviceToken();
+      final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_sessionIdKey);
       await prefs.remove(_lastEventIdKey);
     }
@@ -98,16 +243,18 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     );
     final session = _sessionFromJson(json, lastEventId: lastEventId);
     await _rememberSession(session);
-    final messages = ((json['messages'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((item) => _messageFromJson(item.cast<String, Object?>()))
-        .toList();
-    final pendingEvents = ((json['pendingEvents'] as List?) ??
-            (json['pending_events'] as List?) ??
-            const [])
-        .whereType<Map>()
-        .map((item) => _eventFromJson(item.cast<String, Object?>()))
-        .toList();
+    final messages =
+        ((json['messages'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((item) => _messageFromJson(item.cast<String, Object?>()))
+            .toList();
+    final pendingEvents =
+        ((json['pendingEvents'] as List?) ??
+                (json['pending_events'] as List?) ??
+                const [])
+            .whereType<Map>()
+            .map((item) => _eventFromJson(item.cast<String, Object?>()))
+            .toList();
     return LoadedSession(
       session: session,
       messages: messages,
@@ -124,13 +271,15 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
       closed = true;
       eventClient.close(force: true);
     };
-    unawaited(_pumpEvents(
-      controller,
-      eventClient,
-      () => closed || controller.isClosed,
-      sessionId,
-      lastEventId,
-    ));
+    unawaited(
+      _pumpEvents(
+        controller,
+        eventClient,
+        () => closed || controller.isClosed,
+        sessionId,
+        lastEventId,
+      ),
+    );
     return controller.stream;
   }
 
@@ -142,14 +291,21 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     String? initialLastEventId,
   ) async {
     var resumeId = initialLastEventId ?? await _storedLastEventId();
-    while (!isClosed()) {
+    if (numericEventId(resumeId) == null) resumeId = null;
+    final lifecycle = SessionEventLifecycle(resumeId);
+    while (!isClosed() && lifecycle.shouldReconnect) {
       try {
+        final baseUrl = await serverBaseUrl();
         final request = await eventClient.getUrl(
-          await _resolve(_eventsPath(sessionId, resumeId)),
+          _resolveAgainst(baseUrl, _eventsPath(sessionId, resumeId)),
         );
         request.headers
           ..set(HttpHeaders.acceptHeader, 'text/event-stream')
           ..set(HttpHeaders.cacheControlHeader, 'no-cache');
+        final token = await _deviceToken(requestBaseUrl: baseUrl);
+        if (token != null) {
+          request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+        }
         if (resumeId != null && resumeId.isNotEmpty) {
           request.headers.set('Last-Event-ID', resumeId);
         }
@@ -159,25 +315,39 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
         }
         if (!isClosed()) {
           controller.add(
-            const MikuEvent(
-              type: 'connection',
-              data: {'status': 'connected'},
-            ),
+            const MikuEvent(type: 'connection', data: {'status': 'connected'}),
           );
         }
-        await for (final event in _decodeSse(response)) {
-          if (isClosed()) break;
-          final eventId = event.id;
-          if (eventId != null &&
-              eventId.isNotEmpty &&
-              shouldRememberEventId(event.type, event.data)) {
-            resumeId = eventId;
-            await _rememberLastEventId(sessionId, eventId);
+        final decoder = SessionEventSseDecoder();
+        eventStream:
+        await for (final chunk in response.transform(utf8.decoder)) {
+          for (final event in decoder.add(chunk)) {
+            if (isClosed()) break;
+            if (!lifecycle.accept(event)) continue;
+            final eventId = event.id!;
+            if (shouldRememberEventId(event.type, event.data)) {
+              resumeId = eventId;
+              await _rememberLastEventId(sessionId, eventId);
+            }
+            controller.add(event);
+            if (lifecycle.isTerminal) break eventStream;
           }
-          controller.add(event);
+          if (isClosed()) break;
+        }
+        if (!isClosed() && !lifecycle.isTerminal) {
+          for (final event in decoder.close()) {
+            if (!lifecycle.accept(event)) continue;
+            final eventId = event.id!;
+            if (shouldRememberEventId(event.type, event.data)) {
+              resumeId = eventId;
+              await _rememberLastEventId(sessionId, eventId);
+            }
+            controller.add(event);
+            if (lifecycle.isTerminal) break;
+          }
         }
       } catch (_) {
-        if (!isClosed()) {
+        if (!isClosed() && lifecycle.shouldReconnect) {
           controller.add(
             const MikuEvent(
               type: 'connection',
@@ -189,59 +359,9 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
       }
     }
     eventClient.close(force: true);
-  }
-
-  Stream<MikuEvent> _decodeSse(HttpClientResponse response) async* {
-    var type = 'message';
-    String? id;
-    final dataLines = <String>[];
-
-    MikuEvent? flush() {
-      if (dataLines.isEmpty) {
-        type = 'message';
-        id = null;
-        return null;
-      }
-      final dataText = dataLines.join('\n');
-      Map<String, Object?> data;
-      try {
-        final decoded = jsonDecode(dataText);
-        data = decoded is Map
-            ? decoded.cast<String, Object?>()
-            : {'value': decoded};
-      } catch (_) {
-        data = {'text': dataText};
-      }
-      final event = MikuEvent(type: type, id: id, data: data);
-      type = 'message';
-      id = null;
-      dataLines.clear();
-      return event;
+    if (lifecycle.isTerminal && !controller.isClosed) {
+      await controller.close();
     }
-
-    await for (final line
-        in response.transform(utf8.decoder).transform(const LineSplitter())) {
-      if (line.isEmpty) {
-        final event = flush();
-        if (event != null) yield event;
-        continue;
-      }
-      if (line.startsWith(':')) continue;
-      final colon = line.indexOf(':');
-      final field = colon == -1 ? line : line.substring(0, colon);
-      var value = colon == -1 ? '' : line.substring(colon + 1);
-      if (value.startsWith(' ')) value = value.substring(1);
-      switch (field) {
-        case 'event':
-          type = value.isEmpty ? 'message' : value;
-        case 'data':
-          dataLines.add(value);
-        case 'id':
-          id = value;
-      }
-    }
-    final event = flush();
-    if (event != null) yield event;
   }
 
   @override
@@ -251,10 +371,18 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
 
   @override
   Future<void> sendMessage(String sessionId, String content) async {
-    await _request(
-      'POST',
-      '/sessions/$sessionId/messages',
-      body: {'content': content},
+    final clientMessageId = newClientMessageId();
+    await sendIdempotentMessageWithRetry(
+      clientMessageId: clientMessageId,
+      isAmbiguousFailure:
+          (error) => error is IOException || error is TimeoutException,
+      send: (stableClientMessageId) async {
+        await _request(
+          'POST',
+          '/sessions/$sessionId/messages',
+          body: {'clientMessageId': stableClientMessageId, 'content': content},
+        );
+      },
     );
   }
 
@@ -268,10 +396,7 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     await _request(
       'POST',
       '/sessions/$sessionId/approvals/$approvalId',
-      body: {
-        'decision': decision,
-        if (optionId != null) 'optionId': optionId,
-      },
+      body: {'decision': decision, if (optionId != null) 'optionId': optionId},
     );
   }
 
@@ -307,11 +432,12 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     final json = await _request('GET', '/sessions/$sessionId/project');
     return ProjectOverview(
       status: json['status'] as String? ?? '',
-      nextActions: ((json['nextActions'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((item) => item['text'] as String? ?? '')
-          .where((text) => text.isNotEmpty)
-          .toList(),
+      nextActions:
+          ((json['nextActions'] as List?) ?? const [])
+              .whereType<Map>()
+              .map((item) => item['text'] as String? ?? '')
+              .where((text) => text.isNotEmpty)
+              .toList(),
     );
   }
 
@@ -322,15 +448,18 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     String? project,
   }) async {
     final trimmedProject = project?.trim();
-    final query = Uri(
-      queryParameters: {
-        'limit': '$limit',
-        if (trimmedProject != null && trimmedProject.isNotEmpty)
-          'project': trimmedProject,
-      },
-    ).query;
-    final json =
-        await _request('GET', '/sessions/$sessionId/drive/feed?$query');
+    final query =
+        Uri(
+          queryParameters: {
+            'limit': '$limit',
+            if (trimmedProject != null && trimmedProject.isNotEmpty)
+              'project': trimmedProject,
+          },
+        ).query;
+    final json = await _request(
+      'GET',
+      '/sessions/$sessionId/drive/feed?$query',
+    );
     return DriveFeed.fromJson(json);
   }
 
@@ -384,8 +513,13 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     String path, {
     Map<String, Object?>? body,
   }) async {
-    final request = await _http.openUrl(method, await _resolve(path));
+    final baseUrl = await serverBaseUrl();
+    final request = await _http.openUrl(method, _resolveAgainst(baseUrl, path));
     request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+    final token = await _deviceToken(requestBaseUrl: baseUrl);
+    if (token != null) {
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    }
     if (body != null) {
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
@@ -399,8 +533,52 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     return (jsonDecode(text) as Map).cast<String, Object?>();
   }
 
-  Future<Uri> _resolve(String path) async {
-    final base = await serverBaseUrl();
+  Future<Map<String, Object?>> _pairRequest(
+    String baseUrl,
+    Map<String, Object?> body,
+  ) async {
+    final baseUri = Uri.parse(baseUrl.endsWith('/') ? baseUrl : '$baseUrl/');
+    final request = await _http.postUrl(baseUri.resolve('auth/pair'));
+    request.headers
+      ..set(HttpHeaders.acceptHeader, 'application/json')
+      ..contentType = ContentType.json;
+    request.write(jsonEncode(body));
+    final response = await request.close();
+    final text = await response.transform(utf8.decoder).join();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError('pairing failed: ${response.statusCode} $text');
+    }
+    return (jsonDecode(text) as Map).cast<String, Object?>();
+  }
+
+  Future<String?> _deviceToken({String? requestBaseUrl}) async {
+    if (!_tokenLoaded) {
+      _cachedCredential = await _tokenStore.read();
+      _tokenLoaded = true;
+    }
+    final selectedServer = _normalizeServerBaseUrl(await serverBaseUrl());
+    if (requestBaseUrl != null &&
+        _normalizeServerBaseUrl(requestBaseUrl) != selectedServer) {
+      return null;
+    }
+    final credential = _cachedCredential;
+    if (credential == null || credential.serverBaseUrl != selectedServer) {
+      return null;
+    }
+    final token = credential.token.trim();
+    return token.isEmpty ? null : token;
+  }
+
+  @visibleForTesting
+  Future<String?> deviceTokenForTesting() => _deviceToken();
+
+  Future<void> _clearDeviceToken() async {
+    await _tokenStore.delete();
+    _cachedCredential = null;
+    _tokenLoaded = true;
+  }
+
+  Uri _resolveAgainst(String base, String path) {
     final baseUri = Uri.parse(base.endsWith('/') ? base : '$base/');
     final relative = path.startsWith('/') ? path.substring(1) : path;
     return baseUri.resolve(relative);
@@ -440,7 +618,9 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
   }
 
   ResourcePreview _resourcePreviewFromJson(
-      Map<String, Object?> json, String uri) {
+    Map<String, Object?> json,
+    String uri,
+  ) {
     return ResourcePreview(
       uri: json['uri'] as String? ?? uri,
       kind: json['kind'] as String? ?? '',
@@ -457,23 +637,27 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     Map<String, Object?> json, {
     String? lastEventId,
   }) {
-    final modeState = (json['mode_state'] as Map?)?.cast<String, Object?>() ??
+    final modeState =
+        (json['mode_state'] as Map?)?.cast<String, Object?>() ??
         (json['modeState'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
     return MikuSession(
       id: json['id'] as String,
+      status: json['status'] as String? ?? 'active',
       mode: (json['mode'] as String?) ?? (modeState['mode'] as String?) ?? '',
       label: json['label'] as String? ?? '',
       voiceCap:
           (json['voice_cap'] as String?) ?? (json['voiceCap'] as String?) ?? '',
-      defaultScope: (json['default_scope'] as String?) ??
+      defaultScope:
+          (json['default_scope'] as String?) ??
           (json['defaultScope'] as String?) ??
           'global',
-      activeSkills: ((json['activeSkills'] as List?) ??
-              (json['active_skills'] as List?) ??
-              const [])
-          .map((skill) => skill.toString())
-          .toList(),
+      activeSkills:
+          ((json['activeSkills'] as List?) ??
+                  (json['active_skills'] as List?) ??
+                  const [])
+              .map((skill) => skill.toString())
+              .toList(),
       locked:
           modeState['lockSource'] != null || modeState['lock_source'] != null,
       lastEventId: lastEventId,
@@ -487,11 +671,13 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
       preview: json['preview'] as String? ?? '',
       mode: json['mode'] as String? ?? '',
       label: json['label'] as String? ?? '',
-      updatedAt: (json['updatedAt'] as String?) ??
+      updatedAt:
+          (json['updatedAt'] as String?) ??
           (json['updated_at'] as String?) ??
           '',
       status: json['status'] as String? ?? '',
-      messageCount: (json['messageCount'] as int?) ??
+      messageCount:
+          (json['messageCount'] as int?) ??
           (json['message_count'] as int?) ??
           0,
       lastEventId: _nullableString(
@@ -505,14 +691,16 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
       seq: (json['seq'] as num?)?.toInt() ?? 0,
       role: json['role'] as String? ?? '',
       content: json['content'] as String? ?? '',
-      createdAt: (json['createdAt'] as String?) ??
+      createdAt:
+          (json['createdAt'] as String?) ??
           (json['created_at'] as String?) ??
           '',
     );
   }
 
   MikuEvent _eventFromJson(Map<String, Object?> json) {
-    final data = (json['data'] as Map?)?.cast<String, Object?>() ??
+    final data =
+        (json['data'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
     return MikuEvent(
       type: json['type'] as String? ?? '',
@@ -523,6 +711,14 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
 
   String _normalizeServerBaseUrl(String value) {
     return normalizeMikuServerBaseUrl(value);
+  }
+
+  String? _tryNormalizeServerBaseUrl(String value) {
+    try {
+      return _normalizeServerBaseUrl(value);
+    } catch (_) {
+      return null;
+    }
   }
 
   String? _nullableString(Object? value) {

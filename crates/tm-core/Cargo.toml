@@ -14,5 +14,5 @@ futures.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
 parking_lot = { workspace = true }
+tokio.workspace = true

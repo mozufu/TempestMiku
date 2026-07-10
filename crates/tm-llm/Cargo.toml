@@ -8,6 +8,7 @@ description = "TempestMiku LLM backend: a streaming-first OpenAI-compatible chat
 
 [dependencies]
 tm-core.workspace = true
+tm-memory.workspace = true
 reqwest.workspace = true
 futures.workspace = true
 async-trait.workspace = true

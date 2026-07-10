@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tm-artifacts.workspace = true
+tm-memory.workspace = true
 url.workspace = true
 regex.workspace = true
 globset.workspace = true

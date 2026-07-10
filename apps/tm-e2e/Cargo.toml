@@ -11,6 +11,7 @@ tm-core.workspace = true
 tm-llm.workspace = true
 tm-artifacts.workspace = true
 tm-drive.workspace = true
+tm-host.workspace = true
 tm-server.workspace = true
 tm-agents.workspace = true
 tm-sandbox.workspace = true
@@ -24,6 +25,7 @@ dotenvy.workspace = true
 tokio.workspace = true
 chrono.workspace = true
 axum.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

@@ -26,19 +26,7 @@ async fn session_creation_message_append_event_append_and_replay_work() {
     assert_eq!(reused["id"], session.id.to_string());
     assert_eq!(reused["mode"], json!("general"));
 
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"hello"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "hello").await;
     let all = store.events_after(session.id, None).await.unwrap();
     assert_eq!(
         all.iter()
@@ -77,13 +65,7 @@ async fn ending_session_enqueues_one_dream_and_replays_lifecycle_events() {
                 .method(Method::POST)
                 .uri(format!("/sessions/{}/end", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "subject": "brian",
-                        "scope": "project:tempestmiku"
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from("{}"))
                 .unwrap(),
         )
         .await
@@ -93,7 +75,7 @@ async fn ending_session_enqueues_one_dream_and_replays_lifecycle_events() {
     assert_eq!(ended["status"], json!("ended"));
     assert_eq!(ended["dream"]["status"], json!("queued"));
     assert_eq!(ended["dream"]["reason"], json!("session_ended"));
-    assert_eq!(ended["dream"]["scope"], json!("project:tempestmiku"));
+    assert_eq!(ended["dream"]["scope"], json!("global"));
 
     let session_record = store.get_session(session.id).await.unwrap();
     assert_eq!(session_record.status, "ended");
@@ -101,7 +83,7 @@ async fn ending_session_enqueues_one_dream_and_replays_lifecycle_events() {
     assert_eq!(dreams.len(), 1);
     assert_eq!(ended["dream"]["id"], json!(dreams[0].id));
     assert_eq!(dreams[0].status, tm_memory::DreamStatus::Queued);
-    assert_eq!(dreams[0].source_event_seq, Some(4));
+    assert_eq!(dreams[0].source_event_seq, Some(5));
 
     let events = store.events_after(session.id, None).await.unwrap();
     assert_eq!(
@@ -109,11 +91,11 @@ async fn ending_session_enqueues_one_dream_and_replays_lifecycle_events() {
             .iter()
             .map(|event| event.event_type.as_str())
             .collect::<Vec<_>>(),
-        vec!["mode", "text", "final", "session_end", "dream_queued"]
+        vec!["mode", "text", "final", "dream_queued", "session_end"]
     );
     assert_eq!(
-        events[4].payload_json["sourceEventSeq"],
-        json!(events[3].seq)
+        events[3].payload_json["sourceEventSeq"],
+        json!(events[4].seq)
     );
 
     let duplicate = app
@@ -123,13 +105,7 @@ async fn ending_session_enqueues_one_dream_and_replays_lifecycle_events() {
                 .method(Method::POST)
                 .uri(format!("/sessions/{}/end", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "subject": "brian",
-                        "scope": "global"
-                    })
-                    .to_string(),
-                ))
+                .body(Body::from("{}"))
                 .unwrap(),
         )
         .await
@@ -160,6 +136,74 @@ async fn ending_session_enqueues_one_dream_and_replays_lifecycle_events() {
             .count(),
         1
     );
+    store
+        .append_event(
+            session.id,
+            "post_end_diagnostic",
+            json!({ "shouldNotStream": true }),
+        )
+        .await
+        .unwrap();
+
+    let replay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/sessions/{}/events", session.id))
+                .header("last-event-id", "2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = axum::body::to_bytes(replay.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let replay = String::from_utf8(replay.to_vec()).unwrap();
+    assert_eq!(replay.matches("event: session_event").count(), 3);
+    assert!(replay.contains(r#""type":"final""#));
+    assert!(replay.contains(r#""type":"session_end""#));
+    assert!(replay.contains(r#""type":"dream_queued""#));
+    assert!(!replay.contains("post_end_diagnostic"));
+    assert!(replay.contains(r#""turnId":"#));
+    assert!(replay.contains(r#""createdAt":"#));
+    assert_eq!(replay.matches("id: 3").count(), 1);
+
+    let session_end_seq = events
+        .iter()
+        .find(|event| event.event_type == "session_end")
+        .expect("session_end event")
+        .seq;
+    let post_end_seq = session_end_seq + 1;
+    for terminal_cursor in [session_end_seq, post_end_seq] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}/events", session.id))
+                    .header("last-event-id", terminal_cursor.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = tokio::time::timeout(
+            Duration::from_secs(1),
+            axum::body::to_bytes(response.into_body(), 1024),
+        )
+        .await
+        .expect("terminal replay must close immediately")
+        .unwrap();
+        assert!(
+            body.is_empty(),
+            "terminal cursor {terminal_cursor} streamed unexpected data: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
 }
 
 #[tokio::test]
@@ -397,19 +441,7 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
         "燒烤我 about this fuzzy plan",
         "i am overwhelmed and exhausted",
     ] {
-        let res = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/sessions/{}/messages", session.id))
-                    .header("content-type", "application/json")
-                    .body(Body::from(json!({ "content": content }).to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
+        post_user_message(&app, session.id, content).await;
     }
 
     let turns = turns.lock();
@@ -417,6 +449,18 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
     // All three turns stay in `general` mode now: ambiguity-grill and negative-state-grounding
     // are triggered layered skills, not separate modes, so they never change turns[*].mode.
     assert_eq!(turns[0].mode, ModeId::from("general"));
+    assert!(
+        turns[0]
+            .capabilities
+            .iter()
+            .any(|cap| cap == "memory.recall")
+    );
+    for denied in ["fs.*", "code.*", "proc.*", "resources.read:linked"] {
+        assert!(
+            !turns[0].capabilities.iter().any(|cap| cap == denied),
+            "general turn unexpectedly received {denied}"
+        );
+    }
     assert!(turns[0].system_prompt.contains("Fixture SOUL"));
     assert!(turns[0].system_prompt.contains("miku-voice fixture body"));
     assert!(
@@ -487,6 +531,14 @@ async fn chat_turn_prompt_includes_bounded_drive_recall_for_project_scope() {
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(RecordingChatRunner::default());
     let turns = Arc::clone(&chat.turns);
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: artifact_root.path().to_path_buf(),
+        mode: FsMode::Ro,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
     let state = AppState::new(
         store,
         memory,
@@ -495,11 +547,14 @@ async fn chat_turn_prompt_includes_bounded_drive_recall_for_project_scope() {
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.path().to_path_buf())
+    .with_linked_folders(linked)
     .with_drive_store(drive_store);
     let app = app(state);
-    let session = create(&app).await;
+    let session = create_with_body(&app, Body::from(r#"{"scope":"project:tempestmiku"}"#)).await;
 
-    let res = app
+    post_user_message(&app, session.id, "recall local drive docs").await;
+
+    let rejected_scope_override = app
         .clone()
         .oneshot(
             Request::builder()
@@ -507,24 +562,33 @@ async fn chat_turn_prompt_includes_bounded_drive_recall_for_project_scope() {
                 .uri(format!("/sessions/{}/messages", session.id))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"content":"recall local drive docs","scope":"project:tempestmiku"}"#,
+                    json!({
+                        "clientMessageId": Uuid::new_v4(),
+                        "content": "recall other docs",
+                        "scope": "project:other",
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-
-    let recorded = turns.lock();
-    assert_eq!(recorded.len(), 1);
-    assert!(recorded[0].user_prompt.contains("Drive recall"));
-    assert!(recorded[0].user_prompt.contains(&filed.uri));
-    assert!(
-        recorded[0]
-            .user_prompt
-            .contains("raw content remains behind drive://")
+    assert_eq!(
+        rejected_scope_override.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
     );
-    drop(recorded);
+
+    {
+        let recorded = turns.lock();
+        assert_eq!(recorded.len(), 1);
+        assert!(recorded[0].user_prompt.contains("Drive recall"));
+        assert!(recorded[0].user_prompt.contains(&filed.uri));
+        assert!(
+            recorded[0]
+                .user_prompt
+                .contains("raw content remains behind drive://")
+        );
+    }
 
     let chunks = store_for_assert
         .recall_chunks("project:tempestmiku", "Drive document", 10)
@@ -578,44 +642,25 @@ async fn chat_turn_prompt_includes_bounded_drive_recall_for_project_scope() {
             .contains("Drive document")
     );
 
-    let res = app
+    let scope_change = app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
+                .uri(format!("/sessions/{}/scope", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"recall other docs","scope":"project:other"}"#,
-                ))
+                .body(Body::from(r#"{"scope":"global"}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let recorded = turns.lock();
-    assert_eq!(recorded.len(), 2);
-    assert!(!recorded[1].user_prompt.contains("Drive recall"));
-    drop(recorded);
-
-    let res = app
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"recall global docs","scope":"global"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let recorded = turns.lock();
-    assert_eq!(recorded.len(), 3);
-    assert!(!recorded[2].user_prompt.contains("Drive recall"));
-    drop(recorded);
+    assert_eq!(scope_change.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "recall global docs").await;
+    {
+        let recorded = turns.lock();
+        assert_eq!(recorded.len(), 2);
+        assert!(!recorded[1].user_prompt.contains("Drive recall"));
+    }
 
     let chunks_after = store_for_assert
         .recall_chunks("project:tempestmiku", "Drive document", 10)
@@ -652,6 +697,14 @@ async fn drive_recall_chunk_updates_after_move_and_tag_without_losing_provenance
     let store_for_assert = Arc::clone(&store);
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(RecordingChatRunner::default());
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: artifact_root.path().to_path_buf(),
+        mode: FsMode::Ro,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
     let state = AppState::new(
         store,
         memory,
@@ -660,25 +713,12 @@ async fn drive_recall_chunk_updates_after_move_and_tag_without_losing_provenance
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.path().to_path_buf())
+    .with_linked_folders(linked)
     .with_drive_store(drive_store.clone());
     let app = app(state);
-    let session = create(&app).await;
+    let session = create_with_body(&app, Body::from(r#"{"scope":"project:tempestmiku"}"#)).await;
 
-    let first = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"recall local drive docs","scope":"project:tempestmiku"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(first.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "recall local drive docs").await;
     let original_chunks = store_for_assert
         .recall_chunks("project:tempestmiku", "Drive document", 10)
         .await
@@ -699,20 +739,7 @@ async fn drive_recall_chunk_updates_after_move_and_tag_without_losing_provenance
             vec!["urgent".to_string()],
         )
         .unwrap();
-    let second = app
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"recall moved drive docs","scope":"project:tempestmiku"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(second.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "recall moved drive docs").await;
 
     let updated_chunks = store_for_assert
         .recall_chunks("project:tempestmiku", "Drive document", 10)
@@ -760,19 +787,7 @@ async fn coding_turn_prompt_uses_active_mode_bundle() {
         (serious.id, "fix the Rust code"),
         (handoff.id, "delegate this implementation handoff"),
     ] {
-        let res = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/sessions/{session_id}/messages"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(json!({ "content": content }).to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
+        post_user_message(&app, session_id, content).await;
     }
 
     let turns = turns.lock();
@@ -785,6 +800,9 @@ async fn coding_turn_prompt_uses_active_mode_bundle() {
             .contains("serious-engineer-ops fixture body")
     );
     assert!(!turns[0].system_prompt.contains("miku-voice fixture body"));
+    for capability in ["fs.*", "code.*", "proc.*", "resources.read:linked"] {
+        assert!(turns[0].capabilities.iter().any(|cap| cap == capability));
+    }
 
     assert_eq!(turns[1].mode, ModeId::from("handoff"));
     assert!(
@@ -796,9 +814,15 @@ async fn coding_turn_prompt_uses_active_mode_bundle() {
         !turns[1].system_prompt.contains("miku-voice fixture body"),
         "handoff mode must not inject miku-voice skill"
     );
-    assert_eq!(turns[1].scope, "project:tempestmiku");
+    assert_eq!(turns[1].scope, "global");
     assert!(
         turns[1].capabilities.iter().any(|c| c == "agents.*"),
         "handoff mode must declare agents.* capability"
     );
+    for denied in ["fs.*", "code.*", "proc.*", "resources.read:linked"] {
+        assert!(
+            !turns[1].capabilities.iter().any(|cap| cap == denied),
+            "handoff turn unexpectedly received {denied}"
+        );
+    }
 }

@@ -6,12 +6,15 @@ mod turn;
 
 pub use crud::{
     CreateSessionRequest, CreateSessionResponse, EndSessionRequest, EndSessionResponse,
-    ListSessionsResponse, SessionMessagesResponse,
+    ListSessionsResponse, SessionMessagesResponse, SetSessionScopeRequest, SetSessionScopeResponse,
 };
 pub(crate) use crud::{
     create_session, end_session, get_session, get_session_messages, list_sessions,
+    set_session_scope,
 };
 pub(crate) use memory_write::propose_memory_write;
 pub use memory_write::{MemoryWriteProposalResponse, ProposeMemoryWriteRequest};
-pub use turn::PostMessageRequest;
-pub(crate) use turn::{default_subject, post_message};
+pub use turn::{PostMessageRequest, PostMessageResponse};
+pub(crate) use turn::{
+    get_turn, post_message, start_supervised_turn_dispatcher, start_turn_dispatcher,
+};

@@ -1,90 +1,404 @@
 use super::*;
 use sha2::{Digest, Sha256};
-use tm_core::ToolMediator;
-#[derive(Debug, Deserialize)]
-pub struct PostMessageRequest {
-    pub content: String,
-    #[serde(default = "default_subject")]
-    pub subject: String,
-    #[serde(default)]
-    pub scope: Option<String>,
+use tm_core::Message;
+use tm_host::HostFn;
+use tokio::sync::Notify;
+
+const TURN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const TURN_STALE_TIMEOUT: Duration = Duration::from_secs(60);
+const TURN_STALE_SWEEP_INTERVAL: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Clone, Copy)]
+struct TurnMaintenance {
+    heartbeat_interval: Duration,
+    stale_timeout: Duration,
+    stale_sweep_interval: Duration,
 }
 
-pub(crate) fn default_subject() -> String {
-    "brian".to_string()
+impl Default for TurnMaintenance {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: TURN_HEARTBEAT_INTERVAL,
+            stale_timeout: TURN_STALE_TIMEOUT,
+            stale_sweep_interval: TURN_STALE_SWEEP_INTERVAL,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PostMessageRequest {
+    pub client_message_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostMessageResponse {
+    pub turn_id: Uuid,
+    pub client_message_id: String,
+    pub status: String,
 }
 
 pub(crate) async fn post_message<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<PostMessageRequest>,
-) -> Result<Json<Value>>
+) -> Result<impl IntoResponse>
 where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
-    let session = state.store.get_session(session_id).await?;
-    // Mode changes are no longer silently auto-applied from keyword matches: they come only
-    // from the user's picker (apply/override/lock) or, once wired, a model-proposed and
-    // user-confirmed `mode_suggest`. This keeps capability modes sticky across turns.
-    let turn_profile = mode_profile(&state.persona, &session.mode_state.mode);
-    let scope = payload
-        .scope
-        .clone()
-        .unwrap_or_else(|| turn_profile.default_scope.clone());
-    let persona_prompt = build_turn_prompt(&state, &session.mode_state.mode, &payload.content);
+    validate_client_message_id(&payload.client_message_id)?;
+    validate_message_content(&payload.content)?;
+    let turn = state
+        .store
+        .enqueue_turn(session_id, &payload.client_message_id, &payload.content)
+        .await?;
+    state.notify_turn_dispatcher();
+    Ok((
+        axum::http::StatusCode::ACCEPTED,
+        Json(PostMessageResponse {
+            turn_id: turn.id,
+            client_message_id: turn.client_message_id,
+            status: turn.status,
+        }),
+    ))
+}
+
+pub(crate) async fn get_turn<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path((session_id, turn_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<crate::SessionTurnRecord>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let turn = state.store.turn(turn_id).await?;
+    if turn.session_id != session_id {
+        return Err(ServerError::NotFound(format!("turn {turn_id}")));
+    }
+    Ok(Json(turn))
+}
+
+pub(crate) fn start_turn_dispatcher<S, M, C>(state: AppState<S, M, C>, notify: Arc<Notify>)
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let (shutdown_guard, shutdown) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        // The app-level dispatcher exists only for deterministic in-process tests. Keeping
+        // the sender alive prevents the watch channel from looking like a shutdown request.
+        let _shutdown_guard = shutdown_guard;
+        run_turn_dispatcher(
+            state,
+            notify,
+            shutdown,
+            4,
+            Duration::from_millis(250),
+            TurnMaintenance::default(),
+        )
+        .await;
+    });
+}
+
+pub(crate) fn start_supervised_turn_dispatcher<S, M, C>(
+    state: AppState<S, M, C>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+    concurrency: usize,
+    poll_interval: Duration,
+) -> tokio::task::JoinHandle<()>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let notify = Arc::clone(&state.turn_notify);
+    tokio::spawn(run_turn_dispatcher(
+        state,
+        notify,
+        shutdown,
+        concurrency,
+        poll_interval,
+        TurnMaintenance::default(),
+    ))
+}
+
+async fn run_turn_dispatcher<S, M, C>(
+    state: AppState<S, M, C>,
+    notify: Arc<Notify>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    concurrency: usize,
+    poll_interval: Duration,
+    maintenance: TurnMaintenance,
+) where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let worker_id = Uuid::new_v4();
+    let startup = Utc::now();
+    if let Err(error) = fail_stale_turns(&state, startup, maintenance.stale_timeout).await {
+        let safe_error = tm_memory::redact_dream_text(&error.to_string()).text;
+        tracing::error!(error = %safe_error, "could not sweep stale running turns");
+        return;
+    }
+    let mut stale_sweep = tokio::time::interval(maintenance.stale_sweep_interval);
+    stale_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    stale_sweep.tick().await;
+
+    let max_in_flight = concurrency.max(1);
+    let mut in_flight = tokio::task::JoinSet::new();
+    'dispatch: loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        let mut claimed_any = false;
+        while in_flight.len() < max_in_flight {
+            if *shutdown.borrow() {
+                break 'dispatch;
+            }
+            let turn = match state.store.claim_next_turn(worker_id, Utc::now()).await {
+                Ok(turn) => turn,
+                Err(error) => {
+                    let safe_error = tm_memory::redact_dream_text(&error.to_string()).text;
+                    tracing::error!(error = %safe_error, "turn dispatcher claim failed");
+                    break;
+                }
+            };
+            let Some(turn) = turn else {
+                break;
+            };
+            claimed_any = true;
+            let state = state.clone();
+            in_flight.spawn(async move {
+                if let Err(error) =
+                    execute_claimed_turn(&state, worker_id, turn, maintenance.heartbeat_interval)
+                        .await
+                {
+                    let safe_error = tm_memory::redact_dream_text(&error.to_string()).text;
+                    tracing::warn!(error = %safe_error, "durable turn failed");
+                }
+            });
+        }
+
+        if in_flight.len() >= max_in_flight || (!claimed_any && !in_flight.is_empty()) {
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() || shutdown.has_changed().is_err() {
+                        break 'dispatch;
+                    }
+                }
+                result = in_flight.join_next() => {
+                    if let Some(Err(error)) = result {
+                        tracing::warn!(%error, "turn task join failed");
+                    }
+                }
+                _ = notify.notified(), if in_flight.len() < max_in_flight => {}
+                _ = stale_sweep.tick() => {
+                    if let Err(error) = fail_stale_turns(&state, Utc::now(), maintenance.stale_timeout).await {
+                        let safe_error = tm_memory::redact_dream_text(&error.to_string()).text;
+                        tracing::warn!(error = %safe_error, "periodic stale turn sweep failed");
+                    }
+                }
+                _ = tokio::time::sleep(poll_interval) => {}
+            }
+        } else {
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() || shutdown.has_changed().is_err() {
+                        break 'dispatch;
+                    }
+                }
+                _ = notify.notified() => {}
+                _ = stale_sweep.tick() => {
+                    if let Err(error) = fail_stale_turns(&state, Utc::now(), maintenance.stale_timeout).await {
+                        let safe_error = tm_memory::redact_dream_text(&error.to_string()).text;
+                        tracing::warn!(error = %safe_error, "periodic stale turn sweep failed");
+                    }
+                }
+                _ = tokio::time::sleep(poll_interval) => {}
+            }
+        }
+    }
+
+    // Stop claiming immediately, but let owned turns finish while the outer supervisor keeps
+    // the process alive (and hard-aborts after its configured grace period).
+    while let Some(result) = in_flight.join_next().await {
+        if let Err(error) = result {
+            tracing::warn!(%error, "turn task join failed while draining");
+        }
+    }
+}
+
+async fn execute_claimed_turn<S, M, C>(
+    state: &AppState<S, M, C>,
+    worker_id: Uuid,
+    turn: crate::SessionTurnRecord,
+    heartbeat_interval: Duration,
+) -> Result<()>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let result =
+        match execute_turn_with_heartbeat(state, worker_id, &turn, heartbeat_interval).await {
+            Ok(result) => result,
+            Err(error) => {
+                state.runtime_status().record_heartbeat_failure();
+                return Err(error);
+            }
+        };
+    match result {
+        Ok(response) => {
+            state
+                .store
+                .complete_turn(turn.id, worker_id, &response, Utc::now())
+                .await?;
+            Ok(())
+        }
+        Err(error) => {
+            let message = tm_memory::redact_dream_text(&error.to_string()).text;
+            state
+                .store
+                .fail_turn(turn.id, worker_id, &message, Utc::now())
+                .await?;
+            if let Ok(event) = state
+                .store
+                .append_event_for_turn(
+                    turn.session_id,
+                    "error",
+                    json!({ "message": message, "turnId": turn.id }),
+                    Some(turn.id),
+                )
+                .await
+            {
+                let _ = state.sender(turn.session_id).send(event);
+            }
+            Err(ServerError::Backend(message))
+        }
+    }
+}
+
+async fn execute_turn_with_heartbeat<S, M, C>(
+    state: &AppState<S, M, C>,
+    worker_id: Uuid,
+    turn: &crate::SessionTurnRecord,
+    heartbeat_interval: Duration,
+) -> Result<Result<String>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let execution = execute_turn_body(state, turn);
+    tokio::pin!(execution);
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + heartbeat_interval,
+        heartbeat_interval,
+    );
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            result = &mut execution => return Ok(result),
+            _ = heartbeat.tick() => {
+                state
+                    .store
+                    .heartbeat_turn(turn.id, worker_id, Utc::now())
+                    .await?;
+            }
+        }
+    }
+}
+
+async fn fail_stale_turns<S, M, C>(
+    state: &AppState<S, M, C>,
+    now: chrono::DateTime<Utc>,
+    stale_timeout: Duration,
+) -> Result<usize>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let stale_timeout =
+        chrono::Duration::from_std(stale_timeout).expect("turn stale timeout fits chrono duration");
     state
         .store
-        .append_message(session_id, "user", &payload.content)
-        .await?;
+        .fail_stale_running_turns(now - stale_timeout, now, "turn owner heartbeat expired")
+        .await
+}
+
+async fn execute_turn_body<S, M, C>(
+    state: &AppState<S, M, C>,
+    durable_turn: &crate::SessionTurnRecord,
+) -> Result<String>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let session_id = durable_turn.session_id;
+    let session = state.store.get_session(session_id).await?;
+    if session.status == "ended" {
+        return Err(ServerError::Conflict(format!(
+            "session {session_id} has ended"
+        )));
+    }
+    resources::util::validate_authorized_memory_scope(
+        &state.linked_folders,
+        &session.memory_scope,
+    )?;
+    let prior_messages =
+        bounded_prior_messages(state.store.as_ref(), session_id, durable_turn.id).await?;
+    // Mode changes are never inferred from keywords. An unlocked normal chat turn receives the
+    // exact modes.suggest grant and may call it through execute; coding, actor, scheduler, and
+    // locked turns do not receive that authority.
+    let turn_profile = mode_profile(&state.persona, &session.mode_state.mode);
+    let scope = session.memory_scope.clone();
+    let subject = session.owner_subject.clone();
+    let persona_prompt = build_turn_prompt(state, &session.mode_state.mode, &durable_turn.content);
     let memory = state
         .memory
-        .context_for_turn(&payload.subject, &scope, &payload.content)
+        .context_for_turn(&subject, &scope, &durable_turn.content)
         .await?;
     let mut recall_blocks = Vec::new();
     if !memory.is_empty() {
         recall_blocks.push(memory.render_prompt_block());
     }
-    if let Some(block) = drive_recall_block(&state.drive_store, &scope) {
+    if let Some(block) = drive_recall_block(&state.drive_store, &scope).await {
         recall_blocks.push(block);
     }
     let user_prompt = if recall_blocks.is_empty() {
-        payload.content.clone()
+        durable_turn.content.clone()
     } else {
         format!(
             "{}\n\n[recall]\n{}",
-            payload.content,
+            durable_turn.content,
             recall_blocks.join("\n\n")
         )
     };
-    // The model can propose a mode switch mid-turn (`mode_suggest`) whenever a turn actually
-    // runs through the ChatRunner path (i.e. not the native coding backend, which has no
-    // mediator seam in v1 — see §21.4 / ModeSuggestMediator docs). Built once and shared by
-    // both ChatRunner call sites below.
-    let mode_suggest_mediator = || -> Option<Arc<dyn ToolMediator>> {
-        if session.mode_state.lock_source.is_some() {
-            return None;
-        }
-        let mode_sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
-            session_id,
-            Arc::clone(&state.store),
-            state.sender(session_id),
-        ));
-        Some(Arc::new(ModeSuggestMediator::new(
-            state.clone(),
-            session_id,
-            mode_sink,
-            MODE_SUGGEST_APPROVAL_TIMEOUT,
-        )))
-    };
+    let mode_suggest_host: Arc<dyn HostFn> =
+        Arc::new(ModeSuggestHostFn::new(state, MODE_SUGGEST_APPROVAL_TIMEOUT));
+    let mut chat_capabilities = turn_profile.capabilities.clone();
+    if session.mode_state.lock_source.is_none() && !turn_profile.has_capability("backend.coding") {
+        chat_capabilities.push(MODE_SUGGEST_CAPABILITY.to_string());
+    }
+    // Registering a handler is deliberately independent from granting it. Cached sessions may
+    // retain this stable, server-owned service, but HostRegistry still rejects calls unless the
+    // current sandbox profile includes modes.suggest.
+    let chat_host_functions = vec![mode_suggest_host];
 
     let response = if turn_profile.has_capability("backend.coding") {
         if let Some(backend) = &state.coding_backend {
-            let sink = Arc::new(StoreCodingEventSink::new(
+            let sink = Arc::new(StoreCodingEventSink::for_turn(
                 session_id,
+                durable_turn.id,
                 Arc::clone(&state.store),
                 state.sender(session_id),
             ));
@@ -97,14 +411,16 @@ where
                         mode: session.mode_state.mode.clone(),
                         scope: scope.clone(),
                         capabilities: turn_profile.capabilities.clone(),
+                        prior_messages: prior_messages.clone(),
                     },
                     sink,
                 )
                 .await?
                 .final_text
         } else {
-            let sink = Arc::new(PersistingEventSink::new(
+            let sink = Arc::new(PersistingEventSink::for_turn(
                 session_id,
+                Some(durable_turn.id),
                 Arc::clone(&state.store),
                 state.sender(session_id),
             ));
@@ -117,17 +433,26 @@ where
                         system_prompt: persona_prompt.system_prompt.clone(),
                         mode: session.mode_state.mode.clone(),
                         scope: scope.clone(),
+                        capabilities: chat_capabilities.clone(),
+                        prior_messages: prior_messages.clone(),
+                        limits: crate::ChatRunLimits::default(),
+                        deny_approvals: false,
+                        host_functions: chat_host_functions.clone(),
                     },
                     sink.clone(),
-                    mode_suggest_mediator(),
                 )
-                .await?;
-            sink.flush().await?;
-            response
+                .await;
+            let flushed = sink.flush().await;
+            match (response, flushed) {
+                (Ok(response), Ok(())) => response,
+                (Err(error), _) => return Err(error),
+                (Ok(_), Err(error)) => return Err(error),
+            }
         }
     } else {
-        let sink = Arc::new(PersistingEventSink::new(
+        let sink = Arc::new(PersistingEventSink::for_turn(
             session_id,
+            Some(durable_turn.id),
             Arc::clone(&state.store),
             state.sender(session_id),
         ));
@@ -140,20 +465,24 @@ where
                     system_prompt: persona_prompt.system_prompt,
                     mode: session.mode_state.mode.clone(),
                     scope: scope.clone(),
+                    capabilities: chat_capabilities,
+                    prior_messages,
+                    limits: crate::ChatRunLimits::default(),
+                    deny_approvals: false,
+                    host_functions: chat_host_functions,
                 },
                 sink.clone(),
-                mode_suggest_mediator(),
             )
-            .await?;
-        sink.flush().await?;
-        response
+            .await;
+        let flushed = sink.flush().await;
+        match (response, flushed) {
+            (Ok(response), Ok(())) => response,
+            (Err(error), _) => return Err(error),
+            (Ok(_), Err(error)) => return Err(error),
+        }
     };
 
-    state
-        .store
-        .append_message(session_id, "assistant", &response)
-        .await?;
-    persist_drive_recall_chunks(&state, &scope).await?;
+    persist_drive_recall_chunks(state, &scope).await?;
     if turn_profile.has_capability("backend.coding") && !response.trim().is_empty() {
         state
             .store
@@ -170,10 +499,10 @@ where
             })
             .await?;
         record_project_observations(
-            &state,
+            state,
             session_id,
             project_id_from_scope(&scope),
-            &payload.content,
+            &durable_turn.content,
             &response,
         )
         .await?;
@@ -182,15 +511,114 @@ where
         state.clone(),
         session_id,
         turn_profile,
-        payload.subject,
+        subject,
         scope,
-        payload.content,
-    );
-    Ok(Json(json!({ "status": "accepted" })))
+        durable_turn.content.clone(),
+    )
+    .await?;
+    Ok(response)
 }
 
-fn drive_recall_block(
-    drive_store: &Option<tm_drive::InMemoryDriveStore>,
+async fn bounded_prior_messages<S: Store>(
+    store: &S,
+    session_id: Uuid,
+    current_turn_id: Uuid,
+) -> Result<Vec<Message>> {
+    const MAX_MESSAGES: usize = 40;
+    const MAX_BYTES: usize = 128 * 1024;
+
+    let stored = store.session_messages(session_id).await?;
+    let current_seq = stored
+        .iter()
+        .find(|message| message.turn_id == Some(current_turn_id) && message.role == "user")
+        .map(|message| message.seq)
+        .ok_or_else(|| {
+            ServerError::Store(format!(
+                "turn {current_turn_id} is missing its persisted user message"
+            ))
+        })?;
+    let mut linked_roles = std::collections::BTreeMap::<Uuid, (bool, bool)>::new();
+    for message in stored.iter().filter(|message| message.seq < current_seq) {
+        let Some(turn_id) = message.turn_id else {
+            continue;
+        };
+        let roles = linked_roles.entry(turn_id).or_default();
+        match message.role.as_str() {
+            "user" => roles.0 = true,
+            "assistant" => roles.1 = true,
+            _ => {}
+        }
+    }
+    let complete_turns = linked_roles
+        .into_iter()
+        .filter_map(|(turn_id, (has_user, has_assistant))| {
+            (has_user && has_assistant).then_some(turn_id)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut bytes = 0usize;
+    let mut newest = Vec::new();
+    for message in stored
+        .into_iter()
+        .filter(|message| {
+            message.seq < current_seq
+                && message
+                    .turn_id
+                    .is_none_or(|turn_id| complete_turns.contains(&turn_id))
+        })
+        .rev()
+    {
+        if newest.len() == MAX_MESSAGES {
+            break;
+        }
+        let next = bytes.saturating_add(message.content.len());
+        if next > MAX_BYTES {
+            break;
+        }
+        let message = match message.role.as_str() {
+            "user" => Message::user(message.content),
+            "assistant" => Message::assistant(message.content),
+            _ => continue,
+        };
+        bytes = next;
+        newest.push(message);
+    }
+    newest.reverse();
+    Ok(newest)
+}
+
+fn validate_client_message_id(value: &str) -> Result<()> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ServerError::InvalidRequest(
+            "clientMessageId must be 1-128 safe ASCII characters".to_string(),
+        ))
+    }
+}
+
+fn validate_message_content(value: &str) -> Result<()> {
+    const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+    if value.trim().is_empty() {
+        return Err(ServerError::InvalidRequest(
+            "message content must not be empty".to_string(),
+        ));
+    }
+    if value.len() > MAX_MESSAGE_BYTES {
+        return Err(ServerError::InvalidRequest(format!(
+            "message content exceeds {MAX_MESSAGE_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+async fn drive_recall_block(
+    drive_store: &Option<tm_drive::SharedDriveStore>,
     scope: &str,
 ) -> Option<String> {
     let store = drive_store.as_ref()?;
@@ -202,6 +630,7 @@ fn drive_recall_block(
             return_snippets: true,
             ..tm_drive::DriveSearchOptions::default()
         })
+        .await
         .ok()?;
     if hits.is_empty() {
         return None;
@@ -250,12 +679,22 @@ where
             return_snippets: true,
             ..tm_drive::DriveSearchOptions::default()
         })
+        .await
         .map_err(|err| ServerError::Store(err.to_string()))?;
     let mut persisted = 0;
     for hit in hits {
         let entry = store
-            .get(&hit.uri)
-            .map_err(|err| ServerError::Store(err.to_string()))?;
+            .list(tm_drive::DriveListOptions {
+                path: Some(hit.path.clone()),
+                recursive: true,
+                limit: 1,
+                include_archived: true,
+            })
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .into_iter()
+            .find(|entry| entry.path == hit.path)
+            .ok_or_else(|| ServerError::NotFound(hit.uri.clone()))?;
         let chunk = drive_entry_recall_chunk(scope, &entry);
         state.store.upsert_recall_chunk(chunk).await?;
         persisted += 1;
@@ -341,4 +780,239 @@ fn stable_drive_recall_id(scope: &str, content_hash: &str) -> Uuid {
     bytes[6] = (bytes[6] & 0x0f) | 0x80;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Uuid::from_bytes(bytes)
+}
+
+#[cfg(test)]
+mod dispatcher_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use async_trait::async_trait;
+    use tm_core::EventSink;
+
+    use super::*;
+    use crate::{AuthConfig, ChatTurn, InMemoryStore, NewSession, StoreMemoryProvider};
+
+    #[derive(Default)]
+    struct ConcurrentRunner {
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+    }
+
+    struct SlowRunner;
+
+    #[async_trait]
+    impl ChatRunner for ConcurrentRunner {
+        async fn run_turn(
+            &self,
+            _turn: ChatTurn,
+            _sink: Arc<dyn EventSink + Send + Sync>,
+        ) -> Result<String> {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok("done".to_string())
+        }
+    }
+
+    #[async_trait]
+    impl ChatRunner for SlowRunner {
+        async fn run_turn(
+            &self,
+            _turn: ChatTurn,
+            _sink: Arc<dyn EventSink + Send + Sync>,
+        ) -> Result<String> {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Ok("slow turn done".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_runs_different_sessions_concurrently() {
+        let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject("owner").await.unwrap();
+        let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+        let runner = Arc::new(ConcurrentRunner::default());
+        let persona = tm_modes::ModesConfig::default();
+        let assets = persona.load_assets();
+        let state = AppState::new(
+            Arc::clone(&store),
+            memory,
+            Arc::clone(&runner),
+            persona,
+            AuthConfig::NoAuth,
+        )
+        .with_auto_turn_dispatcher(false);
+
+        let mut turn_ids = Vec::new();
+        for index in 0..3 {
+            let session = store
+                .create_session(NewSession {
+                    mode: assets.modes.default_mode(),
+                    persona_status: assets.status.clone(),
+                })
+                .await
+                .unwrap();
+            let turn = store
+                .enqueue_turn(session.id, &format!("client-{index}"), "hello")
+                .await
+                .unwrap();
+            turn_ids.push(turn.id);
+        }
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let dispatcher =
+            start_supervised_turn_dispatcher(state, shutdown_rx, 3, Duration::from_millis(5));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let mut all_complete = true;
+                for turn_id in &turn_ids {
+                    all_complete &= store.turn(*turn_id).await.unwrap().status == "completed";
+                }
+                if all_complete {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        shutdown_tx.send(true).unwrap();
+        dispatcher.await.unwrap();
+
+        assert!(
+            runner.max_active.load(Ordering::SeqCst) >= 2,
+            "turns from independent sessions should overlap"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatcher_heartbeats_live_turns_during_periodic_stale_sweeps() {
+        let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject("owner").await.unwrap();
+        let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+        let persona = tm_modes::ModesConfig::default();
+        let assets = persona.load_assets();
+        let session = store
+            .create_session(NewSession {
+                mode: assets.modes.default_mode(),
+                persona_status: assets.status.clone(),
+            })
+            .await
+            .unwrap();
+        let turn = store
+            .enqueue_turn(session.id, "heartbeat-live", "take your time")
+            .await
+            .unwrap();
+        let state = AppState::new(
+            Arc::clone(&store),
+            memory,
+            Arc::new(SlowRunner),
+            persona,
+            AuthConfig::NoAuth,
+        )
+        .with_auto_turn_dispatcher(false);
+        let notify = Arc::clone(&state.turn_notify);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let dispatcher = tokio::spawn(run_turn_dispatcher(
+            state,
+            notify,
+            shutdown_rx,
+            1,
+            Duration::from_millis(2),
+            TurnMaintenance {
+                heartbeat_interval: Duration::from_millis(10),
+                stale_timeout: Duration::from_millis(80),
+                stale_sweep_interval: Duration::from_millis(10),
+            },
+        ));
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if store.turn(turn.id).await.unwrap().status == "completed" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        shutdown_tx.send(true).unwrap();
+        dispatcher.await.unwrap();
+        let completed = store.turn(turn.id).await.unwrap();
+        assert_eq!(completed.status, "completed");
+        assert!(completed.updated_at > completed.started_at.unwrap());
+    }
+
+    #[tokio::test]
+    async fn dispatcher_periodically_fails_crashed_turns_without_a_restart() {
+        let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject("owner").await.unwrap();
+        let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+        let persona = tm_modes::ModesConfig::default();
+        let assets = persona.load_assets();
+        let session = store
+            .create_session(NewSession {
+                mode: assets.modes.default_mode(),
+                persona_status: assets.status.clone(),
+            })
+            .await
+            .unwrap();
+        let turn = store
+            .enqueue_turn(session.id, "heartbeat-crashed", "lose the worker")
+            .await
+            .unwrap();
+        store
+            .claim_next_turn(
+                Uuid::new_v4(),
+                Utc::now() + chrono::Duration::milliseconds(200),
+            )
+            .await
+            .unwrap()
+            .expect("external worker claims turn");
+        let state = AppState::new(
+            Arc::clone(&store),
+            memory,
+            Arc::new(ConcurrentRunner::default()),
+            persona,
+            AuthConfig::NoAuth,
+        )
+        .with_auto_turn_dispatcher(false);
+        let notify = Arc::clone(&state.turn_notify);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let dispatcher = tokio::spawn(run_turn_dispatcher(
+            state,
+            notify,
+            shutdown_rx,
+            1,
+            Duration::from_millis(2),
+            TurnMaintenance {
+                heartbeat_interval: Duration::from_millis(10),
+                stale_timeout: Duration::from_millis(40),
+                stale_sweep_interval: Duration::from_millis(10),
+            },
+        ));
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if store.turn(turn.id).await.unwrap().status == "failed" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        shutdown_tx.send(true).unwrap();
+        dispatcher.await.unwrap();
+        let failed = store.turn(turn.id).await.unwrap();
+        assert_eq!(failed.status, "failed");
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("turn owner heartbeat expired")
+        );
+    }
 }

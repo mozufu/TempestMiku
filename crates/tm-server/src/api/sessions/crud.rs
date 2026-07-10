@@ -3,9 +3,12 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateSessionRequest {
     #[serde(default)]
     pub mode: Option<ModeId>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -15,14 +18,18 @@ pub struct ListSessionsQuery {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateSessionResponse {
     pub id: Uuid,
+    pub status: String,
     pub mode: ModeId,
     pub mode_state: ModeState,
     pub persona_status: crate::AssetStatus,
     pub label: String,
     pub voice_cap: String,
     pub default_scope: String,
+    pub owner_subject: String,
+    pub memory_scope: String,
     #[serde(rename = "activeSkills")]
     pub active_skills: Vec<String>,
 }
@@ -55,12 +62,15 @@ pub struct SessionSummaryResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SessionMessagesResponse {
     pub id: Uuid,
+    pub status: String,
     pub mode: ModeId,
     pub mode_state: ModeState,
     pub persona_status: crate::AssetStatus,
     pub label: String,
     pub voice_cap: String,
     pub default_scope: String,
+    pub owner_subject: String,
+    pub memory_scope: String,
     #[serde(rename = "activeSkills")]
     pub active_skills: Vec<String>,
     pub messages: Vec<SessionMessageResponse>,
@@ -74,6 +84,7 @@ pub struct SessionMessageResponse {
     pub seq: i64,
     pub role: String,
     pub content: String,
+    pub turn_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -89,12 +100,21 @@ pub struct SessionPendingEventResponse {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EndSessionRequest {}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetSessionScopeRequest {
+    pub scope: String,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EndSessionRequest {
-    #[serde(default = "default_subject")]
-    pub subject: String,
-    #[serde(default)]
-    pub scope: Option<String>,
+pub struct SetSessionScopeResponse {
+    pub id: Uuid,
+    pub owner_subject: String,
+    pub memory_scope: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,7 +127,6 @@ pub struct EndSessionResponse {
 
 pub(crate) async fn list_sessions<S, M, C>(
     State(state): State<AppState<S, M, C>>,
-    headers: HeaderMap,
     Query(query): Query<ListSessionsQuery>,
 ) -> Result<Json<ListSessionsResponse>>
 where
@@ -115,7 +134,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let limit = query.limit.unwrap_or(30).clamp(1, 100);
     let sessions = state
         .store
@@ -129,7 +147,6 @@ where
 
 pub(crate) async fn create_session<S, M, C>(
     State(state): State<AppState<S, M, C>>,
-    headers: HeaderMap,
     payload: Option<Json<CreateSessionRequest>>,
 ) -> Result<Json<CreateSessionResponse>>
 where
@@ -137,20 +154,28 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let assets = state.persona.load_assets();
-    let mode = match payload.and_then(|Json(payload)| payload.mode) {
+    let payload = payload.map(|Json(payload)| payload).unwrap_or_default();
+    let mode = match payload.mode {
         Some(mode) => modes::validate_mode(&state.persona, mode)?,
         None => assets.modes.default_mode(),
     };
+    let scope = payload.scope.unwrap_or_else(|| "global".to_string());
+    validate_memory_scope(&state.linked_folders, &scope)?;
     let persona_status = assets.status.clone();
-    let session = state
+    let mut session = state
         .store
         .create_session(NewSession {
             mode: mode.clone(),
             persona_status: persona_status.clone(),
         })
         .await?;
+    if session.memory_scope != scope {
+        session = state
+            .store
+            .set_session_memory_scope(session.id, &scope)
+            .await?;
+    }
     let profile = mode_profile(&state.persona, &session.mode_state.mode);
     let mode_event = state
         .store
@@ -171,14 +196,12 @@ where
 pub(crate) async fn get_session<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
 ) -> Result<Json<CreateSessionResponse>>
 where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     let persona_status = session.persona_status.clone();
     Ok(Json(session_response(
@@ -191,14 +214,12 @@ where
 pub(crate) async fn get_session_messages<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
 ) -> Result<Json<SessionMessagesResponse>>
 where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     let persona_status = session.persona_status.clone();
     let messages = state
@@ -210,6 +231,7 @@ where
             seq: message.seq,
             role: message.role,
             content: message.content,
+            turn_id: message.turn_id,
             created_at: message.created_at,
         })
         .collect();
@@ -219,12 +241,15 @@ where
     let profile = mode_profile(&state.persona, &session.mode);
     Ok(Json(SessionMessagesResponse {
         id: session.id,
+        status: session.status,
         mode: session.mode.clone(),
         mode_state: session.mode_state.clone(),
         persona_status,
         label: profile.label,
         voice_cap: profile.voice_cap,
-        default_scope: profile.default_scope,
+        default_scope: session.memory_scope.clone(),
+        owner_subject: session.owner_subject.clone(),
+        memory_scope: session.memory_scope,
         active_skills: active_skills(&state.persona, &session.mode),
         messages,
         last_event_id,
@@ -235,81 +260,53 @@ where
 pub(crate) async fn end_session<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
-    payload: Option<Json<EndSessionRequest>>,
+    _payload: Option<Json<EndSessionRequest>>,
 ) -> Result<Json<EndSessionResponse>>
 where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
-    let payload = payload.map(|Json(payload)| payload).unwrap_or_default();
     let existing = state.store.get_session(session_id).await?;
-    let profile = mode_profile(&state.persona, &existing.mode_state.mode);
-    let subject = payload.subject;
-    let scope = payload
-        .scope
-        .unwrap_or_else(|| profile.default_scope.clone());
-    let was_ended = existing.status == "ended";
-    let session = if was_ended {
-        existing
-    } else {
-        state.store.end_session(session_id).await?
-    };
-    let source_event_seq = if was_ended {
-        None
-    } else {
-        let event = state
-            .store
-            .append_event(
-                session_id,
-                "session_end",
-                json!({
-                    "status": "ended",
-                    "reason": "user_requested",
-                    "subject": subject,
-                    "scope": scope,
-                }),
-            )
-            .await?;
-        let _ = state.sender(session_id).send(event.clone());
-        Some(event.seq)
-    };
-    let dream = state
+    let result = state
         .store
-        .enqueue_dream(NewDreamQueueRecord::session_end(
-            session_id,
-            subject,
-            scope,
-            source_event_seq,
-        ))
+        .end_session_and_enqueue_dream(session_id, existing.owner_subject, existing.memory_scope)
         .await?;
-    if !was_ended {
-        let event = state
-            .store
-            .append_event(
-                session_id,
-                "dream_queued",
-                json!({
-                    "dreamId": dream.id,
-                    "sessionId": dream.session_id,
-                    "reason": dream.reason,
-                    "status": dream.status,
-                    "subject": dream.subject,
-                    "scope": dream.scope,
-                    "dedupeKey": dream.dedupe_key,
-                    "sourceEventSeq": dream.source_event_seq,
-                    "availableAt": dream.available_at,
-                }),
-            )
-            .await?;
+    for event in result.events {
         let _ = state.sender(session_id).send(event);
     }
     Ok(Json(EndSessionResponse {
+        id: result.session.id,
+        status: result.session.status,
+        dream: result.dream,
+    }))
+}
+
+pub(crate) async fn set_session_scope<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path(session_id): Path<Uuid>,
+    Json(payload): Json<SetSessionScopeRequest>,
+) -> Result<Json<SetSessionScopeResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    validate_memory_scope(&state.linked_folders, &payload.scope)?;
+    let existing = state.store.get_session(session_id).await?;
+    if existing.status == "ended" {
+        return Err(ServerError::Conflict(format!(
+            "session {session_id} has ended"
+        )));
+    }
+    let session = state
+        .store
+        .set_session_memory_scope(session_id, &payload.scope)
+        .await?;
+    Ok(Json(SetSessionScopeResponse {
         id: session.id,
-        status: session.status,
-        dream,
+        owner_subject: session.owner_subject,
+        memory_scope: session.memory_scope,
     }))
 }
 
@@ -321,14 +318,21 @@ fn session_response(
     let profile = mode_profile(persona, &session.mode);
     CreateSessionResponse {
         id: session.id,
+        status: session.status,
         mode: session.mode.clone(),
         mode_state: session.mode_state.clone(),
         persona_status,
         label: profile.label,
         voice_cap: profile.voice_cap,
-        default_scope: profile.default_scope,
+        default_scope: session.memory_scope.clone(),
+        owner_subject: session.owner_subject.clone(),
+        memory_scope: session.memory_scope,
         active_skills: profile.active_skills,
     }
+}
+
+fn validate_memory_scope(linked_folders: &tm_host::LinkedFolders, scope: &str) -> Result<()> {
+    resources::util::validate_authorized_memory_scope(linked_folders, scope)
 }
 
 fn session_summary_response(

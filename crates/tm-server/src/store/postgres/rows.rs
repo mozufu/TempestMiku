@@ -7,9 +7,54 @@ use tm_memory::{
 use crate::{Result, ServerError};
 
 use super::{
-    CronJobRecord, CronRunRecord, MessageRecord, ModeState, ProjectItemKind, ProjectItemRecord,
-    SessionRecord,
+    ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronRunRecord, MessageRecord,
+    ModeState, ProjectItemRecord, SessionRecord, SessionTurnRecord,
 };
+
+pub(super) fn row_to_approval_request(row: tokio_postgres::Row) -> ApprovalRequestRecord {
+    ApprovalRequestRecord {
+        id: row.get("id"),
+        session_id: row.get("session_id"),
+        turn_id: row.get("turn_id"),
+        requester_id: row.get("requester_id"),
+        origin: row.get("origin"),
+        action: row.get("action"),
+        scope_json: row.get("scope_json"),
+        options_json: row.get("options_json"),
+        status: row.get("status"),
+        resumable: row.get("resumable"),
+        created_at: row.get("created_at"),
+        expires_at: row.get("expires_at"),
+        heartbeat_at: row.get("heartbeat_at"),
+        resolved_at: row.get("resolved_at"),
+        selected_option_id: row.get("selected_option_id"),
+        resolution_json: row.get("resolution_json"),
+        request_event_seq: row.get("request_event_seq"),
+        resolution_event_seq: row.get("resolution_event_seq"),
+        resolution_version: row.get("resolution_version"),
+    }
+}
+
+pub(super) fn row_to_approval_effect(row: tokio_postgres::Row) -> ApprovalEffectRecord {
+    ApprovalEffectRecord {
+        id: row.get("id"),
+        approval_id: row.get("approval_id"),
+        session_id: row.get("session_id"),
+        effect_type: row.get("effect_type"),
+        payload_json: row.get("payload_json"),
+        status: row.get("status"),
+        attempts: row.get("attempts"),
+        available_at: row.get("available_at"),
+        locked_at: row.get("locked_at"),
+        lease_owner: row.get("lease_owner"),
+        lease_epoch: row.get("lease_epoch"),
+        applied_at: row.get("applied_at"),
+        error_at: row.get("error_at"),
+        last_error: row.get("last_error"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
 
 pub(super) fn row_to_cron_job(row: tokio_postgres::Row) -> CronJobRecord {
     CronJobRecord {
@@ -34,6 +79,12 @@ pub(super) fn row_to_cron_run(row: tokio_postgres::Row) -> CronRunRecord {
         session_id: row.get("session_id"),
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
+        attempts: row.get("attempts"),
+        available_at: row.get("available_at"),
+        locked_at: row.get("locked_at"),
+        lease_owner: row.get("lease_owner"),
+        lease_epoch: row.get("lease_epoch"),
+        last_error: row.get("last_error"),
         result_json: row.get("result_json"),
     }
 }
@@ -107,6 +158,11 @@ pub(super) fn row_to_dream_record(row: tokio_postgres::Row) -> Result<DreamQueue
         enqueued_at: row.get("enqueued_at"),
         available_at: row.get("available_at"),
         locked_at: row.get("locked_at"),
+        lease_owner: row.get("lease_owner"),
+        lease_epoch: row.get("lease_epoch"),
+        heartbeat_at: row.get("heartbeat_at"),
+        completed_at: row.get("completed_at"),
+        error_at: row.get("error_at"),
         last_error: row.get("last_error"),
     })
 }
@@ -149,6 +205,8 @@ pub(super) fn row_to_session_record(row: &tokio_postgres::Row) -> Result<Session
         mode_state,
         persona_status: serde_json::from_value(persona_status)
             .map_err(|err| ServerError::Store(err.to_string()))?,
+        owner_subject: row.get("owner_subject"),
+        memory_scope: row.get("memory_scope"),
     })
 }
 
@@ -158,6 +216,24 @@ pub(super) fn row_to_message_record(row: tokio_postgres::Row) -> MessageRecord {
         seq: row.get("seq"),
         role: row.get("role"),
         content: row.get("content"),
+        turn_id: row.get("turn_id"),
         created_at: row.get("created_at"),
+    }
+}
+
+pub(super) fn row_to_session_turn(row: tokio_postgres::Row) -> SessionTurnRecord {
+    SessionTurnRecord {
+        id: row.get("id"),
+        session_id: row.get("session_id"),
+        client_message_id: row.get("client_message_id"),
+        content: row.get("content"),
+        content_hash: row.get("content_hash"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        started_at: row.get("started_at"),
+        completed_at: row.get("completed_at"),
+        worker_id: row.get("worker_id"),
+        error: row.get("error"),
     }
 }

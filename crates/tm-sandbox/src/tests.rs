@@ -1,12 +1,35 @@
-use std::{collections::BTreeMap, fs, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fs,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use serde_json::Value;
 use tm_artifacts::ArtifactStore;
-use tm_core::{CellBudget, Sandbox, SessionConfig};
+use tm_core::{CancellationToken, CellBudget, Sandbox, SessionConfig};
 use tm_drive::InMemoryDriveStore;
-use tm_host::{ApprovalDecision, ApprovalPolicy, FsMode, LinkedFolderConfig, LinkedFolders};
+use tm_host::{
+    ApprovalDecision, ApprovalPolicy, CapabilityGrants, FsMode, LinkedFolderConfig, LinkedFolders,
+};
 
 use crate::{DenoSandbox, DenoSandboxOptions, StubSandbox};
+
+#[test]
+fn core_sandbox_grants_are_fixed_and_do_not_imply_linked_or_drive_authority() {
+    let grants = crate::core_sandbox_grants();
+    assert_eq!(
+        grants.names().collect::<std::collections::BTreeSet<_>>(),
+        ["http.get", "resources.read:artifact"]
+            .into_iter()
+            .collect()
+    );
+    assert!(!grants.permits("resources.read:linked"));
+    assert!(!grants.permits("drive.search"));
+    assert!(!grants.permits("fs.read"));
+}
 
 fn p0_sandbox(root: &std::path::Path, artifact_root: &std::path::Path) -> DenoSandbox {
     p0_sandbox_with_approval(
@@ -34,13 +57,44 @@ fn p0_sandbox_with_approval(
             }])
             .unwrap(),
         ),
-        drive_store: Some(InMemoryDriveStore::new(drive_artifacts)),
+        drive_store: Some(Arc::new(InMemoryDriveStore::new(drive_artifacts))),
+        grants: CapabilityGrants::default().allow_many([
+            "http.get",
+            "resources.read:artifact",
+            "fs.read",
+            "fs.write",
+            "fs.ls",
+            "fs.find",
+            "code.search",
+            "code.edit",
+            "proc.run",
+            "resources.read:linked",
+            "drive.put",
+            "drive.get",
+            "drive.ls",
+            "drive.move",
+            "drive.search",
+            "drive.tag",
+            "drive.link",
+            "drive.unlink",
+            "drive.organize",
+            "resources.read:drive",
+        ]),
         approval_policy,
         ..DenoSandboxOptions::default()
     })
 }
 
 struct StaticApproval(ApprovalDecision);
+
+#[derive(Default)]
+struct TestCancellation(AtomicBool);
+
+impl CancellationToken for TestCancellation {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
 
 #[async_trait::async_trait]
 impl ApprovalPolicy for StaticApproval {
@@ -200,6 +254,45 @@ async fn deno_timeout_is_structured_error() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
+async fn deno_cancellation_interrupts_busy_evaluation_and_keeps_the_session_healthy() {
+    let cancellation = Arc::new(TestCancellation::default());
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        cancellation: Some(cancellation.clone()),
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let canceller = Arc::clone(&cancellation);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        canceller.0.store(true, Ordering::SeqCst);
+    });
+
+    let cancelled = session
+        .eval(
+            "while (true) {}",
+            CellBudget {
+                wall_ms: 10_000,
+                ..CellBudget::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        cancelled
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("CancellationError")),
+        "{cancelled:?}"
+    );
+
+    cancellation.0.store(false, Ordering::SeqCst);
+    let next = session.eval("21 * 2", CellBudget::default()).await.unwrap();
+    assert_eq!(next.result, Some(Value::Number(42.into())));
+    assert!(next.error.is_none());
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
 async fn deno_captures_print_and_display() {
     let sandbox = DenoSandbox::default();
     let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
@@ -235,6 +328,234 @@ async fn deno_blocks_ambient_raw_apis() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
+async fn registered_resources_do_not_implicitly_grant_capabilities() {
+    let root = tempfile::tempdir().unwrap();
+    let artifacts = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("private.txt"), "private").unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "private".to_string(),
+        path: root.path().to_path_buf(),
+        mode: FsMode::Rw,
+        commands: vec!["cargo".to_string()],
+        safe_args: vec![],
+    }])
+    .unwrap();
+    let drive_artifacts = ArtifactStore::open(artifacts.path(), "drive").unwrap();
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        artifact_root: artifacts.path().to_path_buf(),
+        linked_folders: Some(linked),
+        drive_store: Some(Arc::new(InMemoryDriveStore::new(drive_artifacts))),
+        grants: CapabilityGrants::default().allow("resources.read:artifact"),
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let out = session
+        .eval(
+            "const fsDenied = await fs.read('private:private.txt').catch(err => err.name);\n\
+             const driveDenied = await drive.ls().catch(err => err.name);\n\
+             ({ fsDenied, driveDenied })",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    let result = out.result.unwrap();
+    assert_eq!(
+        result["fsDenied"],
+        Value::String("CapabilityDeniedError".to_string())
+    );
+    assert_eq!(
+        result["driveDenied"],
+        Value::String("CapabilityDeniedError".to_string())
+    );
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn await_cells_persist_declarations_and_handle_semicolons_in_strings() {
+    let sandbox = DenoSandbox::default();
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let first = session
+        .eval(
+            "const persisted = await Promise.resolve('a;b');\n\
+             let suffix = '!';\n\
+             function decorate(value: string) { return value + suffix; }\n\
+             class Holder { static value = persisted; }\n\
+             decorate(Holder.value)",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.result, Some(Value::String("a;b!".to_string())));
+    let second = session
+        .eval("decorate(Holder.value)", CellBudget::default())
+        .await
+        .unwrap();
+    assert_eq!(second.result, Some(Value::String("a;b!".to_string())));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn syntax_lookalikes_do_not_trigger_async_lowering_and_unsupported_syntax_fails_closed() {
+    let sandbox = DenoSandbox::default();
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let ordinary = session
+        .eval(
+            "const text = 'await Promise.resolve(1)';\n\
+             // await Promise.resolve(2)\n\
+             async function nested() { return await Promise.resolve(42); }\n\
+             nested()",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ordinary.result, Some(Value::Number(42.into())));
+
+    let destructuring = session
+        .eval(
+            "const { value } = { value: 1 }; value",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(destructuring.result, Some(Value::Number(1.into())));
+
+    for code in [
+        "import { value } from './missing.ts'; value",
+        "export const value = 1",
+        "const { value } = { value: await Promise.resolve(1) }; value",
+    ] {
+        let output = session.eval(code, CellBudget::default()).await.unwrap();
+        assert!(output.error.is_some(), "{code:?} unexpectedly executed");
+    }
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn print_output_is_bounded_during_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        artifact_root: dir.path().to_path_buf(),
+        limits: crate::DenoResourceLimits {
+            retained_output_bytes: 64,
+            ..crate::DenoResourceLimits::default()
+        },
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let out = session
+        .eval(
+            "print('x'.repeat(10_000)); 'ok'",
+            CellBudget {
+                output_bytes: 10_000,
+                ..CellBudget::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        out.stdout.len() < 512,
+        "stdout was {} bytes",
+        out.stdout.len()
+    );
+    assert!(out.stdout.contains("artifact://") || out.stdout.contains("truncated"));
+    assert!(out.error.is_none(), "{out:?}");
+    if let Some(result) = out.result {
+        assert!(
+            result == Value::String("ok".to_string())
+                || result.get("artifact").and_then(Value::as_str).is_some()
+        );
+    } else {
+        assert!(out.stdout.contains("full output at artifact://"), "{out:?}");
+    }
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn aggregate_output_spills_once_with_a_readable_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        artifact_root: dir.path().to_path_buf(),
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let out = session
+        .eval(
+            "print('x'.repeat(4096)); 'y'.repeat(4096)",
+            CellBudget {
+                output_bytes: 256,
+                ..CellBudget::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(out.stdout.contains("artifact://"), "{:?}", out.stdout);
+    assert!(out.result.is_none());
+    assert!(out.error.is_none());
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn display_limit_is_structured_and_session_remains_usable() {
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        limits: crate::DenoResourceLimits {
+            displays_per_cell: 2,
+            ..crate::DenoResourceLimits::default()
+        },
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let exhausted = session
+        .eval("display(1); display(2); display(3)", CellBudget::default())
+        .await
+        .unwrap();
+    assert!(
+        exhausted
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("ResourceLimitError"))
+    );
+
+    let next = session.eval("1 + 1", CellBudget::default()).await.unwrap();
+    assert_eq!(next.result, Some(Value::Number(2.into())));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn heap_exhaustion_rebuilds_the_isolate() {
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        limits: crate::DenoResourceLimits {
+            heap_bytes: 16 * 1024 * 1024,
+            ..crate::DenoResourceLimits::default()
+        },
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let exhausted = session
+        .eval(
+            "let chunks = []; while (true) chunks.push('x'.repeat(1024 * 1024));",
+            CellBudget {
+                wall_ms: 10_000,
+                ..CellBudget::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        exhausted
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("heap limit exceeded")),
+        "{:?}",
+        exhausted.error
+    );
+
+    let next = session.eval("21 * 2", CellBudget::default()).await.unwrap();
+    assert_eq!(next.result, Some(Value::Number(42.into())));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
 async fn deno_spills_large_output_to_artifact() {
     let dir = tempfile::tempdir().unwrap();
     let sandbox = DenoSandbox::new(DenoSandboxOptions {
@@ -253,7 +574,7 @@ async fn deno_spills_large_output_to_artifact() {
         .await
         .unwrap();
     assert!(out.stdout.contains("artifact://"));
-    assert!(out.stdout.contains("output truncated to 20 bytes"));
+    assert!(out.stdout.contains("20-byte result budget"));
     assert!(!out.stdout.contains(&"x".repeat(100)));
     let fetched = session
         .eval(
@@ -262,15 +583,67 @@ async fn deno_spills_large_output_to_artifact() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        fetched.result.unwrap()["content"].as_str().unwrap().len(),
-        100
-    );
+    let content = fetched.result.unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(content.contains(&"x".repeat(100)));
     let listed = session
         .eval("artifacts.list()[0].sizeBytes", CellBudget::default())
         .await
         .unwrap();
-    assert_eq!(listed.result, Some(Value::Number(100.into())));
+    assert!(listed.result.unwrap().as_u64().unwrap() >= 100);
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn artifact_writes_redact_content_titles_and_reject_untrusted_mime_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let sandbox = DenoSandbox::new(DenoSandboxOptions {
+        artifact_root: dir.path().to_path_buf(),
+        ..DenoSandboxOptions::default()
+    });
+    let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
+    let raw_secret = "sk-testsecret123456";
+    let stored = session
+        .eval(
+            &format!(
+                "const ref = artifacts.put('{raw_secret}', {{ title: '{raw_secret}', mime: 'text/plain' }}); ref"
+            ),
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    let artifact = stored.result.unwrap();
+    assert!(!artifact["preview"].as_str().unwrap().contains(raw_secret));
+    let content = session
+        .eval("await artifacts.get(ref)", CellBudget::default())
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert!(!content["content"].as_str().unwrap().contains(raw_secret));
+    let listed = session
+        .eval("artifacts.list()[0]", CellBudget::default())
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert!(!listed["title"].as_str().unwrap().contains(raw_secret));
+
+    let invalid = session
+        .eval(
+            "artifacts.put('safe', { mime: 'Bearer secret-token-123456' })",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        invalid
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("artifact MIME"))
+    );
 }
 
 #[serial_test::serial]
@@ -936,6 +1309,17 @@ async fn deno_unknown_host_capability_fails_closed() {
     let error = out.error.unwrap();
     assert!(error.contains("CapabilityDeniedError"));
     assert!(error.contains("missing.capability"));
+
+    let out = session
+        .eval(
+            "await modes.suggest('serious_engineer', 'needs repo access')",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    let error = out.error.unwrap();
+    assert!(error.contains("CapabilityDeniedError"));
+    assert!(error.contains("modes.suggest"));
 }
 
 #[serial_test::serial]

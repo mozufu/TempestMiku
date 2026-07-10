@@ -12,5 +12,8 @@ mod ts;
 #[cfg(test)]
 mod tests;
 
-pub use deno::{DenoSandbox, DenoSandboxOptions, DenoSession};
+pub use deno::{
+    CORE_SANDBOX_CAPABILITIES, DenoResourceLimits, DenoSandbox, DenoSandboxOptions, DenoSession,
+    core_sandbox_grants,
+};
 pub use stub::{StubSandbox, StubSession};

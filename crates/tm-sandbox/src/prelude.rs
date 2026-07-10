@@ -9,13 +9,81 @@ try {
 globalThis.fetch = undefined;
 globalThis.__tm_stdout = [];
 globalThis.__tm_displays = [];
+globalThis.__tm_output_limit = 8192;
+globalThis.__tm_output_size = 0;
+globalThis.__tm_output_truncated = false;
+globalThis.__tm_display_limit = 64;
+globalThis.__tm_display_count = 0;
+const __tm_utf8_size = (text) => {
+  let bytes = 0;
+  for (const char of String(text)) {
+    const point = char.codePointAt(0);
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+};
+const __tm_utf8_prefix = (text, maxBytes) => {
+  const value = String(text);
+  let bytes = 0;
+  let units = 0;
+  for (const char of value) {
+    const point = char.codePointAt(0);
+    const size = point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    units += char.length;
+  }
+  return { text: value.slice(0, units), bytes };
+};
+const __tm_render = (value) => {
+  if (typeof value === "string") return value;
+  try {
+    const rendered = JSON.stringify(value);
+    return rendered === undefined ? String(value) : rendered;
+  } catch (_) {
+    return String(value);
+  }
+};
+const __tm_capture = (text) => {
+  const rendered = String(text);
+  const remaining = Math.max(0, globalThis.__tm_output_limit - globalThis.__tm_output_size);
+  if (remaining === 0) {
+    globalThis.__tm_output_truncated = true;
+    return null;
+  }
+  const clipped = __tm_utf8_prefix(rendered, remaining);
+  globalThis.__tm_output_size += clipped.bytes;
+  if (clipped.bytes < __tm_utf8_size(rendered)) globalThis.__tm_output_truncated = true;
+  return clipped.text;
+};
+const __tm_capture_or_spill = (text, title) => {
+  const rendered = String(text);
+  const captured = __tm_capture(rendered);
+  if (captured != null && __tm_utf8_size(captured) === __tm_utf8_size(rendered)) return captured;
+  try {
+    const artifact = __tm_ops.op_tm_artifact_put(rendered, { title, mime: "text/plain" });
+    return `${captured ?? ""}\n… output truncated; full output at ${artifact.uri}`.trim();
+  } catch (_) {
+    throw new Error("ResourceLimitError: output exceeded retention limit and artifact spill failed");
+  }
+};
 globalThis.print = (...items) => {
-  globalThis.__tm_stdout.push(items.map((item) =>
-    typeof item === "string" ? item : JSON.stringify(item)
-  ).join(" "));
+  const captured = __tm_capture_or_spill(items.map(__tm_render).join(" "), "cell print");
+  if (captured != null) globalThis.__tm_stdout.push(captured);
 };
 globalThis.display = (value, opts = undefined) => {
-  globalThis.__tm_displays.push({ value, opts });
+  globalThis.__tm_display_count += 1;
+  if (globalThis.__tm_display_count > globalThis.__tm_display_limit) {
+    throw new Error(`ResourceLimitError: cell exceeded ${globalThis.__tm_display_limit} displays`);
+  }
+  const rendered = __tm_render(value);
+  if (opts && typeof opts === "object" && opts.artifact === true) {
+    const artifact = __tm_ops.op_tm_artifact_put(rendered, opts);
+    globalThis.__tm_displays.push({ artifact, opts });
+    return;
+  }
+  const captured = __tm_capture_or_spill(rendered, opts?.title ?? "display");
+  if (captured != null) globalThis.__tm_displays.push({ rendered: captured, opts });
 };
 const __tm_uri = (ref) => typeof ref === "string" ? ref : ref.uri;
 const __tm_selector = (opts) => {
@@ -91,6 +159,13 @@ globalThis.proc = {
 };
 globalThis.http = {
   get: async (url) => tools.call("http.get", { url: String(url) })
+};
+globalThis.modes = {
+  suggest: async (targetMode, reason = undefined) =>
+    await tools.call("modes.suggest", {
+      targetMode: String(targetMode),
+      ...(reason == null ? {} : { reason: String(reason) })
+    })
 };
 globalThis.drive = {
   put: async (content, opts = undefined) =>

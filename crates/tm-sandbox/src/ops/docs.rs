@@ -319,6 +319,7 @@ pub(super) fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
     .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn core_doc(
     name: &str,
     namespace: &str,

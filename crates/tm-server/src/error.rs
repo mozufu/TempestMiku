@@ -14,6 +14,8 @@ pub enum ServerError {
     Policy(String),
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("store error: {0}")]
     Store(String),
     #[error("backend error: {0}")]
@@ -35,6 +37,7 @@ impl IntoResponse for ServerError {
             ServerError::Unauthorized => StatusCode::UNAUTHORIZED,
             ServerError::Forbidden | ServerError::Policy(_) => StatusCode::FORBIDDEN,
             ServerError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            ServerError::Conflict(_) => StatusCode::CONFLICT,
             ServerError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ServerError::Backend(_) => StatusCode::BAD_GATEWAY,
         };

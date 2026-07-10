@@ -3,7 +3,10 @@ use std::{
     convert::Infallible,
     fs,
     path::{Component, Path as FsPath, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -13,14 +16,13 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::HeaderMap,
+    middleware,
     response::{IntoResponse, Sse, sse::Event},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
-use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use tm_agents::{
@@ -28,20 +30,22 @@ use tm_agents::{
 };
 use tm_artifacts::{ResourceContent, preview};
 use tm_core::DEFAULT_SYSTEM_PROMPT;
-use tm_drive::InMemoryDriveStore;
+use tm_drive::{IntoSharedDriveStore, SharedDriveStore};
 use tm_host::{
     CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
     ResourceRegistry,
 };
-use tm_memory::{DreamQueueRecord, NewDreamQueueRecord};
+use tm_memory::DreamQueueRecord;
 
 use crate::{
-    ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig, ChatRunner,
-    ChatTurn, CodingBackend, CodingEventSink, CodingTurn, MemoryProvider, MemoryRecordRef,
+    ApprovalBroker, ApprovalEffectRecord, ApprovalOption, ApprovalPrompt, ApprovalRequestRecord,
+    ApprovalStatus, AuthConfig, AuthContext, AuthDeviceStore, ChatRunner, ChatTurn, CodingBackend,
+    CodingEventSink, CodingTurn, DurableApprovalSpec, MemoryProvider, MemoryRecordRef,
     MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, ModeCatalog, ModeId, ModeProfile,
     ModesConfig, NewProjectItem, NewSession, PersistingEventSink, ProjectItemKind,
-    ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent, Store,
-    StoreCodingEventSink, StoreEvent, store::ModeState, store::RecallChunkRecord,
+    ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent,
+    SkillProposalStatus, Store, StoreCodingEventSink, StoreEvent, store::ModeState,
+    store::RecallChunkRecord,
 };
 
 const SESSION_RESOURCE_PREVIEW_BYTES: usize = 512;
@@ -75,29 +79,30 @@ impl ActorResourceLinkSeed {
     }
 }
 
-mod approvals;
+pub(crate) mod approvals;
+mod auth_devices;
 mod events;
 mod mode_suggest;
 pub(crate) mod modes;
 pub(crate) mod pairing;
 mod projects;
 mod resources;
-mod sessions;
+pub(crate) mod sessions;
 
 #[cfg(test)]
 mod tests;
 
-use mode_suggest::{MODE_SUGGEST_APPROVAL_TIMEOUT, ModeSuggestMediator};
+use mode_suggest::{MODE_SUGGEST_APPROVAL_TIMEOUT, MODE_SUGGEST_CAPABILITY, ModeSuggestHostFn};
 use modes::{active_skills, build_turn_prompt, mode_changed_payload, mode_profile};
 use projects::{build_project_overview, project_id_from_scope, record_project_observations};
 use resources::validate_relative_path;
-use sessions::default_subject;
 
 pub use modes::{ModeRequest, ModeResponse};
 pub use sessions::{
     CreateSessionRequest, CreateSessionResponse, EndSessionRequest, EndSessionResponse,
-    ListSessionsResponse, MemoryWriteProposalResponse, PostMessageRequest,
-    ProposeMemoryWriteRequest, SessionMessagesResponse,
+    ListSessionsResponse, MemoryWriteProposalResponse, PostMessageRequest, PostMessageResponse,
+    ProposeMemoryWriteRequest, SessionMessagesResponse, SetSessionScopeRequest,
+    SetSessionScopeResponse,
 };
 
 pub struct AppState<S, M, C> {
@@ -105,13 +110,17 @@ pub struct AppState<S, M, C> {
     pub memory: Arc<M>,
     pub chat: Arc<C>,
     pub persona: ModesConfig,
-    pub auth: AuthConfig,
+    pub auth: AuthContext,
     pub coding_backend: Option<Arc<dyn CodingBackend>>,
     pub approval_broker: Arc<ApprovalBroker>,
     pub artifact_root: PathBuf,
     pub linked_folders: LinkedFolders,
-    pub drive_store: Option<InMemoryDriveStore>,
+    pub drive_store: Option<SharedDriveStore>,
     pub actor_roster: Arc<MailboxRegistry>,
+    runtime_status: Arc<crate::RuntimeStatus>,
+    auto_start_turn_dispatcher: bool,
+    turn_notify: Arc<tokio::sync::Notify>,
+    turn_dispatcher_started: Arc<AtomicBool>,
     live_events:
         Arc<parking_lot::Mutex<std::collections::BTreeMap<Uuid, broadcast::Sender<SessionEvent>>>>,
 }
@@ -130,6 +139,10 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             linked_folders: self.linked_folders.clone(),
             drive_store: self.drive_store.clone(),
             actor_roster: Arc::clone(&self.actor_roster),
+            runtime_status: Arc::clone(&self.runtime_status),
+            auto_start_turn_dispatcher: self.auto_start_turn_dispatcher,
+            turn_notify: Arc::clone(&self.turn_notify),
+            turn_dispatcher_started: Arc::clone(&self.turn_dispatcher_started),
             live_events: Arc::clone(&self.live_events),
         }
     }
@@ -142,19 +155,30 @@ impl<S, M, C> AppState<S, M, C> {
         chat: Arc<C>,
         persona: ModesConfig,
         auth: AuthConfig,
-    ) -> Self {
+    ) -> Self
+    where
+        S: Store,
+    {
+        let approval_broker = Arc::new(ApprovalBroker::default());
+        approval_broker.bind_store(Arc::clone(&store));
         Self {
             store,
             memory,
             chat,
             persona,
-            auth,
+            auth: AuthContext::new(auth),
             coding_backend: None,
-            approval_broker: Arc::new(ApprovalBroker::default()),
+            approval_broker,
             artifact_root: tm_artifacts::default_root(),
             linked_folders: LinkedFolders::default(),
             drive_store: None,
             actor_roster: Arc::new(MailboxRegistry::new()),
+            runtime_status: Arc::new(crate::RuntimeStatus::local_test()),
+            // Production startup is role-supervised. Unit tests retain the small embedded
+            // dispatcher so router tests can exercise the durable API without a daemon.
+            auto_start_turn_dispatcher: cfg!(test),
+            turn_notify: Arc::new(tokio::sync::Notify::new()),
+            turn_dispatcher_started: Arc::new(AtomicBool::new(false)),
             live_events: Arc::new(parking_lot::Mutex::new(std::collections::BTreeMap::new())),
         }
     }
@@ -164,7 +188,16 @@ impl<S, M, C> AppState<S, M, C> {
         self
     }
 
-    pub fn with_approval_broker(mut self, broker: Arc<ApprovalBroker>) -> Self {
+    pub fn with_auth_store(mut self, store: Arc<dyn AuthDeviceStore>) -> Self {
+        self.auth = self.auth.with_store(store);
+        self
+    }
+
+    pub fn with_approval_broker(mut self, broker: Arc<ApprovalBroker>) -> Self
+    where
+        S: Store,
+    {
+        broker.bind_store(Arc::clone(&self.store));
         self.approval_broker = broker;
         self
     }
@@ -184,9 +217,23 @@ impl<S, M, C> AppState<S, M, C> {
         self
     }
 
-    pub fn with_drive_store(mut self, drive_store: InMemoryDriveStore) -> Self {
-        self.drive_store = Some(drive_store);
+    pub fn with_drive_store(mut self, drive_store: impl IntoSharedDriveStore) -> Self {
+        self.drive_store = Some(drive_store.into_shared_drive_store());
         self
+    }
+
+    pub fn with_runtime_status(mut self, runtime_status: Arc<crate::RuntimeStatus>) -> Self {
+        self.runtime_status = runtime_status;
+        self
+    }
+
+    pub fn with_auto_turn_dispatcher(mut self, enabled: bool) -> Self {
+        self.auto_start_turn_dispatcher = enabled;
+        self
+    }
+
+    pub fn runtime_status(&self) -> &Arc<crate::RuntimeStatus> {
+        &self.runtime_status
     }
 
     pub fn dream_worker(&self, config: crate::DreamWorkerConfig) -> crate::ServerDreamWorker<S>
@@ -215,6 +262,22 @@ impl<S, M, C> AppState<S, M, C> {
             .entry(session_id)
             .or_insert_with(|| broadcast::channel(256).0)
             .clone()
+    }
+
+    pub(crate) fn notify_turn_dispatcher(&self) {
+        self.turn_notify.notify_one();
+    }
+
+    fn wire_turn_dispatcher(&self)
+    where
+        S: Store,
+        M: MemoryProvider,
+        C: ChatRunner,
+    {
+        if self.turn_dispatcher_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        sessions::start_turn_dispatcher(self.clone(), Arc::clone(&self.turn_notify));
     }
 
     /// Wire actor lifecycle events into the session SSE stream (P3.5).
@@ -264,8 +327,10 @@ impl<S, M, C> AppState<S, M, C> {
                                         let _ = sender.send(link_event);
                                     }
                                     Err(err) => {
+                                        let err =
+                                            tm_memory::redact_dream_text(&err.to_string()).text;
                                         tracing::warn!(
-                                            error = %err,
+                                            %err,
                                             "actor resource link event store write failed"
                                         )
                                     }
@@ -273,7 +338,8 @@ impl<S, M, C> AppState<S, M, C> {
                             }
                         }
                         Err(err) => {
-                            tracing::warn!(error = %err, "lifecycle event store write failed")
+                            let err = tm_memory::redact_dream_text(&err.to_string()).text;
+                            tracing::warn!(%err, "lifecycle event store write failed")
                         }
                     }
                 });
@@ -311,10 +377,18 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    Router::<AppState<S, M, C>>::new()
-        .route("/health", get(health))
-        .route("/pair", get(pairing::page))
-        .route("/pair/qr.svg", get(pairing::qr_svg))
+    if state.auto_start_turn_dispatcher {
+        state.wire_turn_dispatcher();
+    }
+    let protected = Router::<AppState<S, M, C>>::new()
+        .route("/ready", get(readiness::<S, M, C>))
+        .route("/metrics", get(metrics::<S, M, C>))
+        .route("/auth/devices", get(auth_devices::list_devices::<S, M, C>))
+        .route("/auth/logout", post(auth_devices::logout::<S, M, C>))
+        .route(
+            "/auth/devices/:device_id",
+            delete(auth_devices::revoke_device::<S, M, C>),
+        )
         .route("/modes", get(modes::list_modes::<S, M, C>))
         .route(
             "/sessions",
@@ -323,12 +397,20 @@ where
         .route("/sessions/:id", get(sessions::get_session::<S, M, C>))
         .route("/sessions/:id/end", post(sessions::end_session::<S, M, C>))
         .route(
+            "/sessions/:id/scope",
+            post(sessions::set_session_scope::<S, M, C>),
+        )
+        .route(
             "/sessions/:id/events",
             get(events::session_events::<S, M, C>),
         )
         .route(
             "/sessions/:id/messages",
             get(sessions::get_session_messages::<S, M, C>).post(sessions::post_message::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/turns/:turn_id",
+            get(sessions::get_turn::<S, M, C>),
         )
         .route(
             "/sessions/:id/memory/proposals",
@@ -404,10 +486,88 @@ where
             "/sessions/:id/resources/artifacts/:artifact_id",
             get(resources::read_artifact::<S, M, C>),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.auth.clone(),
+            crate::auth::require_auth,
+        ));
+
+    Router::<AppState<S, M, C>>::new()
+        .route("/health", get(health))
+        .route("/pair", get(pairing::page::<S, M, C>))
+        .route(
+            "/auth/pairing-codes",
+            post(auth_devices::create_pairing_code::<S, M, C>),
+        )
+        .route("/auth/pair", post(auth_devices::pair_device::<S, M, C>))
+        .merge(protected)
         .fallback_service(crate::webui::service())
         .with_state(state)
 }
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+async fn readiness<S, M, C>(State(state): State<AppState<S, M, C>>) -> Result<impl IntoResponse>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let runtime = state.runtime_status().snapshot();
+    let ready = !runtime.shutting_down
+        && (!runtime.postgres || runtime.migrations_applied)
+        && (!runtime.workers_enabled || runtime.postgres);
+    let status = if runtime.shutting_down {
+        "draining"
+    } else if ready {
+        "ready"
+    } else {
+        "not_ready"
+    };
+    let status_code = if ready {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+    Ok((
+        status_code,
+        Json(json!({
+            "status": status,
+            "runtime": runtime,
+        })),
+    ))
+}
+
+async fn metrics<S, M, C>(State(state): State<AppState<S, M, C>>) -> Result<Json<Value>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let store = state.store.runtime_metrics(Utc::now()).await?;
+    Ok(Json(json!({
+        "runtime": state.runtime_status().snapshot(),
+        "queues": {
+            "turn": {
+                "depth": store.turn_queue_depth,
+                "oldestAgeSeconds": store.turn_oldest_age_seconds,
+            },
+            "dream": {
+                "depth": store.dream_queue_depth,
+                "oldestAgeSeconds": store.dream_oldest_age_seconds,
+            },
+            "scheduler": {
+                "depth": store.cron_queue_depth,
+                "oldestAgeSeconds": store.cron_oldest_age_seconds,
+                "lagSeconds": store.scheduler_lag_seconds,
+            },
+            "approvalEffects": {
+                "depth": store.approval_effect_queue_depth,
+                "oldestAgeSeconds": store.approval_effect_oldest_age_seconds,
+            },
+        },
+        "pendingApprovals": store.pending_approvals,
+        "leaseReclaims": store.lease_reclaims,
+    })))
 }

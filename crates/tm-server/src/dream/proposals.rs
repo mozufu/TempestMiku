@@ -9,10 +9,10 @@ use tm_memory::{
     SkillProposalStatus, SkillVerification,
 };
 
-use crate::memory::{MemoryRecordRef, MemoryWriteProposal, MemoryWriteStatus};
+use crate::memory::{MemoryWriteProposal, MemoryWriteStatus};
 use crate::{
-    ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, CodingEventSink, Result, Store,
-    StoreCodingEventSink,
+    ApprovalBroker, ApprovalOption, ApprovalPrompt, CodingEventSink, DurableApprovalSpec, Result,
+    Store, StoreCodingEventSink,
 };
 
 use super::util::{
@@ -92,140 +92,76 @@ fn verify_skill_body(body: &str) -> SkillVerification {
     }
 }
 
-pub(super) fn spawn_memory_write_proposal<S>(
+pub(super) async fn spawn_memory_write_proposal<S>(
     store: Arc<S>,
     approval_broker: Arc<ApprovalBroker>,
     sender_for: SenderFactory,
     session_id: Uuid,
     proposal: MemoryWriteProposal,
     timeout: StdDuration,
-) where
+) -> Result<()>
+where
     S: Store,
 {
-    tokio::spawn(async move {
-        let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+    let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+        session_id,
+        Arc::clone(&store),
+        sender_for(session_id),
+    ));
+    sink.emit(
+        "write_proposal",
+        proposal.event_payload(MemoryWriteStatus::Pending, None),
+    )
+    .await?;
+    approval_broker
+        .enqueue_permission_for_backend(DurableApprovalSpec {
             session_id,
-            Arc::clone(&store),
-            sender_for(session_id),
-        ));
-        if let Err(err) = sink
-            .emit(
-                "write_proposal",
-                proposal.event_payload(MemoryWriteStatus::Pending, None),
-            )
-            .await
-        {
-            tracing::warn!(%err, %session_id, "dream memory proposal event failed");
-            return;
-        }
-        let approval = approval_broker
-            .request_permission_detailed_for_backend(
-                session_id,
-                "memory",
-                memory_write_approval_prompt(&proposal, timeout),
-                timeout,
-                Arc::clone(&sink),
-            )
-            .await;
-        let Ok(approval) = approval else {
-            tracing::warn!(%session_id, "dream memory approval request failed");
-            return;
-        };
-        let status = memory_write_status_from_approval(approval.status);
-        let record = if approval.status == ApprovalStatus::Approved {
-            match persist_memory_write(store.as_ref(), &proposal).await {
-                Ok(record) => Some(record),
-                Err(err) => {
-                    tracing::warn!(%err, %session_id, "dream memory persistence failed");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        if let Err(err) = sink
-            .emit(
-                "write_proposal",
-                proposal.event_payload(status, record.as_ref()),
-            )
-            .await
-        {
-            tracing::warn!(%err, %session_id, "dream memory proposal resolution event failed");
-        }
-    });
+            origin: "memory".to_string(),
+            prompt: memory_write_approval_prompt(&proposal, timeout),
+            timeout,
+            effect_type: "memory_write".to_string(),
+            effect_payload_json: json!({ "proposal": proposal }),
+            resumable: true,
+            sink,
+        })
+        .await?;
+    Ok(())
 }
 
-pub(super) fn spawn_skill_write_proposal<S>(
+pub(super) async fn spawn_skill_write_proposal<S>(
     store: Arc<S>,
     approval_broker: Arc<ApprovalBroker>,
     sender_for: SenderFactory,
     proposal: SkillProposalRecord,
     timeout: StdDuration,
-) where
-    S: Store,
-{
-    tokio::spawn(async move {
-        let session_id = proposal.source_session_id;
-        let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
-            session_id,
-            Arc::clone(&store),
-            sender_for(session_id),
-        ));
-        if let Err(err) = sink
-            .emit(
-                "write_proposal",
-                skill_proposal_payload(&proposal, SkillProposalStatus::Pending),
-            )
-            .await
-        {
-            tracing::warn!(%err, %session_id, "dream skill proposal event failed");
-            return;
-        }
-        let approval = approval_broker
-            .request_permission_detailed_for_backend(
-                session_id,
-                "skill",
-                skill_write_approval_prompt(&proposal, timeout),
-                timeout,
-                Arc::clone(&sink),
-            )
-            .await;
-        let Ok(approval) = approval else {
-            tracing::warn!(%session_id, "dream skill approval request failed");
-            return;
-        };
-        let status = skill_status_from_approval(approval.status);
-        let updated = store
-            .update_skill_proposal_status(proposal.id, status)
-            .await
-            .unwrap_or(proposal);
-        if let Err(err) = sink
-            .emit("write_proposal", skill_proposal_payload(&updated, status))
-            .await
-        {
-            tracing::warn!(%err, %session_id, "dream skill proposal resolution event failed");
-        }
-    });
-}
-
-async fn persist_memory_write<S>(
-    store: &S,
-    proposal: &MemoryWriteProposal,
-) -> Result<MemoryRecordRef>
+) -> Result<()>
 where
     S: Store,
 {
-    match proposal.memory_kind {
-        crate::memory::MemoryWriteKind::ProfileFact => {
-            let fact = crate::memory::profile_fact_record(proposal)?;
-            store.upsert_profile_fact(fact).await?;
-        }
-        crate::memory::MemoryWriteKind::RecallChunk => {
-            let chunk = crate::memory::recall_chunk_record(proposal)?;
-            store.upsert_recall_chunk(chunk).await?;
-        }
-    }
-    Ok(proposal.record_ref())
+    let session_id = proposal.source_session_id;
+    let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+        session_id,
+        Arc::clone(&store),
+        sender_for(session_id),
+    ));
+    sink.emit(
+        "write_proposal",
+        skill_proposal_payload(&proposal, SkillProposalStatus::Pending),
+    )
+    .await?;
+    approval_broker
+        .enqueue_permission_for_backend(DurableApprovalSpec {
+            session_id,
+            origin: "skill".to_string(),
+            prompt: skill_write_approval_prompt(&proposal, timeout),
+            timeout,
+            effect_type: "skill_write".to_string(),
+            effect_payload_json: json!({ "proposalId": proposal.id }),
+            resumable: true,
+            sink,
+        })
+        .await?;
+    Ok(())
 }
 
 fn memory_write_approval_prompt(
@@ -287,7 +223,10 @@ fn skill_write_approval_prompt(
     }
 }
 
-fn skill_proposal_payload(proposal: &SkillProposalRecord, status: SkillProposalStatus) -> Value {
+pub(crate) fn skill_proposal_payload(
+    proposal: &SkillProposalRecord,
+    status: SkillProposalStatus,
+) -> Value {
     json!({
         "kind": "skill",
         "proposalId": proposal.id,
@@ -305,24 +244,6 @@ fn skill_proposal_payload(proposal: &SkillProposalRecord, status: SkillProposalS
         "createdAt": proposal.created_at,
         "updatedAt": proposal.updated_at,
     })
-}
-
-fn memory_write_status_from_approval(status: ApprovalStatus) -> MemoryWriteStatus {
-    match status {
-        ApprovalStatus::Approved => MemoryWriteStatus::Approved,
-        ApprovalStatus::Denied => MemoryWriteStatus::Denied,
-        ApprovalStatus::TimedOut => MemoryWriteStatus::TimedOut,
-        ApprovalStatus::Cancelled => MemoryWriteStatus::Cancelled,
-    }
-}
-
-fn skill_status_from_approval(status: ApprovalStatus) -> SkillProposalStatus {
-    match status {
-        ApprovalStatus::Approved => SkillProposalStatus::Approved,
-        ApprovalStatus::Denied => SkillProposalStatus::Denied,
-        ApprovalStatus::TimedOut => SkillProposalStatus::TimedOut,
-        ApprovalStatus::Cancelled => SkillProposalStatus::Cancelled,
-    }
 }
 
 fn skill_proposal_uri(id: Uuid) -> String {

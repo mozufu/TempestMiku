@@ -1,5 +1,5 @@
 mod config;
-mod proposals;
+pub(crate) mod proposals;
 mod summary;
 mod util;
 mod worker;

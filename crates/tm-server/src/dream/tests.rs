@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use tm_memory::{
-    DreamInputBudget, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport,
-    MemorySummaryKind, MemorySummaryRecord, NewDreamQueueRecord, NewMemorySummaryRecord,
-    NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
+    DreamInputBudget, DreamLease, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker,
+    DreamWorkerReport, MemorySummaryKind, MemorySummaryRecord, NewDreamQueueRecord,
+    NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
 };
 use tm_modes::{AssetStatus, ModeId, ModesConfig};
 use tokio::sync::broadcast;
@@ -16,12 +16,15 @@ use uuid::Uuid;
 
 use super::worker::SenderFactory;
 use super::*;
+use crate::store::StoreRuntimeMetrics;
 use crate::{
-    ApprovalBroker, ApprovalResolveDecision, CronJobRecord, CronRunRecord, InMemoryStore,
-    MemoryWriteStatus, MessageRecord, NewCronJobRecord, NewCronRunRecord, NewProjectItem,
-    NewSession, ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord,
-    ResolveApprovalRequest, Result, ServerError, SessionEvent, SessionRecord, SessionSummaryRecord,
-    Store,
+    ApprovalBroker, ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord,
+    ApprovalResolveDecision, CronJobRecord, CronLease, CronRunRecord, EndSessionDreamResult,
+    InMemoryStore, MemoryWriteStatus, MessageRecord, NewApprovalRequest, NewApprovalResolution,
+    NewCronJobRecord, NewCronRunRecord, NewProjectItem, NewSession, ProfileFactRecord,
+    ProjectItemKind, ProjectItemRecord, RecallChunkRecord, ResolveApprovalRequest, Result,
+    ServerError, SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store,
+    StoreCodingEventSink,
 };
 
 struct ClaimFailureStore;
@@ -32,8 +35,29 @@ impl Store for ClaimFailureStore {
         panic!("unused store method create_session")
     }
 
+    async fn configure_owner_subject(&self, _owner_subject: &str) -> Result<usize> {
+        panic!("unused store method configure_owner_subject")
+    }
+
+    async fn set_session_memory_scope(
+        &self,
+        _session_id: Uuid,
+        _memory_scope: &str,
+    ) -> Result<SessionRecord> {
+        panic!("unused store method set_session_memory_scope")
+    }
+
     async fn end_session(&self, _session_id: Uuid) -> Result<SessionRecord> {
         panic!("unused store method end_session")
+    }
+
+    async fn end_session_and_enqueue_dream(
+        &self,
+        _session_id: Uuid,
+        _subject: String,
+        _scope: String,
+    ) -> Result<EndSessionDreamResult> {
+        panic!("unused store method end_session_and_enqueue_dream")
     }
 
     async fn list_sessions(&self, _limit: usize) -> Result<Vec<SessionSummaryRecord>> {
@@ -80,6 +104,179 @@ impl Store for ClaimFailureStore {
         _last_event_id: Option<i64>,
     ) -> Result<Vec<SessionEvent>> {
         panic!("unused store method events_after")
+    }
+
+    async fn enqueue_turn(
+        &self,
+        _session_id: Uuid,
+        _client_message_id: &str,
+        _content: &str,
+    ) -> Result<SessionTurnRecord> {
+        panic!("unused store method enqueue_turn")
+    }
+
+    async fn turn(&self, _turn_id: Uuid) -> Result<SessionTurnRecord> {
+        panic!("unused store method turn")
+    }
+
+    async fn claim_next_turn(
+        &self,
+        _worker_id: Uuid,
+        _now: chrono::DateTime<Utc>,
+    ) -> Result<Option<SessionTurnRecord>> {
+        panic!("unused store method claim_next_turn")
+    }
+
+    async fn heartbeat_turn(
+        &self,
+        _turn_id: Uuid,
+        _worker_id: Uuid,
+        _now: chrono::DateTime<Utc>,
+    ) -> Result<SessionTurnRecord> {
+        panic!("unused store method heartbeat_turn")
+    }
+
+    async fn fail_stale_running_turns(
+        &self,
+        _stale_before: chrono::DateTime<Utc>,
+        _failed_at: chrono::DateTime<Utc>,
+        _error: &str,
+    ) -> Result<usize> {
+        panic!("unused store method fail_stale_running_turns")
+    }
+
+    async fn complete_turn(
+        &self,
+        _turn_id: Uuid,
+        _worker_id: Uuid,
+        _assistant_content: &str,
+        _completed_at: chrono::DateTime<Utc>,
+    ) -> Result<SessionTurnRecord> {
+        panic!("unused store method complete_turn")
+    }
+
+    async fn fail_turn(
+        &self,
+        _turn_id: Uuid,
+        _worker_id: Uuid,
+        _error: &str,
+        _failed_at: chrono::DateTime<Utc>,
+    ) -> Result<SessionTurnRecord> {
+        panic!("unused store method fail_turn")
+    }
+
+    async fn create_approval_request(
+        &self,
+        _request: NewApprovalRequest,
+    ) -> Result<ApprovalRequestRecord> {
+        panic!("unused store method create_approval_request")
+    }
+
+    async fn approval_request(
+        &self,
+        _session_id: Uuid,
+        _approval_id: Uuid,
+    ) -> Result<ApprovalRequestRecord> {
+        panic!("unused store method approval_request")
+    }
+
+    async fn heartbeat_approval_request(
+        &self,
+        _approval_id: Uuid,
+        _requester_id: Uuid,
+        _now: chrono::DateTime<Utc>,
+    ) -> Result<ApprovalRequestRecord> {
+        panic!("unused store method heartbeat_approval_request")
+    }
+
+    async fn resolve_approval_request(
+        &self,
+        _session_id: Uuid,
+        _approval_id: Uuid,
+        _resolution: NewApprovalResolution,
+    ) -> Result<ApprovalRequestRecord> {
+        panic!("unused store method resolve_approval_request")
+    }
+
+    async fn resolve_approval_request_with_event(
+        &self,
+        _session_id: Uuid,
+        _approval_id: Uuid,
+        _resolution: NewApprovalResolution,
+    ) -> Result<(ApprovalRequestRecord, SessionEvent)> {
+        panic!("unused store method resolve_approval_request_with_event")
+    }
+
+    async fn link_approval_event(
+        &self,
+        _session_id: Uuid,
+        _approval_id: Uuid,
+        _event_type: &str,
+        _event_seq: i64,
+    ) -> Result<ApprovalRequestRecord> {
+        panic!("unused store method link_approval_event")
+    }
+
+    async fn cancel_stale_non_resumable_approvals(
+        &self,
+        _stale_before: chrono::DateTime<Utc>,
+        _cancelled_at: chrono::DateTime<Utc>,
+    ) -> Result<Vec<SessionEvent>> {
+        panic!("unused store method cancel_stale_non_resumable_approvals")
+    }
+
+    async fn expire_pending_approvals(
+        &self,
+        _now: chrono::DateTime<Utc>,
+    ) -> Result<Vec<SessionEvent>> {
+        panic!("unused store method expire_pending_approvals")
+    }
+
+    async fn claim_approval_effect(
+        &self,
+        _approval_id: Uuid,
+        _owner_id: Uuid,
+        _now: chrono::DateTime<Utc>,
+        _lease_timeout: Duration,
+    ) -> Result<Option<ApprovalEffectLease>> {
+        panic!("unused store method claim_approval_effect")
+    }
+
+    async fn claim_next_approval_effect(
+        &self,
+        _owner_id: Uuid,
+        _now: chrono::DateTime<Utc>,
+        _lease_timeout: Duration,
+    ) -> Result<Option<ApprovalEffectLease>> {
+        panic!("unused store method claim_next_approval_effect")
+    }
+
+    async fn complete_approval_effect(
+        &self,
+        _lease: &ApprovalEffectLease,
+        _applied_at: chrono::DateTime<Utc>,
+    ) -> Result<ApprovalEffectRecord> {
+        panic!("unused store method complete_approval_effect")
+    }
+
+    async fn complete_approval_effect_with_event(
+        &self,
+        _lease: &ApprovalEffectLease,
+        _proposal_payload_json: Value,
+        _turn_id: Option<Uuid>,
+        _applied_at: chrono::DateTime<Utc>,
+    ) -> Result<(ApprovalEffectRecord, SessionEvent)> {
+        panic!("unused store method complete_approval_effect_with_event")
+    }
+
+    async fn fail_approval_effect(
+        &self,
+        _lease: &ApprovalEffectLease,
+        _error: &str,
+        _next_available_at: chrono::DateTime<Utc>,
+        _max_attempts: i32,
+    ) -> Result<ApprovalEffectRecord> {
+        panic!("unused store method fail_approval_effect")
     }
 
     async fn add_profile_fact(&self, _fact: ProfileFactRecord) -> Result<()> {
@@ -151,21 +348,22 @@ impl Store for ClaimFailureStore {
         &self,
         _now: chrono::DateTime<Utc>,
         _lease_timeout: Duration,
-    ) -> Result<Option<DreamQueueRecord>> {
+        _owner_id: Uuid,
+    ) -> Result<Option<DreamLease>> {
         Err(ServerError::Store("claim failed".to_string()))
     }
 
     async fn heartbeat_dream(
         &self,
-        _dream_id: Uuid,
+        _lease: &DreamLease,
         _now: chrono::DateTime<Utc>,
-    ) -> Result<DreamQueueRecord> {
+    ) -> Result<DreamLease> {
         panic!("unused store method heartbeat_dream")
     }
 
     async fn complete_dream(
         &self,
-        _dream_id: Uuid,
+        _lease: &DreamLease,
         _now: chrono::DateTime<Utc>,
     ) -> Result<DreamQueueRecord> {
         panic!("unused store method complete_dream")
@@ -173,7 +371,7 @@ impl Store for ClaimFailureStore {
 
     async fn fail_dream(
         &self,
-        _dream_id: Uuid,
+        _lease: &DreamLease,
         _error: String,
         _next_available_at: chrono::DateTime<Utc>,
         _max_attempts: i32,
@@ -238,7 +436,32 @@ impl Store for ClaimFailureStore {
         panic!("unused store method cron_jobs")
     }
 
-    async fn claim_cron_run(&self, _run: NewCronRunRecord) -> Result<(CronRunRecord, bool)> {
+    async fn materialize_cron_run(
+        &self,
+        _run: NewCronRunRecord,
+        _expected_next_run_at: chrono::DateTime<Utc>,
+        _next_run_at: chrono::DateTime<Utc>,
+    ) -> Result<Option<CronRunRecord>> {
+        panic!("unused store method materialize_cron_run")
+    }
+
+    async fn claim_ready_cron_run(
+        &self,
+        _owner_id: Uuid,
+        _now: chrono::DateTime<Utc>,
+        _lease_timeout: Duration,
+        _max_attempts: i32,
+    ) -> Result<Option<CronLease>> {
+        panic!("unused store method claim_ready_cron_run")
+    }
+
+    async fn claim_cron_run(
+        &self,
+        _run: NewCronRunRecord,
+        _owner_id: Uuid,
+        _now: chrono::DateTime<Utc>,
+        _lease_timeout: Duration,
+    ) -> Result<(CronLease, bool)> {
         panic!("unused store method claim_cron_run")
     }
 
@@ -246,9 +469,17 @@ impl Store for ClaimFailureStore {
         panic!("unused store method record_cron_run")
     }
 
+    async fn heartbeat_cron_run(
+        &self,
+        _lease: &CronLease,
+        _now: chrono::DateTime<Utc>,
+    ) -> Result<CronLease> {
+        panic!("unused store method heartbeat_cron_run")
+    }
+
     async fn complete_cron_run(
         &self,
-        _run_id: Uuid,
+        _lease: &CronLease,
         _status: &str,
         _session_id: Option<Uuid>,
         _result_json: Value,
@@ -256,8 +487,22 @@ impl Store for ClaimFailureStore {
         panic!("unused store method complete_cron_run")
     }
 
+    async fn fail_cron_run(
+        &self,
+        _lease: &CronLease,
+        _error: String,
+        _next_available_at: chrono::DateTime<Utc>,
+        _max_attempts: i32,
+    ) -> Result<CronRunRecord> {
+        panic!("unused store method fail_cron_run")
+    }
+
     async fn cron_runs(&self, _job_id: &str, _limit: usize) -> Result<Vec<CronRunRecord>> {
         panic!("unused store method cron_runs")
+    }
+
+    async fn runtime_metrics(&self, _now: chrono::DateTime<Utc>) -> Result<StoreRuntimeMetrics> {
+        panic!("unused store method runtime_metrics")
     }
 }
 
@@ -274,6 +519,183 @@ fn test_sender_factory() -> SenderFactory {
     })
 }
 
+struct FailingPublishSink;
+
+#[async_trait]
+impl crate::CodingEventSink for FailingPublishSink {
+    async fn emit(&self, _event_type: &str, _payload_json: Value) -> Result<SessionEvent> {
+        panic!("approval proposal finalization must publish an already-persisted event")
+    }
+
+    async fn publish_persisted(&self, _event: SessionEvent) -> Result<()> {
+        Err(ServerError::Store(
+            "simulated post-commit broadcast failure".to_string(),
+        ))
+    }
+}
+
+struct PersistedOnlySink;
+
+#[async_trait]
+impl crate::CodingEventSink for PersistedOnlySink {
+    async fn emit(&self, _event_type: &str, _payload_json: Value) -> Result<SessionEvent> {
+        panic!("durable approval test helper must not append a second event")
+    }
+}
+
+async fn resolve_and_apply_durable_approval(
+    store: &Arc<InMemoryStore>,
+    broker: &Arc<ApprovalBroker>,
+    sender_for: &SenderFactory,
+    session_id: Uuid,
+    approval_id: Uuid,
+    request: ResolveApprovalRequest,
+) {
+    let sink: Arc<dyn crate::CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+        session_id,
+        Arc::clone(store),
+        sender_for(session_id),
+    ));
+    broker
+        .resolve_persisted(session_id, approval_id, request, Arc::clone(&sink))
+        .await
+        .unwrap();
+    let lease = store
+        .claim_approval_effect(
+            approval_id,
+            Uuid::new_v4(),
+            Utc::now(),
+            Duration::seconds(30),
+        )
+        .await
+        .unwrap()
+        .expect("resolved approval effect");
+    let approval = store
+        .approval_request(session_id, approval_id)
+        .await
+        .unwrap();
+    crate::api::approvals::apply_approval_effect_lease(store.as_ref(), &approval, &lease, sink)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn approval_effect_publish_failure_does_not_requeue_committed_mutation() {
+    let store = Arc::new(InMemoryStore::default());
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let now = Utc::now();
+    let proposal = crate::memory::MemoryWriteProposal::recall_chunk(
+        "brian".to_string(),
+        "global".to_string(),
+        "persist this exactly once".to_string(),
+        "fault-test".to_string(),
+        "fault-test".to_string(),
+        json!({"source": "fault-test"}),
+        now,
+    )
+    .unwrap();
+    let proposal_id = proposal.proposal_id;
+    let approval_id = Uuid::new_v4();
+    store
+        .create_approval_request(NewApprovalRequest {
+            id: approval_id,
+            session_id: session.id,
+            turn_id: None,
+            requester_id: Uuid::new_v4(),
+            origin: "fault-test".to_string(),
+            action: "memory.write".to_string(),
+            scope_json: json!({"scope": "global"}),
+            options_json: json!([]),
+            effect_type: "memory_write".to_string(),
+            effect_payload_json: json!({"proposal": proposal}),
+            resumable: true,
+            created_at: now,
+            expires_at: now + Duration::minutes(5),
+        })
+        .await
+        .unwrap();
+    store
+        .resolve_approval_request_with_event(
+            session.id,
+            approval_id,
+            NewApprovalResolution {
+                status: "approved".to_string(),
+                selected_option_id: Some("allow".to_string()),
+                resolution_json: json!({
+                    "approvalId": approval_id,
+                    "status": "approved",
+                    "outcome": "approved",
+                }),
+                resolved_at: now + Duration::seconds(1),
+            },
+        )
+        .await
+        .unwrap();
+    let lease = store
+        .claim_approval_effect(
+            approval_id,
+            Uuid::new_v4(),
+            now + Duration::seconds(1),
+            Duration::seconds(30),
+        )
+        .await
+        .unwrap()
+        .expect("resolved memory effect");
+    let approval = store
+        .approval_request(session.id, approval_id)
+        .await
+        .unwrap();
+
+    let error = crate::api::approvals::apply_approval_effect_lease(
+        store.as_ref(),
+        &approval,
+        &lease,
+        Arc::new(FailingPublishSink),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("post-commit broadcast failure"));
+    assert!(
+        store
+            .claim_approval_effect(
+                approval_id,
+                Uuid::new_v4(),
+                now + Duration::minutes(2),
+                Duration::seconds(30),
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "a broadcast failure must not requeue an applied effect"
+    );
+    assert_eq!(
+        store.recall_chunks("global", "", 10).await.unwrap().len(),
+        1
+    );
+    assert_eq!(
+        store
+            .events_after(session.id, None)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["proposalId"] == json!(proposal_id)
+                    && event.payload_json["status"] == json!("approved")
+            })
+            .count(),
+        1
+    );
+}
+
 async fn wait_for_event_count(
     store: &InMemoryStore,
     session_id: Uuid,
@@ -281,6 +703,30 @@ async fn wait_for_event_count(
     count: usize,
 ) -> Vec<SessionEvent> {
     for _ in 0..100 {
+        if event_type == "approval_resolved" {
+            store.expire_pending_approvals(Utc::now()).await.unwrap();
+            loop {
+                let Some(lease) = store
+                    .claim_next_approval_effect(Uuid::new_v4(), Utc::now(), Duration::seconds(30))
+                    .await
+                    .unwrap()
+                else {
+                    break;
+                };
+                let approval = store
+                    .approval_request(lease.effect.session_id, lease.effect.approval_id)
+                    .await
+                    .unwrap();
+                crate::api::approvals::apply_approval_effect_lease(
+                    store,
+                    &approval,
+                    &lease,
+                    Arc::new(PersistedOnlySink),
+                )
+                .await
+                .unwrap();
+            }
+        }
         let events = store.events_after(session_id, None).await.unwrap();
         if events
             .iter()
@@ -626,10 +1072,11 @@ async fn completed_dream_rerun_does_not_duplicate_memory_or_approvals() {
     };
     let dream = store.enqueue_dream(new_dream.clone()).await.unwrap();
 
+    let sender_for = test_sender_factory();
     let worker = ServerDreamWorker::new(
         Arc::clone(&store),
         Arc::clone(&broker),
-        test_sender_factory(),
+        Arc::clone(&sender_for),
         DreamWorkerConfig {
             proposal_timeout: StdDuration::from_secs(5),
             ..DreamWorkerConfig::default()
@@ -650,16 +1097,18 @@ async fn completed_dream_rerun_does_not_duplicate_memory_or_approvals() {
         .unwrap()
         .parse::<Uuid>()
         .unwrap();
-    broker
-        .resolve(
-            session.id,
-            approval_id,
-            ResolveApprovalRequest {
-                decision: ApprovalResolveDecision::Approve,
-                option_id: Some("allow".to_string()),
-            },
-        )
-        .unwrap();
+    resolve_and_apply_durable_approval(
+        &store,
+        &broker,
+        &sender_for,
+        session.id,
+        approval_id,
+        ResolveApprovalRequest {
+            decision: ApprovalResolveDecision::Approve,
+            option_id: Some("allow".to_string()),
+        },
+    )
+    .await;
     wait_for_memory_write_status(&store, session.id, MemoryWriteStatus::Approved).await;
 
     let duplicate = store.enqueue_dream(new_dream).await.unwrap();
@@ -1429,10 +1878,11 @@ async fn skill_proposal_approval_can_approve_or_reject_without_live_reload() {
             .await
             .unwrap();
 
+        let sender_for = test_sender_factory();
         let worker = ServerDreamWorker::new(
             Arc::clone(&store),
             Arc::clone(&broker),
-            test_sender_factory(),
+            Arc::clone(&sender_for),
             DreamWorkerConfig {
                 proposal_timeout: StdDuration::from_secs(5),
                 ..DreamWorkerConfig::default()
@@ -1449,16 +1899,18 @@ async fn skill_proposal_approval_can_approve_or_reject_without_live_reload() {
                 .unwrap()
                 .parse::<Uuid>()
                 .unwrap();
-            broker
-                .resolve(
-                    session.id,
-                    approval_id,
-                    ResolveApprovalRequest {
-                        decision,
-                        option_id: Some(option_id.to_string()),
-                    },
-                )
-                .unwrap();
+            resolve_and_apply_durable_approval(
+                &store,
+                &broker,
+                &sender_for,
+                session.id,
+                approval_id,
+                ResolveApprovalRequest {
+                    decision,
+                    option_id: Some(option_id.to_string()),
+                },
+            )
+            .await;
         }
 
         let proposal = wait_for_skill_status(&store, session.id, expected_status).await;

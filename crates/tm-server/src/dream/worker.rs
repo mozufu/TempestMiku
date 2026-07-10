@@ -36,6 +36,7 @@ pub struct ServerDreamWorker<S> {
     approval_broker: Arc<crate::ApprovalBroker>,
     sender_for: SenderFactory,
     config: DreamWorkerConfig,
+    owner_id: Uuid,
 }
 
 pub struct DreamWorkerDaemon<S> {
@@ -53,12 +54,17 @@ impl<S> ServerDreamWorker<S> {
         approval_broker: Arc<crate::ApprovalBroker>,
         sender_for: SenderFactory,
         config: DreamWorkerConfig,
-    ) -> Self {
+    ) -> Self
+    where
+        S: Store,
+    {
+        approval_broker.bind_store(Arc::clone(&store));
         Self {
             store,
             approval_broker,
             sender_for,
             config,
+            owner_id: Uuid::new_v4(),
         }
     }
 
@@ -91,29 +97,51 @@ where
             return Ok(DreamWorkerReport::default());
         }
         let now = Utc::now();
-        let Some(dream) = self
+        let Some(lease) = self
             .store
-            .claim_ready_dream(now, self.config.lease_timeout)
+            .claim_ready_dream_bounded(
+                now,
+                self.config.lease_timeout,
+                self.owner_id,
+                self.config.max_attempts,
+            )
             .await?
         else {
             return Ok(DreamWorkerReport::default());
         };
+        let dream = &lease.dream;
         let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
             dream.session_id,
             Arc::clone(&self.store),
             (self.sender_for)(dream.session_id),
         ));
-        sink.emit("dream_started", dream_started_payload(&dream))
+        sink.emit("dream_started", dream_started_payload(dream))
             .await?;
 
         let processed = if self.config.per_dream_timeout.is_zero() {
             Err(ServerError::Store("dream timed out".to_string()))
         } else {
-            match tokio::time::timeout(
-                self.config.per_dream_timeout,
-                self.process_claimed_dream(&dream, Arc::clone(&sink)),
-            )
-            .await
+            let heartbeat_every = self
+                .config
+                .heartbeat_interval
+                .max(StdDuration::from_millis(1));
+            let processing = self.process_claimed_dream(dream, Arc::clone(&sink));
+            tokio::pin!(processing);
+            let mut heartbeat = tokio::time::interval(heartbeat_every);
+            heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            heartbeat.tick().await;
+            let processed_with_heartbeat = async {
+                loop {
+                    tokio::select! {
+                        processed = &mut processing => break processed,
+                        _ = heartbeat.tick() => {
+                            self.store.heartbeat_dream(&lease, Utc::now()).await?;
+                        }
+                    }
+                }
+            };
+            match tokio::time::timeout(self.config.per_dream_timeout, processed_with_heartbeat)
+                .await
             {
                 Ok(processed) => processed,
                 Err(_) => Err(ServerError::Store("dream timed out".to_string())),
@@ -122,7 +150,7 @@ where
 
         match processed {
             Ok(mut report) => {
-                let completed = self.store.complete_dream(dream.id, Utc::now()).await?;
+                let completed = self.store.complete_dream(&lease, Utc::now()).await?;
                 sink.emit(
                     "dream_completed",
                     json!({
@@ -142,7 +170,7 @@ where
                 let failed = self
                     .store
                     .fail_dream(
-                        dream.id,
+                        &lease,
                         err.to_string(),
                         next_available_at,
                         self.config.max_attempts,
@@ -313,7 +341,8 @@ where
                 dream.session_id,
                 proposal,
                 self.config.proposal_timeout,
-            );
+            )
+            .await?;
         }
 
         let mut proposal_count = memory_proposals.len();
@@ -328,7 +357,8 @@ where
                         Arc::clone(&self.sender_for),
                         skill,
                         self.config.proposal_timeout,
-                    );
+                    )
+                    .await?;
                 }
                 DreamSkillProposal::Rejected {
                     name,
@@ -389,6 +419,7 @@ where
                 break;
             }
             if let Err(err) = self.worker.run_batch_result().await {
+                let err = tm_memory::redact_dream_text(&err.to_string()).text;
                 tracing::warn!(%err, "dream worker daemon tick failed");
             }
             tokio::select! {
@@ -425,6 +456,7 @@ where
         match self.run_once_result().await {
             Ok(report) => report,
             Err(err) => {
+                let err = tm_memory::redact_dream_text(&err.to_string()).text;
                 tracing::warn!(%err, "dream worker run failed before producing a report");
                 DreamWorkerReport::default()
             }

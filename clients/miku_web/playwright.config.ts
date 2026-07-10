@@ -10,9 +10,9 @@ export default defineConfig({
     baseURL,
   },
   webServer: {
-    command: `OPENAI_API_KEY= OPENAI_BASE_URL= TM_DATABASE_URL= TM_OMP_ACP_ENABLED=0 TM_SERVER_ADDR=127.0.0.1:${port} cargo run -p tm-server`,
+    command: `OPENAI_API_KEY= OPENAI_BASE_URL= TM_OMP_ACP_ENABLED=0 TM_SERVER_ROLE=all TM_SERVER_ADDR=127.0.0.1:${port} cargo run -p tm-server`,
     url: `${baseURL}/health`,
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 300_000,
   },
 });

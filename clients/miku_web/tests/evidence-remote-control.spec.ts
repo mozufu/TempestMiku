@@ -65,6 +65,10 @@ evidenceTest('real Flutter UI remote-control flow records user-visible evidence'
     sessionId = await waitForSessionId(page);
     await waitForFonts(page);
     await page.screenshot({ path: path.join(uiDir, 'ui-loaded.png'), fullPage: true });
+    const scope = await page.request.post(`/sessions/${sessionId}/scope`, {
+      data: { scope: 'project:tempestmiku' },
+    });
+    expect(scope.ok()).toBeTruthy();
     await setHandoffMode(page, sessionId);
 
     await sendPrompt(

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,9 +37,34 @@ pub fn parse_sse_block(block: &str) -> Result<Option<E2eEvent>> {
     } else {
         serde_json::from_str(&data_text).unwrap_or(Value::String(data_text))
     };
+    ensure!(
+        event_type.as_deref() == Some("session_event"),
+        "unsupported SSE event name {}",
+        event_type.as_deref().unwrap_or("message")
+    );
+    let Value::Object(mut envelope) = data else {
+        bail!("session_event data must be an object");
+    };
+    let event_type = envelope
+        .remove("type")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .context("session_event envelope is missing type")?;
+    let payload = envelope
+        .remove("payload")
+        .context("session_event envelope is missing payload")?;
+    ensure!(
+        envelope.get("createdAt").and_then(Value::as_str).is_some(),
+        "session_event envelope is missing createdAt"
+    );
+    ensure!(
+        envelope
+            .get("turnId")
+            .is_some_and(|value| value.is_null() || value.is_string()),
+        "session_event envelope has invalid turnId"
+    );
     Ok(Some(E2eEvent {
         id,
-        event_type: event_type.unwrap_or_else(|| "message".to_string()),
-        data,
+        event_type,
+        data: payload,
     }))
 }

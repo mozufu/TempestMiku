@@ -164,6 +164,10 @@ pub async fn run_workflow(
     };
     let coding_step = WorkflowStep::CodingModeProbe;
     let coding_message = speaker.message(coding_step, &context).await?;
+    client
+        .set_session_scope(&session.id, "project:tempestmiku")
+        .await
+        .context("selecting the linked TempestMiku project scope")?;
     // Modes no longer auto-switch from message keywords (they're sticky capability envelopes
     // now); the workflow drives the same explicit override a client's mode picker would use.
     client
@@ -274,7 +278,7 @@ pub async fn run_workflow(
     if let Some(uri) = &artifact_uri {
         let artifact = client.resolve_resource(&session.id, uri).await?;
         ensure!(
-            artifact["content"].as_str().unwrap_or_default().len() > 0,
+            !artifact["content"].as_str().unwrap_or_default().is_empty(),
             "artifact resource {uri} should be readable"
         );
     }

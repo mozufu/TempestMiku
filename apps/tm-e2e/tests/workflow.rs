@@ -19,6 +19,7 @@ use tm_e2e::{
     WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions, run_actor_smoke, run_drive_smoke,
     run_record_api, run_workflow, write_workflow_record,
 };
+use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use tm_server::{
     AppState, ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig,
@@ -292,7 +293,7 @@ async fn native_deno_actor_coordination_public_api_covers_p3_plus_route() {
         "expected two actor_resources_linked events, saw {event_types:?}"
     );
     assert!(
-        event_types.iter().any(|kind| *kind == "final"),
+        event_types.contains(&"final"),
         "expected final event in replayed/native route events"
     );
     let artifact_uris = [
@@ -476,6 +477,8 @@ async fn start_server(
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
     let state = AppState::new(store, memory, chat, tm_server::ModesConfig::default(), auth)
+        .with_auto_turn_dispatcher(true)
+        .with_linked_folders(test_linked_project(temp.path()))
         .with_artifact_root(artifact_root.clone())
         .with_coding_backend(Arc::new(ArtifactBackend {
             root: artifact_root,
@@ -536,6 +539,7 @@ async fn start_native_actor_coordination_server()
         tm_server::ModesConfig::default(),
         AuthConfig::NoAuth,
     )
+    .with_auto_turn_dispatcher(true)
     .with_artifact_root(artifact_root.clone())
     .with_actor_roster(Arc::clone(&roster));
     let broker = Arc::clone(&state.approval_broker);
@@ -549,14 +553,13 @@ async fn start_native_actor_coordination_server()
         Arc::new(ChatActorExecutor::with_actor_context(
             llm_for_executor,
             cfg.clone(),
-            move |session_id, actor_id, grants, cancellation| {
+            move |session_id, actor_id, grants, session_scope, cancellation| {
                 let mut opts = executor_options.clone();
                 opts.session_id = session_id.to_string();
                 opts.actor_id = actor_id.map(str::to_string);
+                opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants = opts
-                    .grants
-                    .clone()
+                opts.grants = tm_sandbox::core_sandbox_grants()
                     .allow_many(grants.names().map(str::to_string));
                 let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                     session_id,
@@ -623,6 +626,8 @@ async fn start_drive_smoke_server() -> (String, tokio::task::JoinHandle<()>, tem
         tm_server::ModesConfig::default(),
         AuthConfig::NoAuth,
     )
+    .with_auto_turn_dispatcher(true)
+    .with_linked_folders(test_linked_project(temp.path()))
     .with_artifact_root(artifact_root.clone())
     .with_drive_store(drive_store.clone());
     let broker = Arc::clone(&state.approval_broker);
@@ -631,7 +636,7 @@ async fn start_drive_smoke_server() -> (String, tokio::task::JoinHandle<()>, tem
         cfg,
         DenoSandboxOptions {
             artifact_root,
-            drive_store: Some(drive_store),
+            drive_store: Some(Arc::new(drive_store)),
             approval_timeout: Duration::from_secs(5),
             ..DenoSandboxOptions::default()
         },
@@ -654,14 +659,14 @@ fn drive_smoke_code() -> String {
 const filed = await drive.put("# Approval Drop\nManual approval gates drive writes.\nResearch smoke citation body.", {
   auto: true,
   suggestedPath: "inbox/approval-drop.md",
-  project: "TempestMiku",
+  project: "tempestmiku",
   docKind: "note",
   sourceUri: "drop://browser/approval-drop.md",
   eventSeq: 101
 });
-const hits = await drive.search("approval", { project: "TempestMiku", returnSnippets: true });
+const hits = await drive.search("approval", { project: "tempestmiku", returnSnippets: true });
 const researchResult = await research.drive("approval", {
-  project: "TempestMiku",
+  project: "tempestmiku",
   maxDocs: 1,
   maxSnippets: 1,
   maxWorkers: 0,
@@ -678,6 +683,17 @@ display({
 });
 "##
     .to_string()
+}
+
+fn test_linked_project(root: &std::path::Path) -> LinkedFolders {
+    LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: root.to_path_buf(),
+        mode: FsMode::Ro,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .expect("active TempestMiku test project")
 }
 
 fn native_parent_coordination_code() -> String {
@@ -795,6 +811,7 @@ async fn start_actor_smoke_server() -> (String, tokio::task::JoinHandle<()>, tem
         tm_server::ModesConfig::default(),
         AuthConfig::NoAuth,
     )
+    .with_auto_turn_dispatcher(true)
     .with_artifact_root(artifact_root.clone())
     .with_actor_roster(Arc::clone(&roster));
     let broker = Arc::clone(&state.approval_broker);

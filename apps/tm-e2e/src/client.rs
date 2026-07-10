@@ -39,12 +39,31 @@ impl MikuClient {
     }
 
     pub async fn create_session(&self, mode: Option<&str>) -> Result<SessionInfo> {
-        let body = match mode {
-            Some(mode) => json!({ "mode": mode }),
-            None => json!({}),
-        };
-        let value = self.post_json("/sessions", body).await?;
+        self.create_session_scoped(mode, None).await
+    }
+
+    pub async fn create_session_scoped(
+        &self,
+        mode: Option<&str>,
+        scope: Option<&str>,
+    ) -> Result<SessionInfo> {
+        let mut body = serde_json::Map::new();
+        if let Some(mode) = mode {
+            body.insert("mode".to_string(), json!(mode));
+        }
+        if let Some(scope) = scope {
+            body.insert("scope".to_string(), json!(scope));
+        }
+        let value = self.post_json("/sessions", Value::Object(body)).await?;
         serde_json::from_value(value).context("decoding create-session response")
+    }
+
+    pub async fn set_session_scope(&self, session_id: &str, scope: &str) -> Result<Value> {
+        self.post_json(
+            &format!("/sessions/{session_id}/scope"),
+            json!({ "scope": scope }),
+        )
+        .await
     }
 
     pub async fn get_session(&self, session_id: &str) -> Result<SessionInfo> {
@@ -57,13 +76,24 @@ impl MikuClient {
             .await
     }
 
-    pub async fn send_message(&self, session_id: &str, content: &str) -> Result<()> {
-        self.post_json(
-            &format!("/sessions/{session_id}/messages"),
-            json!({ "content": content }),
-        )
-        .await?;
-        Ok(())
+    pub async fn send_message(&self, session_id: &str, content: &str) -> Result<String> {
+        let accepted = self
+            .post_json(
+                &format!("/sessions/{session_id}/messages"),
+                json!({
+                    "clientMessageId": uuid::Uuid::new_v4().to_string(),
+                    "content": content,
+                }),
+            )
+            .await?;
+        ensure!(
+            accepted["status"] == "queued",
+            "message turn was not queued"
+        );
+        accepted["turnId"]
+            .as_str()
+            .map(str::to_string)
+            .context("queued message response is missing turnId")
     }
 
     pub async fn override_mode(&self, session_id: &str, mode: &str, reason: &str) -> Result<Value> {
@@ -99,7 +129,6 @@ impl MikuClient {
             &format!("/sessions/{session_id}/memory/proposals"),
             json!({
                 "memoryKind": "profile_fact",
-                "subject": "brian",
                 "predicate": predicate,
                 "object": object,
                 "confidence": 0.93,

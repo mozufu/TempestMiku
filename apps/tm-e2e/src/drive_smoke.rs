@@ -15,7 +15,9 @@ pub struct DriveSmokeReport {
 }
 
 pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
-    let session = client.create_session(Some("serious_engineer")).await?;
+    let session = client
+        .create_session_scoped(Some("serious_engineer"), Some("project:tempestmiku"))
+        .await?;
     ensure!(
         session.mode == "serious_engineer",
         "drive smoke should start in Serious Engineer mode, got {}",
@@ -104,7 +106,7 @@ pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
     );
     ensure!(
         final_events.iter().any(research_cell_result),
-        "native turn should display search/research result"
+        "native turn should display search/research result; events: {final_events:#?}"
     );
 
     let preview = client.preview_resource(&session.id, &filed_uri).await?;
@@ -124,7 +126,7 @@ pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
         "resolved drive resource should open filed content"
     );
     let feed = client
-        .drive_feed(&session.id, Some("TempestMiku"), 5)
+        .drive_feed(&session.id, Some("tempestmiku"), 5)
         .await?;
     ensure!(
         feed["recent"]
@@ -159,10 +161,20 @@ pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
 }
 
 fn research_cell_result(event: &E2eEvent) -> bool {
-    event.event_type == "cell_result"
-        && event.data["shaped"].as_str().is_some_and(|shaped| {
-            shaped.contains("\"searchHits\": 1")
-                && shaped.contains("\"researchCitations\": 1")
-                && shaped.contains("\"sourceKind\": \"drive\"")
+    if event.event_type != "cell_result" {
+        return false;
+    }
+    event.data["shaped"]
+        .as_str()
+        .and_then(|shaped| {
+            shaped
+                .lines()
+                .find_map(|line| line.strip_prefix("display: "))
+        })
+        .and_then(|display| serde_json::from_str::<serde_json::Value>(display).ok())
+        .is_some_and(|display| {
+            display["searchHits"] == 1
+                && display["researchCitations"] == 1
+                && display["sourceKind"] == "drive"
         })
 }

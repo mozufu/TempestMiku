@@ -7,7 +7,8 @@ It does not add a production endpoint or model-visible capability. The driver
 only calls:
 
 - `POST /sessions`
-- `POST /sessions/:id/messages`
+- `POST /sessions/:id/messages` with a unique `clientMessageId` (durable `202` turn)
+- `GET /sessions/:id/turns/:turnId`
 - `GET /sessions/:id/events`
 - approval, memory, project, and resource routes
 
@@ -49,6 +50,10 @@ TM_MIKU_E2E_TIMEOUT_MS=15000
 TM_E2E_REQUIRE_ARTIFACT=1
 TM_E2E_RECORD_PATH=target/tm-e2e/scripted-latest.json
 ```
+
+External-server runs authenticate every HTTP/SSE request with `TM_MIKU_BEARER_TOKEN`. The SSE parser
+accepts only `event: session_event`, deduplicates durable numeric ids, and reads the logical event kind
+from `data.type`; the `eventTypes` arrays below contain those logical type values, not wire event names.
 
 `tm-e2e` loads the nearest workspace `.env` before reading these variables. Values already exported
 in the shell win over `.env`. Evidence manifests include credential presence only as redacted

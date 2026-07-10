@@ -20,6 +20,7 @@ use tm_core::{
     AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Message,
     Result as CoreResult, StreamEvent, ToolChoice,
 };
+use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
 use tm_llm::OpenAiClient;
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use tm_server::{
@@ -430,7 +431,7 @@ async fn run_native_actor_coordination_scenario(
         ensure_min_event_count(&event_types, "actor_completed", 2)?;
         ensure_min_event_count(&event_types, "actor_resources_linked", 2)?;
         ensure!(
-            event_types.iter().any(|kind| *kind == "final"),
+            event_types.contains(&"final"),
             "native actor route did not replay a final event"
         );
 
@@ -892,6 +893,7 @@ impl NativeActorRecordingServer {
             tm_server::ModesConfig::default(),
             AuthConfig::NoAuth,
         )
+        .with_auto_turn_dispatcher(true)
         .with_artifact_root(artifact_root.clone())
         .with_actor_roster(Arc::clone(&roster));
         let broker = Arc::clone(&state.approval_broker);
@@ -905,14 +907,13 @@ impl NativeActorRecordingServer {
             Arc::new(ChatActorExecutor::with_actor_context(
                 llm_for_executor,
                 cfg.clone(),
-                move |session_id, actor_id, grants, cancellation| {
+                move |session_id, actor_id, grants, session_scope, cancellation| {
                     let mut opts = executor_options.clone();
                     opts.session_id = session_id.to_string();
                     opts.actor_id = actor_id.map(str::to_string);
+                    opts.session_scope = session_scope.map(str::to_string);
                     opts.cancellation = cancellation;
-                    opts.grants = opts
-                        .grants
-                        .clone()
+                    opts.grants = tm_sandbox::core_sandbox_grants()
                         .allow_many(grants.names().map(str::to_string));
                     let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                         session_id,
@@ -1098,6 +1099,14 @@ impl RecordingServer {
         let chat = Arc::new(EchoChatRunner);
         let broker = Arc::new(ApprovalBroker::default());
         let roster = Arc::new(MailboxRegistry::new());
+        let linked_folders = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+            name: "tempestmiku".to_string(),
+            path: run_root.to_path_buf(),
+            mode: FsMode::Rw,
+            commands: Vec::new(),
+            safe_args: Vec::new(),
+        }])
+        .context("configuring recording-server project link")?;
         let state = AppState::new(
             store,
             memory,
@@ -1105,8 +1114,10 @@ impl RecordingServer {
             tm_server::ModesConfig::default(),
             AuthConfig::NoAuth,
         )
+        .with_auto_turn_dispatcher(true)
         .with_approval_broker(Arc::clone(&broker))
         .with_artifact_root(artifact_root.clone())
+        .with_linked_folders(linked_folders)
         .with_actor_roster(Arc::clone(&roster))
         .with_coding_backend(Arc::new(RecordingBackend {
             root: artifact_root.clone(),

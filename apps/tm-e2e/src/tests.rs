@@ -4,7 +4,10 @@ use serde_json::json;
 
 #[test]
 fn parses_json_sse_block() {
-    let event = parse_sse_block("id: 7\nevent: final\ndata: {\"text\":\"done\"}\n").unwrap();
+    let event = parse_sse_block(
+        "id: 7\nevent: session_event\ndata: {\"type\":\"final\",\"turnId\":null,\"payload\":{\"text\":\"done\"},\"createdAt\":\"2026-07-10T00:00:00Z\"}\n",
+    )
+    .unwrap();
     let event = event.unwrap();
     assert_eq!(event.id, Some(7));
     assert_eq!(event.event_type, "final");

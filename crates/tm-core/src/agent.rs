@@ -1,12 +1,15 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc, task::Poll};
 
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{
+    FutureExt, StreamExt,
+    future::{BoxFuture, Either, select},
+};
 
 use crate::{
     Accumulator, CellBudget, ChatRequest, Error, EventSink, ExecuteCall, LlmClient, Message,
-    Result, Sandbox, SessionConfig, StreamEvent, ToolChoice, ToolMediator, ToolSpec,
-    prompt::DEFAULT_SYSTEM_PROMPT, shape::shape_result,
+    Result, Sandbox, SessionConfig, StreamEvent, ToolChoice, ToolSpec,
+    prompt::DEFAULT_SYSTEM_PROMPT, shape::shape_result_capped,
 };
 
 /// Optional source of actor inbox messages for the agent loop.
@@ -25,6 +28,23 @@ pub trait InboxDrain: Send + Sync {
 /// only observes whether the current run should stop.
 pub trait CancellationToken: Send + Sync {
     fn is_cancelled(&self) -> bool;
+
+    /// Resolve when cancellation is requested.
+    ///
+    /// Implementations should override this with their native notification primitive. The
+    /// compatibility default preserves existing tokens and repeatedly yields through the
+    /// executor until [`CancellationToken::is_cancelled`] changes.
+    fn cancelled(&self) -> BoxFuture<'_, ()> {
+        futures::future::poll_fn(|cx| {
+            if self.is_cancelled() {
+                Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+        .boxed()
+    }
 }
 
 /// How the model is asked to run code.
@@ -69,6 +89,11 @@ const FENCED_INSTRUCTIONS: &str = "\n\nThis endpoint has no function-calling. To
 EXACTLY ONE fenced block:\n```run\n<your code>\n```\nThe runtime executes it and returns the \
 result as the next message. Emit no fenced block when you have the final answer.";
 
+enum TurnAction {
+    Execute(ExecuteCall),
+    Final,
+}
+
 /// The orchestrator: owns the message list and runs the streaming loop.
 pub struct Agent {
     llm: Arc<dyn LlmClient>,
@@ -93,14 +118,9 @@ impl Agent {
         Message::system(prompt)
     }
 
-    fn build_request(&self, messages: &[Message], extra_tools: &[ToolSpec]) -> ChatRequest {
+    fn build_request(&self, messages: &[Message]) -> ChatRequest {
         let (tools, tool_choice) = match self.cfg.protocol {
-            Protocol::NativeTool => (
-                std::iter::once(ToolSpec::execute())
-                    .chain(extra_tools.iter().cloned())
-                    .collect(),
-                ToolChoice::Auto,
-            ),
+            Protocol::NativeTool => (vec![ToolSpec::execute()], ToolChoice::Auto),
             Protocol::FencedBlock => (Vec::new(), ToolChoice::None),
         };
         ChatRequest {
@@ -115,28 +135,22 @@ impl Agent {
 
     /// Run the agent to a final answer, streaming events to `sink` as they arrive.
     pub async fn run(&self, user: &str, sink: &dyn EventSink) -> Result<String> {
-        self.run_with_inbox(user, sink, None, None).await
+        self.run_with_inbox(user, sink, None).await
     }
 
-    /// Run the agent with an optional actor inbox drain and an optional [`ToolMediator`].
+    /// Run the agent with an optional actor inbox drain.
     ///
     /// Pending inbox messages are appended before each model turn, preserving the
     /// existing streaming/tool loop while letting live actor messages wake the
     /// next turn without adding another runtime loop.
     ///
-    /// A mediator's tool specs are advertised alongside `execute`; when the model calls one
-    /// of them instead of `execute`, the loop hands the call to the mediator and feeds its
-    /// returned string back as that call's tool result, then continues to the next turn —
-    /// `tm-core` never learns what the mediated tool actually does.
     pub async fn run_with_inbox(
         &self,
         user: &str,
         sink: &dyn EventSink,
         inbox: Option<&dyn InboxDrain>,
-        mediator: Option<&dyn ToolMediator>,
     ) -> Result<String> {
-        self.run_with_controls(user, sink, inbox, mediator, None)
-            .await
+        self.run_with_controls(user, sink, inbox, None).await
     }
 
     /// Run the agent with optional product-layer controls.
@@ -145,77 +159,142 @@ impl Agent {
         user: &str,
         sink: &dyn EventSink,
         inbox: Option<&dyn InboxDrain>,
-        mediator: Option<&dyn ToolMediator>,
         cancellation: Option<&dyn CancellationToken>,
     ) -> Result<String> {
-        let mut messages = vec![self.system_message(), Message::user(user)];
-        let mut session = self.sandbox.open(SessionConfig::default()).await?;
-        let extra_tools = mediator.map(|m| m.tool_specs()).unwrap_or_default();
+        self.run_with_prior_messages_and_controls(user, &[], sink, inbox, cancellation)
+            .await
+    }
+
+    /// Open a fresh sandbox session, then run with caller-bounded prior conversation messages.
+    pub async fn run_with_prior_messages_and_controls(
+        &self,
+        user: &str,
+        prior_messages: &[Message],
+        sink: &dyn EventSink,
+        inbox: Option<&dyn InboxDrain>,
+        cancellation: Option<&dyn CancellationToken>,
+    ) -> Result<String> {
+        check_cancelled(cancellation)?;
+        let mut session =
+            await_cancellable(self.sandbox.open(SessionConfig::default()), cancellation).await??;
+        self.run_with_session_and_controls(
+            user,
+            prior_messages,
+            session.as_mut(),
+            sink,
+            inbox,
+            cancellation,
+        )
+        .await
+    }
+
+    /// Run against an already-open sandbox session with caller-bounded conversation history.
+    ///
+    /// `prior_messages` are inserted after the current system message and before the new user
+    /// message. The caller owns history selection and must keep the slice within its context
+    /// budget. Reusing `session` preserves REPL state across otherwise independent agent runs.
+    pub async fn run_with_session(
+        &self,
+        user: &str,
+        prior_messages: &[Message],
+        session: &mut dyn crate::Session,
+        sink: &dyn EventSink,
+    ) -> Result<String> {
+        self.run_with_session_and_controls(user, prior_messages, session, sink, None, None)
+            .await
+    }
+
+    /// Run the single streaming/tool loop against an already-open session with all optional
+    /// product-layer controls enabled.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_session_and_controls(
+        &self,
+        user: &str,
+        prior_messages: &[Message],
+        session: &mut dyn crate::Session,
+        sink: &dyn EventSink,
+        inbox: Option<&dyn InboxDrain>,
+        cancellation: Option<&dyn CancellationToken>,
+    ) -> Result<String> {
+        let mut messages = Vec::with_capacity(prior_messages.len() + 2);
+        messages.push(self.system_message());
+        messages.extend_from_slice(prior_messages);
+        messages.push(Message::user(user));
 
         for _ in 0..self.cfg.max_turns {
             check_cancelled(cancellation)?;
             if let Some(inbox) = inbox {
-                for message in inbox.drain().await? {
+                let pending = await_cancellable(inbox.drain(), cancellation).await??;
+                for message in pending {
                     check_cancelled(cancellation)?;
                     messages.push(Message::user(format!("[actor inbox]\n{message}")));
                 }
             }
 
-            let request = self.build_request(&messages, &extra_tools);
+            let request = self.build_request(&messages);
 
             // Stream the turn; assistant tokens reach the sink the instant they land.
-            let mut stream = self.llm.chat_stream(&request).await?;
+            let mut stream =
+                await_cancellable(self.llm.chat_stream(&request), cancellation).await??;
             let mut acc = Accumulator::new();
-            while let Some(ev) = stream.next().await {
+            while let Some(ev) = await_cancellable(stream.next(), cancellation).await? {
                 check_cancelled(cancellation)?;
                 let ev = ev?;
                 match &ev {
-                    StreamEvent::Reasoning(r) => sink.on_reasoning(r),
-                    StreamEvent::Text(t) => sink.on_text(t),
+                    StreamEvent::Reasoning(r) => sink.try_on_reasoning(r)?,
+                    StreamEvent::Text(t) => sink.try_on_text(t)?,
                     StreamEvent::ToolCall {
                         name: Some(name), ..
-                    } if !name.is_empty() => sink.on_tool_call(name),
+                    } if !name.is_empty() => sink.try_on_tool_call(name)?,
                     _ => {}
                 }
                 acc.push(ev);
             }
-            sink.on_turn_end();
+            sink.try_on_turn_end()?;
 
             let turn = acc.into_turn();
+            let action = match self.cfg.protocol {
+                Protocol::NativeTool => validate_native_turn(&turn)?,
+                Protocol::FencedBlock => {
+                    validate_completion_state(&turn)?;
+                    if !turn.tool_calls.is_empty() {
+                        return Err(Error::Protocol(
+                            "fenced-block endpoint returned native tool calls".to_string(),
+                        ));
+                    }
+                    match parse_fenced(&turn.text)? {
+                        Some(code) => TurnAction::Execute(ExecuteCall {
+                            id: String::new(),
+                            code,
+                        }),
+                        None => TurnAction::Final,
+                    }
+                }
+            };
             messages.push(turn.to_message());
 
-            // Decide whether the model wants to run code, per protocol.
-            let call = match self.cfg.protocol {
-                Protocol::NativeTool => turn.execute_call(),
-                Protocol::FencedBlock => parse_fenced(&turn.text).map(|code| ExecuteCall {
-                    id: String::new(),
-                    code,
-                }),
-            };
-
-            let Some(call) = call else {
-                // No `execute` call this turn. If a mediator is attached and the model
-                // called one of its tools instead, hand it off and keep looping; otherwise
-                // this is the final answer.
-                let mediated = mediator.zip(turn.tool_calls.iter().find(|tc| tc.name != "execute"));
-                let Some((mediator, tool_call)) = mediated else {
-                    sink.on_final(&turn.text);
+            let call = match action {
+                TurnAction::Final => {
+                    sink.try_on_final(&turn.text)?;
                     return Ok(turn.text);
-                };
-                let result = mediator
-                    .handle(&tool_call.name, &tool_call.arguments)
-                    .await
-                    .unwrap_or_else(|err| format!("{} failed: {err}", tool_call.name));
-                messages.push(Message::tool_result(&tool_call.id, result));
-                continue;
+                }
+                TurnAction::Execute(call) => call,
             };
 
+            if call.id.is_empty() && self.cfg.protocol == Protocol::NativeTool {
+                return Err(Error::Protocol(
+                    "execute tool call is missing an id".to_string(),
+                ));
+            }
+
             check_cancelled(cancellation)?;
-            sink.on_cell_start(&call.code);
-            let out = session.eval(&call.code, self.cfg.cell_budget).await?;
+            sink.try_on_cell_start(&call.code)?;
+            let out =
+                await_cancellable(session.eval(&call.code, self.cfg.cell_budget), cancellation)
+                    .await??;
             check_cancelled(cancellation)?;
-            let shaped = shape_result(&out);
-            sink.on_cell_result(&shaped);
+            let shaped = shape_result_capped(&out, self.cfg.cell_budget.output_bytes);
+            sink.try_on_cell_result(&shaped)?;
 
             match self.cfg.protocol {
                 Protocol::NativeTool => messages.push(Message::tool_result(&call.id, shaped)),
@@ -237,33 +316,147 @@ fn check_cancelled(cancellation: Option<&dyn CancellationToken>) -> Result<()> {
     }
 }
 
-/// Extract the body of the first fenced code block the loop knows how to run. Recognized
-/// fences, in priority order: ```run, ```tm, then the common language fences.
-fn parse_fenced(text: &str) -> Option<String> {
-    const FENCES: &[&str] = &[
-        "```run",
-        "```tm",
-        "```ts",
-        "```typescript",
-        "```js",
-        "```javascript",
-    ];
-    for fence in FENCES {
-        let Some(open) = text.find(fence) else {
-            continue;
-        };
-        let after = &text[open + fence.len()..];
-        // Skip the rest of the opening fence line.
-        let body_start = after.find('\n').map(|i| i + 1).unwrap_or(after.len());
-        let body = &after[body_start..];
-        if let Some(end) = body.find("```") {
-            let code = body[..end].trim();
-            if !code.is_empty() {
-                return Some(code.to_string());
+async fn await_cancellable<F, T>(
+    future: F,
+    cancellation: Option<&dyn CancellationToken>,
+) -> Result<T>
+where
+    F: Future<Output = T>,
+{
+    let Some(cancellation) = cancellation else {
+        return Ok(future.await);
+    };
+    check_cancelled(Some(cancellation))?;
+    futures::pin_mut!(future);
+    let cancelled = cancellation.cancelled();
+    futures::pin_mut!(cancelled);
+    match select(future, cancelled).await {
+        Either::Left((output, _)) => Ok(output),
+        Either::Right(((), _)) => Err(Error::Cancelled),
+    }
+}
+
+fn validate_completion_state(turn: &crate::AssistantTurn) -> Result<()> {
+    match turn.finish_reason.as_deref() {
+        Some("length") => {
+            return Err(Error::Protocol(
+                "completion ended at the token limit".to_string(),
+            ));
+        }
+        Some("content_filter") => {
+            return Err(Error::Protocol(
+                "completion was stopped by a content filter".to_string(),
+            ));
+        }
+        _ => {}
+    }
+    if turn.text.is_empty() && turn.tool_calls.is_empty() && turn.finish_reason.is_none() {
+        return Err(Error::Protocol(
+            "completion stream ended without content, tool calls, or a finish reason".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_native_turn(turn: &crate::AssistantTurn) -> Result<TurnAction> {
+    validate_completion_state(turn)?;
+    if turn.tool_calls.len() > 1 {
+        return Err(Error::Protocol(format!(
+            "expected at most one tool call, received {}",
+            turn.tool_calls.len()
+        )));
+    }
+    let Some(call) = turn.tool_calls.first() else {
+        if turn.finish_reason.as_deref() == Some("tool_calls") {
+            return Err(Error::Protocol(
+                "completion reported tool_calls without a complete tool call".to_string(),
+            ));
+        }
+        return Ok(TurnAction::Final);
+    };
+    if call.id.trim().is_empty() {
+        return Err(Error::Protocol(format!(
+            "tool {} is missing a call id",
+            call.name
+        )));
+    }
+    let arguments = call.arguments.as_object().ok_or_else(|| {
+        Error::Protocol(format!(
+            "tool {} arguments are not a JSON object",
+            call.name
+        ))
+    })?;
+    if call.name == "execute" {
+        if arguments.len() != 1 || !arguments.contains_key("code") {
+            return Err(Error::Protocol(
+                "execute accepts exactly one code argument".to_string(),
+            ));
+        }
+        let code = arguments
+            .get("code")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                Error::Protocol("execute requires a string code argument".to_string())
+            })?;
+        if code.trim().is_empty() {
+            return Err(Error::Protocol(
+                "execute requires non-empty code".to_string(),
+            ));
+        }
+        return Ok(TurnAction::Execute(ExecuteCall {
+            id: call.id.clone(),
+            code: code.to_string(),
+        }));
+    }
+    Err(Error::Protocol(format!(
+        "model returned non-execute tool {}",
+        call.name
+    )))
+}
+
+/// Extract one explicitly executable `run` fence only when it is the response's sole complete
+/// fenced block. Mixed or malformed fenced content fails closed instead of letting prose smuggle
+/// an executable block alongside another block.
+fn parse_fenced(text: &str) -> Result<Option<String>> {
+    let mut blocks = Vec::<(String, String)>::new();
+    let mut current: Option<(String, Vec<&str>)> = None;
+    for line in text.lines() {
+        let marker = line.trim();
+        match &mut current {
+            Some((label, body)) if marker == "```" => {
+                let code = body.join("\n").trim().to_string();
+                if code.is_empty() {
+                    return Err(Error::Protocol(
+                        "fenced block contains no content".to_string(),
+                    ));
+                }
+                blocks.push((std::mem::take(label), code));
+                current = None;
             }
+            Some(_) if marker.starts_with("```") => {
+                return Err(Error::Protocol(
+                    "fenced block has a malformed closing marker".to_string(),
+                ));
+            }
+            Some((_, body)) => body.push(line),
+            None if marker.starts_with("```") => {
+                current = Some((marker[3..].to_string(), Vec::new()));
+            }
+            None => {}
         }
     }
-    None
+    if current.is_some() {
+        return Err(Error::Protocol("unterminated fenced block".to_string()));
+    }
+    match blocks.as_slice() {
+        [] => Ok(None),
+        [(label, code)] if label == "run" => Ok(Some(code.clone())),
+        [_, _, ..] => Err(Error::Protocol(format!(
+            "expected at most one fenced block, received {}",
+            blocks.len()
+        ))),
+        [_] => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -273,16 +466,53 @@ mod tests {
     #[test]
     fn parses_run_fence() {
         let text = "Sure, let me check.\n```run\ndisplay(1 + 1);\n```\nDone.";
-        assert_eq!(parse_fenced(text).as_deref(), Some("display(1 + 1);"));
+        assert_eq!(
+            parse_fenced(text).unwrap().as_deref(),
+            Some("display(1 + 1);")
+        );
     }
 
     #[test]
     fn no_fence_is_none() {
-        assert_eq!(parse_fenced("just prose, the final answer"), None);
+        assert_eq!(parse_fenced("just prose, the final answer").unwrap(), None);
     }
 
     #[test]
-    fn empty_fence_is_none() {
-        assert_eq!(parse_fenced("```run\n\n```"), None);
+    fn empty_fence_is_protocol_error() {
+        assert!(matches!(
+            parse_fenced("```run\n\n```"),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn json_and_javascript_fences_are_not_executable() {
+        assert_eq!(parse_fenced("```json\n{\"ok\":true}\n```").unwrap(), None);
+        assert_eq!(parse_fenced("```js\ndisplay('no')\n```").unwrap(), None);
+    }
+
+    #[test]
+    fn non_run_fence_plus_run_fence_is_rejected() {
+        assert!(matches!(
+            parse_fenced("```js\ndisplay('decoy')\n```\n```run\ndisplay('unsafe')\n```"),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_fence_plus_run_fence_is_rejected() {
+        assert!(matches!(
+            parse_fenced("```json\n{\"open\":true}\n```run\ndisplay('unsafe')\n```"),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn multiple_or_unterminated_run_fences_are_protocol_errors() {
+        assert!(matches!(
+            parse_fenced("```run\n1\n```\n```run\n2\n```"),
+            Err(Error::Protocol(_))
+        ));
+        assert!(matches!(parse_fenced("```run\n1"), Err(Error::Protocol(_))));
     }
 }

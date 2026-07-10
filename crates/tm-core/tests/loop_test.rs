@@ -15,8 +15,8 @@ use serde_json::Value;
 
 use tm_core::{
     Agent, AgentConfig, CancellationToken, CellBudget, ChatRequest, DEFAULT_SYSTEM_PROMPT, Error,
-    EvalOutput, EventSink, FunctionSpec, InboxDrain, LlmClient, Message, Protocol, Result, Role,
-    Sandbox, Session, SessionConfig, StreamEvent, ToolMediator, ToolSpec,
+    EvalOutput, EventSink, InboxDrain, LlmClient, Message, Protocol, Result, Role, Sandbox,
+    Session, SessionConfig, StreamEvent, ToolSpec,
 };
 
 /// An `LlmClient` that replays a fixed script of stream events per turn and records every
@@ -77,6 +77,26 @@ impl Session for EchoSession {
     }
 }
 
+struct CountingSession {
+    evaluations: usize,
+}
+
+#[async_trait(?Send)]
+impl Session for CountingSession {
+    async fn eval(&mut self, _code: &str, _budget: CellBudget) -> Result<EvalOutput> {
+        self.evaluations += 1;
+        Ok(EvalOutput {
+            result: Some(Value::from(self.evaluations)),
+            ..EvalOutput::default()
+        })
+    }
+
+    async fn reset(&mut self) -> Result<()> {
+        self.evaluations = 0;
+        Ok(())
+    }
+}
+
 #[test]
 fn default_prompt_teaches_js_ts_repl_discovery_contract() {
     assert!(DEFAULT_SYSTEM_PROMPT.contains("JavaScript/TypeScript"));
@@ -113,8 +133,16 @@ impl InboxDrain for StaticInbox {
 struct FlagCancellation(AtomicBool);
 
 impl FlagCancellation {
+    fn active() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
     fn cancelled() -> Self {
         Self(AtomicBool::new(true))
+    }
+
+    fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
     }
 }
 
@@ -151,6 +179,48 @@ impl EventSink for CaptureSink {
     }
     fn on_final(&self, text: &str) {
         self.events.lock().push(format!("final:{text}"));
+    }
+}
+
+struct FailingSink(&'static str);
+
+impl FailingSink {
+    fn at(&self, point: &str) -> Result<()> {
+        if self.0 == point {
+            Err(Error::EventSink(point.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl EventSink for FailingSink {
+    fn try_on_reasoning(&self, _delta: &str) -> Result<()> {
+        self.at("reasoning")
+    }
+
+    fn try_on_text(&self, _delta: &str) -> Result<()> {
+        self.at("text")
+    }
+
+    fn try_on_tool_call(&self, _name: &str) -> Result<()> {
+        self.at("tool_call")
+    }
+
+    fn try_on_cell_start(&self, _code: &str) -> Result<()> {
+        self.at("cell_start")
+    }
+
+    fn try_on_cell_result(&self, _shaped: &str) -> Result<()> {
+        self.at("cell_result")
+    }
+
+    fn try_on_final(&self, _text: &str) -> Result<()> {
+        self.at("final")
+    }
+
+    fn try_on_turn_end(&self) -> Result<()> {
+        self.at("turn_end")
     }
 }
 
@@ -234,6 +304,115 @@ async fn native_tool_loop_streams_and_executes() {
 }
 
 #[tokio::test]
+async fn open_session_path_includes_prior_history_and_reuses_session_state() {
+    let execute_turn = |id: &str| {
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some(id.to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(r#"{"code":"display('count')"}"#.to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ]
+    };
+    let final_turn = |text: &str| {
+        vec![
+            StreamEvent::Text(text.to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ]
+    };
+    let llm = Arc::new(FakeLlm::new(vec![
+        execute_turn("call_1"),
+        final_turn("first"),
+        execute_turn("call_2"),
+        final_turn("second"),
+    ]));
+    let agent = Agent::new(
+        llm.clone(),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let prior = vec![
+        Message::user("earlier question"),
+        Message::assistant("earlier answer"),
+    ];
+    let mut session = CountingSession { evaluations: 0 };
+
+    assert_eq!(
+        agent
+            .run_with_session("first current question", &prior, &mut session, &sink)
+            .await
+            .unwrap(),
+        "first"
+    );
+    assert_eq!(
+        agent
+            .run_with_session("second current question", &[], &mut session, &sink)
+            .await
+            .unwrap(),
+        "second"
+    );
+    assert_eq!(session.evaluations, 2);
+
+    let requests = llm.requests.lock();
+    assert_eq!(requests[0][0].role, Role::System);
+    assert_eq!(&requests[0][1..3], prior.as_slice());
+    assert_eq!(requests[0][3], Message::user("first current question"));
+}
+
+#[tokio::test]
+async fn fallible_sink_errors_abort_every_agent_emission_point() {
+    let final_script = || {
+        vec![
+            StreamEvent::Reasoning("private".to_string()),
+            StreamEvent::Text("answer".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ]
+    };
+    let tool_script = || {
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_sink".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(r#"{"code":"display(1)"}"#.to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ]
+    };
+
+    for point in ["reasoning", "text", "turn_end", "final"] {
+        let agent = Agent::new(
+            Arc::new(FakeLlm::new(vec![final_script()])),
+            Arc::new(EchoSandbox),
+            config(Protocol::NativeTool),
+        );
+        let error = agent.run("emit", &FailingSink(point)).await.unwrap_err();
+        assert!(matches!(error, Error::EventSink(ref failed) if failed == point));
+    }
+
+    for point in ["tool_call", "cell_start", "cell_result"] {
+        let agent = Agent::new(
+            Arc::new(FakeLlm::new(vec![tool_script(), final_script()])),
+            Arc::new(EchoSandbox),
+            config(Protocol::NativeTool),
+        );
+        let error = agent.run("emit", &FailingSink(point)).await.unwrap_err();
+        assert!(matches!(error, Error::EventSink(ref failed) if failed == point));
+    }
+}
+
+#[tokio::test]
 async fn fenced_block_loop_executes() {
     // Turn 1: a ```run fenced block, streamed in fragments. Turn 2: the final answer.
     let scripts = vec![
@@ -292,7 +471,7 @@ async fn run_with_inbox_drains_before_model_turn() {
     let inbox = StaticInbox::new(vec!["from: Worker\ntext: done"]);
 
     let answer = agent
-        .run_with_inbox("wait for worker", &sink, Some(&inbox), None)
+        .run_with_inbox("wait for worker", &sink, Some(&inbox))
         .await
         .unwrap();
     assert_eq!(answer, "I saw the inbox.");
@@ -323,7 +502,7 @@ async fn run_with_controls_stops_before_model_turn_when_cancelled() {
     let cancellation = FlagCancellation::cancelled();
 
     let err = agent
-        .run_with_controls("please do work", &sink, None, None, Some(&cancellation))
+        .run_with_controls("please do work", &sink, None, Some(&cancellation))
         .await
         .unwrap_err();
 
@@ -332,123 +511,209 @@ async fn run_with_controls_stops_before_model_turn_when_cancelled() {
     assert!(sink.events().is_empty());
 }
 
-/// A [`ToolMediator`] that advertises one tool, records every call it handles, and returns a
-/// canned result — enough to prove the loop's mediated-tool-call seam without a real product
-/// implementation (e.g. `ModeSuggestMediator` in tm-server).
-#[derive(Default)]
-struct MockMediator {
-    calls: Mutex<Vec<(String, Value)>>,
-}
+#[tokio::test(flavor = "current_thread")]
+async fn run_with_controls_cancels_a_pending_stream() {
+    struct PendingLlm;
 
-#[async_trait]
-impl ToolMediator for MockMediator {
-    fn tool_specs(&self) -> Vec<ToolSpec> {
-        vec![ToolSpec {
-            kind: "function".into(),
-            function: FunctionSpec {
-                name: "mode_suggest".into(),
-                description: "propose a mode switch".into(),
-                parameters: serde_json::json!({"type": "object", "properties": {}}),
-            },
-        }]
+    #[async_trait]
+    impl LlmClient for PendingLlm {
+        async fn chat_stream(
+            &self,
+            _req: &ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+            Ok(Box::pin(stream::pending()))
+        }
     }
 
-    async fn handle(&self, name: &str, arguments: &Value) -> Result<String> {
-        self.calls
-            .lock()
-            .push((name.to_string(), arguments.clone()));
-        Ok("switched".to_string())
-    }
+    let agent = Agent::new(
+        Arc::new(PendingLlm),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let cancellation = FlagCancellation::active();
+    let run = agent.run_with_controls("please wait forever", &sink, None, Some(&cancellation));
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        cancellation.cancel();
+    };
+    let (result, ()) = tokio::join!(run, cancel);
+    assert!(matches!(result, Err(Error::Cancelled)));
 }
 
-#[tokio::test]
-async fn mediated_tool_call_feeds_back_result_and_continues_to_final() {
-    // Turn 1: the model calls the mediator's tool instead of `execute`. Turn 2: final answer.
-    let scripts = vec![
-        vec![
-            StreamEvent::ToolCall {
-                index: 0,
-                id: Some("call_ms".into()),
-                name: Some("mode_suggest".into()),
-                arguments: Some(
-                    r#"{"target_mode":"serious_engineer","reason":"fix a bug"}"#.into(),
-                ),
-            },
-            StreamEvent::Finish {
-                reason: Some("tool_calls".into()),
-            },
-        ],
-        vec![
-            StreamEvent::Text("Done.".into()),
-            StreamEvent::Finish {
-                reason: Some("stop".into()),
-            },
-        ],
-    ];
+#[tokio::test(flavor = "current_thread")]
+async fn run_with_controls_cancels_a_pending_llm_connection() {
+    struct PendingConnectLlm;
 
-    let llm = Arc::new(FakeLlm::new(scripts));
+    #[async_trait]
+    impl LlmClient for PendingConnectLlm {
+        async fn chat_stream(
+            &self,
+            _req: &ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+            futures::future::pending::<()>().await;
+            unreachable!("pending LLM connection returned")
+        }
+    }
+
+    let agent = Agent::new(
+        Arc::new(PendingConnectLlm),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let cancellation = FlagCancellation::active();
+    let run = agent.run_with_controls("connect", &sink, None, Some(&cancellation));
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        cancellation.cancel();
+    };
+    let (result, ()) = tokio::join!(run, cancel);
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(sink.events().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_with_controls_cancels_a_pending_inbox_wait() {
+    struct PendingInbox;
+
+    #[async_trait]
+    impl InboxDrain for PendingInbox {
+        async fn drain(&self) -> Result<Vec<String>> {
+            futures::future::pending().await
+        }
+    }
+
+    let llm = Arc::new(FakeLlm::new(vec![vec![
+        StreamEvent::Text("must not run".to_string()),
+        StreamEvent::Finish {
+            reason: Some("stop".to_string()),
+        },
+    ]]));
     let agent = Agent::new(
         llm.clone(),
         Arc::new(EchoSandbox),
         config(Protocol::NativeTool),
     );
     let sink = CaptureSink::default();
-    let mediator = MockMediator::default();
-
-    let answer = agent
-        .run_with_inbox("please fix the bug", &sink, None, Some(&mediator))
-        .await
-        .unwrap();
-    assert_eq!(answer, "Done.");
-
-    // The seam fired exactly once, with the model's exact arguments.
-    let calls = mediator.calls.lock();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "mode_suggest");
-    assert_eq!(calls[0].1["target_mode"], "serious_engineer");
-    assert_eq!(calls[0].1["reason"], "fix a bug");
-
-    // A `Role::Tool` message keyed to the mediated call's id was appended before turn 2.
-    let requests = llm.requests.lock();
-    assert_eq!(requests.len(), 2, "two turns => two requests");
-    let tool_msg = requests[1]
-        .iter()
-        .find(|m| m.role == Role::Tool)
-        .expect("tool result appended before turn 2");
-    assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_ms"));
-    assert_eq!(tool_msg.content, "switched");
-
-    // No sandbox cell ever ran — this call never reached `execute`.
-    assert!(!sink.events().contains(&"cell_start".to_string()));
+    let cancellation = FlagCancellation::active();
+    let inbox = PendingInbox;
+    let run = agent.run_with_controls("wait", &sink, Some(&inbox), Some(&cancellation));
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        cancellation.cancel();
+    };
+    let (result, ()) = tokio::join!(run, cancel);
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(llm.requests.lock().is_empty());
+    assert!(sink.events().is_empty());
 }
 
-#[tokio::test]
-async fn mediator_error_becomes_a_tool_result_not_an_aborted_turn() {
-    struct FailingMediator;
+#[tokio::test(flavor = "current_thread")]
+async fn run_with_controls_cancels_a_pending_session_eval() {
+    struct PendingEvalSandbox;
+    struct PendingEvalSession;
 
     #[async_trait]
-    impl ToolMediator for FailingMediator {
-        fn tool_specs(&self) -> Vec<ToolSpec> {
-            vec![ToolSpec {
-                kind: "function".into(),
-                function: FunctionSpec {
-                    name: "mode_suggest".into(),
-                    description: "propose a mode switch".into(),
-                    parameters: serde_json::json!({"type": "object", "properties": {}}),
-                },
-            }]
-        }
-
-        async fn handle(&self, _name: &str, _arguments: &Value) -> Result<String> {
-            Err(Error::Sandbox("broker unavailable".into()))
+    impl Sandbox for PendingEvalSandbox {
+        async fn open(&self, _cfg: SessionConfig) -> Result<Box<dyn Session>> {
+            Ok(Box::new(PendingEvalSession))
         }
     }
 
-    let scripts = vec![
+    #[async_trait(?Send)]
+    impl Session for PendingEvalSession {
+        async fn eval(&mut self, _code: &str, _budget: CellBudget) -> Result<EvalOutput> {
+            futures::future::pending().await
+        }
+
+        async fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    let llm = Arc::new(FakeLlm::new(vec![vec![
+        StreamEvent::ToolCall {
+            index: 0,
+            id: Some("call_pending_eval".to_string()),
+            name: Some("execute".to_string()),
+            arguments: Some(r#"{"code":"await pendingHostWait()"}"#.to_string()),
+        },
+        StreamEvent::Finish {
+            reason: Some("tool_calls".to_string()),
+        },
+    ]]));
+    let agent = Agent::new(
+        llm,
+        Arc::new(PendingEvalSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let cancellation = FlagCancellation::active();
+    let run = agent.run_with_controls("evaluate", &sink, None, Some(&cancellation));
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        cancellation.cancel();
+    };
+    let (result, ()) = tokio::join!(run, cancel);
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(sink.events().contains(&"cell_start".to_string()));
+    assert!(!sink.events().contains(&"cell_result".to_string()));
+}
+
+#[tokio::test]
+async fn rejects_multiple_or_malformed_tool_calls_before_execution() {
+    let cases = vec![
         vec![
             StreamEvent::ToolCall {
                 index: 0,
-                id: Some("call_ms".into()),
+                id: Some("call_1".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"1"}"#.into()),
+            },
+            StreamEvent::ToolCall {
+                index: 1,
+                id: Some("call_2".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"2"}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_valid".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"1"}"#.into()),
+            },
+            StreamEvent::ToolCall {
+                index: 1,
+                id: Some("call_missing_name".into()),
+                name: None,
+                arguments: Some(r#"{"code":"2"}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("must not become a final answer".into()),
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_missing_name".into()),
+                name: None,
+                arguments: Some(r#"{"code":"1"}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("stop".into()),
+            },
+        ],
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_other".into()),
                 name: Some("mode_suggest".into()),
                 arguments: Some(r#"{"target_mode":"serious_engineer"}"#.into()),
             },
@@ -457,35 +722,79 @@ async fn mediator_error_becomes_a_tool_result_not_an_aborted_turn() {
             },
         ],
         vec![
-            StreamEvent::Text("Continuing anyway.".into()),
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_bad".into()),
+                name: Some("execute".into()),
+                arguments: Some("{}".into()),
+            },
             StreamEvent::Finish {
-                reason: Some("stop".into()),
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_extra".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"1","extra":true}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_empty".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"  \n"}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
             },
         ],
     ];
 
-    let llm = Arc::new(FakeLlm::new(scripts));
+    for script in cases {
+        let llm = Arc::new(FakeLlm::new(vec![script]));
+        let agent = Agent::new(llm, Arc::new(EchoSandbox), config(Protocol::NativeTool));
+        let sink = CaptureSink::default();
+        let result = agent.run("bad tool turn", &sink).await;
+        assert!(matches!(result, Err(Error::Protocol(_))));
+        assert!(!sink.events().contains(&"cell_start".to_string()));
+    }
+}
+
+#[tokio::test]
+async fn native_requests_advertise_exactly_execute() {
+    struct InspectingLlm(Arc<Mutex<Vec<ToolSpec>>>);
+
+    #[async_trait]
+    impl LlmClient for InspectingLlm {
+        async fn chat_stream(
+            &self,
+            request: &ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+            *self.0.lock() = request.tools.clone();
+            Ok(Box::pin(stream::iter([
+                Ok(StreamEvent::Text("done".to_string())),
+                Ok(StreamEvent::Finish {
+                    reason: Some("stop".to_string()),
+                }),
+            ])))
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
     let agent = Agent::new(
-        llm.clone(),
+        Arc::new(InspectingLlm(Arc::clone(&seen))),
         Arc::new(EchoSandbox),
         config(Protocol::NativeTool),
     );
-    let sink = CaptureSink::default();
-    let mediator = FailingMediator;
+    agent.run("hello", &CaptureSink::default()).await.unwrap();
 
-    let answer = agent
-        .run_with_inbox("please fix the bug", &sink, None, Some(&mediator))
-        .await
-        .unwrap();
-    assert_eq!(
-        answer, "Continuing anyway.",
-        "one failed mediated call must not abort the turn"
-    );
-
-    let requests = llm.requests.lock();
-    let tool_msg = requests[1]
-        .iter()
-        .find(|m| m.role == Role::Tool)
-        .expect("a tool result was still appended after the mediator error");
-    assert!(tool_msg.content.contains("broker unavailable"));
+    let tools = seen.lock();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].function.name, "execute");
 }

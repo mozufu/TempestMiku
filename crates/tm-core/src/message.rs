@@ -122,6 +122,7 @@ impl ToolSpec {
                     .into(),
                 parameters: serde_json::json!({
                     "type": "object",
+                    "additionalProperties": false,
                     "properties": {
                         "code": {
                             "type": "string",

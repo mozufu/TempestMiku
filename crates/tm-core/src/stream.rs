@@ -90,7 +90,6 @@ impl Accumulator {
         let tool_calls = self
             .calls
             .into_values()
-            .filter(|c| !c.name.is_empty())
             .map(|c| {
                 let arguments = if c.arguments.trim().is_empty() {
                     Value::Object(serde_json::Map::new())

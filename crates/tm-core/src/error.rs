@@ -27,6 +27,10 @@ pub enum Error {
     #[error("run cancelled")]
     Cancelled,
 
+    /// A required streaming event could not be delivered without dropping it.
+    #[error("event sink error: {0}")]
+    EventSink(String),
+
     /// JSON (de)serialization failed.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),

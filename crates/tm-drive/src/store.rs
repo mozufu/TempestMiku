@@ -1,12 +1,21 @@
 mod core;
 mod docs;
 mod host_fns;
+mod metadata;
+mod operations;
 mod payloads;
+mod service;
 mod types;
 
 pub use core::normalize_canonical_path;
+pub(crate) use host_fns::drive_authority;
 pub use host_fns::register_drive_functions;
-pub use types::{DriveRead, InMemoryDriveStore};
+pub use metadata::{
+    DriveEntryUpdate, DriveMetadataStore, DriveMoveCommit, DriveOverwriteTarget,
+    OrganizerProposalCommit,
+};
+pub use operations::{DriveOperations, IntoSharedDriveStore, SharedDriveStore};
+pub use types::{DriveRead, DriveService, InMemoryDriveMetadataStore, InMemoryDriveStore};
 
 #[cfg(test)]
 use crate::*;

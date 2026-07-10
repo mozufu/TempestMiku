@@ -1,42 +1,37 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path},
-    sync::Arc,
 };
 
 use chrono::{DateTime, Duration, Utc};
-use parking_lot::Mutex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tm_artifacts::{ArtifactStore, ResourceContent, preview};
+use tm_artifacts::{ResourceContent, preview};
 use tm_host::{HostError, ResourceEntry};
 use uuid::Uuid;
 
-use super::types::{DriveCorrection, DrivePutPlan, DriveRead, InMemoryDriveStore, Inner};
+use super::types::{DrivePutPlan, DriveRead, DriveService, InMemoryDriveMetadataStore, Inner};
 use crate::types::DriveError;
 use crate::{
-    DriveAutomationTier, DriveCollisionStrategy, DriveDedupeMode, DriveEntry, DriveEntryId,
-    DriveEntryStatus, DriveEvidence, DriveListOptions, DriveOrganizerConfig, DriveOrganizerRunId,
-    DriveProvenance, DrivePutOptions, DrivePutResult, DriveSearchOptions, DriveSearchResult,
-    OrganizerActionKind, OrganizerProposal, OrganizerRun, OrganizerRunStatus, PolicyDecision,
-    ProposalStatus, TransducerInput, apply_tags, drive_uri_path,
-    generate_organizer_proposals_for_run, parse_virtual_dir, propose_path, transduce_document,
-    vdir::virtual_query_to_search,
+    DriveAutomationTier, DriveCollisionStrategy, DriveCorrectionRecord, DriveDedupeMode,
+    DriveEntry, DriveEntryId, DriveEntryStatus, DriveEvidence, DriveListOptions,
+    DriveOrganizerConfig, DriveOrganizerRunId, DriveProvenance, DrivePutOptions, DrivePutResult,
+    DriveSearchOptions, DriveSearchResult, OrganizerActionKind, OrganizerProposal, OrganizerRun,
+    OrganizerRunStatus, PolicyDecision, ProposalStatus, TransducerInput, apply_tags,
+    drive_uri_path, generate_organizer_proposals_for_run, initial_record_version,
+    parse_virtual_dir, propose_path, transduce_document, vdir::virtual_query_to_search,
 };
 
-impl InMemoryDriveStore {
-    pub fn new(artifacts: ArtifactStore) -> Self {
-        Self {
-            artifacts,
-            inner: Arc::new(Mutex::new(Inner::default())),
-        }
-    }
-
+impl DriveService<InMemoryDriveMetadataStore> {
     pub fn put_bytes(
         &self,
         bytes: &[u8],
         options: DrivePutOptions,
     ) -> crate::Result<DrivePutResult> {
+        let options = sanitize_drive_put_options(options)?;
+        let bytes = sanitize_drive_bytes(bytes)?;
+        let bytes = bytes.as_ref();
         let plan = self.plan_put_bytes(bytes, &options)?;
         self.commit_put_bytes(bytes, options, plan)
     }
@@ -51,11 +46,11 @@ impl InMemoryDriveStore {
                 "inline drive.put content is capped at 5 MiB in P5 v1".to_string(),
             ));
         }
-        let filename_hint = filename_hint(&options);
+        let filename_hint = filename_hint(options);
         let transduction = transduce_document(TransducerInput {
             bytes,
             filename: filename_hint.as_deref(),
-            options: &options,
+            options,
         })?;
         let proposed_path = propose_path(&transduction, options, filename_hint.as_deref());
         let path = normalize_canonical_path(&proposed_path)?;
@@ -83,7 +78,7 @@ impl InMemoryDriveStore {
             .artifacts
             .put_blob(bytes)
             .map_err(|err| DriveError::Store(err.to_string()))?;
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
 
         if let Some(existing_id) = inner.path_to_id.get(&path).copied() {
             let existing = inner.entries.get(&existing_id).cloned().ok_or_else(|| {
@@ -117,6 +112,7 @@ impl InMemoryDriveStore {
                 entry.attributes = transduction.attributes.clone();
                 entry.summary = transduction.summary.clone();
                 entry.updated_at = now;
+                bump_version(&mut entry.version);
                 entry.provenance.push(provenance(
                     &options,
                     &transduction.content_hash,
@@ -142,6 +138,7 @@ impl InMemoryDriveStore {
         let uri = DriveEntry::drive_uri(&path);
         let entry = DriveEntry {
             id,
+            version: initial_record_version(),
             path: path.clone(),
             uri: uri.clone(),
             blob_uri,
@@ -193,7 +190,7 @@ impl InMemoryDriveStore {
 
     pub fn get(&self, path_or_uri: &str) -> crate::Result<DriveEntry> {
         let path = normalize_canonical_path_path_or_uri(path_or_uri)?;
-        let inner = self.inner.lock();
+        let inner = self.metadata.inner.lock();
         let id = inner
             .path_to_id
             .get(&path)
@@ -284,7 +281,7 @@ impl InMemoryDriveStore {
             .map(normalize_optional_prefix)
             .transpose()?
             .unwrap_or_default();
-        let inner = self.inner.lock();
+        let inner = self.metadata.inner.lock();
         let mut entries = inner
             .entries
             .values()
@@ -327,7 +324,7 @@ impl InMemoryDriveStore {
             .iter()
             .map(|tag| tag.to_ascii_lowercase())
             .collect::<BTreeSet<_>>();
-        let inner = self.inner.lock();
+        let inner = self.metadata.inner.lock();
         let mut results = Vec::new();
         for entry in inner.entries.values() {
             if !options.include_archived && entry.status != DriveEntryStatus::Active {
@@ -410,10 +407,12 @@ impl InMemoryDriveStore {
         to: &str,
         collision: DriveCollisionStrategy,
     ) -> crate::Result<DriveEntry> {
+        validate_drive_identifier("move source", from)?;
+        validate_drive_identifier("move destination", to)?;
         let from = normalize_canonical_path_path_or_uri(from)?;
         let mut to = normalize_canonical_path_path_or_uri(to)?;
         let now = Utc::now();
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         let id = *inner
             .path_to_id
             .get(&from)
@@ -439,8 +438,11 @@ impl InMemoryDriveStore {
         entry.path = to.clone();
         entry.uri = DriveEntry::drive_uri(&to);
         entry.updated_at = now;
+        bump_version(&mut entry.version);
         let updated = entry.clone();
-        inner.corrections.push(DriveCorrection {
+        inner.corrections.push(DriveCorrectionRecord {
+            id: Uuid::new_v4(),
+            version: initial_record_version(),
             from,
             to,
             created_at: now,
@@ -449,9 +451,13 @@ impl InMemoryDriveStore {
     }
 
     pub fn tag_entry(&self, path_or_uri: &str, tags: Vec<String>) -> crate::Result<DriveEntry> {
+        validate_drive_identifier("tag path", path_or_uri)?;
+        for tag in &tags {
+            validate_drive_identifier("tag", tag)?;
+        }
         let path = normalize_canonical_path_path_or_uri(path_or_uri)?;
         let now = Utc::now();
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         let id = *inner
             .path_to_id
             .get(&path)
@@ -462,6 +468,7 @@ impl InMemoryDriveStore {
             .ok_or_else(|| DriveError::NotFound(path.clone()))?;
         entry.tags = apply_tags(&entry.tags, &tags);
         entry.updated_at = now;
+        bump_version(&mut entry.version);
         Ok(entry.clone())
     }
 
@@ -504,7 +511,7 @@ impl InMemoryDriveStore {
         trigger: impl Into<String>,
         now: DateTime<Utc>,
     ) -> OrganizerRun {
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         if let Some(existing) = inner
             .organizer_runs
             .values()
@@ -520,6 +527,7 @@ impl InMemoryDriveStore {
         }
         let run = OrganizerRun {
             id: Uuid::new_v4(),
+            version: initial_record_version(),
             trigger: trigger.into(),
             status: OrganizerRunStatus::Queued,
             attempts: 0,
@@ -540,7 +548,7 @@ impl InMemoryDriveStore {
         lease_timeout: Duration,
     ) -> crate::Result<Option<OrganizerRun>> {
         let stale_before = now - lease_timeout;
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         let Some(run_id) = inner
             .organizer_runs
             .values()
@@ -567,6 +575,7 @@ impl InMemoryDriveStore {
             .ok_or_else(|| DriveError::NotFound(format!("organizer run {run_id}")))?;
         run.status = OrganizerRunStatus::Running;
         run.attempts += 1;
+        bump_version(&mut run.version);
         run.locked_at = Some(now);
         run.completed_at = None;
         run.last_error = None;
@@ -578,9 +587,10 @@ impl InMemoryDriveStore {
         run_id: DriveOrganizerRunId,
         now: DateTime<Utc>,
     ) -> crate::Result<OrganizerRun> {
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         let run = running_organizer_run_mut(&mut inner, run_id)?;
         run.locked_at = Some(now);
+        bump_version(&mut run.version);
         Ok(run.clone())
     }
 
@@ -590,9 +600,10 @@ impl InMemoryDriveStore {
         proposal_ids: Vec<Uuid>,
         now: DateTime<Utc>,
     ) -> crate::Result<OrganizerRun> {
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         let run = running_organizer_run_mut(&mut inner, run_id)?;
         run.status = OrganizerRunStatus::Completed;
+        bump_version(&mut run.version);
         run.proposal_ids = proposal_ids;
         run.available_at = now;
         run.locked_at = None;
@@ -608,13 +619,15 @@ impl InMemoryDriveStore {
         next_available_at: DateTime<Utc>,
         max_attempts: u32,
     ) -> crate::Result<OrganizerRun> {
-        let mut inner = self.inner.lock();
+        let error = tm_memory::redact_dream_text(&error).text;
+        let mut inner = self.metadata.inner.lock();
         let run = running_organizer_run_mut(&mut inner, run_id)?;
         run.status = if run.attempts >= max_attempts {
             OrganizerRunStatus::Failed
         } else {
             OrganizerRunStatus::Queued
         };
+        bump_version(&mut run.version);
         run.available_at = next_available_at;
         run.locked_at = None;
         run.completed_at = None;
@@ -623,14 +636,20 @@ impl InMemoryDriveStore {
     }
 
     pub fn organizer_runs(&self) -> Vec<OrganizerRun> {
-        self.inner.lock().organizer_runs.values().cloned().collect()
+        self.metadata
+            .inner
+            .lock()
+            .organizer_runs
+            .values()
+            .cloned()
+            .collect()
     }
 
     fn generate_organizer_proposals_for_run(
         &self,
         run_id: DriveOrganizerRunId,
     ) -> crate::Result<Vec<OrganizerProposal>> {
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         if !inner
             .organizer_runs
             .get(&run_id)
@@ -653,7 +672,7 @@ impl InMemoryDriveStore {
         proposals: &[OrganizerProposal],
         config: &DriveOrganizerConfig,
     ) -> Vec<Uuid> {
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         let mut ids = Vec::new();
         for proposal in proposals {
             if !organizer_auto_apply_allowed(proposal, config) {
@@ -661,6 +680,7 @@ impl InMemoryDriveStore {
             }
             if let Some(stored) = inner.proposals.get_mut(&proposal.id) {
                 stored.policy_decision = PolicyDecision::AutoApply;
+                bump_version(&mut stored.version);
                 ids.push(stored.id);
             }
         }
@@ -668,7 +688,8 @@ impl InMemoryDriveStore {
     }
 
     pub fn pending_proposal_ids(&self) -> Vec<Uuid> {
-        self.inner
+        self.metadata
+            .inner
             .lock()
             .proposals
             .values()
@@ -684,18 +705,19 @@ impl InMemoryDriveStore {
 
     pub fn mark_proposals_status(&self, ids: &[Uuid], status: ProposalStatus) {
         let now = Utc::now();
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         for id in ids {
             if let Some(proposal) = inner.proposals.get_mut(id) {
                 proposal.status = status.clone();
                 proposal.updated_at = now;
+                bump_version(&mut proposal.version);
             }
         }
     }
 
     pub fn apply_organizer_proposals(&self, ids: &[Uuid]) -> crate::Result<Vec<OrganizerProposal>> {
         let now = Utc::now();
-        let mut inner = self.inner.lock();
+        let mut inner = self.metadata.inner.lock();
         let mut applied = Vec::new();
         for id in ids {
             let Some(mut proposal) = inner.proposals.get(id).cloned() else {
@@ -710,6 +732,7 @@ impl InMemoryDriveStore {
             }
             proposal.status = apply_organizer_proposal(&mut inner, &proposal, now);
             proposal.updated_at = now;
+            bump_version(&mut proposal.version);
             inner.proposals.insert(*id, proposal.clone());
             applied.push(proposal);
         }
@@ -717,7 +740,13 @@ impl InMemoryDriveStore {
     }
 
     pub fn proposals(&self) -> Vec<OrganizerProposal> {
-        self.inner.lock().proposals.values().cloned().collect()
+        self.metadata
+            .inner
+            .lock()
+            .proposals
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn resource_entries(&self, uri: Option<&str>) -> crate::Result<Vec<ResourceEntry>> {
@@ -749,7 +778,8 @@ impl InMemoryDriveStore {
     }
 
     pub fn correction_signals(&self) -> Vec<(String, String, chrono::DateTime<Utc>)> {
-        self.inner
+        self.metadata
+            .inner
             .lock()
             .corrections
             .iter()
@@ -762,6 +792,80 @@ impl InMemoryDriveStore {
             })
             .collect()
     }
+}
+
+pub(crate) fn sanitize_drive_bytes(bytes: &[u8]) -> crate::Result<Cow<'_, [u8]>> {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => {
+            let report = tm_memory::redact_dream_text(text);
+            if report.redactions.is_empty() {
+                Ok(Cow::Borrowed(bytes))
+            } else {
+                Ok(Cow::Owned(report.text.into_bytes()))
+            }
+        }
+        Err(_) => {
+            let searchable = String::from_utf8_lossy(bytes);
+            if tm_memory::contains_sensitive_data(&searchable) {
+                Err(DriveError::InvalidArgs(
+                    "binary drive content matched the secret detector and was rejected".to_string(),
+                ))
+            } else {
+                Ok(Cow::Borrowed(bytes))
+            }
+        }
+    }
+}
+
+pub(crate) fn sanitize_drive_put_options(
+    mut options: DrivePutOptions,
+) -> crate::Result<DrivePutOptions> {
+    for (field, value) in [
+        ("suggestedPath", options.suggested_path.as_deref()),
+        ("project", options.project.as_deref()),
+        ("docKind", options.doc_kind.as_deref()),
+        ("sourceUri", options.source_uri.as_deref()),
+        ("mime", options.mime.as_deref()),
+        ("sessionId", options.session_id.as_deref()),
+        (
+            "conventions.project",
+            options.conventions.project.as_deref(),
+        ),
+        (
+            "conventions.finance",
+            options.conventions.finance.as_deref(),
+        ),
+        ("conventions.inbox", options.conventions.inbox.as_deref()),
+        (
+            "modelExtraction.role",
+            options.model_extraction.role.as_deref(),
+        ),
+    ] {
+        reject_sensitive_drive_identifier(field, value)?;
+    }
+    for tag in &options.tags {
+        reject_sensitive_drive_identifier("tags", Some(tag))?;
+    }
+    for field in &options.model_extraction.fields {
+        reject_sensitive_drive_identifier("modelExtraction.fields", Some(field))?;
+    }
+    options.title = options
+        .title
+        .map(|title| tm_memory::redact_dream_text(&title).text);
+    Ok(options)
+}
+
+fn reject_sensitive_drive_identifier(field: &str, value: Option<&str>) -> crate::Result<()> {
+    if value.is_some_and(tm_memory::contains_sensitive_data) {
+        return Err(DriveError::InvalidArgs(format!(
+            "drive {field} contains sensitive data"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_drive_identifier(field: &str, value: &str) -> crate::Result<()> {
+    reject_sensitive_drive_identifier(field, Some(value))
 }
 
 pub fn normalize_canonical_path(input: &str) -> crate::Result<String> {
@@ -875,6 +979,7 @@ pub(crate) fn write_proposal(
 ) -> OrganizerProposal {
     OrganizerProposal {
         id: Uuid::new_v4(),
+        version: initial_record_version(),
         action: OrganizerActionKind::Move,
         entry_id: entry.id,
         source_path: entry.path.clone(),
@@ -985,7 +1090,10 @@ pub(crate) fn apply_organizer_proposal(
             entry.path = target.clone();
             entry.uri = DriveEntry::drive_uri(&target);
             entry.updated_at = now;
-            inner.corrections.push(DriveCorrection {
+            bump_version(&mut entry.version);
+            inner.corrections.push(DriveCorrectionRecord {
+                id: Uuid::new_v4(),
+                version: initial_record_version(),
                 from,
                 to: target,
                 created_at: now,
@@ -998,6 +1106,7 @@ pub(crate) fn apply_organizer_proposal(
             };
             entry.tags = apply_tags(&entry.tags, &proposal.proposed_tags);
             entry.updated_at = now;
+            bump_version(&mut entry.version);
             ProposalStatus::Applied
         }
         OrganizerActionKind::Archive => {
@@ -1006,6 +1115,7 @@ pub(crate) fn apply_organizer_proposal(
             };
             entry.status = DriveEntryStatus::Archived;
             entry.updated_at = now;
+            bump_version(&mut entry.version);
             ProposalStatus::Applied
         }
         OrganizerActionKind::SetDocKind => {
@@ -1017,6 +1127,7 @@ pub(crate) fn apply_organizer_proposal(
             };
             entry.doc_kind = Some(kind.clone());
             entry.updated_at = now;
+            bump_version(&mut entry.version);
             ProposalStatus::Applied
         }
         OrganizerActionKind::SetProject => {
@@ -1028,10 +1139,15 @@ pub(crate) fn apply_organizer_proposal(
             };
             entry.project = Some(project.clone());
             entry.updated_at = now;
+            bump_version(&mut entry.version);
             ProposalStatus::Applied
         }
         OrganizerActionKind::Dedupe => ProposalStatus::Failed,
     }
+}
+
+fn bump_version(version: &mut u64) {
+    *version = version.saturating_add(1);
 }
 
 pub(crate) fn unique_path(paths: &BTreeMap<String, DriveEntryId>, path: &str) -> String {
@@ -1052,32 +1168,74 @@ pub(crate) fn unique_path(paths: &BTreeMap<String, DriveEntryId>, path: &str) ->
 }
 
 pub(crate) fn select_text(content: &str, selector: Option<&str>) -> crate::Result<(String, bool)> {
-    let Some(selector) = selector else {
-        return Ok((content.to_string(), false));
+    const DEFAULT_LINE_LIMIT: usize = 200;
+    const DEFAULT_BYTE_LIMIT: usize = 64 * 1024;
+    const HARD_LINE_LIMIT: usize = 1_000;
+    const HARD_BYTE_LIMIT: usize = 256 * 1024;
+
+    let (start, end, byte_limit) = if let Some(selector) = selector {
+        let (start, end) = selector
+            .split_once('-')
+            .ok_or_else(|| DriveError::InvalidArgs(format!("invalid selector {selector}")))?;
+        let start = start
+            .parse::<usize>()
+            .map_err(|_| DriveError::InvalidArgs(format!("invalid selector {selector}")))?;
+        let end = end
+            .parse::<usize>()
+            .map_err(|_| DriveError::InvalidArgs(format!("invalid selector {selector}")))?;
+        if start == 0 || end < start || end - start + 1 > HARD_LINE_LIMIT {
+            return Err(DriveError::InvalidArgs(format!(
+                "selector {selector} exceeds the 1000-line paging limit"
+            )));
+        }
+        (start, end, HARD_BYTE_LIMIT)
+    } else {
+        if content.len() <= DEFAULT_BYTE_LIMIT
+            && content.lines().take(DEFAULT_LINE_LIMIT + 1).count() <= DEFAULT_LINE_LIMIT
+        {
+            return Ok((content.to_string(), false));
+        }
+        (1, DEFAULT_LINE_LIMIT, DEFAULT_BYTE_LIMIT)
     };
-    let (start, end) = selector
-        .split_once('-')
-        .ok_or_else(|| DriveError::InvalidArgs(format!("invalid selector {selector}")))?;
-    let start = start
-        .parse::<usize>()
-        .map_err(|_| DriveError::InvalidArgs(format!("invalid selector {selector}")))?;
-    let end = end
-        .parse::<usize>()
-        .map_err(|_| DriveError::InvalidArgs(format!("invalid selector {selector}")))?;
-    if start == 0 || end < start {
-        return Err(DriveError::InvalidArgs(format!(
-            "invalid selector {selector}"
-        )));
+
+    let mut selected = String::new();
+    let mut has_more = false;
+    for (index, line) in content.lines().enumerate() {
+        let line_number = index + 1;
+        if line_number < start {
+            continue;
+        }
+        if line_number > end {
+            has_more = true;
+            break;
+        }
+        let separator_bytes = usize::from(!selected.is_empty());
+        if selected.len() + separator_bytes + line.len() > byte_limit {
+            if separator_bytes == 1 && selected.len() < byte_limit {
+                selected.push('\n');
+            }
+            let remaining = byte_limit.saturating_sub(selected.len());
+            let boundary = line
+                .char_indices()
+                .map(|(index, _)| index)
+                .take_while(|index| *index <= remaining)
+                .last()
+                .unwrap_or(0);
+            let boundary = if line.len() <= remaining {
+                line.len()
+            } else {
+                boundary
+            };
+            selected.push_str(&line[..boundary]);
+            has_more = true;
+            break;
+        }
+        if separator_bytes == 1 {
+            selected.push('\n');
+        }
+        selected.push_str(line);
     }
-    let lines = content.lines().collect::<Vec<_>>();
-    let selected = lines
-        .iter()
-        .skip(start - 1)
-        .take(end - start + 1)
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok((selected, end < lines.len()))
+    Ok((selected, has_more))
 }
 
 pub(crate) fn recency_score(entry: &DriveEntry) -> f32 {
@@ -1205,6 +1363,7 @@ pub(crate) fn drive_error_to_host(err: DriveError) -> HostError {
         DriveError::InvalidArgs(message) => HostError::InvalidArgs(message),
         DriveError::InvalidPath(path) => HostError::InvalidPath(path),
         DriveError::Collision(path) => HostError::InvalidArgs(format!("drive path exists: {path}")),
+        DriveError::Conflict { .. } => HostError::HostCall(err.to_string()),
         DriveError::Integrity { .. } => HostError::HostCall(err.to_string()),
         DriveError::Store(message) => HostError::HostCall(message),
     }

@@ -115,7 +115,7 @@ pub fn transduce_document(input: TransducerInput<'_>) -> Result<Transduction> {
         })
         .unwrap_or_default();
     let text = redacted.as_ref().map(|report| report.text.as_str());
-    if input.bytes.len() > 0 && text.is_none() {
+    if !input.bytes.is_empty() && text.is_none() {
         warnings.push("binary_or_non_utf8_content_used_fallback_metadata".to_string());
     }
 

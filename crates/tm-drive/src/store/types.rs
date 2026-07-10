@@ -7,12 +7,27 @@ use tm_artifacts::ArtifactStore;
 use uuid::Uuid;
 
 use crate::{
-    DriveEntry, DriveEntryId, DriveOrganizerRunId, OrganizerProposal, OrganizerRun, Transduction,
+    DriveCorrectionRecord, DriveEntry, DriveEntryId, DriveLinkRecord, DriveOrganizerRunId,
+    OrganizerProposal, OrganizerRun, Transduction,
 };
 
-#[derive(Debug, Clone)]
-pub struct InMemoryDriveStore {
+#[derive(Debug)]
+pub struct DriveService<M> {
     pub(crate) artifacts: ArtifactStore,
+    pub(crate) metadata: Arc<M>,
+}
+
+impl<M> Clone for DriveService<M> {
+    fn clone(&self) -> Self {
+        Self {
+            artifacts: self.artifacts.clone(),
+            metadata: Arc::clone(&self.metadata),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryDriveMetadataStore {
     pub(crate) inner: Arc<Mutex<Inner>>,
 }
 
@@ -22,15 +37,11 @@ pub(crate) struct Inner {
     pub(crate) path_to_id: BTreeMap<String, DriveEntryId>,
     pub(crate) proposals: BTreeMap<Uuid, OrganizerProposal>,
     pub(crate) organizer_runs: BTreeMap<DriveOrganizerRunId, OrganizerRun>,
-    pub(crate) corrections: Vec<DriveCorrection>,
+    pub(crate) links: BTreeMap<String, DriveLinkRecord>,
+    pub(crate) corrections: Vec<DriveCorrectionRecord>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct DriveCorrection {
-    pub(crate) from: String,
-    pub(crate) to: String,
-    pub(crate) created_at: DateTime<Utc>,
-}
+pub type InMemoryDriveStore = DriveService<InMemoryDriveMetadataStore>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DriveRead {

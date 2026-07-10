@@ -18,7 +18,11 @@ pub use organize::{
 };
 pub use policy::{drive_link_plan, drive_link_policy, memory_scope_for_project};
 pub use resources::DriveResourceHandler;
-pub use store::{DriveRead, InMemoryDriveStore, register_drive_functions};
+pub use store::{
+    DriveEntryUpdate, DriveMetadataStore, DriveMoveCommit, DriveOperations, DriveOverwriteTarget,
+    DriveRead, DriveService, InMemoryDriveMetadataStore, InMemoryDriveStore, IntoSharedDriveStore,
+    OrganizerProposalCommit, SharedDriveStore, register_drive_functions,
+};
 pub use transduce::{Transducer, TransducerInput, Transduction, transduce_document};
 pub use types::*;
 pub use vdir::{drive_uri_path, parse_virtual_dir};

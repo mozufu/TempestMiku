@@ -1,5 +1,6 @@
 use super::*;
 
+use sha2::Digest;
 use tm_host::{
     ApprovalDecision, ApprovalPolicy, CapabilityGrants, DefaultDenyApprovalPolicy, HostEventSink,
 };
@@ -104,6 +105,70 @@ fn put_get_search_and_virtual_dirs_work_offline() {
         })
         .unwrap();
     assert_eq!(by_type.len(), 1);
+}
+
+#[test]
+fn drive_redacts_text_secrets_before_hashing_and_blob_persistence() {
+    let (_dir, store) = store();
+    let raw_secret = "sk-testsecret123456";
+    let filed = store
+        .put_bytes(
+            format!("# Deployment note\ntoken {raw_secret}").as_bytes(),
+            DrivePutOptions {
+                suggested_path: Some("notes/deployment.md".to_string()),
+                title: Some(format!("Deployment {raw_secret}")),
+                ..DrivePutOptions::default()
+            },
+        )
+        .unwrap();
+
+    let read = store.read(&filed.uri).unwrap();
+    let persisted = String::from_utf8(read.bytes).unwrap();
+    assert!(!persisted.contains(raw_secret));
+    assert!(persisted.contains("[REDACTED_TOKEN]"));
+    assert!(!filed.entry.title.as_deref().unwrap().contains(raw_secret));
+    assert_eq!(
+        filed.entry.content_hash,
+        hex::encode(sha2::Sha256::digest(persisted.as_bytes()))
+    );
+}
+
+#[test]
+fn drive_rejects_secrets_in_authority_and_identifier_metadata() {
+    let (_dir, store) = store();
+    for options in [
+        DrivePutOptions {
+            suggested_path: Some("notes/sk-testsecret123456.md".to_string()),
+            ..DrivePutOptions::default()
+        },
+        DrivePutOptions {
+            project: Some("sk-testsecret123456".to_string()),
+            ..DrivePutOptions::default()
+        },
+        DrivePutOptions {
+            source_uri: Some("https://owner:database-password@example.test/source".to_string()),
+            ..DrivePutOptions::default()
+        },
+        DrivePutOptions {
+            tags: vec!["sk-testsecret123456".to_string()],
+            ..DrivePutOptions::default()
+        },
+    ] {
+        let error = store.put_bytes(b"safe", options).unwrap_err().to_string();
+        assert!(error.contains("sensitive data"), "{error}");
+    }
+}
+
+#[test]
+fn drive_rejects_detectable_secrets_in_non_utf8_content() {
+    let (_dir, store) = store();
+    let mut bytes = vec![0xff];
+    bytes.extend_from_slice(b" sk-testsecret123456");
+    let error = store
+        .put_bytes(&bytes, DrivePutOptions::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("secret detector"));
 }
 
 #[test]
@@ -596,6 +661,7 @@ async fn dropped_file_auto_put_records_approval_provenance_and_replay_event() {
         std::time::Duration::from_secs(1),
     )
     .with_session_id("session-drop")
+    .with_session_scope("project:tempestmiku")
     .with_event_sink(events.clone());
 
     let result = host
@@ -1261,6 +1327,74 @@ async fn drive_organize_apply_timeout_marks_failed_without_mutation() {
             .get(proposals[0].proposed_path.as_deref().unwrap())
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn drive_host_calls_require_exact_authoritative_project_scope() {
+    let (_dir, store) = store();
+    for project in ["alpha", "beta"] {
+        store
+            .put_bytes(
+                format!("# {project}").as_bytes(),
+                DrivePutOptions {
+                    suggested_path: Some(format!("projects/{project}/note.md")),
+                    project: Some(project.to_string()),
+                    ..DrivePutOptions::default()
+                },
+            )
+            .unwrap();
+    }
+    store
+        .put_bytes(
+            b"# global note",
+            DrivePutOptions {
+                suggested_path: Some("notes/global.md".to_string()),
+                ..DrivePutOptions::default()
+            },
+        )
+        .unwrap();
+    let mut host = HostRegistry::new();
+    let mut resources = ResourceRegistry::new();
+    register_drive_functions(&mut host, &mut resources, store, None);
+    let session_id = Uuid::new_v4().to_string();
+
+    let global = InvocationCtx::new(CapabilityGrants::default().allow("drive.search"))
+        .with_session_id(session_id.clone())
+        .with_session_scope("global");
+    let global_results = host
+        .invoke("drive.search", json!({"query": "global"}), &global)
+        .await
+        .unwrap();
+    assert_eq!(global_results.as_array().unwrap().len(), 1);
+    assert!(global_results[0]["project"].is_null());
+    assert!(matches!(
+        host.invoke(
+            "drive.search",
+            json!({"query": "alpha", "project": "alpha"}),
+            &global,
+        )
+        .await,
+        Err(HostError::CapabilityDenied(_))
+    ));
+
+    let alpha = InvocationCtx::new(CapabilityGrants::default().allow("drive.search"))
+        .with_session_id(session_id)
+        .with_session_scope("project:alpha");
+    assert!(matches!(
+        host.invoke(
+            "drive.search",
+            json!({"query": "beta", "project": "beta"}),
+            &alpha,
+        )
+        .await,
+        Err(HostError::CapabilityDenied(_))
+    ));
+    let results = host
+        .invoke("drive.search", json!({"query": "note"}), &alpha)
+        .await
+        .unwrap();
+    assert_eq!(results.as_array().unwrap().len(), 1);
+    assert_eq!(results[0]["project"], json!("alpha"));
 }
 
 #[tokio::test]

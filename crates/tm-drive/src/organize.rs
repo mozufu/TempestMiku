@@ -181,6 +181,7 @@ fn proposal_for_entry(entry: &DriveEntry, source_run_id: Uuid) -> Option<Organiz
 
     Some(OrganizerProposal {
         id: Uuid::new_v4(),
+        version: crate::initial_record_version(),
         action: OrganizerActionKind::Move,
         entry_id: entry.id,
         source_path: entry.path.clone(),

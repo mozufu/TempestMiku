@@ -18,9 +18,25 @@ pub fn drive_link_policy(
     project: Option<&str>,
 ) -> Result<(DriveLinkPlan, FsPolicy), DriveError> {
     let host_path = host_path.as_ref();
+    let host_path_text = host_path.to_string_lossy();
+    if tm_memory::contains_sensitive_data(&host_path_text) {
+        return Err(DriveError::InvalidPath(
+            "linked drive path contains sensitive data".to_string(),
+        ));
+    }
+    if project.is_some_and(tm_memory::contains_sensitive_data) {
+        return Err(DriveError::InvalidArgs(
+            "linked drive project contains sensitive data".to_string(),
+        ));
+    }
     let canonical = host_path
         .canonicalize()
         .map_err(|err| DriveError::InvalidPath(format!("{}: {err}", host_path.display())))?;
+    if tm_memory::contains_sensitive_data(&canonical.to_string_lossy()) {
+        return Err(DriveError::InvalidPath(
+            "canonical linked drive path contains sensitive data".to_string(),
+        ));
+    }
     if !canonical.is_dir() {
         return Err(DriveError::InvalidPath(format!(
             "linked drive path is not a directory: {}",

@@ -19,6 +19,15 @@ pub enum DriveError {
     InvalidPath(String),
     #[error("drive collision at {0}")]
     Collision(String),
+    #[error(
+        "drive {entity} {id} version conflict: expected version {expected}, actual version {actual}"
+    )]
+    Conflict {
+        entity: &'static str,
+        id: String,
+        expected: u64,
+        actual: u64,
+    },
     #[error("drive integrity check failed for {path}: expected {expected}, got {actual}")]
     Integrity {
         path: String,
@@ -31,62 +40,48 @@ pub enum DriveError {
 
 pub type Result<T, E = DriveError> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub const DRIVE_METADATA_SCHEMA_VERSION: u32 = 1;
+
+pub const fn initial_record_version() -> u64 {
+    1
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DriveEntryStatus {
+    #[default]
     Active,
     Archived,
     Deleted,
 }
 
-impl Default for DriveEntryStatus {
-    fn default() -> Self {
-        Self::Active
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DriveCollisionStrategy {
+    #[default]
     KeepBoth,
     Reject,
     Overwrite,
 }
 
-impl Default for DriveCollisionStrategy {
-    fn default() -> Self {
-        Self::KeepBoth
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DriveApprovalMode {
+    #[default]
     Propose,
     Auto,
     RequireApproval,
 }
 
-impl Default for DriveApprovalMode {
-    fn default() -> Self {
-        Self::Propose
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum DriveDedupeMode {
+    #[default]
     ContentHash,
     Off,
 }
 
-impl Default for DriveDedupeMode {
-    fn default() -> Self {
-        Self::ContentHash
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DrivePutOptions {
     #[serde(default)]
@@ -121,29 +116,6 @@ pub struct DrivePutOptions {
     pub conventions: DriveConventions,
     #[serde(default)]
     pub model_extraction: DriveModelExtractionOptions,
-}
-
-impl Default for DrivePutOptions {
-    fn default() -> Self {
-        Self {
-            auto: false,
-            suggested_path: None,
-            project: None,
-            doc_kind: None,
-            tags: Vec::new(),
-            source_uri: None,
-            mime: None,
-            title: None,
-            approval_mode: DriveApprovalMode::default(),
-            dedupe: DriveDedupeMode::default(),
-            collision: DriveCollisionStrategy::default(),
-            overwrite: false,
-            session_id: None,
-            event_seq: None,
-            conventions: DriveConventions::default(),
-            model_extraction: DriveModelExtractionOptions::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -328,6 +300,8 @@ pub struct DriveProvenance {
 #[serde(rename_all = "camelCase")]
 pub struct DriveEntry {
     pub id: DriveEntryId,
+    #[serde(default = "initial_record_version")]
+    pub version: u64,
     pub path: String,
     pub uri: String,
     pub blob_uri: String,
@@ -409,18 +383,13 @@ pub enum OrganizerActionKind {
     SetProject,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DriveAutomationTier {
+    #[default]
     Conservative,
     Moderate,
     Aggressive,
-}
-
-impl Default for DriveAutomationTier {
-    fn default() -> Self {
-        Self::Conservative
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -493,6 +462,8 @@ pub enum OrganizerRunStatus {
 #[serde(rename_all = "camelCase")]
 pub struct OrganizerRun {
     pub id: DriveOrganizerRunId,
+    #[serde(default = "initial_record_version")]
+    pub version: u64,
     pub trigger: String,
     pub status: OrganizerRunStatus,
     pub attempts: u32,
@@ -511,6 +482,8 @@ pub struct OrganizerRun {
 #[serde(rename_all = "camelCase")]
 pub struct OrganizerProposal {
     pub id: Uuid,
+    #[serde(default = "initial_record_version")]
+    pub version: u64,
     pub action: OrganizerActionKind,
     pub entry_id: DriveEntryId,
     pub source_path: String,
@@ -570,6 +543,100 @@ pub struct DriveUnlinkResult {
     pub revoked_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DriveLinkStatus {
+    #[default]
+    Active,
+    Revoked,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveLinkRecord {
+    pub alias: String,
+    #[serde(default = "initial_record_version")]
+    pub version: u64,
+    pub canonical_root: String,
+    pub mode: String,
+    pub linked_uri: String,
+    pub memory_scope: String,
+    pub project: String,
+    #[serde(default)]
+    pub status: DriveLinkStatus,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl DriveLinkRecord {
+    pub fn from_plan(plan: &DriveLinkPlan, now: DateTime<Utc>) -> Self {
+        Self {
+            alias: plan.alias.clone(),
+            version: initial_record_version(),
+            canonical_root: plan.canonical_root.clone(),
+            mode: plan.mode.clone(),
+            linked_uri: plan.linked_uri.clone(),
+            memory_scope: plan.memory_scope.clone(),
+            project: plan.project.clone(),
+            status: DriveLinkStatus::Active,
+            metadata: BTreeMap::new(),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveCorrectionRecord {
+    pub id: Uuid,
+    #[serde(default = "initial_record_version")]
+    pub version: u64,
+    pub from: String,
+    pub to: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveMetadataSnapshot {
+    #[serde(default = "default_metadata_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub entries: Vec<DriveEntry>,
+    #[serde(default)]
+    pub proposals: Vec<OrganizerProposal>,
+    #[serde(default)]
+    pub organizer_runs: Vec<OrganizerRun>,
+    #[serde(default)]
+    pub links: Vec<DriveLinkRecord>,
+    #[serde(default)]
+    pub corrections: Vec<DriveCorrectionRecord>,
+}
+
+impl Default for DriveMetadataSnapshot {
+    fn default() -> Self {
+        Self {
+            schema_version: DRIVE_METADATA_SCHEMA_VERSION,
+            entries: Vec::new(),
+            proposals: Vec::new(),
+            organizer_runs: Vec::new(),
+            links: Vec::new(),
+            corrections: Vec::new(),
+        }
+    }
+}
+
+const fn default_metadata_schema_version() -> u32 {
+    DRIVE_METADATA_SCHEMA_VERSION
+}
+
 pub const DRIVE_EVENT_NAMES: &[&str] = &[
     "drive_put",
     "drive_transduced",
@@ -598,6 +665,7 @@ mod tests {
         let now = Utc::now();
         let entry = DriveEntry {
             id: Uuid::nil(),
+            version: initial_record_version(),
             path: "projects/tempestmiku/notes/p5.txt".to_string(),
             uri: "drive://projects/tempestmiku/notes/p5.txt".to_string(),
             blob_uri: "blob:sha256:abc".to_string(),
@@ -644,6 +712,7 @@ mod tests {
         };
         let proposal = OrganizerProposal {
             id: Uuid::nil(),
+            version: initial_record_version(),
             action: OrganizerActionKind::Move,
             entry_id: entry.id,
             source_path: "inbox/p5.txt".to_string(),
@@ -679,12 +748,12 @@ mod tests {
         );
         assert_eq!(value["entry"]["blobUri"], json!("blob:sha256:abc"));
         assert_eq!(value["entry"]["contentHash"], json!("abc"));
-        assert_eq!(value["entry"]["createdAt"].is_string(), true);
+        assert!(value["entry"]["createdAt"].is_string());
         assert_eq!(
             value["proposal"]["policyDecision"],
             json!("approval_required")
         );
-        assert_eq!(value["proposal"]["sourceRunId"].is_string(), true);
+        assert!(value["proposal"]["sourceRunId"].is_string());
 
         let config = DriveOrganizerConfig {
             tier: DriveAutomationTier::Moderate,
@@ -704,6 +773,7 @@ mod tests {
 
         let run = OrganizerRun {
             id: Uuid::nil(),
+            version: initial_record_version(),
             trigger: "manual".to_string(),
             status: OrganizerRunStatus::Running,
             attempts: 2,
@@ -716,7 +786,7 @@ mod tests {
         };
         let value = serde_json::to_value(run).unwrap();
         assert_eq!(value["proposalIds"][0], json!(Uuid::nil()));
-        assert_eq!(value["lockedAt"].is_string(), true);
+        assert!(value["lockedAt"].is_string());
         assert_eq!(value["completedAt"], json!(null));
 
         let search = DriveSearchResult {

@@ -1,20 +1,18 @@
 use serde_json::{Value, json};
 
-use super::types::InMemoryDriveStore;
+use crate::SharedDriveStore;
 use tm_host::HostError;
 use tm_host::{GrantDoc, ToolDocs, ToolErrorDoc, ToolExample};
 
-pub(crate) fn content_to_bytes(
-    store: &Option<InMemoryDriveStore>,
+pub(crate) async fn content_to_bytes(
+    store: &SharedDriveStore,
     content: &Value,
 ) -> tm_host::Result<Vec<u8>> {
     if let Some(text) = content.as_str() {
         if text.starts_with("blob:sha256:") {
             return store
-                .as_ref()
-                .expect("drive store")
-                .artifacts
                 .read_blob(text)
+                .await
                 .map_err(|err| HostError::NotFound(err.to_string()));
         }
         return Ok(text.as_bytes().to_vec());
@@ -26,10 +24,8 @@ pub(crate) fn content_to_bytes(
         && uri.starts_with("blob:sha256:")
     {
         return store
-            .as_ref()
-            .expect("drive store")
-            .artifacts
             .read_blob(uri)
+            .await
             .map_err(|err| HostError::NotFound(err.to_string()));
     }
     if let Some(uri) = content.get("uri").and_then(Value::as_str) {

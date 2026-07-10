@@ -29,19 +29,7 @@ async fn memory_context_injects_profile_facts_and_recall_chunks() {
         .await
         .unwrap();
     let session = create(&app).await;
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"content":"hello"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    post_user_message(&app, session.id, "hello").await;
     let events = store.events_after(session.id, None).await.unwrap();
     let final_event = events
         .iter()
@@ -64,7 +52,6 @@ async fn memory_write_proposal_approval_persists_profile_fact_and_replays() {
     let post_app = app.clone();
     let request = json!({
         "memoryKind": "profile_fact",
-        "subject": "brian",
         "predicate": "prefers",
         "object": "approval-backed memory writes",
         "confidence": 0.91,
@@ -204,6 +191,36 @@ async fn memory_write_proposal_approval_persists_profile_fact_and_replays() {
 }
 
 #[tokio::test]
+async fn memory_write_proposal_rejects_sensitive_data_before_emitting_events() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/memory/proposals", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "memoryKind": "recall_chunk",
+                        "text": "Reminder: rotate sk-testsecret123456 tomorrow"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert!(events.iter().all(|event| {
+        event.event_type != "write_proposal"
+            && (event.event_type != "approval" || event.payload_json["backend"] != json!("memory"))
+    }));
+}
+
+#[tokio::test]
 async fn memory_write_proposal_denial_does_not_persist() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
@@ -211,7 +228,6 @@ async fn memory_write_proposal_denial_does_not_persist() {
     let post_app = app.clone();
     let request = json!({
         "memoryKind": "profile_fact",
-        "subject": "brian",
         "predicate": "likes",
         "object": "denied memory",
         "timeoutMs": 5000
@@ -277,7 +293,6 @@ async fn memory_write_proposal_timeout_defaults_to_deny() {
                 .body(Body::from(
                     json!({
                         "memoryKind": "recall_chunk",
-                        "scope": "global",
                         "text": "this timed-out memory should not be saved",
                         "timeoutMs": 1
                     })
@@ -320,7 +335,6 @@ async fn approved_memory_writes_are_idempotent_by_dedupe_key() {
         let post_app = app.clone();
         let request = json!({
             "memoryKind": "recall_chunk",
-            "scope": "global",
             "text": "Stable durable memory chunk",
             "source": format!("test-source-{approval_index}"),
             "timeoutMs": 5000
@@ -388,13 +402,11 @@ async fn approved_memory_writes_are_idempotent_by_dedupe_key() {
 #[tokio::test]
 async fn approved_recall_chunks_remain_scope_isolated() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
-    let session = create(&app).await;
+    let session = create_project_session(&app).await;
     let session_id = session.id;
     let post_app = app.clone();
     let request = json!({
         "memoryKind": "recall_chunk",
-        "subject": "brian",
-        "scope": "project:tempestmiku",
         "text": "Project-only release checklist lives here",
         "source": "test-scope-isolation",
         "timeoutMs": 5000
@@ -448,7 +460,6 @@ async fn approved_profile_fact_contradiction_supersedes_without_erasing_history(
         let post_app = app.clone();
         let request = json!({
             "memoryKind": "profile_fact",
-            "subject": "brian",
             "predicate": "prefers",
             "object": object,
             "confidence": 0.9,
@@ -666,6 +677,12 @@ async fn personal_assistant_state_capture_does_not_propose_sensitive_or_transien
     post_user_message(
         &app,
         session.id,
+        "Reminder: rotate sk-testsecret123456 tomorrow.",
+    )
+    .await;
+    post_user_message(
+        &app,
+        session.id,
         "Just venting: that meeting was annoying and I am grumpy.",
     )
     .await;
@@ -707,7 +724,6 @@ async fn gated_postgres_memory_approval_flow_persists_and_replays() {
     let post_app = app.clone();
     let request = json!({
         "memoryKind": "profile_fact",
-        "subject": subject.clone(),
         "predicate": "prefers",
         "object": profile_object.clone(),
         "confidence": 0.93,
@@ -840,7 +856,7 @@ async fn gated_postgres_memory_approval_flow_persists_and_replays() {
 
     let chunk_session = create(&app).await;
     let chunk_session_id = chunk_session.id;
-    let scope = format!("postgres-p2-{run_id}");
+    let scope = "global".to_string();
     let chunk_text = format!("Stable durable postgres memory chunk {run_id}");
     let mut record_ids = Vec::new();
     let mut record_uris = Vec::new();
@@ -848,8 +864,6 @@ async fn gated_postgres_memory_approval_flow_persists_and_replays() {
         let post_app = app.clone();
         let request = json!({
             "memoryKind": "recall_chunk",
-            "subject": subject.clone(),
-            "scope": scope.clone(),
             "text": chunk_text.clone(),
             "source": format!("postgres-test-source-{approval_index}"),
             "provenanceLabel": "postgres-recall",
@@ -919,12 +933,11 @@ async fn gated_postgres_memory_approval_flow_persists_and_replays() {
 
     let denied_session = create(&app).await;
     let denied_session_id = denied_session.id;
-    let denied_subject = format!("brian-denied-pg-{run_id}");
+    let denied_subject = subject.clone();
     let denied_object = format!("denied postgres memory {run_id}");
     let post_app = app.clone();
     let request = json!({
         "memoryKind": "profile_fact",
-        "subject": denied_subject.clone(),
         "predicate": "likes",
         "object": denied_object.clone(),
         "timeoutMs": 5000
@@ -945,7 +958,15 @@ async fn gated_postgres_memory_approval_flow_persists_and_replays() {
     let body = response_json(response).await;
     assert_eq!(body["status"], json!("denied"));
     assert!(body["record"].is_null());
-    assert_eq!(store.profile_facts(&denied_subject).await.unwrap().len(), 0);
+    assert!(
+        store
+            .profile_facts(&denied_subject)
+            .await
+            .unwrap()
+            .iter()
+            .all(|fact| fact.object != denied_object),
+        "denied object must not be persisted alongside earlier approved facts"
+    );
     let raw_denied_count: i64 = store
         .client()
         .query_one(
@@ -971,15 +992,13 @@ async fn gated_postgres_memory_approval_flow_persists_and_replays() {
 
     let timeout_session = create(&app).await;
     let timeout_session_id = timeout_session.id;
-    let timeout_scope = format!("postgres-timeout-{run_id}");
+    let timeout_scope = "global".to_string();
     let timeout_text = format!("timed-out postgres memory should not persist {run_id}");
     let response = post_memory_proposal(
         &app,
         timeout_session_id,
         json!({
             "memoryKind": "recall_chunk",
-            "subject": subject.clone(),
-            "scope": timeout_scope.clone(),
             "text": timeout_text.clone(),
             "timeoutMs": 1
         }),

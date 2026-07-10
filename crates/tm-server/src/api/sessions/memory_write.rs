@@ -1,14 +1,10 @@
 use super::*;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProposeMemoryWriteRequest {
     #[serde(alias = "kind")]
     pub memory_kind: MemoryWriteKind,
-    #[serde(default = "default_subject")]
-    pub subject: String,
-    #[serde(default)]
-    pub scope: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default)]
@@ -39,7 +35,6 @@ pub struct MemoryWriteProposalResponse {
 pub(crate) async fn propose_memory_write<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<ProposeMemoryWriteRequest>,
 ) -> Result<Json<MemoryWriteProposalResponse>>
 where
@@ -47,10 +42,12 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let (proposal, timeout) =
-        memory_write_proposal_from_request(&state.persona, session_id, &session, payload)?;
+    resources::util::validate_authorized_memory_scope(
+        &state.linked_folders,
+        &session.memory_scope,
+    )?;
+    let (proposal, timeout) = memory_write_proposal_from_request(session_id, &session, payload)?;
     Ok(Json(
         run_memory_write_proposal(&state, session_id, proposal, timeout).await?,
     ))
@@ -78,27 +75,47 @@ where
     )
     .await?;
 
-    let approval = state
+    let (approval_id, approval) = state
         .approval_broker
-        .request_permission_detailed_for_backend(
+        .request_permission_detailed_with_effect_for_backend(DurableApprovalSpec {
             session_id,
-            "memory",
-            memory_write_approval_prompt(&proposal, timeout),
+            origin: "memory".to_string(),
+            prompt: memory_write_approval_prompt(&proposal, timeout),
             timeout,
+            effect_type: "memory_write".to_string(),
+            effect_payload_json: json!({ "proposal": proposal.clone() }),
+            resumable: true,
+            sink: Arc::clone(&sink),
+        })
+        .await?;
+    let status = memory_write_status_from_approval(approval.status);
+    if let Some(lease) = state
+        .store
+        .claim_approval_effect(
+            approval_id,
+            Uuid::new_v4(),
+            Utc::now(),
+            chrono::Duration::seconds(30),
+        )
+        .await?
+    {
+        let approval = state
+            .store
+            .approval_request(session_id, approval_id)
+            .await?;
+        crate::api::approvals::apply_approval_effect_lease(
+            state.store.as_ref(),
+            &approval,
+            &lease,
             Arc::clone(&sink),
         )
         .await?;
-    let status = memory_write_status_from_approval(approval.status);
+    }
     let record = if approval.status == ApprovalStatus::Approved {
-        Some(persist_memory_write(state.store.as_ref(), &proposal).await?)
+        Some(await_persisted_memory_write(state.store.as_ref(), &proposal).await?)
     } else {
         None
     };
-    sink.emit(
-        "write_proposal",
-        proposal.event_payload(status, record.as_ref()),
-    )
-    .await?;
     Ok(MemoryWriteProposalResponse {
         proposal_id: proposal.proposal_id,
         memory_kind: proposal.memory_kind,
@@ -107,49 +124,74 @@ where
     })
 }
 
-pub(super) fn spawn_personal_assistant_state_capture<S, M, C>(
+pub(super) async fn spawn_personal_assistant_state_capture<S, M, C>(
     state: AppState<S, M, C>,
     session_id: Uuid,
     mode_profile: ModeProfile,
     subject: String,
     scope: String,
     user_content: String,
-) where
+) -> Result<()>
+where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
     if !mode_profile.captures_personal_state() {
-        return;
+        return Ok(());
     }
-    let proposals = match crate::memory::personal_assistant_state_capture_proposals(
+    let proposals = crate::memory::personal_assistant_state_capture_proposals(
         &subject,
         &scope,
         session_id,
         &user_content,
         Utc::now(),
-    ) {
-        Ok(proposals) => proposals,
-        Err(err) => {
-            tracing::warn!(%err, %session_id, "state capture proposal extraction failed");
-            return;
-        }
-    };
+    )?;
     for proposal in proposals {
-        let state = state.clone();
-        tokio::spawn(async move {
-            if let Err(err) =
-                run_memory_write_proposal(&state, session_id, proposal, Duration::from_secs(60))
-                    .await
-            {
-                tracing::warn!(%err, %session_id, "state capture memory proposal failed");
-            }
-        });
+        enqueue_memory_write_proposal(&state, session_id, proposal, Duration::from_secs(60))
+            .await?;
     }
+    Ok(())
+}
+
+async fn enqueue_memory_write_proposal<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    proposal: MemoryWriteProposal,
+    timeout: Duration,
+) -> Result<()>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+        session_id,
+        Arc::clone(&state.store),
+        state.sender(session_id),
+    ));
+    sink.emit(
+        "write_proposal",
+        proposal.event_payload(MemoryWriteStatus::Pending, None),
+    )
+    .await?;
+    state
+        .approval_broker
+        .enqueue_permission_for_backend(DurableApprovalSpec {
+            session_id,
+            origin: "memory".to_string(),
+            prompt: memory_write_approval_prompt(&proposal, timeout),
+            timeout,
+            effect_type: "memory_write".to_string(),
+            effect_payload_json: json!({ "proposal": proposal }),
+            resumable: true,
+            sink,
+        })
+        .await?;
+    Ok(())
 }
 
 fn memory_write_proposal_from_request(
-    persona: &ModesConfig,
     session_id: Uuid,
     session: &crate::SessionRecord,
     payload: ProposeMemoryWriteRequest,
@@ -157,9 +199,8 @@ fn memory_write_proposal_from_request(
     let now = Utc::now();
     let timeout_ms = payload.timeout_ms.unwrap_or(60_000).clamp(1, 60_000);
     let timeout = Duration::from_millis(timeout_ms);
-    let scope = payload
-        .scope
-        .unwrap_or_else(|| mode_profile(persona, &session.mode_state.mode).default_scope);
+    let subject = session.owner_subject.clone();
+    let scope = session.memory_scope.clone();
     let source = payload
         .source
         .unwrap_or_else(|| format!("session:{session_id}:memory-write"));
@@ -176,18 +217,20 @@ fn memory_write_proposal_from_request(
         })
     });
     let proposal = match payload.memory_kind {
-        MemoryWriteKind::ProfileFact => MemoryWriteProposal::profile_fact(
-            payload.subject,
-            required_memory_field("predicate", payload.predicate)?,
-            required_memory_field("object", payload.object)?,
-            payload.confidence.unwrap_or(0.8),
-            source,
-            provenance_label,
-            provenance,
-            now,
-        )?,
+        MemoryWriteKind::ProfileFact => {
+            MemoryWriteProposal::profile_fact(crate::memory::ProfileFactProposalInput {
+                subject,
+                predicate: required_memory_field("predicate", payload.predicate)?,
+                object: required_memory_field("object", payload.object)?,
+                confidence: payload.confidence.unwrap_or(0.8),
+                source,
+                provenance_label,
+                provenance,
+                created_at: now,
+            })?
+        }
         MemoryWriteKind::RecallChunk => MemoryWriteProposal::recall_chunk(
-            payload.subject,
+            subject,
             scope,
             required_memory_field("text", payload.text)?,
             source,
@@ -196,7 +239,28 @@ fn memory_write_proposal_from_request(
             now,
         )?,
     };
+    ensure_memory_proposal_contains_no_sensitive_data(&proposal)?;
     Ok((proposal, timeout))
+}
+
+fn ensure_memory_proposal_contains_no_sensitive_data(proposal: &MemoryWriteProposal) -> Result<()> {
+    let provenance = serde_json::to_string(&proposal.provenance)
+        .map_err(|err| ServerError::InvalidRequest(format!("invalid memory provenance: {err}")))?;
+    for value in [
+        proposal.subject.as_str(),
+        proposal.scope.as_str(),
+        proposal.text.as_str(),
+        proposal.source.as_str(),
+        proposal.provenance_label.as_str(),
+        provenance.as_str(),
+    ] {
+        if tm_memory::contains_sensitive_data(value) {
+            return Err(ServerError::InvalidRequest(
+                "memory proposal contains sensitive data".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn required_memory_field(field: &str, value: Option<String>) -> Result<String> {
@@ -232,24 +296,36 @@ fn memory_write_approval_prompt(
     }
 }
 
-async fn persist_memory_write<S>(
+async fn await_persisted_memory_write<S>(
     store: &S,
     proposal: &MemoryWriteProposal,
 ) -> Result<MemoryRecordRef>
 where
     S: Store,
 {
-    match proposal.memory_kind {
-        MemoryWriteKind::ProfileFact => {
-            let fact = crate::memory::profile_fact_record(proposal)?;
-            store.upsert_profile_fact(fact).await?;
-        }
-        MemoryWriteKind::RecallChunk => {
-            let chunk = crate::memory::recall_chunk_record(proposal)?;
-            store.upsert_recall_chunk(chunk).await?;
+    for _ in 0..100 {
+        let result = match proposal.memory_kind {
+            MemoryWriteKind::ProfileFact => store
+                .profile_fact(&proposal.subject, proposal.record_id)
+                .await
+                .map(|_| ()),
+            MemoryWriteKind::RecallChunk => store
+                .recall_chunk(&proposal.scope, proposal.record_id)
+                .await
+                .map(|_| ()),
+        };
+        match result {
+            Ok(()) => return Ok(proposal.record_ref()),
+            Err(ServerError::NotFound(_)) => {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(error) => return Err(error),
         }
     }
-    Ok(proposal.record_ref())
+    Err(ServerError::Store(format!(
+        "approved memory effect {} was not applied",
+        proposal.proposal_id
+    )))
 }
 
 fn memory_write_status_from_approval(status: ApprovalStatus) -> MemoryWriteStatus {

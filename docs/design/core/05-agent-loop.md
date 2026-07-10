@@ -3,7 +3,8 @@
 ### 5.1 Control flow
 
 ```
-seed messages = [system_prompt, user_msg]
+seed messages = [system_prompt, ...bounded_prior_messages, user_msg]
+session = supplied_open_session
 loop:
     stream = llm.chat_stream(messages, tools=[EXECUTE_TOOL])   # streaming is the only transport
     acc = Accumulator()
@@ -22,7 +23,11 @@ until turn_budget exhausted
 ```
 
 The session is **persistent across iterations** — cell 2 sees the variables cell 1 defined. The
-loop ends when the model stops calling `execute` (it has its answer) or a budget is hit.
+loop ends when the model stops calling `execute` (it has its answer) or a budget is hit. Product
+servers supply the already-open thread-affine `Session` and bounded prior messages; the core loop
+still solely owns accumulation and cell execution. Cancellation is selected against model
+connection/stream reads, pending host waits, and cell evaluation rather than being checked only
+between turns.
 
 ### 5.2 The one tool
 
@@ -46,6 +51,11 @@ loop ends when the model stops calling `execute` (it has its answer) or a budget
 That is the *entire* tool surface presented to the model. Capability growth never grows this
 schema — it grows the SDK the code discovers at runtime.
 
+Native requests set `parallel_tool_calls: false`, and the loop independently fails closed before
+execution unless a tool turn contains exactly one complete `execute` call with an id, an object
+argument, and non-empty string `code`. Multiple calls, any other native tool name, malformed
+arguments, and truncated `tool_calls` completions are protocol errors.
+
 ### 5.3 Fallback for endpoints without function calling
 
 Some OpenAI-compatible servers don't support `tools`. Provide a `Protocol` switch:
@@ -55,15 +65,24 @@ Some OpenAI-compatible servers don't support `tools`. Provide a `Protocol` switc
   ` ```run … ``` `; the orchestrator parses the block, runs it, and injects the result as the
   next user message. Same loop, brittler parsing. Used only when native tools are unavailable.
 
+The fallback parser is deliberately strict: a response must contain exactly one line-delimited,
+non-empty `run` fence and no competing executable fence. JavaScript/TypeScript/JSON fences,
+malformed or unterminated fences, empty bodies, and multiple blocks are protocol errors and never
+execute.
+
 ### 5.4 Result shaping (the context-efficiency lever)
 
-`shape_result` turns an `EvalOutput` into the compact tool message the model sees. Policy:
+`shape_result` turns an `EvalOutput` into the compact tool message the model sees. One total budget
+covers stdout, return value, displays, errors, and host-call metadata; independently truncating each
+field must not multiply the allowance. Policy:
 
 - `stdout` and return value: capped (e.g. 8 KB) with head+tail elision markers.
 - `display()` items: the model's *intended* outputs — included (text/markdown/table inline;
   images as blocks; large data as artifact refs).
-- Anything over the cap → spilled to the artifact store; the model gets
-  `artifact://<id>` + a preview + size, and can re-read slices on demand.
+- Anything elided by the total budget → spilled to the artifact store; every elision marker includes
+  a readable `artifact://<id>` + preview + size so omitted data is never silently lost.
+- If a backend violates that contract and returns oversized data without a readable artifact
+  reference, shaping fails closed with `ResultLimitError` instead of silently eliding bytes.
 - `error`: message + trimmed traceback.
 - A one-line **host-call summary** (which capabilities ran, bytes in/out) so the model — and the
   audit log — know what happened.

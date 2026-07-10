@@ -40,6 +40,15 @@ First-pass globals:
   capability-gated sub-agent orchestration, defined only in sessions holding an `agents.*` grant.
   Ungranted sessions keep `agents` as `undefined`; P3-plus covers active supervision, wall-clock
   budgets, subtree cancellation, status lifecycle events, and parent-event provenance links.
+- `modes.suggest(targetMode, reason?)` — approval-backed model suggestion through `execute`, not a
+  second chat-native `mode_suggest` tool. The handler may be registered globally, but only unlocked
+  normal chat turns receive the exact `modes.suggest` grant; coding, actor, scheduler, and locked
+  turns fail closed (§21.4).
+
+**Registration is not authority.** `DenoSandboxOptions.grants` is replaced with the exact grant set
+for each turn. Configured linked folders, drive availability, a registered handler, or a previous
+turn's mode can never union in authority. Only the fixed core `http.get` and artifact/resource-read
+primitives are retained where specified; every other namespace requires the current turn's grant.
 
 Reserved first-pass globals:
 
@@ -518,7 +527,7 @@ interface HttpNamespace {
 ```
 
 Parity is enforced in the sandbox tests: the runtime-exposed direct namespace methods (`tools.*`,
-`resources.*`, `artifacts.*`, `fs.*`, `code.*`, `proc.run`, and `http.get`) are enumerated from the
+`resources.*`, `artifacts.*`, `fs.*`, `code.*`, `proc.run`, `modes.suggest`, and `http.get`) are enumerated from the
 installed prelude, each `tools.docs(name).signature` must appear in `docs/sdk/tm-runtime.d.ts`, and
 each docs entry must carry schemas, examples, fail-closed errors, grants, approval, since, and
 stability metadata. Until generation exists, update the checked-in `.d.ts` snapshot and catalog docs

@@ -32,6 +32,7 @@ declare global {
   const code: CodeNamespace;
   const proc: ProcNamespace;
   const http: HttpNamespace;
+  const modes: ModesNamespace;
   const drive: DriveNamespace;
   const research: ResearchNamespace;
 
@@ -170,6 +171,34 @@ interface ToolsNamespace {
    * wrappers when one exists; unknown or ungranted capabilities fail closed.
    */
   call<T = unknown>(name: CapabilityName, args?: JsonValue): Promise<T>;
+}
+
+interface ModesNamespace {
+  /**
+   * modes.suggest(targetMode: string, reason?: string): Promise<ModeSuggestionOutcome>
+   *
+   * Ask the owner to confirm a sticky session-mode switch. This is a
+   * capability-gated host call made from inside execute, not another native
+   * model tool. It is granted only to unlocked normal ChatRunner turns; coding
+   * backends, actors, scheduler runs, and locked turns fail closed.
+   */
+  suggest(targetMode: string, reason?: string): Promise<ModeSuggestionOutcome>;
+}
+
+interface ModeSuggestionOutcome {
+  status:
+    | "approved"
+    | "denied"
+    | "timed_out"
+    | "cancelled"
+    | "locked"
+    | "stale"
+    | "already_active"
+    | "invalid_target";
+  currentMode: string;
+  targetMode: string;
+  changed: boolean;
+  message: string;
 }
 
 interface ToolSearchOptions {

@@ -36,8 +36,8 @@ coding product:
   fewer 喵.** Cuteness yields to precision, by design.
 - **Mode profile** (`modes.json` → `modes[]`) — *what capabilities are available now*: declared
   runtime capabilities, the mode's own declared skills, grouping class, default scope, and voice cap.
-  Switchable, and **sticky**: once switched, a mode stays active until the user or a confirmed
-  `mode_suggest` changes it — never a silent per-turn revert.
+  Switchable, and **sticky**: once switched, a mode stays active until the user changes it or
+  confirms an `await modes.suggest(...)` proposal — never a silent per-turn revert.
 - **Layered skills** (`modes.json` → top-level `skills[]`, bodies at `skills/*/SKILL.md`) —
   *procedural payloads* composed on top of whichever mode is active: always-on, or triggered by
   message content. Independent of mode capability grants.
@@ -84,7 +84,7 @@ Pick the smallest sufficient mode — and expect it to stick until you leave it.
 | # | Bundled runtime mode | Declared capabilities | Voice | Mode-declared skills |
 |---|---|---|---|---|
 | 1 | **General** (default) | conversation + light `memory.recall` / `memory.propose` | `medium` | `miku-voice`, `personal-assistant-state-capture` |
-| 2 | **Serious Engineer** | native `fs.*` / `code.*` / `proc.*` (§25), with P0a OMP ACP still available as a replaceable bridge; future light `agents.*` | `off` | `serious-engineer-ops` |
+| 2 | **Serious Engineer** | native `fs.*` / `code.*` / `proc.*` and `resources.read:linked` (§25), with P0a OMP ACP still available as a replaceable bridge; future light `agents.*` | `off` | `serious-engineer-ops` |
 | 3 | **Handoff** | `agents.*` (§23) + brief generation | `off` | `oh-my-pi-handoff` |
 
 All three modes run under the **one** character. Capabilities are config, not code (§10.4): a mode =
@@ -135,28 +135,33 @@ Standing behavior from SOUL.md that isn't a skill file but is still cross-cuttin
 - **Capability modes are sticky.** Once a session is in Serious Engineer or Handoff, it stays there
   across turns regardless of what later messages say — there is no per-turn keyword revert. Getting
   back to General is a deliberate action: the user's mode picker, an explicit `override`/`apply`
-  call, or a confirmed `mode_suggest` (below). A locked mode suppresses all of these except unlock.
+  call, or a confirmed `await modes.suggest(...)` (below). A locked mode suppresses all of these
+  except unlock.
 - **Switching a mode is model-proposed, user-confirmed — not silently auto-applied.** The model
-  calls `mode_suggest(target_mode, reason)` mid-turn when it judges the conversation needs a
-  different capability envelope (e.g. real repo work, or delegating to a coding agent). That surfaces
-  as a pending confirmation (the existing approval-broker event/resolve flow, §10.2/§25) rather than
+  calls `await modes.suggest(targetMode, reason)` from inside `execute` when it judges the
+  conversation needs a different capability envelope (e.g. real repo work, or delegating to a
+  coding agent). `modes.suggest` is a grant-controlled host SDK function, not a second model-visible
+  tool. That surfaces as a pending confirmation (the existing approval-broker event/resolve flow,
+  §10.2/§25) rather than
   an immediate switch; the model gets the user's decision back as its tool result and continues the
   turn coherently either way. The bundled server's keyword `route.triggers` on each mode remain in
-  the catalog as a cheap signal for `mode_suggest` to reason from, but they never auto-apply a switch
+  the catalog as a cheap signal for `modes.suggest` to reason from, but they never auto-apply a switch
   by themselves — that was the old, confusing behavior (a substring match on words like `repo` or
   `test` could silently flip the whole session's capability envelope, then flip back on the very next
   unrelated message).
 - **User is always final.** Brian can **lock** a mode, **override** it directly, or confirm/decline
-  any `mode_suggest` — a locked mode suppresses proposals entirely rather than prompting for one.
+  any `modes.suggest` — a locked mode suppresses proposals entirely rather than prompting for one.
   If the session is locked or moved to another mode while a suggestion is pending, the stale
   suggestion is ignored even if its approval response arrives later.
-- **v1 scoping: `mode_suggest` only runs on the ChatRunner path.** The mediator that offers
-  `mode_suggest` is attached to plain chat turns, not to the native coding backend (§25). So once a
+- **v1 scoping: `modes.suggest` authority only exists on unlocked normal ChatRunner turns.** The
+  server registers the host handler independently, then adds the exact `modes.suggest` grant only to
+  unlocked normal chat turns. Native coding backends (§25), actors, scheduler runs, and locked turns
+  never receive that grant. So once a
   turn is actually dispatched to a configured coding backend (i.e. Serious Engineer or Handoff with
   a real backend wired in), the model has no way to propose *leaving* that mode from inside it —
   getting back to General is picker/override-only in that state. Proposing to *enter* Serious
   Engineer or Handoff from General works today because General always runs the ChatRunner path.
-  Extending the mediator seam to the coding backend is a follow-up, not yet built.
+  Extending mode-suggestion authority to the coding backend is explicitly out of the v1 contract.
 - **Observable, not primary UI.** Each switch emits `ModeChanged` (§10.2) for replay, audit, and
   optional debug/advanced controls. Clients read `GET /modes` to render runtime mode controls;
   default chat surfaces should not make Brian manage or care about the mode label. Mode is a
@@ -166,16 +171,16 @@ Standing behavior from SOUL.md that isn't a skill file but is still cross-cuttin
 sequenceDiagram
     participant B as Brian
     participant M as Miku (model)
-    participant Med as Mode-suggest mediator
+    participant SDK as modes.suggest host capability
     participant C as Clients
     B->>M: "this migration scares me, can you do it?"
-    M->>Med: mode_suggest("serious_engineer", "irreversible op")
-    Med-->>C: pending confirmation (approval event)
-    C-->>Med: Brian confirms
-    Med-->>C: ModeChanged(Serious Engineer)  %% debug/advanced only; voice cap is internal
-    Med-->>M: tool result: switched; fs.*/code.*/proc.* now in registry, 喵 off
+    M->>SDK: execute("await modes.suggest('serious_engineer', 'irreversible op')")
+    SDK-->>C: pending confirmation (approval event)
+    C-->>SDK: Brian confirms
+    SDK-->>C: ModeChanged(Serious Engineer)  %% debug/advanced only; voice cap is internal
+    SDK-->>M: execute result: approved; next turn gets engineering grants
     Note over M: identity unchanged; precise, asks before destructive
-    Note over M,Med: A later "clean up my inbox" does NOT revert the mode — it stays in<br/>Serious Engineer until Brian or another confirmed mode_suggest moves it.
+    Note over M,SDK: A later "clean up my inbox" does NOT revert the mode — it stays in<br/>Serious Engineer until Brian or another confirmed modes.suggest moves it.
 ```
 
 ## 21.5 Character: defined (was the top open question)

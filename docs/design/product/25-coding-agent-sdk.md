@@ -38,8 +38,9 @@ The bridge shape is deliberately small:
 
 - `tm-server` launches or connects to a pinned `omp acp` subprocess for a Serious Engineer / Handoff
   session.
-- A `CodingBackend` adapter maps TempestMiku `POST /sessions/:id/messages` into ACP session messages
-  and maps ACP progress, diffs, tool events, and final output back into `session_events`.
+- After `POST /sessions/:id/messages` queues a durable turn, the worker's `CodingBackend` adapter maps
+  that turn into ACP session messages and maps ACP progress, diffs, tool events, and final output back
+  into durable `session_events` associated with its `turn_id`.
 - ACP permission requests become TempestMiku `approval` events and resolve only through the normal
   approval endpoint; generated OMP config may select yolo/prompt modes, but policy is explicit per
   bridge process, never an ambient default.
@@ -47,6 +48,11 @@ The bridge shape is deliberately small:
   and project promotion keep provenance.
 - Miku owns the user-facing final answer and serious-mode voice cap; raw OMP transcript is evidence,
   not the personality layer.
+- Transcript capture is bounded and redacted while streaming: individual JSONL artifact segments are
+  at most 1 MiB, the complete capture is at most 16 MiB, and one entry is at most 128 KiB. A manifest
+  records source/backend version, ACP session id, segment refs, captured/max bytes, redaction count,
+  and explicit truncation reason; the event stream exposes that provenance instead of raw unbounded
+  backend output.
 
 P0a acceptance: a UI/API Serious Engineer session dispatches a real TempestMiku coding task through
 `omp acp`, applies a patch in a linked repo, runs a targeted test, streams progress through existing
@@ -190,6 +196,13 @@ flowchart TD
   via an output sink — bounded in context, full on disk (OMP `OutputSink`, spill at
   `DEFAULT_MAX_BYTES` = 50 KB). Output caps match the deployment: **50 KB / 2000 lines / 2000
   line-length** (§29).
+- **Storage/read quotas:** text artifacts are capped at 4 MiB, blobs at 64 MiB, and aggregate session
+  artifacts plus unique logical blob references at 256 MiB. Default text reads return at most 64
+  KiB/200 lines; callers cannot exceed
+  256 KiB/1,000 lines. Reads stream, and every shaped-output elision includes a readable artifact ref.
+- **Reference integrity:** ids are canonical, blob paths reject symlinks/root escape, writes are
+  atomic no-clobber, and blob bytes are rehashed on read. Artifact metadata id/URI must match its
+  filename; tampering returns an integrity error.
 - **Resume / fork / move:** scan-and-continue ids; **fork copies artifacts, blobs are global (no
   copy)**; move renames the session + artifact dir together. Mirrors OMP `blob-artifact-architecture`.
 
@@ -227,10 +240,10 @@ model above. This section owns the **storage tiers** only; the **read / routing*
 - **Non-allowlisted command** — `proc.run` rejects it (fail-closed); **no linked folder** → no
   real-FS reach (sandbox only); **destructive/external/out-of-grant action** → approval or fail-closed;
   **approval timeout** → denied, effect skipped (§27.6).
-- **Blob missing on rehydrate** — warn, keep the `blob:sha256:` ref in memory, load continues (OMP
-  behavior); blob read ENOENT → returns null.
-- **Artifact dir missing** — empty list, allocation starts fresh; **artifact id not found** → error
-  lists available ids.
+- **Blob missing/tampered on rehydrate** — retain the reference for diagnostics, but direct reads fail
+  closed; a hash mismatch is an integrity error and never returns bytes.
+- **Artifact dir missing** — empty list, allocation starts fresh; **artifact id not found** → bounded
+  diagnostics built after releasing the store lock.
 - **`OutputSink` file-sink init fails** — bounded in-memory output only; full output not persisted
   (degraded, logged).
 - **Fork copy fails** — new session's artifact ids start from 0; blobs unaffected (global).

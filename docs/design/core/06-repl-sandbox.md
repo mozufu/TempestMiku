@@ -33,16 +33,29 @@ and registry, different executor. The choice is reversible by construction.
 
 A `Session` is one long-lived V8 isolate + context. `eval(code)` runs a cell in that context;
 top-level `let/const/var` and assignments persist. `reset()` tears down and recreates the isolate
-for a clean slate. M3 may add session pooling to amortize V8 startup; until then the contract is a
-fresh or reset isolate behind the same `Sandbox` / `Session` traits.
+for a clean slate. V8 sessions are deliberately **not `Send`**: each stays on its owning runtime
+thread. The product server shards sessions by session id onto dedicated runtime threads, serializes
+cells within a session, and evicts inactive sessions by TTL. After daemon restart, conversation
+history is restored but a fresh isolate is created and `runtime_reset` is emitted; historical code
+cells are never replayed.
+
+Top-level await is syntax-aware. `deno_ast`/SWC detects only actual top-level `await` or `for await`
+nodes (never strings/comments or awaits nested in functions), transpiles TypeScript, and lowers the
+cell into an async expression. Simple top-level identifiers/functions/classes are hoisted into the
+persistent script scope and declarations in the async body become assignments; the final expression
+remains the cell result. Imports/exports, `using`, reserved runtime names, destructuring, and other
+unsupported binding patterns fail with structured sandbox errors rather than textual source
+corruption.
 
 ### 6.3 Resource limits
 
 Per cell and per session:
 
 - **Wall-clock timeout** → isolate terminated, `Timeout` error returned to the model.
-- **Heap cap** (V8 `--max-old-space-size` / isolate heap limit) → `OutOfMemory`.
-- **Output cap** (stdout + return bytes) → truncation + artifact spill.
+- **Heap cap:** 128 MiB per V8 isolate. Near-limit exhaustion terminates and rebuilds the isolate and
+  returns a structured `ResourceLimitError`; a subsequent cell runs in the rebuilt session.
+- **Retained output/result/error cap:** 4 MiB per cell, plus at most 64 `display()` calls. Result
+  shaping applies its own total context budget and spills readable artifact references (§5.4/§9).
 - **Egress cap** (bytes/requests via host net ops) → `EgressLimit`.
 - **Host-call rate/quota** per capability.
 

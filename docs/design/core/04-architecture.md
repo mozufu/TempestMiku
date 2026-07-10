@@ -8,14 +8,14 @@ flowchart TD
     S -->|host calls| H[Host capability registry]
     H --> NET[HTTP egress -- allowlist]
     H --> FSY[Filesystem -- root-jailed]
-    H --> MCP[MCP client -- imported tools]
-    H --> SEC[Secret broker]
+    H -.future.-> MCP[tm-mcp -- deferred]
+    H -.future.-> SEC[Secret broker -- deferred]
     S --> ART[Artifact store]
     O --> ART
     S -->|read uri| RR[Resource resolver registry]
     RR --> ART
-    O --> TR[Transcript / tracing]
-    H --> TR
+    O -.future crate.-> TR[tm-trace -- deferred]
+    H -.future crate.-> TR
 ```
 
 Components:
@@ -28,7 +28,13 @@ Components:
 - **Artifact store** — content-addressed storage for large outputs; hands back `artifact://` refs.
 - **Resource resolver registry** — one scheme-dispatched `read(uri)` over registered handlers
   (currently `artifact://` / `workspace://session` / `linked://` / `project://` / `memory://` /
-  `agent://` / `history://`; `drive://`, `cron://`, and `skill://` reads remain reserved until their
-  owning milestones register handlers and grants); §9.2.
-- **Secret broker** — resolves opaque secret handles to real values only at the host boundary.
-- **Transcript / tracing** — structured record of the whole session for audit and replay.
+  `agent://` / `history://` / `cron://` and configured `drive://`; `skill://` reads remain reserved
+  until their owning milestone registers a handler and grants); §9.2.
+- **Secret broker** — deferred P7 surface for resolving opaque handles only at the host boundary.
+- **Transcript / tracing** — current structured events/artifacts provide audit evidence; a dedicated
+  `tm-trace` replay crate remains deferred.
+
+The product server (§27) wraps these components with authenticated durable turns and one replayable
+SSE envelope. Postgres-backed `api`, `worker`, and `all` roles own persistence and supervision; they
+do not create a second agent loop. A Deno session remains thread-affine to its runtime shard while the
+core loop continues to own accumulation, execution, and result shaping.

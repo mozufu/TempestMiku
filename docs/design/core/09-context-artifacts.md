@@ -13,6 +13,19 @@ The two-tier store behind these handles — global `blob:sha256:` + session `art
 resources at `agent://` / `history://` using the spill path as needed — is specified in §25.3. This
 section owns the **read path**: how any handle (and every other readable thing) is resolved.
 
+Storage references are validated before path construction: session ids are 1–128 safe ASCII
+characters and reject empty/absolute/`.`/`..`; artifact ids are canonical decimal `u64`; blob ids are
+exactly 64 lowercase hexadecimal characters after `blob:sha256:`. Blob reads reject symlinks/reparse
+points and paths outside the root, then rehash the bytes and fail integrity on mismatch. Blob creation
+is atomic/no-clobber, and artifact metadata id/URI must match its filename.
+
+Quotas are hard boundaries: 4 MiB per text artifact, 64 MiB per blob, and 256 MiB aggregate logical
+storage per session. A global deduplicated blob is charged once to each session that references it;
+reusing the same blob in that session does not charge it twice. Text reads stream rather than loading
+the file/all lines; default selection is at
+most 64 KiB or 200 lines, with a hard request maximum of 256 KiB or 1,000 lines. Unknown ids release
+the store mutex before building diagnostics, so not-found reporting cannot deadlock writers/readers.
+
 ## 9.2 Resource resolution — one registry, scheme-keyed handlers
 
 Everything readable is addressed through a uniform `read(uri)` (SDK `resources.read(uri)`),

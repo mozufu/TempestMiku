@@ -14,7 +14,7 @@ tempest-miku/
 │   ├── tm-agents/      # actor lifecycle, mailbox, agents.* host fns, agent:// + history:// resources
 │   ├── tm-memory/      # P4 recall, summaries, dream queue/worker, redaction helpers
 │   ├── tm-drive/       # P5 local-first drive metadata, transducers, vdirs, resources, host fns
-│   └── tm-server/      # axum sessions, SSE replay, approvals, project views, coding backends
+│   └── tm-server/      # auth, migrations, durable turns/SSE, supervised workers, product stores/backends
 └── apps/
     ├── tm-cli/         # binary: wiring, config, REPL/chat entrypoint
     └── tm-e2e/         # public-API local/dev workflow harness
@@ -149,9 +149,12 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
         let turn = acc.into_turn();
         msgs.push(turn.to_message());
 
-        let Some(call) = turn.execute_call() else {
-            sink.on_final(&turn.text);
-            return Ok(turn.text);                          // no tool call ⇒ final answer
+        let call = match validate_native_turn(&turn)? {   // exactly one valid execute, or final
+            NativeAction::Final => {
+                sink.on_final(&turn.text);
+                return Ok(turn.text);
+            }
+            NativeAction::Execute(call) => call,
         };
         sink.on_cell_start(&call.code);
         let out    = session.eval(&call.code, agent.cell_budget()).await?;
@@ -186,9 +189,16 @@ resource handlers, and approval policy.
 The server path now has two coding backends behind the same `CodingBackend` interface: the
 replaceable P0a `omp_acp` bridge and the native Deno backend. The native Serious Engineer backend
 maps approval-gated host calls such as unsafe `proc.run`, overwrites, and destructive edits into the
-same HTTP approval broker used by the client API; timeout still denies by default. The general
-non-coding chat runner keeps a conservative default-deny approval policy until a product surface owns
-that manual flow.
+same durable approval surface used by the client API; timeout still denies by default. Normal turns
+receive only their exact mode/session grants, including `modes.suggest` only when unlocked; registered
+handlers and configured storage do not expand that set.
+
+`tm-server` upgrades Postgres with ordered checksummed migrations and exposes role-separated
+supervision: `api` serves authenticated HTTP/SSE, `worker` dispatches turns and runs approval effects,
+dreams, and cron, and `all` combines them. Worker roles require Postgres. Turn workers serialize each
+session while allowing bounded concurrency across sessions; native V8 state is kept on deterministic
+thread-affine shards and is reset—not replayed—after restart/TTL eviction. The core agent loop remains
+the only owner of message accumulation and execution.
 
 That boundary remains deliberate:
 

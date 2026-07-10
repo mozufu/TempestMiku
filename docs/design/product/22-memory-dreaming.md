@@ -115,13 +115,20 @@ There is no external deriver/dreamer to depend on or fall behind: steps 2–6 *a
 
 **Implemented P4 slice:** `tm-memory` owns the dream queue, summary, skill-proposal, evidence, and
 redaction data contracts. `tm-server` persists a `dream_queue` row when `POST /sessions/:id/end` ends a
-session, emits replayable `session_end` + `dream_queued` events, and exposes a server-owned
+session. Session status, `session_end`, deterministic dream enqueue, and `dream_queued` commit in one
+transaction or not at all; the transaction reads `owner_subject` and `memory_scope` from the locked
+session row rather than trusting request data. It exposes a server-owned
 `ServerDreamWorker` plus `DreamWorkerDaemon` runner. The current worker is deterministic and
-external-service-free: it leases ready dreams, emits `dream_started` / `dream_progress` /
+external-service-free: it leases ready dreams by exact `lease_owner` + incrementing `lease_epoch`,
+heartbeats and completes/fails only under that fence, and terminalizes exhausted work after three
+attempts. Defaults are a 60-second lease, 15-second heartbeat, and 120-second execution timeout.
+`worker` and `all` runtime roles supervise the daemon and drain it on shutdown. It emits `dream_started` / `dream_progress` /
 `dream_completed` or `dream_failed`, records timeout failures back to the queue for bounded retry or
 terminal failure, collects session messages/events through `DreamInputBudget` chunks, redacts obvious
 secrets/credentials/PII before derived writes, writes a session summary with evidence links and input
-budget metadata, reuses the existing approval/default-deny memory proposal path for durable
+budget metadata, and enqueues approval-backed writes into the durable idempotent effect outbox. Dream
+completion happens only after downstream effects are durably enqueued. It reuses the existing
+approval/default-deny memory proposal path for durable
 facts/chunks with deterministic `importanceScore` metadata in provenance, and creates a constrained
 approval-gated skill proposal when the session contains reusable-workflow signal. The `dream_progress`
 `input_collected` payload reports total/included
@@ -139,7 +146,8 @@ orders by deterministic importance and recency; empty optional recall stores ret
 instead of failing. Approved profile facts dedupe by normalized assertion, and a new active fact with
 the same `(subject, predicate)` but a different object supersedes the older active fact by setting
 `valid_to`; exact `memory://profile/.../facts/<id>` resources remain resolvable for history. Dense
-embeddings, graph extraction, and LLM-backed extraction remain later P4 hardening. When Postgres is
+embeddings, graph extraction, and LLM-backed extraction remain later memory expansion, outside the
+audit hardening gate. When Postgres is
 enabled, scoped recall also uses a `simple` `tsvector`/`plainto_tsquery` path with substring fallback;
 the in-memory store keeps deterministic substring matching for normal tests.
 
@@ -164,8 +172,11 @@ follow-up hardening.
 - **Embeddings:** dense vectors/pgvector remain disabled by default while lexical + summaries harden.
   The config surface already exists as `embeddings.provider: disabled | local | openai_compatible`;
   any enabled provider must pin `embeddings.dimensions` (switching provider/dimension ⇒ re-embed).
-- **Scope:** a `scope` column on every row — a **global** scope (Brian) always, plus a
-  **per-linked-project** scope when a folder/repo is linked (§24), so repo lore stays isolated.
+- **Scope:** `owner_subject` and `memory_scope` are server-owned session authority. A session starts in
+  `global` or an active linked `project:<slug>` scope; changing modes never changes memory authority.
+  Exact read/list/recall operations compare their subject/scope to the authorized invocation context
+  and return not-found on mismatch. Unlink tombstones revoke project scope immediately and survive
+  restart (§24).
 
 ### 22.6.1 P0/P1 minimum schema
 
@@ -175,17 +186,19 @@ is configured; normal local development and `cargo test` may use the in-memory i
 baseline suite stays external-service-free. The schema is deliberately expandable toward the full §22
 engine while preserving project continuity:
 
-- `sessions(id, created_at, updated_at, status, mode, persona_status)`
-- `session_events(session_id, seq, event_type, payload_json, created_at)` — SSE replay source (§27)
-- `messages(session_id, seq, role, content, created_at)`
+- `sessions(id, owner_subject, memory_scope, created_at, updated_at, status, mode, persona_status)`
+- `session_turns(id, session_id, client_message_id, content_hash, status, worker_id, error,
+  created_at, started_at, completed_at)` — idempotent durable message work (§27)
+- `session_events(session_id, seq, turn_id?, event_type, payload_json, created_at)` — SSE replay source (§27)
+- `messages(session_id, seq, turn_id?, role, content, created_at)`
 - `profile_facts(id, subject, predicate, object, confidence, importance, provenance, valid_from,
   valid_to)`
 - `recall_chunks(id, scope, text, source, importance, created_at, embedding?)` — project summaries,
   decisions, open loops, and profile/user recall
 - `dream_queue(id, session_id, subject, scope, reason, status, dedupe_key, source_event_seq,
-  attempts, enqueued_at, available_at, locked_at, last_error)` — session-end/manual/scheduled dream
-  requests, with claim/heartbeat/complete/fail lifecycle, stale-lock recovery, bounded retry/backoff,
-  and idempotent `dedupe_key`
+  attempts, lease_owner, lease_epoch, heartbeat_at, enqueued_at, available_at, completed_at,
+  error_at, last_error)` — session-end/manual/scheduled dream requests with fenced lifecycle,
+  stale-owner rejection, bounded retry/backoff, and idempotent `dedupe_key`
 - `memory_summaries(id, kind, subject, scope, title, body, evidence_json, source_dream_id,
   source_session_id, dedupe_key, created_at, updated_at)` — P4 summary records; `kind` includes
   session, reflection, daily, weekly, and topic-project rollups
@@ -195,6 +208,8 @@ engine while preserving project continuity:
   live skill catalog
 - `cron_jobs` / `cron_runs` (§27.2) — scheduler job definitions, bounds, and run history for P4
   proactive sessions
+- `approval_requests` / `approval_effects` — durable compare-and-swap decisions plus an idempotent
+  outbox for resumable memory/skill/drive effects (§27.6)
 
 P0/P1 recall is profile facts + scoped recall chunks, enough to remember what changed, why it changed,
 and what remains open between coding sessions and promoted projects. P4 adds deterministic
@@ -283,8 +298,9 @@ types these as resource URIs; the global `memory` namespace remains `undefined` 
   logical store traits for episodic input, profile/recall, summaries, skill proposals, and dream
   leases. `tm-server` still owns concrete durable store implementations and the deterministic dream
   runner; the richer modules below remain the target layout.
-- `store` — Postgres + `pgvector` spine: `episodic`, `vector` (pgvector), `lexical` (Postgres FTS),
-  `facts`, `summaries`, `graph` (`nodes` / `edges`); migrations; `scope`-column isolation.
+- `store` — Postgres + future `pgvector` spine: `episodic`, `vector`, `lexical` (Postgres FTS),
+  `facts`, `summaries`, `graph` (`nodes` / `edges`); ordered migrations; server-owned
+  `owner_subject`/`memory_scope` isolation.
 - `recall` — candidate generation, RRF fusion, memory-stream re-score, budgeter, rerank?
 - `working` — window, recursive summary, core blocks, paging.
 - `dream` — embed, extract (facts + relations), importance, reflect, summarize, OMP consolidation, redaction; lease +
@@ -299,7 +315,9 @@ Dreaming/extraction use cheaper model roles (§27.3).
 
 - **A logical store empty/unavailable** (graph not yet populated, embeddings missing) — RRF still fuses the rest; recall degrades, never errors.
 - **Embeddings provider down** — switch to the `local` embedder, or BM25-only recall + cached profile.
-- **Postgres unreachable** — turn-time writes buffer locally + replay (§22.5); reads degrade to the in-context working set until it returns.
+- **Postgres unreachable** — durable server roles fail readiness and stop claiming work; they do not
+  silently downgrade authority or effects into process-local state. The explicit no-database
+  loopback development mode remains non-durable.
 - **P4 worker misconfig/failure** — missing dream model-role config, disabled redaction, timeout, or
   store failure produces a replayable `dream_failed`/`last_error` path before partial unapproved writes.
 - **Stale facts** — memory is heuristic; prefer live repo/user signal on conflict; bi-temporal history

@@ -57,14 +57,16 @@ Capability-checked at the boundary like every host fn (§07/§08).
 
 ### 24.2.1 Implemented P5 v1 contract
 
-The first Rust slice lives in `tm-drive` and is wired into `tm-sandbox` and `tm-server` when an
-`InMemoryDriveStore` is configured. The Deno SDK exposes `drive.put`, `drive.get`, `drive.ls`,
+The first Rust slice lives in `tm-drive` and is wired into `tm-sandbox` and `tm-server` through the
+`DriveOperations` boundary. The Deno SDK exposes `drive.put`, `drive.get`, `drive.ls`,
 `drive.move`, `drive.search`, `drive.tag`, `drive.link`, `drive.unlink`, and `drive.organize`; each
 wrapper forwards through `tools.call`, so the model still has one chat-native tool.
-`tm-server` also bootstraps the gated Postgres schema for durable drive storage
-(`drive_entries`, `drive_attributes`, `drive_tags`, `drive_proposals`, and `drive_links`) with path,
-hash, project, doc-kind, tag, recency, and FTS indexes; the full Postgres-backed `DriveStore`
-implementation remains a follow-up.
+With `TM_DATABASE_URL`, `tm-server` uses a Postgres-backed metadata store over `drive_entries`,
+`drive_attributes`, `drive_tags`, `drive_proposals`, `drive_organizer_runs`, `drive_corrections`,
+`drive_entry_tombstones`, and `drive_links`, with optimistic record versions and path, hash, project,
+doc-kind, tag, recency, and FTS indexes. The no-database local-development path intentionally retains
+the historical in-memory metadata exception; artifact/blob persistence alone does not make that mode
+durable. Runtime consumers depend on the trait-object boundary rather than the concrete in-memory store.
 
 Data vocabulary is frozen for this slice as:
 
@@ -104,8 +106,12 @@ event sequence in provenance; after approval they emit the same replayable `driv
 other filed documents.
 Missing `drive://` reads return a stable not-found error with up to three nearby drive paths from the
 same authorized store; raw host paths are never included in the suggestion text.
+Model-visible text reads follow the artifact paging contract: no selector returns at most 64 KiB or
+200 lines, and an explicit line selector is rejected above 256 KiB or 1,000 lines. Selection walks the
+text iterator without collecting every line into a second buffer; `hasMore` tells callers to request
+another bounded page.
 
-Replayable event names reserved for client/server use are `drive_put`, `drive_transduced`,
+Replayable `session_event.data.type` values reserved for client/server use are `drive_put`, `drive_transduced`,
 `drive_path_proposed`, `drive_write_proposed`, `drive_filed`, `drive_moved`, `drive_tagged`,
 `drive_linked`, `drive_unlinked`, `drive_organizer_started`, `drive_organizer_completed`, and
 `drive_organizer_failed`. The first implementation proves the JSON wire shapes in `tm-drive`.
@@ -114,7 +120,8 @@ session events with mobile-friendly preview text, classification metadata, and r
 `drive.organize` emits replayable organizer started/completed/failed events through the same host event
 sink, while each organizer proposal also appears on the shared `write_proposal` surface with
 `kind: "drive"`, mobile-friendly previews, and `drive://` source/proposed resource refs. Native server
-sessions persist both event families to `session_events`/SSE and expose pending drive proposals through
+sessions persist both event families to `session_events` and emit them through the single versioned
+`event: session_event` SSE envelope; pending drive proposals remain visible through
 the existing pending-events transcript shape. Organizer apply uses the same `InvocationCtx` approval
 policy path as `fs.*`, `code.*`, `proc.*`, and other drive writes rather than a drive-only approval
 channel. Broader drag/drop browser UI remains a client slice.
@@ -171,10 +178,12 @@ flowchart LR
   (content-hash), and proposes a better tree; lease + heartbeat to avoid double-runs.
   The manual `drive.organize()` path proposes by default; `drive.organize({ apply: true })` applies
   pending/current proposals only after approval, and marks denied/timeout/stale proposals with a
-  replayable status instead of mutating silently. The in-memory store now records organizer runs with
+  replayable status instead of mutating silently. `DriveMetadataStore` records organizer runs with
   queued/running/completed/failed status, attempts, locked heartbeat time, retry availability, terminal
   errors, and the proposal ids produced by a completed run; stale leases can be reclaimed, while duplicate
-  workers cannot claim a fresh running organizer lease. Organizer event payloads include proposal ids,
+  workers cannot claim a fresh running organizer lease. Postgres persists those rows, proposals,
+  corrections, version counters, entries, links, and tombstones; moves and organizer application use
+  compare-and-swap so concurrent workers mutate once. Organizer event payloads include proposal ids,
   source/proposed `drive://` refs, statuses, confidence, and compact previews so session replay and
   mobile clients can show pending filing decisions without reading full document bodies.
 - Extracted attributes also flow into the **memory stores** (§22 semantic / lexical), so filed docs become
@@ -198,6 +207,15 @@ flowchart LR
   canonical root, `linked://` URI, memory scope id, and revocation timestamp. Project-scoped memory
   views are gated by the same live alias, so narrowing updates the visible mode and revocation makes
   the project memory facade fail closed with the linked folder.
+- **Durable links fail closed on restart.** Postgres persists active, revoked, and invalid link
+  records with versions. Startup restores only active records whose directory still exists and whose
+  canonical identity, non-symlink root, mode, and alias policy all revalidate. A failure is persisted
+  as `invalid`; invalid and revoked records are not auto-reactivated on later restarts.
+- **Session scope is authority, not a query hint.** `global` sessions may access only unprojected
+  drive entries. `project:<slug>` sessions may access only entries for that project, including
+  `drive://` virtual/search listings. Drive host calls, resource reads, child actors, and organizer
+  proposal application inherit the exact server scope. Linked-folder, `fs.*`, `code.*`, and
+  `proc.*` authority always requires the matching project scope; global sessions fail closed.
 - **Attenuation & revocation.** `ro` vs `rw` is attenuation; a grant narrows or revokes, never escalates.
   This is the **only** path by which **Serious Engineer** (§21) and `fs.*` / `proc.*` (§25) reach real
   repos. A linked folder is exposed for read/list/preview as `linked://<alias>/…` (§9.3), and through

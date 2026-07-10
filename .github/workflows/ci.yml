@@ -1,0 +1,281 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  rust-quality:
+    name: Rust format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run strict clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  rust-tests:
+    name: Rust workspace tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+  postgres-tests:
+    name: Postgres integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: tempestmiku_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tempestmiku_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TM_POSTGRES_TESTS: "1"
+      TM_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/tempestmiku_test
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run gated Postgres tests
+        run: cargo test -p tm-server --locked -- --test-threads=1
+
+  flutter-checks:
+    name: Flutter analysis and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/miku_flutter
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Analyze Flutter client
+        run: flutter analyze --fatal-infos --fatal-warnings
+
+      - name: Run Flutter tests
+        run: flutter test
+
+  flutter-web-build:
+    name: Flutter web release build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/miku_flutter
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Build Flutter web client
+        run: flutter build web --release --no-pub
+
+  android-build:
+    name: Android debug build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/miku_flutter
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Build Android debug APK
+        run: flutter build apk --debug --target-platform android-arm64 --no-pub
+
+  android-release-build:
+    name: Android signed release build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/miku_flutter
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Create ephemeral non-debug signing identity
+        run: |
+          keytool -genkeypair -v -keystore android/ci-release.jks -storepass ci-release-password -keypass ci-release-password -alias tempestmiku-ci-release -keyalg RSA -keysize 3072 -validity 2 -dname "CN=TempestMiku CI Release,O=TempestMiku,C=TW"
+          {
+            echo "storePassword=ci-release-password"
+            echo "keyPassword=ci-release-password"
+            echo "keyAlias=tempestmiku-ci-release"
+            echo "storeFile=../ci-release.jks"
+          } > android/key.properties
+
+      - name: Build signed Android release APK
+        run: flutter build apk --release --target-platform android-arm64 --no-pub
+
+      - name: Verify release certificate is not the debug identity
+        run: |
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner_path"
+          "$apksigner_path" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | tee /tmp/tempestmiku-release-cert.txt
+          grep -q "TempestMiku CI Release" /tmp/tempestmiku-release-cert.txt
+          if grep -q "Android Debug" /tmp/tempestmiku-release-cert.txt; then
+            echo "release APK was signed with the Android debug certificate" >&2
+            exit 1
+          fi
+
+  web-smoke:
+    name: Playwright web smoke
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: tempestmiku_web_smoke
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tempestmiku_web_smoke"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TM_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/tempestmiku_web_smoke
+      TM_SERVER_ROLE: all
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: clients/miku_web/package-lock.json
+
+      - name: Install web smoke dependencies
+        run: npm ci
+        working-directory: clients/miku_web
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: clients/miku_web
+
+      - name: Build server used by the smoke test
+        run: cargo build -p tm-server --locked
+
+      - name: Run Playwright smoke test
+        run: npm test
+        working-directory: clients/miku_web
+
+  security-audit:
+    name: Cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Audit Rust dependencies
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

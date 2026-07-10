@@ -25,10 +25,8 @@ pub fn build_body(req: &ChatRequest, include_usage: bool) -> Value {
             "tool_choice".into(),
             Value::String(req.tool_choice.as_str().into()),
         );
-        // At most one tool call per turn: the agent loop (and any attached ToolMediator)
-        // only ever handles a single call per turn, so a parallel batch would silently
-        // drop everything after the first. Guaranteeing this at the wire also protects the
-        // long-standing single-`execute`-tool path the same way.
+        // At most one tool call per turn: the agent loop exposes only `execute` and fails
+        // closed on any parallel batch. Keep the transport aligned with that protocol.
         map.insert("parallel_tool_calls".into(), Value::Bool(false));
     }
     if include_usage {

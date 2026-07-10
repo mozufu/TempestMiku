@@ -7,11 +7,17 @@ use tm_core::{Error, Result, StreamEvent};
 
 use crate::wire;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SseLimits {
+    pub(crate) max_line_bytes: usize,
+    pub(crate) max_stream_bytes: usize,
+}
+
 /// Adapt a byte stream (e.g. `reqwest::Response::bytes_stream()`) into a stream of
 /// [`StreamEvent`]s. Lines are buffered until a newline so multi-byte UTF-8 split across
-/// network chunks is never mis-decoded. Unparseable `data:` payloads are skipped rather than
-/// killing the stream — OpenAI-compatible servers vary.
-pub fn events<S, B>(stream: S) -> BoxStream<'static, Result<StreamEvent>>
+/// network chunks is never mis-decoded. Malformed completion payloads fail the stream rather than
+/// silently dropping text or tool-call fragments.
+pub fn events<S, B>(stream: S, limits: SseLimits) -> BoxStream<'static, Result<StreamEvent>>
 where
     S: Stream<Item = std::result::Result<B, reqwest::Error>> + Send + 'static,
     B: AsRef<[u8]> + Send + 'static,
@@ -20,12 +26,29 @@ where
         futures::pin_mut!(stream);
         let mut buf: Vec<u8> = Vec::new();
         let mut done = false;
+        let mut stream_bytes = 0usize;
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| Error::Llm(e.to_string()))?;
+            let chunk = chunk
+                .map_err(|error| Error::Llm(crate::redact_transport_error(error)))?;
+            stream_bytes = stream_bytes
+                .checked_add(chunk.as_ref().len())
+                .ok_or_else(|| Error::Llm("completion stream size overflow".to_string()))?;
+            if stream_bytes > limits.max_stream_bytes {
+                Err(Error::Llm(format!(
+                    "completion stream exceeded {} bytes",
+                    limits.max_stream_bytes
+                )))?;
+            }
             buf.extend_from_slice(chunk.as_ref());
 
             while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                if pos > limits.max_line_bytes {
+                    Err(Error::Llm(format!(
+                        "SSE line exceeded {} bytes",
+                        limits.max_line_bytes
+                    )))?;
+                }
                 let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
                 let line = std::str::from_utf8(&line_bytes)
                     .map_err(|e| Error::Llm(format!("invalid utf-8 in stream: {e}")))?
@@ -36,14 +59,45 @@ where
                         done = true;
                         break;
                     }
-                    for ev in parse_chunk(payload) {
+                    for ev in parse_chunk(payload)? {
                         yield ev;
                     }
                 }
             }
+            if buf.len() > limits.max_line_bytes {
+                Err(Error::Llm(format!(
+                    "SSE line exceeded {} bytes",
+                    limits.max_line_bytes
+                )))?;
+            }
             if done {
                 break;
             }
+        }
+        if !done && !buf.is_empty() {
+            if buf.len() > limits.max_line_bytes {
+                Err(Error::Llm(format!(
+                    "SSE line exceeded {} bytes",
+                    limits.max_line_bytes
+                )))?;
+            }
+            let line = std::str::from_utf8(&buf)
+                .map_err(|e| Error::Llm(format!("invalid utf-8 in stream: {e}")))?
+                .trim_end();
+            if let Some(payload) = data_payload(line) {
+                if payload == "[DONE]" {
+                    done = true;
+                } else {
+                    for ev in parse_chunk(payload)? {
+                        yield ev;
+                    }
+                }
+            }
+        }
+        if !done {
+            Err(Error::Llm(
+                "completion stream ended before the [DONE] marker".to_string(),
+            ))?;
         }
     })
 }
@@ -57,10 +111,9 @@ fn data_payload(line: &str) -> Option<&str> {
 
 /// Map one chunk JSON payload to zero or more events. A payload that doesn't deserialize as a
 /// chunk yields nothing (keep-alives, provider quirks).
-fn parse_chunk(payload: &str) -> Vec<StreamEvent> {
-    let Ok(chunk) = serde_json::from_str::<wire::Chunk>(payload) else {
-        return Vec::new();
-    };
+fn parse_chunk(payload: &str) -> Result<Vec<StreamEvent>> {
+    let chunk = serde_json::from_str::<wire::Chunk>(payload)
+        .map_err(|err| Error::Llm(format!("invalid SSE data JSON: {err}")))?;
 
     let mut out = Vec::new();
     if let Some(choice) = chunk.choices.into_iter().next() {
@@ -103,7 +156,7 @@ fn parse_chunk(payload: &str) -> Vec<StreamEvent> {
     if let Some(usage) = chunk.usage {
         out.push(StreamEvent::Usage(usage));
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -117,12 +170,30 @@ mod tests {
                 .into_iter()
                 .map(|c| Ok::<_, reqwest::Error>(c.as_bytes().to_vec())),
         );
-        let mut evs = events(byte_stream);
+        let mut evs = events(
+            byte_stream,
+            SseLimits {
+                max_line_bytes: 1024 * 1024,
+                max_stream_bytes: 4 * 1024 * 1024,
+            },
+        );
         let mut out = Vec::new();
         while let Some(ev) = evs.next().await {
             out.push(ev.expect("event"));
         }
         out
+    }
+
+    async fn collect_results(
+        chunks: Vec<&'static str>,
+        limits: SseLimits,
+    ) -> Vec<Result<StreamEvent>> {
+        let byte_stream = stream::iter(
+            chunks
+                .into_iter()
+                .map(|c| Ok::<_, reqwest::Error>(c.as_bytes().to_vec())),
+        );
+        events(byte_stream, limits).collect().await
     }
 
     #[tokio::test]
@@ -203,5 +274,62 @@ mod tests {
                 StreamEvent::Text("answer".into()),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn accepts_done_without_a_trailing_newline() {
+        let evs = collect(vec![
+            "data: {\"choices\":[{\"delta\":{\"content\":\"tail\"}}]}\n",
+            "data: [DONE]",
+        ])
+        .await;
+        assert_eq!(evs, vec![StreamEvent::Text("tail".into())]);
+    }
+
+    #[tokio::test]
+    async fn rejects_truncated_stream_without_done() {
+        let results = collect_results(
+            vec!["data: {\"choices\":[{\"delta\":{\"content\":\"tail\"}}]}"],
+            SseLimits {
+                max_line_bytes: 1024,
+                max_stream_bytes: 4096,
+            },
+        )
+        .await;
+        assert!(matches!(
+            results.first(),
+            Some(Ok(StreamEvent::Text(text))) if text == "tail"
+        ));
+        assert!(
+            matches!(results.last(), Some(Err(Error::Llm(message))) if message.contains("[DONE]"))
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_or_oversized_data() {
+        let limits = SseLimits {
+            max_line_bytes: 32,
+            max_stream_bytes: 128,
+        };
+        let malformed = collect_results(vec!["data: not-json\n"], limits).await;
+        assert!(matches!(malformed.as_slice(), [Err(Error::Llm(_))]));
+
+        let oversized =
+            collect_results(vec!["data: 123456789012345678901234567890123\n"], limits).await;
+        assert!(matches!(oversized.as_slice(), [Err(Error::Llm(_))]));
+
+        let total = collect_results(
+            vec![
+                "data: {\"choices\":[]}\n",
+                "data: {\"choices\":[]}\n",
+                "data: {\"choices\":[]}\n",
+            ],
+            SseLimits {
+                max_line_bytes: 64,
+                max_stream_bytes: 40,
+            },
+        )
+        .await;
+        assert!(total.iter().any(Result::is_err));
     }
 }

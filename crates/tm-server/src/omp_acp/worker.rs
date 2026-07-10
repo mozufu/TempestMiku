@@ -24,6 +24,98 @@ use crate::{
     CodingTurnResult, Result, ServerError, StoreEvent,
 };
 
+const TRANSCRIPT_SEGMENT_BYTES: usize = 1024 * 1024;
+const TRANSCRIPT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const TRANSCRIPT_MAX_ENTRY_BYTES: usize = 128 * 1024;
+const TRANSCRIPT_MAX_DIRECTION_BYTES: usize = 64;
+
+#[derive(Debug, Default)]
+struct TranscriptBuffer {
+    lines: Vec<String>,
+    bytes: usize,
+    truncated: bool,
+    truncation_reason: Option<String>,
+    redactions: usize,
+}
+
+#[derive(Debug)]
+struct TranscriptArtifacts {
+    manifest: tm_artifacts::ArtifactRef,
+    segments: Vec<tm_artifacts::ArtifactRef>,
+    captured_bytes: usize,
+    truncated: bool,
+    truncation_reason: Option<String>,
+    redactions: usize,
+}
+
+impl TranscriptBuffer {
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn push(&mut self, direction: &str, line: &str) {
+        if self.truncated {
+            return;
+        }
+        let mut entry_truncated = line.len() > TRANSCRIPT_MAX_ENTRY_BYTES;
+        let line = if entry_truncated {
+            &line[..floor_char_boundary(line, TRANSCRIPT_MAX_ENTRY_BYTES)]
+        } else {
+            line
+        };
+        let report = tm_memory::redact_dream_text(line);
+        self.redactions = self.redactions.saturating_add(
+            report
+                .redactions
+                .iter()
+                .map(|redaction| redaction.count)
+                .sum::<usize>(),
+        );
+        let direction = if direction.len() <= TRANSCRIPT_MAX_DIRECTION_BYTES {
+            direction
+        } else {
+            "unknown"
+        };
+        let mut retained_line = report.text;
+        let serialized = loop {
+            let entry = json!({
+                "direction": direction,
+                "line": retained_line,
+                "truncated": entry_truncated,
+            });
+            let Ok(serialized) = serde_json::to_string(&entry) else {
+                return;
+            };
+            if serialized.len().saturating_add(1) <= TRANSCRIPT_SEGMENT_BYTES {
+                break serialized;
+            }
+            entry_truncated = true;
+            let next_len = floor_char_boundary(&retained_line, retained_line.len() / 2);
+            retained_line.truncate(next_len);
+        };
+        let required = serialized.len().saturating_add(1);
+        if required > TRANSCRIPT_MAX_BYTES.saturating_sub(self.bytes) {
+            self.truncated = true;
+            self.truncation_reason = Some("total_limit".to_string());
+            return;
+        }
+        self.bytes += required;
+        self.lines.push(serialized);
+        self.truncated = entry_truncated;
+        if entry_truncated {
+            self.truncation_reason = Some("entry_limit".to_string());
+        }
+    }
+}
+
+fn floor_char_boundary(value: &str, mut index: usize) -> usize {
+    index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
 pub(crate) struct OmpTurnRequest {
     pub(crate) turn: CodingTurn,
     pub(crate) sink: Arc<dyn CodingEventSink>,
@@ -35,7 +127,7 @@ pub(crate) struct OmpWorker {
     config: OmpAcpConfig,
     approval_broker: Arc<ApprovalBroker>,
     receiver: mpsc::Receiver<OmpTurnRequest>,
-    transcript: Arc<Mutex<Vec<String>>>,
+    transcript: Arc<Mutex<TranscriptBuffer>>,
     active: Arc<tokio::sync::Mutex<Option<ActiveOmpTurn>>>,
 }
 
@@ -57,7 +149,7 @@ impl OmpWorker {
             config,
             approval_broker,
             receiver,
-            transcript: Arc::new(Mutex::new(Vec::new())),
+            transcript: Arc::new(Mutex::new(TranscriptBuffer::default())),
             active: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
@@ -142,7 +234,7 @@ impl OmpWorker {
                 Ok(())
             })
             .await
-            .map_err(|err| ServerError::Backend(format!("omp acp worker failed: {err:?}")))
+            .map_err(|err| omp_backend_error(format!("omp acp worker failed: {err:?}")))
     }
 
     async fn run_prompt_turn(
@@ -159,46 +251,36 @@ impl OmpWorker {
             vec![ContentBlock::from(turn.user_prompt.clone())],
         );
         if let Err(err) = connection.send_request(prompt).block_task().await {
-            let message = format!("omp acp prompt failed: {err:?}");
+            let message = redact_omp_text(&format!("omp acp prompt failed: {err:?}"));
             emit_backend_error(Arc::clone(&sink), &message).await;
             return Err(ServerError::Backend(message));
         }
 
-        let transcript_jsonl = self.transcript.lock().join("\n");
-        let transcript_jsonl = if transcript_jsonl.is_empty() {
-            String::new()
-        } else {
-            format!("{transcript_jsonl}\n")
+        let transcript = {
+            let mut transcript = self.transcript.lock();
+            std::mem::take(&mut *transcript)
         };
-        let artifact =
-            match tm_artifacts::ArtifactStore::open(artifact_root, turn.session_id.to_string())
-                .and_then(|store| {
-                    store.put_text(
-                        transcript_jsonl,
-                        Some("OMP ACP transcript".to_string()),
-                        "application/jsonl",
-                    )
-                }) {
-                Ok(artifact) => artifact,
+        let transcript_artifacts =
+            match write_transcript_artifacts(artifact_root, turn.session_id, transcript) {
+                Ok(artifacts) => artifacts,
                 Err(err) => {
-                    let message = format!("failed to write omp acp transcript artifact: {err}");
+                    let message = redact_omp_text(&format!(
+                        "failed to write omp acp transcript artifact: {err}"
+                    ));
                     emit_backend_error(Arc::clone(&sink), &message).await;
                     return Err(ServerError::Backend(message));
                 }
             };
         sink.emit(
             "artifact",
-            json!({
-                "backend": "omp-acp",
-                "artifact": artifact,
-                "provenance": {
-                    "source": "omp-acp",
-                    "ompVersion": expected_version,
-                    "acpSessionId": acp_session_id.to_string(),
-                }
-            }),
+            transcript_artifact_event(
+                &transcript_artifacts,
+                expected_version,
+                &acp_session_id.to_string(),
+            ),
         )
         .await?;
+        let artifact = transcript_artifacts.manifest;
         let final_text = format!(
             "Completed via OMP ACP. Progress, diff, permission, and final transcript evidence were mirrored to {}.",
             artifact.uri
@@ -227,18 +309,17 @@ pub(crate) fn write_generated_config(
         .join("omp-acp")
         .join(session_id.to_string());
     std::fs::create_dir_all(&dir)
-        .map_err(|err| ServerError::Backend(format!("failed to create omp config dir: {err}")))?;
+        .map_err(|err| omp_backend_error(format!("failed to create omp config dir: {err}")))?;
     let path = dir.join("config.yml");
-    std::fs::write(&path, format!("tools:\n  approvalMode: {approval_mode}\n")).map_err(|err| {
-        ServerError::Backend(format!("failed to write omp config overlay: {err}"))
-    })?;
+    std::fs::write(&path, format!("tools:\n  approvalMode: {approval_mode}\n"))
+        .map_err(|err| omp_backend_error(format!("failed to write omp config overlay: {err}")))?;
     Ok(path)
 }
 
 fn build_agent(
     config: &OmpAcpConfig,
     generated_config: &Path,
-    transcript: Arc<Mutex<Vec<String>>>,
+    transcript: Arc<Mutex<TranscriptBuffer>>,
 ) -> Result<AcpAgent> {
     let mut args = Vec::new();
     args.push(config.command.to_string_lossy().to_string());
@@ -255,7 +336,7 @@ fn build_agent(
     args.push("acp".to_string());
 
     let agent = AcpAgent::from_args(args)
-        .map_err(|err| ServerError::Backend(format!("failed to build omp acp command: {err:?}")))?;
+        .map_err(|err| omp_backend_error(format!("failed to build omp acp command: {err:?}")))?;
     Ok(agent.with_debug(move |line, direction| {
         let direction = match direction {
             LineDirection::Stdin => "send",
@@ -269,7 +350,7 @@ fn build_agent(
 async fn handle_session_notification(
     notification: SessionNotification,
     active: Arc<tokio::sync::Mutex<Option<ActiveOmpTurn>>>,
-    transcript: Arc<Mutex<Vec<String>>>,
+    transcript: Arc<Mutex<TranscriptBuffer>>,
 ) -> Result<()> {
     let active_turn = active.lock().await.clone();
     let Some(active_turn) = active_turn else {
@@ -352,19 +433,214 @@ fn approval_option_from_acp(option: &PermissionOption) -> Result<ApprovalOption>
     })
 }
 
-fn push_transcript(transcript: &Mutex<Vec<String>>, direction: &str, line: &str) {
-    let entry = json!({ "direction": direction, "line": line });
-    if let Ok(line) = serde_json::to_string(&entry) {
-        transcript.lock().push(line);
+fn push_transcript(transcript: &Mutex<TranscriptBuffer>, direction: &str, line: &str) {
+    transcript.lock().push(direction, line);
+}
+
+fn write_transcript_artifacts(
+    artifact_root: &Path,
+    session_id: Uuid,
+    transcript: TranscriptBuffer,
+) -> std::result::Result<TranscriptArtifacts, tm_artifacts::ArtifactError> {
+    let store = tm_artifacts::ArtifactStore::open(artifact_root, session_id.to_string())?;
+    let TranscriptBuffer {
+        lines,
+        bytes,
+        truncated,
+        truncation_reason,
+        redactions,
+    } = transcript;
+    let mut segment = String::with_capacity(TRANSCRIPT_SEGMENT_BYTES);
+    let mut segments = Vec::new();
+    for line in lines {
+        let line_bytes =
+            line.len()
+                .checked_add(1)
+                .ok_or(tm_artifacts::ArtifactError::QuotaExceeded {
+                    resource: "OMP ACP transcript segment",
+                    attempted: usize::MAX,
+                    limit: TRANSCRIPT_SEGMENT_BYTES,
+                })?;
+        if line_bytes > TRANSCRIPT_SEGMENT_BYTES {
+            return Err(tm_artifacts::ArtifactError::QuotaExceeded {
+                resource: "OMP ACP transcript segment",
+                attempted: line_bytes,
+                limit: TRANSCRIPT_SEGMENT_BYTES,
+            });
+        }
+        if segment.len().saturating_add(line_bytes) > TRANSCRIPT_SEGMENT_BYTES {
+            segments.push(store.put_text(
+                std::mem::take(&mut segment),
+                Some(format!("OMP ACP transcript segment {}", segments.len() + 1)),
+                "application/jsonl",
+            )?);
+        }
+        segment.push_str(&line);
+        segment.push('\n');
     }
+    if !segment.is_empty() {
+        segments.push(store.put_text(
+            segment,
+            Some(format!("OMP ACP transcript segment {}", segments.len() + 1)),
+            "application/jsonl",
+        )?);
+    }
+    let manifest = serde_json::to_string_pretty(&json!({
+        "kind": "omp_acp_transcript_manifest",
+        "segments": segments.iter().map(|artifact| json!({
+            "uri": artifact.uri,
+            "sizeBytes": artifact.size_bytes,
+        })).collect::<Vec<_>>(),
+        "capturedBytes": bytes,
+        "maxBytes": TRANSCRIPT_MAX_BYTES,
+        "truncated": truncated,
+        "truncationReason": truncation_reason.as_deref(),
+        "redactions": redactions,
+    }))
+    .expect("transcript manifest serialization is infallible");
+    let manifest = store.put_text(
+        manifest,
+        Some("OMP ACP transcript manifest".to_string()),
+        "application/json",
+    )?;
+    Ok(TranscriptArtifacts {
+        manifest,
+        segments,
+        captured_bytes: bytes,
+        truncated,
+        truncation_reason,
+        redactions,
+    })
+}
+
+fn transcript_artifact_event(
+    artifacts: &TranscriptArtifacts,
+    omp_version: &str,
+    acp_session_id: &str,
+) -> serde_json::Value {
+    json!({
+        "backend": "omp-acp",
+        "artifact": &artifacts.manifest,
+        "capturedBytes": artifacts.captured_bytes,
+        "maxBytes": TRANSCRIPT_MAX_BYTES,
+        "segments": artifacts.segments.iter().map(|segment| json!({
+            "uri": &segment.uri,
+            "sizeBytes": segment.size_bytes,
+        })).collect::<Vec<_>>(),
+        "truncated": artifacts.truncated,
+        "redactions": artifacts.redactions,
+        "provenance": {
+            "source": "omp-acp",
+            "ompVersion": omp_version,
+            "acpSessionId": acp_session_id,
+            "segmentBytes": TRANSCRIPT_SEGMENT_BYTES,
+            "truncation": {
+                "applied": artifacts.truncated,
+                "reason": artifacts.truncation_reason.as_deref(),
+            },
+        }
+    })
 }
 
 async fn emit_backend_error(sink: Arc<dyn CodingEventSink>, message: &str) {
+    let message = redact_omp_text(message);
     let _ = sink
         .emit("error", json!({ "backend": "omp-acp", "message": message }))
         .await;
 }
 
 fn to_acp_error(err: ServerError) -> agent_client_protocol::Error {
-    agent_client_protocol::Error::internal_error().data(err.to_string())
+    agent_client_protocol::Error::internal_error().data(redact_omp_text(&err.to_string()))
+}
+
+fn omp_backend_error(message: impl AsRef<str>) -> ServerError {
+    ServerError::Backend(redact_omp_text(message.as_ref()))
+}
+
+fn redact_omp_text(message: &str) -> String {
+    tm_memory::redact_dream_text(message).text
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use super::*;
+
+    #[test]
+    fn transcript_redacts_secrets_and_stops_at_a_bounded_entry() {
+        let mut transcript = TranscriptBuffer::default();
+        transcript.push("recv", "token sk-testsecret123456 should not persist");
+        assert_eq!(transcript.redactions, 1);
+        assert!(!transcript.lines[0].contains("sk-testsecret123456"));
+
+        transcript.push("stderr", &"x".repeat(TRANSCRIPT_MAX_ENTRY_BYTES + 32));
+        assert!(transcript.truncated);
+        assert_eq!(transcript.truncation_reason.as_deref(), Some("entry_limit"));
+        assert!(transcript.bytes <= TRANSCRIPT_MAX_BYTES);
+        assert!(
+            transcript
+                .lines
+                .last()
+                .unwrap()
+                .contains("\"truncated\":true")
+        );
+
+        let retained = transcript.lines.len();
+        transcript.push("recv", "ignored after truncation");
+        assert_eq!(transcript.lines.len(), retained);
+    }
+
+    #[test]
+    fn transcript_writer_returns_a_segment_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_id = Uuid::new_v4();
+        let mut transcript = TranscriptBuffer::default();
+        transcript.push("recv", "hello");
+        transcript.push("stderr", "world");
+
+        let artifacts = write_transcript_artifacts(dir.path(), session_id, transcript).unwrap();
+        let store = tm_artifacts::ArtifactStore::open(dir.path(), session_id.to_string()).unwrap();
+        let content = store.read(&artifacts.manifest.uri, None).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content.content).unwrap();
+        assert_eq!(json["kind"], "omp_acp_transcript_manifest");
+        assert_eq!(json["segments"].as_array().unwrap().len(), 1);
+        assert_eq!(json["truncated"], false);
+
+        let event = transcript_artifact_event(&artifacts, "1.2.3", "acp-session");
+        assert_eq!(event["capturedBytes"], json!(artifacts.captured_bytes));
+        assert_eq!(event["maxBytes"], json!(TRANSCRIPT_MAX_BYTES));
+        assert_eq!(event["segments"].as_array().unwrap().len(), 1);
+        assert_eq!(event["truncated"], false);
+        assert_eq!(event["redactions"], 0);
+        assert_eq!(event["provenance"]["source"], "omp-acp");
+        assert_eq!(event["provenance"]["truncation"]["applied"], false);
+        assert_eq!(
+            event["provenance"]["truncation"]["reason"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn transcript_segments_stay_bounded_after_worst_case_json_escaping() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_id = Uuid::new_v4();
+        let escaped = "\u{0000}".repeat(TRANSCRIPT_MAX_ENTRY_BYTES);
+        let mut transcript = TranscriptBuffer::default();
+        transcript.push("recv", &escaped);
+        transcript.push("stderr", &escaped);
+        assert!(
+            transcript
+                .lines
+                .iter()
+                .all(|line| line.len() < TRANSCRIPT_SEGMENT_BYTES)
+        );
+
+        let artifacts = write_transcript_artifacts(dir.path(), session_id, transcript).unwrap();
+        assert_eq!(artifacts.segments.len(), 2);
+        assert!(
+            artifacts
+                .segments
+                .iter()
+                .all(|segment| segment.size_bytes <= TRANSCRIPT_SEGMENT_BYTES)
+        );
+    }
 }

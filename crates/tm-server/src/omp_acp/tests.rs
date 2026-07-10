@@ -84,6 +84,7 @@ async fn permission_request_round_trips_selected_and_cancelled() {
             mode: tm_modes::ModeId::from("handoff"),
             scope: "project:tempestmiku".to_string(),
             capabilities: vec![],
+            prior_messages: Vec::new(),
         },
         sink: sink.clone(),
     })));

@@ -44,7 +44,8 @@ impl OmpAcpBackend {
                 );
                 tokio::spawn(async move {
                     if let Err(err) = worker.run().await {
-                        tracing::warn!(?err, %session_id, "omp acp worker stopped");
+                        let err = tm_memory::redact_dream_text(&err.to_string()).text;
+                        tracing::warn!(%err, %session_id, "omp acp worker stopped");
                     }
                 });
                 sender

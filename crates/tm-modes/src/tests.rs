@@ -270,10 +270,25 @@ fn mode_profiles_map_expected_skills_voice_and_scope() {
     assert!(serious.has_capability("fs.read"));
     assert!(serious.has_capability("code.edit"));
     assert!(serious.has_capability("proc.run"));
+    assert!(serious.has_capability("resources.read:linked"));
     assert!(serious.has_capability("backend.coding"));
     assert_eq!(serious.capability_class, "engineering");
     assert_eq!(serious.voice_cap, "off");
     assert_eq!(serious.default_scope, "project:tempestmiku");
+
+    let handoff = assets
+        .modes
+        .profile(&ModeId::from("handoff"))
+        .expect("handoff profile");
+    for capability in [
+        "fs.read",
+        "code.search",
+        "proc.run",
+        "resources.read:linked",
+    ] {
+        assert!(!assistant.has_capability(capability));
+        assert!(!handoff.has_capability(capability));
+    }
 }
 
 #[test]

@@ -4,7 +4,7 @@
     {
       "mode": "general",
       "label": "General",
-      "description": "Planning, reminders, writing, open loops, and decision cleanup.",
+      "description": "Planning, reminders, writing, open loops, and decision cleanup. Unlocked normal chat may request a confirmed transition through await modes.suggest(...).",
       "voiceCap": "medium",
       "defaultScope": "global",
       "activeSkills": ["miku-voice", "personal-assistant-state-capture"],
@@ -23,7 +23,7 @@
       "voiceCap": "off",
       "defaultScope": "project:tempestmiku",
       "activeSkills": ["serious-engineer-ops"],
-      "capabilities": ["fs.*", "code.*", "proc.*", "drive.*", "resources.read:drive", "backend.coding"],
+      "capabilities": ["fs.*", "code.*", "proc.*", "drive.*", "resources.read:drive", "resources.read:linked", "backend.coding"],
       "capabilityClass": "engineering",
       "route": {
         "priority": 70,

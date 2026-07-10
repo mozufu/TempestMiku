@@ -184,6 +184,7 @@ impl HostFn for AgentsMsgFn {
         let spec = ActorSpec {
             id: continuation_id.clone(),
             session_id: ctx.session_id.clone(),
+            session_scope: ctx.session_scope.clone(),
             role: continuation_role,
             task: seeded_task,
             mode: None,

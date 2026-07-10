@@ -108,6 +108,7 @@ impl HostFn for AgentsPipelineFn {
         let session_id = ctx.session_id.clone();
         let parent_id = caller_parent_id(ctx)?;
         let grants = child_agent_grants(ctx);
+        let session_scope = ctx.session_scope.clone();
         let mut stage_outputs = Vec::with_capacity(stages.len());
 
         for (stage_index, stage) in stages.into_iter().enumerate() {
@@ -118,6 +119,7 @@ impl HostFn for AgentsPipelineFn {
                 session_id.clone(),
                 parent_id.clone(),
                 grants.clone(),
+                session_scope.clone(),
                 wave_tasks,
             )
             .await?;
@@ -259,6 +261,7 @@ async fn run_pipeline_wave(
     session_id: String,
     parent_id: Option<ActorId>,
     grants: CapabilityGrants,
+    session_scope: Option<String>,
     tasks: Vec<(String, String)>,
 ) -> Result<Vec<Value>> {
     let supervisor_id = roster.next_supervisor_id("PipelineWave");
@@ -310,6 +313,7 @@ async fn run_pipeline_wave(
         let spec = ActorSpec {
             id: actor_id.clone(),
             session_id: session_id.clone(),
+            session_scope: session_scope.clone(),
             role,
             task,
             mode: None,
@@ -347,10 +351,11 @@ async fn run_pipeline_wave(
                     }
                     Err(err) => {
                         let reason = failure_reason_for_error(&err);
-                        tracing::warn!(actor_id = %actor_id, error = %err, "pipeline actor failed");
+                        let error = redact_actor_diagnostic(&err);
+                        tracing::warn!(actor_id = %actor_id, %error, "pipeline actor failed");
                         mark_actor_error(&roster, &session_id, &actor_id, reason).await;
                         Err(HostError::HostCall(format!(
-                            "actor {actor_id} failed: {err}"
+                            "actor {actor_id} failed: {error}"
                         )))
                     }
                 }
@@ -360,9 +365,12 @@ async fn run_pipeline_wave(
 
     let mut digests = Vec::with_capacity(handles.len());
     for handle in handles {
-        let result = handle
-            .await
-            .map_err(|err| HostError::HostCall(format!("pipeline actor panicked: {err}")))?;
+        let result = handle.await.map_err(|error| {
+            HostError::HostCall(format!(
+                "pipeline actor panicked: {}",
+                redact_actor_diagnostic(error)
+            ))
+        })?;
         match result {
             Ok(digest) => digests.push(digest),
             Err(err) => return Err(err),

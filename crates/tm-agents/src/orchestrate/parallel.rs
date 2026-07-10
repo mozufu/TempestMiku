@@ -174,6 +174,7 @@ impl HostFn for AgentsParallelFn {
             let spec = ActorSpec {
                 id: actor_id.clone(),
                 session_id: session_id.clone(),
+                session_scope: ctx.session_scope.clone(),
                 role,
                 task: task_str,
                 mode: None,
@@ -212,9 +213,12 @@ impl HostFn for AgentsParallelFn {
                         }
                         Err(err) => {
                             let reason = failure_reason_for_error(&err);
-                            tracing::warn!(actor_id = %actor_id, error = %err, "parallel actor failed");
+                            let error = redact_actor_diagnostic(&err);
+                            tracing::warn!(actor_id = %actor_id, %error, "parallel actor failed");
                             mark_actor_error(&roster, &session_id, &actor_id, reason).await;
-                            Err(HostError::HostCall(format!("actor {actor_id} failed: {err}")))
+                            Err(HostError::HostCall(format!(
+                                "actor {actor_id} failed: {error}"
+                            )))
                         }
                     }
                 })
@@ -226,9 +230,12 @@ impl HostFn for AgentsParallelFn {
         // in their detached tokio tasks and update the roster via Arc).
         let mut digests: Vec<Value> = Vec::with_capacity(handles.len());
         for handle in handles {
-            let result = handle
-                .await
-                .map_err(|e| HostError::HostCall(format!("parallel actor panicked: {e}")))?;
+            let result = handle.await.map_err(|error| {
+                HostError::HostCall(format!(
+                    "parallel actor panicked: {}",
+                    redact_actor_diagnostic(error)
+                ))
+            })?;
             match result {
                 Ok(digest) => digests.push(digest),
                 Err(err) => return Err(err),

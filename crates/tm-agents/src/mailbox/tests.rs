@@ -308,10 +308,12 @@ async fn store_and_get_transcript() {
     let id = ActorId::new("Worker").unwrap();
     assert!(registry.get_transcript(&id).await.is_none());
     registry
-        .store_transcript(&id, "line 1\nline 2\n".to_string())
+        .store_transcript(&id, "line 1\nsk-testsecret123456\nline 2\n".to_string())
         .await;
     let content = registry.get_transcript(&id).await.unwrap();
     assert!(content.contains("line 1"));
+    assert!(!content.contains("sk-testsecret123456"));
+    assert!(content.contains("[REDACTED_TOKEN]"));
 }
 
 #[tokio::test]

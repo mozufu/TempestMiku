@@ -6,6 +6,7 @@ use crate::actor::{ActorBudget, ActorCancelToken, ActorId, ActorSpec};
 pub(super) struct ActorRestartTemplate {
     pub(super) id: ActorId,
     pub(super) session_id: String,
+    session_scope: Option<String>,
     pub(super) role: String,
     pub(super) task: String,
     mode: Option<String>,
@@ -21,6 +22,7 @@ impl ActorRestartTemplate {
         Self {
             id: spec.id.clone(),
             session_id: spec.session_id.clone(),
+            session_scope: spec.session_scope.clone(),
             role: spec.role.clone(),
             task: spec.task.clone(),
             mode: spec.mode.clone(),
@@ -36,6 +38,7 @@ impl ActorRestartTemplate {
         ActorSpec {
             id: self.id.clone(),
             session_id: self.session_id.clone(),
+            session_scope: self.session_scope.clone(),
             role: self.role.clone(),
             task: self.task.clone(),
             mode: self.mode.clone(),

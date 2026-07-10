@@ -4,10 +4,12 @@ use std::sync::{
 };
 
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tm_core::CancellationToken;
 use tm_host::CapabilityGrants;
+use tokio::sync::Notify;
 
 use crate::supervise::{FailureReason, SupervisionDecision};
 
@@ -15,11 +17,14 @@ use crate::supervise::{FailureReason, SupervisionDecision};
 #[derive(Debug, Clone, Default)]
 pub struct ActorCancelToken {
     cancelled: Arc<AtomicBool>,
+    notification: Arc<Notify>,
 }
 
 impl ActorCancelToken {
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        if !self.cancelled.swap(true, Ordering::SeqCst) {
+            self.notification.notify_waiters();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -30,6 +35,18 @@ impl ActorCancelToken {
 impl CancellationToken for ActorCancelToken {
     fn is_cancelled(&self) -> bool {
         ActorCancelToken::is_cancelled(self)
+    }
+
+    fn cancelled(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            loop {
+                let notified = self.notification.notified();
+                if self.is_cancelled() {
+                    return;
+                }
+                notified.await;
+            }
+        })
     }
 }
 
@@ -114,6 +131,8 @@ pub struct ActorSpec {
     /// to the user (approval prompts, lifecycle events, and artifacts) belong to
     /// the spawning session.
     pub session_id: String,
+    /// Exact server-authoritative session scope inherited from the spawning host call.
+    pub session_scope: Option<String>,
     pub role: String,
     pub task: String,
     pub mode: Option<String>,

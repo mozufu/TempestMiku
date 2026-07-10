@@ -124,6 +124,7 @@ impl HostFn for AgentsRunFn {
         let spec = ActorSpec {
             id: actor_id.clone(),
             session_id: session_id.clone(),
+            session_scope: ctx.session_scope.clone(),
             role,
             task,
             mode: None,
@@ -152,9 +153,10 @@ impl HostFn for AgentsRunFn {
             }
             Err(err) => {
                 let reason = failure_reason_for_error(&err);
-                tracing::warn!(actor_id = %actor_id, error = %err, "actor failed");
+                let error = redact_actor_diagnostic(&err);
+                tracing::warn!(actor_id = %actor_id, %error, "actor failed");
                 mark_actor_error(&self.roster, &session_id, &actor_id, reason).await;
-                Err(HostError::HostCall(err.to_string()))
+                Err(HostError::HostCall(error))
             }
         }
     }

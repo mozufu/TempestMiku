@@ -172,9 +172,10 @@ async fn spawn_restarted_actor(roster: Arc<MailboxRegistry>, actor_id: ActorId) 
                 }
                 Err(err) => {
                     let reason = failure_reason_for_error(&err);
+                    let error = redact_actor_diagnostic(&err);
                     tracing::warn!(
                         actor_id = %actor_id_bg,
-                        error = %err,
+                        %error,
                         "restarted actor failed"
                     );
                     mark_actor_error(&roster, &session_id, &actor_id_bg, reason).await;
@@ -184,12 +185,20 @@ async fn spawn_restarted_actor(roster: Arc<MailboxRegistry>, actor_id: ActorId) 
     });
 }
 
+pub(super) fn redact_actor_diagnostic(error: impl ToString) -> String {
+    tm_memory::redact_dream_text(&error.to_string()).text
+}
+
 async fn mark_actor_completed(
     roster: &MailboxRegistry,
     session_id: &str,
     actor_id: &ActorId,
-    digest: ActorDigest,
+    mut digest: ActorDigest,
 ) -> bool {
+    digest.summary = tm_memory::redact_dream_text(&digest.summary).text;
+    digest.history_content = digest
+        .history_content
+        .map(|content| tm_memory::redact_dream_text(&content).text);
     if let Some(content) = digest.history_content.clone() {
         roster.store_transcript(actor_id, content).await;
     }

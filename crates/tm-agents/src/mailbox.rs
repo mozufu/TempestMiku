@@ -120,8 +120,9 @@ impl MailboxRegistry {
         &self,
         session_id: &str,
         event_type: &str,
-        payload: serde_json::Value,
+        mut payload: serde_json::Value,
     ) -> Result<(), String> {
+        tm_memory::redact_json_value(&mut payload);
         let Some(hook) = self.raw_event_hook.get() else {
             return Err("raw actor event hook not configured".to_string());
         };
@@ -247,6 +248,7 @@ impl MailboxRegistry {
         artifact_uri: Option<String>,
         history_uri: Option<String>,
     ) -> bool {
+        let summary = tm_memory::redact_dream_text(&summary).text;
         let Some(supervisor_id) = self
             .mark_complete_record(id, Some((summary, artifact_uri, history_uri)))
             .await
@@ -262,7 +264,10 @@ impl MailboxRegistry {
     /// Called by the orchestrator after `run_to_digest` returns `history_content`.
     /// Served by `HistoryResourceHandler`.
     pub async fn store_transcript(&self, id: &ActorId, content: String) {
-        self.transcripts.write().await.insert(id.clone(), content);
+        self.transcripts
+            .write()
+            .await
+            .insert(id.clone(), tm_memory::redact_dream_text(&content).text);
     }
 
     /// Retrieve the stored transcript for an actor, if any.
@@ -334,9 +339,7 @@ impl MailboxRegistry {
     }
 
     pub async fn last_activity(&self, actor_id: &ActorId) -> Option<DateTime<Utc>> {
-        let Some(inbox) = self.inboxes.read().await.get(actor_id).cloned() else {
-            return None;
-        };
+        let inbox = self.inboxes.read().await.get(actor_id).cloned()?;
         inbox.last_activity().await
     }
 

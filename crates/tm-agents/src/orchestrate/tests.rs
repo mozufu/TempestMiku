@@ -19,6 +19,15 @@ fn ctx_with_actor(cap: &str, actor_id: &str) -> InvocationCtx {
         .with_actor_id(Some(actor_id.to_string()))
 }
 
+#[test]
+fn actor_diagnostics_are_redacted_before_logging_or_returning() {
+    let diagnostic = redact_actor_diagnostic(
+        "actor failed with Authorization: Bearer opaque-token-123456 and sk-testsecret123456",
+    );
+    assert!(!diagnostic.contains("opaque-token-123456"));
+    assert!(!diagnostic.contains("sk-testsecret123456"));
+}
+
 async fn track_running(roster: &MailboxRegistry, id: &str) {
     track_actor(roster, id, None, ActorStatus::Running).await;
 }
@@ -67,6 +76,47 @@ async fn agents_run_executor_not_configured_returns_not_implemented() {
         .await
         .unwrap_err();
     assert!(matches!(err, HostError::NotImplemented(_)));
+}
+
+#[tokio::test]
+async fn agents_run_preserves_authoritative_session_scope_for_child_executor() {
+    use crate::actor::{ActorDigest, ActorSpec};
+    use crate::executor::{ActorError, ActorExecutor};
+
+    struct ScopeExecutor(Arc<std::sync::Mutex<Option<String>>>);
+
+    #[async_trait::async_trait]
+    impl ActorExecutor for ScopeExecutor {
+        async fn run_to_digest(
+            &self,
+            spec: ActorSpec,
+        ) -> std::result::Result<ActorDigest, ActorError> {
+            *self.0.lock().unwrap() = spec.session_scope.clone();
+            Ok(ActorDigest {
+                actor_id: spec.id,
+                summary: "scoped".to_string(),
+                artifact_uri: None,
+                history_uri: None,
+                history_content: None,
+            })
+        }
+    }
+
+    let captured = Arc::new(std::sync::Mutex::new(None));
+    let roster = make_roster();
+    roster.set_executor(Arc::new(ScopeExecutor(Arc::clone(&captured))));
+    let function = AgentsRunFn::new(roster);
+    let context = ctx_with(caps::AGENTS_RUN)
+        .with_session_id("session-scope-test")
+        .with_session_scope("project:tempestmiku");
+    function
+        .call(json!({"role": "worker", "task": "check scope"}), &context)
+        .await
+        .unwrap();
+    assert_eq!(
+        captured.lock().unwrap().as_deref(),
+        Some("project:tempestmiku")
+    );
 }
 
 #[tokio::test]
@@ -1803,6 +1853,7 @@ async fn actor_wall_clock_timeout_trips_cancellation_token() {
     let spec = ActorSpec {
         id: ActorId::new("SlowWorker").unwrap(),
         session_id: "session-1".to_string(),
+        session_scope: None,
         role: "worker".to_string(),
         task: "sleep".to_string(),
         mode: None,

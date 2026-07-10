@@ -141,6 +141,7 @@ impl HostFn for AgentsSpawnFn {
         let spec = ActorSpec {
             id: actor_id.clone(),
             session_id: session_id.clone(),
+            session_scope: ctx.session_scope.clone(),
             role,
             task,
             mode: None,
@@ -176,7 +177,8 @@ impl HostFn for AgentsSpawnFn {
                 }
                 Err(err) => {
                     let reason = failure_reason_for_error(&err);
-                    tracing::warn!(actor_id = %actor_id_bg, error = %err, "spawned actor failed");
+                    let error = redact_actor_diagnostic(&err);
+                    tracing::warn!(actor_id = %actor_id_bg, %error, "spawned actor failed");
                     rt.block_on(mark_actor_error(&roster, &session_id, &actor_id_bg, reason));
                 }
             }

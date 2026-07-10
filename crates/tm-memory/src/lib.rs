@@ -14,13 +14,15 @@ mod store;
 mod summary;
 
 pub use dream::{
-    DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport, MemoryError,
-    NewDreamQueueRecord, NoopDreamWorker,
+    DreamLease, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport,
+    MemoryError, NewDreamQueueRecord, NoopDreamWorker,
 };
 pub use embedding::{EmbeddingConfig, EmbeddingConfigError, EmbeddingProvider};
 pub use input::{BudgetedDreamInput, DreamInputBudget, DreamInputChunk, DreamInputMessage};
 pub use records::{ProfileFactRecord, RecallChunkRecord};
-pub use redaction::{Redaction, RedactionReport, redact_dream_text};
+pub use redaction::{
+    Redaction, RedactionReport, contains_sensitive_data, redact_dream_text, redact_json_value,
+};
 pub use skill::{
     NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus, SkillVerification,
     UnknownSkillProposalStatus,

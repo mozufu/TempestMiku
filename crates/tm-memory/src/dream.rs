@@ -105,7 +105,35 @@ pub struct DreamQueueRecord {
     pub enqueued_at: DateTime<Utc>,
     pub available_at: DateTime<Utc>,
     pub locked_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub lease_owner: Option<Uuid>,
+    #[serde(default)]
+    pub lease_epoch: i64,
+    #[serde(default)]
+    pub heartbeat_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub error_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DreamLease {
+    pub dream: DreamQueueRecord,
+    pub owner_id: Uuid,
+    pub epoch: i64,
+}
+
+impl DreamLease {
+    pub fn new(dream: DreamQueueRecord, owner_id: Uuid, epoch: i64) -> Self {
+        Self {
+            dream,
+            owner_id,
+            epoch,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,6 +244,11 @@ mod tests {
             enqueued_at: now,
             available_at: now,
             locked_at: None,
+            lease_owner: None,
+            lease_epoch: 0,
+            heartbeat_at: None,
+            completed_at: None,
+            error_at: None,
             last_error: None,
         };
 

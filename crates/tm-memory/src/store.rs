@@ -5,8 +5,9 @@ use uuid::Uuid;
 
 use crate::MemorySummaryRecord;
 use crate::{
-    DreamQueueRecord, NewDreamQueueRecord, NewMemorySummaryRecord, NewSkillProposalRecord,
-    ProfileFactRecord, RecallChunkRecord, SkillProposalRecord, SkillProposalStatus,
+    DreamLease, DreamQueueRecord, NewDreamQueueRecord, NewMemorySummaryRecord,
+    NewSkillProposalRecord, ProfileFactRecord, RecallChunkRecord, SkillProposalRecord,
+    SkillProposalStatus,
 };
 
 #[derive(Debug, Error)]
@@ -102,20 +103,21 @@ pub trait DreamLeaseStore: Send + Sync {
         &self,
         now: DateTime<Utc>,
         lease_timeout: Duration,
-    ) -> MemoryStoreResult<Option<DreamQueueRecord>>;
+        owner_id: Uuid,
+    ) -> MemoryStoreResult<Option<DreamLease>>;
     async fn heartbeat_dream(
         &self,
-        dream_id: Uuid,
+        lease: &DreamLease,
         now: DateTime<Utc>,
-    ) -> MemoryStoreResult<DreamQueueRecord>;
+    ) -> MemoryStoreResult<DreamLease>;
     async fn complete_dream(
         &self,
-        dream_id: Uuid,
+        lease: &DreamLease,
         now: DateTime<Utc>,
     ) -> MemoryStoreResult<DreamQueueRecord>;
     async fn fail_dream(
         &self,
-        dream_id: Uuid,
+        lease: &DreamLease,
         error: String,
         next_available_at: DateTime<Utc>,
         max_attempts: i32,

@@ -1,13 +1,17 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use parking_lot::Mutex;
+use chrono::Utc;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
-use crate::{Result, ServerError, SessionEvent, Store};
+use crate::{
+    ApprovalRequestRecord, NewApprovalRequest, NewApprovalResolution, Result, ServerError,
+    SessionEvent, Store,
+};
 
 #[async_trait]
 pub trait CodingBackend: Send + Sync + 'static {
@@ -25,9 +29,12 @@ pub struct CodingTurn {
     pub system_prompt: String,
     pub mode: tm_modes::ModeId,
     pub scope: String,
-    /// Declared capabilities from the mode profile (e.g. `["agents.*", "backend.coding"]`).
-    /// Merged into sandbox grants for this turn; supports `.*` glob patterns.
+    /// Exact capabilities declared for this turn (e.g. `["agents.*", "backend.coding"]`).
+    /// The sandbox replaces its turn grants with this set plus the fixed core grants; `.*`
+    /// capability patterns remain supported.
     pub capabilities: Vec<String>,
+    /// Caller-bounded persisted conversation history, ordered oldest to newest.
+    pub prior_messages: Vec<tm_core::Message>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -39,10 +46,19 @@ pub struct CodingTurnResult {
 #[async_trait]
 pub trait CodingEventSink: Send + Sync + 'static {
     async fn emit(&self, event_type: &str, payload_json: Value) -> Result<SessionEvent>;
+
+    async fn publish_persisted(&self, _event: SessionEvent) -> Result<()> {
+        Ok(())
+    }
+
+    fn turn_id(&self) -> Option<Uuid> {
+        None
+    }
 }
 
 pub struct StoreCodingEventSink<S> {
     session_id: Uuid,
+    turn_id: Option<Uuid>,
     store: Arc<S>,
     sender: broadcast::Sender<SessionEvent>,
 }
@@ -51,6 +67,21 @@ impl<S> StoreCodingEventSink<S> {
     pub fn new(session_id: Uuid, store: Arc<S>, sender: broadcast::Sender<SessionEvent>) -> Self {
         Self {
             session_id,
+            turn_id: None,
+            store,
+            sender,
+        }
+    }
+
+    pub fn for_turn(
+        session_id: Uuid,
+        turn_id: Uuid,
+        store: Arc<S>,
+        sender: broadcast::Sender<SessionEvent>,
+    ) -> Self {
+        Self {
+            session_id,
+            turn_id: Some(turn_id),
             store,
             sender,
         }
@@ -65,10 +96,19 @@ where
     async fn emit(&self, event_type: &str, payload_json: Value) -> Result<SessionEvent> {
         let event = self
             .store
-            .append_event(self.session_id, event_type, payload_json)
+            .append_event_for_turn(self.session_id, event_type, payload_json, self.turn_id)
             .await?;
         let _ = self.sender.send(event.clone());
         Ok(event)
+    }
+
+    async fn publish_persisted(&self, event: SessionEvent) -> Result<()> {
+        let _ = self.sender.send(event);
+        Ok(())
+    }
+
+    fn turn_id(&self) -> Option<Uuid> {
+        self.turn_id
     }
 }
 
@@ -135,9 +175,21 @@ pub struct DetailedApprovalOutcome {
     pub status: ApprovalStatus,
 }
 
-#[derive(Default)]
+pub struct DurableApprovalSpec {
+    pub session_id: Uuid,
+    pub origin: String,
+    pub prompt: ApprovalPrompt,
+    pub timeout: Duration,
+    pub effect_type: String,
+    pub effect_payload_json: Value,
+    pub resumable: bool,
+    pub sink: Arc<dyn CodingEventSink>,
+}
+
 pub struct ApprovalBroker {
     pending: Mutex<BTreeMap<Uuid, PendingApproval>>,
+    store: RwLock<Option<Arc<dyn Store>>>,
+    instance_id: Uuid,
 }
 
 struct PendingApproval {
@@ -145,7 +197,44 @@ struct PendingApproval {
     sender: oneshot::Sender<ResolveApprovalRequest>,
 }
 
+impl Default for ApprovalBroker {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(BTreeMap::new()),
+            store: RwLock::new(None),
+            instance_id: Uuid::new_v4(),
+        }
+    }
+}
+
 impl ApprovalBroker {
+    pub fn bind_store<S>(&self, store: Arc<S>)
+    where
+        S: Store,
+    {
+        let store: Arc<dyn Store> = store;
+        *self.store.write() = Some(Arc::clone(&store));
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            // Snapshot startup before spawning. A starved cleanup task must never classify
+            // approvals created after binding as stale or expired when it eventually runs.
+            let startup_at = Utc::now();
+            runtime.spawn(async move {
+                let stale_before = startup_at - chrono::Duration::seconds(30);
+                if let Err(error) = store
+                    .cancel_stale_non_resumable_approvals(stale_before, startup_at)
+                    .await
+                {
+                    let error = tm_memory::redact_dream_text(&error.to_string()).text;
+                    tracing::warn!(%error, "failed to cancel stale durable approvals");
+                }
+                if let Err(error) = store.expire_pending_approvals(startup_at).await {
+                    let error = tm_memory::redact_dream_text(&error.to_string()).text;
+                    tracing::warn!(%error, "failed to expire durable approvals");
+                }
+            });
+        }
+    }
+
     pub async fn request_permission(
         &self,
         session_id: Uuid,
@@ -171,6 +260,63 @@ impl ApprovalBroker {
             .outcome)
     }
 
+    pub async fn enqueue_permission_for_backend(&self, spec: DurableApprovalSpec) -> Result<Uuid> {
+        let DurableApprovalSpec {
+            session_id,
+            origin,
+            prompt,
+            timeout,
+            effect_type,
+            effect_payload_json,
+            resumable,
+            sink,
+        } = spec;
+        let durable_store = { self.store.read().clone() };
+        let store = durable_store
+            .ok_or_else(|| ServerError::Store("durable approval store is not bound".to_string()))?;
+        let approval_id = Uuid::new_v4();
+        let created_at = Utc::now();
+        let expires_at = created_at
+            + chrono::Duration::from_std(timeout)
+                .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+        store
+            .create_approval_request(NewApprovalRequest {
+                id: approval_id,
+                session_id,
+                turn_id: sink.turn_id(),
+                requester_id: self.instance_id,
+                origin: origin.clone(),
+                action: prompt.action.clone(),
+                scope_json: prompt.scope.clone(),
+                options_json: serde_json::to_value(&prompt.options)?,
+                effect_type,
+                effect_payload_json,
+                resumable,
+                created_at,
+                expires_at,
+            })
+            .await?;
+        let event = sink
+            .emit(
+                "approval",
+                json!({
+                    "approvalId": approval_id,
+                    "backend": origin,
+                    "action": prompt.action,
+                    "scope": prompt.scope,
+                    "options": prompt.options,
+                    "timeoutMs": timeout.as_millis(),
+                    "expiresAt": expires_at,
+                    "resumable": resumable,
+                }),
+            )
+            .await?;
+        store
+            .link_approval_event(session_id, approval_id, "approval", event.seq)
+            .await?;
+        Ok(approval_id)
+    }
+
     pub async fn request_permission_detailed_for_backend(
         &self,
         session_id: Uuid,
@@ -179,6 +325,30 @@ impl ApprovalBroker {
         timeout: Duration,
         sink: Arc<dyn CodingEventSink>,
     ) -> Result<DetailedApprovalOutcome> {
+        let durable_store = { self.store.read().clone() };
+        if let Some(store) = durable_store {
+            let effect_payload_json = json!({
+                "origin": backend,
+                "action": prompt.action.clone(),
+                "scope": prompt.scope.clone(),
+            });
+            return self
+                .request_permission_durable(
+                    store,
+                    DurableApprovalSpec {
+                        session_id,
+                        origin: backend.to_string(),
+                        prompt,
+                        timeout,
+                        effect_type: "approval_continuation".to_string(),
+                        effect_payload_json,
+                        resumable: false,
+                        sink,
+                    },
+                )
+                .await
+                .map(|(_, outcome)| outcome);
+        }
         let approval_id = Uuid::new_v4();
         let (sender, receiver) = oneshot::channel();
         self.pending
@@ -239,6 +409,192 @@ impl ApprovalBroker {
         self.emit_resolution(approval_id, backend, &detailed, sink)
             .await?;
         Ok(detailed)
+    }
+
+    pub async fn request_permission_detailed_with_effect_for_backend(
+        &self,
+        spec: DurableApprovalSpec,
+    ) -> Result<(Uuid, DetailedApprovalOutcome)> {
+        let durable_store = { self.store.read().clone() };
+        let store = durable_store
+            .ok_or_else(|| ServerError::Store("durable approval store is not bound".to_string()))?;
+        self.request_permission_durable(store, spec).await
+    }
+
+    async fn request_permission_durable(
+        &self,
+        store: Arc<dyn Store>,
+        spec: DurableApprovalSpec,
+    ) -> Result<(Uuid, DetailedApprovalOutcome)> {
+        let DurableApprovalSpec {
+            session_id,
+            origin,
+            prompt,
+            timeout,
+            effect_type,
+            effect_payload_json,
+            resumable,
+            sink,
+        } = spec;
+        let approval_id = Uuid::new_v4();
+        let created_at = Utc::now();
+        let expires_at = created_at
+            + chrono::Duration::from_std(timeout)
+                .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+        store
+            .create_approval_request(NewApprovalRequest {
+                id: approval_id,
+                session_id,
+                turn_id: sink.turn_id(),
+                requester_id: self.instance_id,
+                origin: origin.clone(),
+                action: prompt.action.clone(),
+                scope_json: prompt.scope.clone(),
+                options_json: serde_json::to_value(&prompt.options)?,
+                effect_type,
+                effect_payload_json,
+                resumable,
+                created_at,
+                expires_at,
+            })
+            .await?;
+
+        let approval_payload = json!({
+            "approvalId": approval_id,
+            "backend": origin,
+            "action": prompt.action,
+            "scope": prompt.scope,
+            "options": prompt.options,
+            "timeoutMs": timeout.as_millis(),
+            "expiresAt": expires_at,
+            "resumable": resumable,
+        });
+        let approval_event = match sink.emit("approval", approval_payload).await {
+            Ok(event) => event,
+            Err(error) => {
+                let resolution_json = json!({
+                    "approvalId": approval_id,
+                    "backend": origin,
+                    "status": "cancelled",
+                    "outcome": "cancelled",
+                    "reason": "event_emit_failed",
+                });
+                if let Ok((_, event)) = store
+                    .resolve_approval_request_with_event(
+                        session_id,
+                        approval_id,
+                        NewApprovalResolution {
+                            status: "cancelled".to_string(),
+                            selected_option_id: None,
+                            resolution_json,
+                            resolved_at: Utc::now(),
+                        },
+                    )
+                    .await
+                {
+                    let _ = sink.publish_persisted(event).await;
+                }
+                return Err(error);
+            }
+        };
+        store
+            .link_approval_event(session_id, approval_id, "approval", approval_event.seq)
+            .await?;
+
+        let mut last_heartbeat = created_at;
+        loop {
+            let record = store.approval_request(session_id, approval_id).await?;
+            if record.status != "pending" {
+                let detailed = detailed_from_record(&record)?;
+                return Ok((approval_id, detailed));
+            }
+
+            let now = Utc::now();
+            if now >= record.expires_at {
+                let outcome = self.reject_outcome(&prompt);
+                let detailed = DetailedApprovalOutcome {
+                    outcome,
+                    status: ApprovalStatus::TimedOut,
+                };
+                let resolution_json = resolution_payload(approval_id, &origin, &detailed);
+                let selected_option_id = selected_option_id(&detailed.outcome);
+                match store
+                    .resolve_approval_request_with_event(
+                        session_id,
+                        approval_id,
+                        NewApprovalResolution {
+                            status: detailed.status.as_str().to_string(),
+                            selected_option_id,
+                            resolution_json,
+                            resolved_at: now,
+                        },
+                    )
+                    .await
+                {
+                    Ok((_, event)) => {
+                        sink.publish_persisted(event).await?;
+                        return Ok((approval_id, detailed));
+                    }
+                    Err(ServerError::Conflict(_)) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+
+            if now - last_heartbeat >= chrono::Duration::seconds(1) {
+                store
+                    .heartbeat_approval_request(approval_id, self.instance_id, now)
+                    .await?;
+                last_heartbeat = now;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    pub async fn resolve_persisted(
+        &self,
+        session_id: Uuid,
+        approval_id: Uuid,
+        request: ResolveApprovalRequest,
+        sink: Arc<dyn CodingEventSink>,
+    ) -> Result<()> {
+        let durable_store = { self.store.read().clone() };
+        let Some(store) = durable_store else {
+            return self.resolve(session_id, approval_id, request);
+        };
+        let record = store.approval_request(session_id, approval_id).await?;
+        if record.status != "pending" {
+            return Err(ServerError::Conflict(format!(
+                "approval {approval_id} is already resolved"
+            )));
+        }
+        let prompt = prompt_from_record(&record)?;
+        let detailed = if Utc::now() >= record.expires_at {
+            DetailedApprovalOutcome {
+                outcome: self.reject_outcome(&prompt),
+                status: ApprovalStatus::TimedOut,
+            }
+        } else {
+            let outcome = self.resolve_outcome(&prompt, request);
+            DetailedApprovalOutcome {
+                status: status_for_outcome(&prompt, &outcome),
+                outcome,
+            }
+        };
+        let resolved_at = Utc::now();
+        let (_, event) = store
+            .resolve_approval_request_with_event(
+                session_id,
+                approval_id,
+                NewApprovalResolution {
+                    status: detailed.status.as_str().to_string(),
+                    selected_option_id: selected_option_id(&detailed.outcome),
+                    resolution_json: resolution_payload(approval_id, &record.origin, &detailed),
+                    resolved_at,
+                },
+            )
+            .await?;
+        sink.publish_persisted(event).await?;
+        Ok(())
     }
 
     pub fn resolve(
@@ -312,23 +668,68 @@ impl ApprovalBroker {
         detailed: &DetailedApprovalOutcome,
         sink: Arc<dyn CodingEventSink>,
     ) -> Result<SessionEvent> {
-        let payload = match &detailed.outcome {
-            ApprovalOutcome::Selected { option_id } => json!({
-                "approvalId": approval_id,
-                "backend": backend,
-                "status": detailed.status.as_str(),
-                "outcome": "selected",
-                "optionId": option_id,
-            }),
-            ApprovalOutcome::Cancelled => json!({
-                "approvalId": approval_id,
-                "backend": backend,
-                "status": detailed.status.as_str(),
-                "outcome": "cancelled",
-            }),
-        };
+        let payload = resolution_payload(approval_id, backend, detailed);
         sink.emit("approval_resolved", payload).await
     }
+}
+
+fn resolution_payload(
+    approval_id: Uuid,
+    origin: &str,
+    detailed: &DetailedApprovalOutcome,
+) -> Value {
+    match &detailed.outcome {
+        ApprovalOutcome::Selected { option_id } => json!({
+            "approvalId": approval_id,
+            "backend": origin,
+            "status": detailed.status.as_str(),
+            "outcome": "selected",
+            "optionId": option_id,
+        }),
+        ApprovalOutcome::Cancelled => json!({
+            "approvalId": approval_id,
+            "backend": origin,
+            "status": detailed.status.as_str(),
+            "outcome": "cancelled",
+        }),
+    }
+}
+
+fn selected_option_id(outcome: &ApprovalOutcome) -> Option<String> {
+    match outcome {
+        ApprovalOutcome::Selected { option_id } => Some(option_id.clone()),
+        ApprovalOutcome::Cancelled => None,
+    }
+}
+
+fn prompt_from_record(record: &ApprovalRequestRecord) -> Result<ApprovalPrompt> {
+    Ok(ApprovalPrompt {
+        action: record.action.clone(),
+        scope: record.scope_json.clone(),
+        options: serde_json::from_value(record.options_json.clone())?,
+    })
+}
+
+fn detailed_from_record(record: &ApprovalRequestRecord) -> Result<DetailedApprovalOutcome> {
+    let status = match record.status.as_str() {
+        "approved" => ApprovalStatus::Approved,
+        "denied" => ApprovalStatus::Denied,
+        "timed_out" => ApprovalStatus::TimedOut,
+        "cancelled" => ApprovalStatus::Cancelled,
+        other => {
+            return Err(ServerError::Store(format!(
+                "approval {} has non-terminal status {other}",
+                record.id
+            )));
+        }
+    };
+    let outcome = record
+        .selected_option_id
+        .clone()
+        .map_or(ApprovalOutcome::Cancelled, |option_id| {
+            ApprovalOutcome::Selected { option_id }
+        });
+    Ok(DetailedApprovalOutcome { outcome, status })
 }
 
 fn select_option(prompt: &ApprovalPrompt, predicate: impl Fn(&str) -> bool) -> Option<String> {
@@ -608,5 +1009,99 @@ mod tests {
                 option_id: "once".to_string()
             }
         );
+    }
+
+    #[tokio::test]
+    async fn durable_permission_observes_resolution_from_another_broker_instance() {
+        let store = Arc::new(crate::InMemoryStore::default());
+        let session = store
+            .create_session(crate::NewSession {
+                mode: tm_modes::ModeId::from("general"),
+                persona_status: tm_modes::AssetStatus::Degraded {
+                    warning: "test".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+        let requester = Arc::new(ApprovalBroker::default());
+        let resolver = Arc::new(ApprovalBroker::default());
+        requester.bind_store(Arc::clone(&store));
+        resolver.bind_store(Arc::clone(&store));
+        let (sender, _) = tokio::sync::broadcast::channel(32);
+        let request_sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+            session.id,
+            Arc::clone(&store),
+            sender.clone(),
+        ));
+        let pending = {
+            let requester = Arc::clone(&requester);
+            tokio::spawn(async move {
+                requester
+                    .request_permission(
+                        session.id,
+                        prompt(vec![("allow", "allow_once"), ("reject", "reject_once")]),
+                        Duration::from_secs(5),
+                        request_sink,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        let approval_id = loop {
+            if let Some(event) = store
+                .events_after(session.id, None)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|event| event.event_type == "approval")
+            {
+                break event.payload_json["approvalId"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<Uuid>()
+                    .unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        };
+        let resolution_sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+            session.id,
+            Arc::clone(&store),
+            sender,
+        ));
+        resolver
+            .resolve_persisted(
+                session.id,
+                approval_id,
+                ResolveApprovalRequest {
+                    decision: ApprovalResolveDecision::Approve,
+                    option_id: Some("allow".to_string()),
+                },
+                resolution_sink,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            pending.await.unwrap(),
+            ApprovalOutcome::Selected {
+                option_id: "allow".to_string()
+            }
+        );
+        let approval = store
+            .approval_request(session.id, approval_id)
+            .await
+            .unwrap();
+        assert_eq!(approval.status, "approved");
+        assert!(approval.request_event_seq.is_some());
+        assert!(approval.resolution_event_seq.is_some());
+        let lease = store
+            .claim_next_approval_effect(Uuid::new_v4(), Utc::now(), chrono::Duration::seconds(30))
+            .await
+            .unwrap()
+            .expect("a restarted worker can claim the durable continuation");
+        assert_eq!(lease.effect.approval_id, approval_id);
+        store
+            .complete_approval_effect(&lease, Utc::now())
+            .await
+            .unwrap();
     }
 }

@@ -13,6 +13,16 @@ use uuid::Uuid;
 
 use super::util::last_artifact_uri_in_text;
 
+type ActorSandboxFactory = dyn Fn(
+        Uuid,
+        Option<&str>,
+        &CapabilityGrants,
+        Option<&str>,
+        Option<Arc<dyn CancellationToken>>,
+    ) -> Arc<dyn Sandbox>
+    + Send
+    + Sync;
+
 impl ChatActorExecutor {
     pub fn new(
         llm: Arc<dyn LlmClient>,
@@ -31,9 +41,11 @@ impl ChatActorExecutor {
         Self {
             llm,
             cfg,
-            sandbox_factory: Arc::new(move |session_id, _actor_id, _grants, _cancellation| {
-                sandbox_factory(session_id)
-            }),
+            sandbox_factory: Arc::new(
+                move |session_id, _actor_id, _grants, _scope, _cancellation| {
+                    sandbox_factory(session_id)
+                },
+            ),
             artifact_root,
             actor_roster: None,
         }
@@ -46,6 +58,7 @@ impl ChatActorExecutor {
             Uuid,
             Option<&str>,
             &CapabilityGrants,
+            Option<&str>,
             Option<Arc<dyn CancellationToken>>,
         ) -> Arc<dyn Sandbox>
         + Send
@@ -77,7 +90,10 @@ impl CollectingSink {
     }
 
     fn push(&self, line: String) {
-        self.0.lock().expect("collecting sink lock").push(line);
+        self.0
+            .lock()
+            .expect("collecting sink lock")
+            .push(tm_memory::redact_dream_text(&line).text);
     }
 
     fn into_transcript(self) -> String {
@@ -117,16 +133,7 @@ impl EventSink for CollectingSink {
 pub struct ChatActorExecutor {
     llm: Arc<dyn LlmClient>,
     cfg: AgentConfig,
-    sandbox_factory: Arc<
-        dyn Fn(
-                Uuid,
-                Option<&str>,
-                &CapabilityGrants,
-                Option<Arc<dyn CancellationToken>>,
-            ) -> Arc<dyn Sandbox>
-            + Send
-            + Sync,
-    >,
+    sandbox_factory: Arc<ActorSandboxFactory>,
     /// Artifact root for reading child cell-spills and writing transcripts (P3.3).
     artifact_root: Option<PathBuf>,
     actor_roster: Option<Arc<tm_agents::MailboxRegistry>>,
@@ -209,6 +216,7 @@ impl ActorExecutor for ChatActorExecutor {
             owner_session_id,
             Some(actor_id.as_str()),
             &spec.grants,
+            spec.session_scope.as_deref(),
             Some(Arc::clone(&cancellation)),
         );
         let inbox = self.actor_roster.as_ref().map(|roster| ActorMailboxDrain {
@@ -231,9 +239,6 @@ impl ActorExecutor for ChatActorExecutor {
                     &task,
                     &sink,
                     inbox.as_ref().map(|inbox| inbox as &dyn InboxDrain),
-                    // Sub-agents run scoped tasks, not the top-level conversation; they
-                    // don't get a mode-suggest (or any other) mediator.
-                    None,
                     Some(cancellation_for_loop.as_ref()),
                 ))
                 .map_err(|e| match e {
@@ -247,6 +252,8 @@ impl ActorExecutor for ChatActorExecutor {
         let (summary, transcript) = rx
             .await
             .map_err(|_| ActorError::Execution("actor worker dropped response".to_string()))??;
+        let summary = tm_memory::redact_dream_text(&summary).text;
+        let transcript = tm_memory::redact_dream_text(&transcript).text;
 
         // Populate artifact_uri from this child's own transcript first; concurrent child actors
         // can write to the same session artifact store, so "latest new artifact" is only a fallback.

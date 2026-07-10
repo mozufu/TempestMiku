@@ -108,6 +108,19 @@ pub struct InvocationCtx {
     /// Top-level orchestrator sessions leave this unset and are treated as `Root`
     /// by the agents mailbox layer.
     pub actor_id: Option<String>,
+    /// Server-authoritative session scope used by project-bound capability families.
+    pub session_scope: Option<String>,
+    /// Server-authoritative owner and memory scope for resource calls.
+    ///
+    /// Product handlers must compare requested subjects/scopes against this
+    /// value instead of trusting model- or client-supplied arguments.
+    pub memory_authority: Option<MemoryAuthority>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryAuthority {
+    pub subject: String,
+    pub scope: String,
 }
 
 impl std::fmt::Debug for InvocationCtx {
@@ -117,6 +130,8 @@ impl std::fmt::Debug for InvocationCtx {
             .field("approval_timeout", &self.approval_timeout)
             .field("session_id", &self.session_id)
             .field("actor_id", &self.actor_id)
+            .field("session_scope", &self.session_scope)
+            .field("memory_authority", &self.memory_authority)
             .finish_non_exhaustive()
     }
 }
@@ -142,6 +157,8 @@ impl InvocationCtx {
             events: Arc::new(NoopHostEventSink),
             session_id: String::new(),
             actor_id: None,
+            session_scope: None,
+            memory_authority: None,
         }
     }
 
@@ -152,6 +169,46 @@ impl InvocationCtx {
 
     pub fn with_actor_id(mut self, actor_id: Option<impl Into<String>>) -> Self {
         self.actor_id = actor_id.map(Into::into);
+        self
+    }
+
+    pub fn with_session_scope(mut self, scope: impl Into<String>) -> Self {
+        self.session_scope = Some(scope.into());
+        self
+    }
+
+    pub fn require_linked_alias(&self, alias: &str) -> Result<()> {
+        let Some(scope) = self.session_scope.as_deref() else {
+            if self.session_id.is_empty() || self.session_id == "default" {
+                return Ok(());
+            }
+            return Err(HostError::CapabilityDenied(
+                "linked resources require server-authoritative project scope".to_string(),
+            ));
+        };
+        let Some(project) = scope.strip_prefix("project:") else {
+            return Err(HostError::CapabilityDenied(format!(
+                "linked resources are unavailable from non-project session scope {scope}"
+            )));
+        };
+        if project == alias {
+            Ok(())
+        } else {
+            Err(HostError::CapabilityDenied(format!(
+                "linked alias {alias} is outside authorized scope {scope}"
+            )))
+        }
+    }
+
+    pub fn with_memory_authority(
+        mut self,
+        subject: impl Into<String>,
+        scope: impl Into<String>,
+    ) -> Self {
+        self.memory_authority = Some(MemoryAuthority {
+            subject: subject.into(),
+            scope: scope.into(),
+        });
         self
     }
 
@@ -284,5 +341,24 @@ pub struct DefaultDenyApprovalPolicy;
 impl ApprovalPolicy for DefaultDenyApprovalPolicy {
     async fn request(&self, action: &str, _timeout: Duration) -> Result<ApprovalDecision> {
         Err(HostError::ApprovalTimeout(action.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_authority_is_explicit_and_server_supplied() {
+        let ctx = InvocationCtx::new(CapabilityGrants::default())
+            .with_memory_authority("brian", "project:tempestmiku");
+
+        assert_eq!(
+            ctx.memory_authority,
+            Some(MemoryAuthority {
+                subject: "brian".to_string(),
+                scope: "project:tempestmiku".to_string(),
+            })
+        );
     }
 }

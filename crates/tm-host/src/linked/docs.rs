@@ -203,7 +203,7 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
             result_schema: Some(code_edit_result_schema()),
             examples: vec![ToolExample {
                 title: Some("Replace one line".to_string()),
-                code: "const [hit] = await code.search({ pattern: 'old', paths: ['tempestmiku:src/lib.rs'], regex: false });\nawait code.edit({ path: hit.path, tag: hit.tag, hunks: [{ op: 'replace', startLine: hit.line, endLine: hit.line, lines: ['new'] }] });"
+                code: "const hits = await code.search({ pattern: 'old', paths: ['tempestmiku:src/lib.rs'], regex: false });\nconst hit = hits[0];\nawait code.edit({ path: hit.path, tag: hit.tag, hunks: [{ op: 'replace', startLine: hit.line, endLine: hit.line, lines: ['new'] }] });"
                     .to_string(),
                 notes: Some("Existing files require a fresh tag from code.search or another read/search path.".to_string()),
             }],

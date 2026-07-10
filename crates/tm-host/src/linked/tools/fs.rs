@@ -25,7 +25,7 @@ impl HostFn for FsReadFn {
         &self.docs
     }
 
-    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         #[derive(Deserialize)]
         struct Args {
             path: String,
@@ -34,6 +34,7 @@ impl HostFn for FsReadFn {
             raw: Option<bool>,
         }
         let args: Args = parse_args(args)?;
+        ctx.require_linked_alias(&parse_linked_path(&args.path)?.alias)?;
         serde_json::to_value(
             self.linked
                 .read_resource(&args.path, args.selector.as_deref())?,
@@ -91,6 +92,7 @@ impl HostFn for FsWriteFn {
             mime: Option<String>,
         }
         let args: Args = parse_args(args)?;
+        ctx.require_linked_alias(&parse_linked_path(&args.path)?.alias)?;
         let resolved = self
             .linked
             .resolve_for_create(&args.path, args.create_parents)?;
@@ -150,7 +152,7 @@ impl HostFn for FsLsFn {
         &self.docs
     }
 
-    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Args {
@@ -163,6 +165,7 @@ impl HostFn for FsLsFn {
         }
         let args: Args = parse_args(args)?;
         let resolved = self.linked.resolve_existing(args.path.as_deref())?;
+        ctx.require_linked_alias(&resolved.alias)?;
         let entries = list_entries(
             &resolved,
             args.recursive,
@@ -193,7 +196,7 @@ impl HostFn for FsFindFn {
         &self.docs
     }
 
-    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Args {
@@ -209,6 +212,7 @@ impl HostFn for FsFindFn {
         let patterns = args.patterns.into_vec();
         let globset = compile_globs(&patterns)?;
         let resolved = self.linked.resolve_existing(args.cwd.as_deref())?;
+        ctx.require_linked_alias(&resolved.alias)?;
         let root_ignores = if respect_gitignore {
             load_simple_gitignore(&resolved.policy.root)?
         } else {

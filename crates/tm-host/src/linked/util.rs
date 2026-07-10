@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
-    fs, io,
+    fs::{self, File},
+    io::{self, BufRead, BufReader},
     path::{Component, Path, PathBuf},
     time::SystemTime,
 };
@@ -190,9 +191,72 @@ pub(super) fn path_slash(path: &Path) -> String {
         .join("/")
 }
 
-pub(super) fn select_text(content: &str, selector: Option<&str>) -> Result<(String, bool)> {
+const DEFAULT_READ_LINES: usize = 200;
+const DEFAULT_READ_BYTES: usize = 64 * 1024;
+const MAX_READ_LINES: usize = 1_000;
+const MAX_READ_BYTES: usize = 256 * 1024;
+
+pub(super) fn read_text_page(path: &Path, selector: Option<&str>) -> Result<(String, bool)> {
+    let (start, end, byte_limit) = parse_text_selector(selector)?;
+    let normalize_selected_lines = selector.is_some();
+    let file = File::open(path).map_err(|err| HostError::HostCall(err.to_string()))?;
+    let mut reader = BufReader::new(file);
+    for _ in 1..start {
+        if reader
+            .skip_until(b'\n')
+            .map_err(|err| HostError::HostCall(err.to_string()))?
+            == 0
+        {
+            return Ok((String::new(), false));
+        }
+    }
+
+    let mut selected = Vec::new();
+    let mut truncated = false;
+    for (selected_lines, _) in (start..=end).enumerate() {
+        let separator = usize::from(normalize_selected_lines && selected_lines > 0);
+        let remaining = byte_limit.saturating_sub(selected.len().saturating_add(separator));
+        let Some((mut line, line_truncated)) = read_bounded_line(&mut reader, remaining)? else {
+            break;
+        };
+        if normalize_selected_lines {
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            if separator == 1 {
+                selected.push(b'\n');
+            }
+        }
+        selected.extend_from_slice(&line);
+        if line_truncated {
+            truncated = true;
+            break;
+        }
+    }
+    let has_more = truncated
+        || !reader
+            .fill_buf()
+            .map_err(|err| HostError::HostCall(err.to_string()))?
+            .is_empty();
+    if let Err(error) = std::str::from_utf8(&selected) {
+        if error.error_len().is_some() {
+            return Err(HostError::InvalidArgs(
+                "fs.read supports UTF-8 text only".to_string(),
+            ));
+        }
+        selected.truncate(error.valid_up_to());
+    }
+    let selected = String::from_utf8(selected)
+        .map_err(|_| HostError::InvalidArgs("fs.read supports UTF-8 text only".to_string()))?;
+    Ok((selected, has_more))
+}
+
+fn parse_text_selector(selector: Option<&str>) -> Result<(usize, usize, usize)> {
     let Some(selector) = selector else {
-        return Ok((content.to_string(), false));
+        return Ok((1, DEFAULT_READ_LINES, DEFAULT_READ_BYTES));
     };
     let (start, end) = selector
         .split_once('-')
@@ -203,20 +267,53 @@ pub(super) fn select_text(content: &str, selector: Option<&str>) -> Result<(Stri
     let end: usize = end
         .parse()
         .map_err(|_| HostError::InvalidArgs(format!("invalid selector {selector}")))?;
-    if start == 0 || end < start {
+    let line_count = end
+        .checked_sub(start)
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| HostError::InvalidArgs(format!("invalid selector {selector}")))?;
+    if start == 0 || end < start || line_count > MAX_READ_LINES {
         return Err(HostError::InvalidArgs(format!(
             "invalid selector {selector}"
         )));
     }
-    let lines: Vec<&str> = content.lines().collect();
-    let selected = lines
-        .iter()
-        .skip(start - 1)
-        .take(end - start + 1)
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok((selected, end < lines.len()))
+    Ok((start, end, MAX_READ_BYTES))
+}
+
+fn read_bounded_line<R: BufRead>(reader: &mut R, limit: usize) -> Result<Option<(Vec<u8>, bool)>> {
+    let mut line = Vec::new();
+    loop {
+        let buffer = reader
+            .fill_buf()
+            .map_err(|err| HostError::HostCall(err.to_string()))?;
+        if buffer.is_empty() {
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some((line, false)))
+            };
+        }
+        if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+            let content = &buffer[..=newline];
+            let available = limit.saturating_sub(line.len());
+            let copied = content.len().min(available);
+            line.extend_from_slice(&content[..copied]);
+            if copied < content.len() {
+                reader.consume(copied);
+                return Ok(Some((line, true)));
+            }
+            reader.consume(newline + 1);
+            return Ok(Some((line, false)));
+        }
+
+        let available = limit.saturating_sub(line.len());
+        let buffer_len = buffer.len();
+        let copied = buffer_len.min(available);
+        line.extend_from_slice(&buffer[..copied]);
+        reader.consume(copied);
+        if copied < buffer_len || available == 0 {
+            return Ok(Some((line, true)));
+        }
+    }
 }
 
 pub(super) fn list_entries(

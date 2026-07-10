@@ -24,19 +24,22 @@ impl ResourceHandler for LinkedResourceHandler {
         &self,
         uri: &str,
         selector: Option<&str>,
-        _ctx: &InvocationCtx,
+        ctx: &InvocationCtx,
     ) -> Result<ResourceContent> {
+        ctx.require_linked_alias(&parse_linked_path(uri)?.alias)?;
         self.linked.read_resource(uri, selector)
     }
 
-    async fn preview(&self, uri: &str, _ctx: &InvocationCtx) -> Result<ResourceContent> {
+    async fn preview(&self, uri: &str, ctx: &InvocationCtx) -> Result<ResourceContent> {
+        ctx.require_linked_alias(&parse_linked_path(uri)?.alias)?;
         let mut content = self.linked.read_resource(uri, None)?;
         content.content.clear();
         Ok(content)
     }
 
-    async fn list(&self, uri: Option<&str>, _ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
+    async fn list(&self, uri: Option<&str>, ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
         let resolved = self.linked.resolve_existing(uri)?;
+        ctx.require_linked_alias(&resolved.alias)?;
         list_entries(&resolved, false, 1000, false).map(|entries| {
             entries
                 .into_iter()

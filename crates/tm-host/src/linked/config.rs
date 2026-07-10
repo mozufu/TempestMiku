@@ -12,7 +12,7 @@ use crate::{HostError, Result};
 
 use super::util::{
     ensure_existing_ancestor_under_root, ensure_under_root, linked_uri, parse_linked_path,
-    select_text, validate_alias, validate_command_name,
+    read_text_page, validate_alias, validate_command_name,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -271,12 +271,12 @@ impl LinkedFolders {
         selector: Option<&str>,
     ) -> Result<ResourceContent> {
         let resolved = self.resolve_existing(Some(path))?;
-        let bytes = fs::read(&resolved.path).map_err(|err| HostError::HostCall(err.to_string()))?;
-        let content = String::from_utf8(bytes).map_err(|_| {
-            HostError::InvalidArgs("fs.read supports UTF-8 text only in P0".to_string())
-        })?;
-        let size_bytes = content.len();
-        let (selected, has_more) = select_text(&content, selector)?;
+        let size_bytes = fs::metadata(&resolved.path)
+            .map_err(|err| HostError::HostCall(err.to_string()))?
+            .len()
+            .try_into()
+            .map_err(|_| HostError::HostCall("linked file is too large".to_string()))?;
+        let (selected, has_more) = read_text_page(&resolved.path, selector)?;
         Ok(ResourceContent {
             uri: linked_uri(&resolved.alias, &resolved.relative),
             kind: "text".to_string(),

@@ -33,7 +33,7 @@ impl HostFn for CodeSearchFn {
         &self.docs
     }
 
-    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> Result<Value> {
+    async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Args {
@@ -58,6 +58,7 @@ impl HostFn for CodeSearchFn {
         let limit = args.limit.unwrap_or(1000);
         let mut files = Vec::new();
         for path in &args.paths {
+            ctx.require_linked_alias(&parse_linked_path(path)?.alias)?;
             let resolved = self.linked.resolve_existing(Some(path))?;
             if resolved.path.is_dir() {
                 collect_files(&resolved, &mut files)?;
@@ -178,6 +179,7 @@ impl HostFn for CodeEditFn {
 
     async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         let edit: PatchEdit = parse_args(args)?;
+        ctx.require_linked_alias(&parse_linked_path(&edit.path)?.alias)?;
         if edit.hunks.is_empty() {
             return Err(HostError::InvalidArgs(
                 "code.edit requires at least one hunk".to_string(),

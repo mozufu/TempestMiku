@@ -224,6 +224,26 @@ async fn linked_path_vanished_fails_closed_without_host_path() {
     assert!(!error.contains(root.path().to_str().unwrap()));
 }
 
+#[test]
+fn linked_text_reads_are_paged_before_loading_the_whole_file() {
+    let root = tempfile::tempdir().unwrap();
+    let content = (0..400)
+        .map(|line| format!("{line:04} {}\n", "x".repeat(512)))
+        .collect::<String>();
+    fs::write(root.path().join("large.txt"), &content).unwrap();
+    let linked = temp_linked(root.path(), FsMode::Ro);
+
+    let page = linked.read_resource("tempestmiku:large.txt", None).unwrap();
+    assert!(page.content.len() <= 64 * 1024);
+    assert!(page.has_more);
+    assert_eq!(page.size_bytes, content.len());
+
+    let error = linked
+        .read_resource("tempestmiku:large.txt", Some("1-1001"))
+        .unwrap_err();
+    assert!(matches!(error, HostError::InvalidArgs(_)));
+}
+
 #[tokio::test]
 async fn fs_read_write_ls_find_honor_mode_and_gitignore() {
     let root = tempfile::tempdir().unwrap();
@@ -458,11 +478,12 @@ async fn proc_run_allows_safe_prefix_approval_gates_unsafe_and_spills() {
     fs::create_dir(root.path().join("src")).unwrap();
     fs::write(
         root.path().join("src/lib.rs"),
-        "#[test]\nfn prints() { println!(\"{}\", \"x\".repeat(60000)); }\n",
+        "#[test]\nfn prints() { println!(\"sk-testsecret123456 {}\", \"x\".repeat(60000)); }\n",
     )
     .unwrap();
     let artifact_dir = tempfile::tempdir().unwrap();
     let store = ArtifactStore::open(artifact_dir.path(), "proc").unwrap();
+    let read_store = store.clone();
     let proc_run = ProcRunFn::new(temp_linked(root.path(), FsMode::Rw), store);
     let value = call_fn(
         &proc_run,
@@ -500,4 +521,9 @@ async fn proc_run_allows_safe_prefix_approval_gates_unsafe_and_spills() {
             .unwrap()
             .starts_with("artifact://")
     );
+    let persisted = read_store
+        .read(spill["artifact"]["uri"].as_str().unwrap(), None)
+        .unwrap();
+    assert!(!persisted.content.contains("sk-testsecret123456"));
+    assert!(persisted.content.contains("[REDACTED_TOKEN]"));
 }

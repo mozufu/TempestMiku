@@ -20,8 +20,8 @@ use crate::{
 
 use super::util::{
     apply_line_hunks, collect_files, compile_globs, display_path, ensure_rw, file_tag, fs_entry,
-    linked_uri, list_entries, load_simple_gitignore, parse_args, simple_diff, stdin_present,
-    validate_command_name,
+    linked_uri, list_entries, load_simple_gitignore, parse_args, parse_linked_path, simple_diff,
+    stdin_present, validate_command_name,
 };
 use super::{LinkedFolders, docs::docs};
 

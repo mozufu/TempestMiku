@@ -26,28 +26,24 @@ pub struct ModeResponse {
 
 pub(super) async fn list_modes<S, M, C>(
     State(state): State<AppState<S, M, C>>,
-    headers: HeaderMap,
 ) -> Result<Json<ModeCatalog>>
 where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     Ok(Json(state.persona.load_assets().modes))
 }
 
 pub(super) async fn get_mode<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
 ) -> Result<Json<ModeResponse>>
 where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     Ok(Json(mode_response(
         &state.persona,
@@ -60,7 +56,6 @@ where
 pub(super) async fn suggest_mode<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<ModeRequest>,
 ) -> Result<Json<ModeResponse>>
 where
@@ -68,7 +63,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     if let Some(mode) = payload.mode {
         validate_mode(&state.persona, mode)?;
@@ -86,7 +80,7 @@ where
         session.mode_state,
         false,
         Some(
-            "mode suggestions are approval-backed through the mode_suggest tool; use apply or override for an explicit user switch"
+            "mode suggestions are approval-backed through the modes.suggest SDK capability; use apply or override for an explicit user switch"
                 .to_string(),
         ),
     )))
@@ -95,7 +89,6 @@ where
 pub(super) async fn apply_mode<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<ModeRequest>,
 ) -> Result<Json<ModeResponse>>
 where
@@ -103,7 +96,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     if session.mode_state.lock_source.is_some() {
         return Ok(Json(mode_response(
@@ -134,7 +126,6 @@ where
 pub(super) async fn lock_mode<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<ModeRequest>,
 ) -> Result<Json<ModeResponse>>
 where
@@ -142,7 +133,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     let mut next = session.mode_state.clone();
     if let Some(mode) = payload.mode {
@@ -164,7 +154,6 @@ where
 pub(super) async fn unlock_mode<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<ModeRequest>,
 ) -> Result<Json<ModeResponse>>
 where
@@ -172,7 +161,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     let mut next = session.mode_state.clone();
     next.lock_source = None;
@@ -191,7 +179,6 @@ where
 pub(super) async fn override_mode<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<ModeRequest>,
 ) -> Result<Json<ModeResponse>>
 where
@@ -199,7 +186,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
     let mode = payload
         .mode
@@ -250,15 +236,44 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
+    commit_mode_state_parts(
+        &state.store,
+        &state.persona,
+        state.sender(session.id),
+        session,
+        next,
+    )
+    .await
+}
+
+pub(super) async fn commit_mode_state_parts<S>(
+    store: &Arc<S>,
+    persona: &ModesConfig,
+    sender: broadcast::Sender<SessionEvent>,
+    session: crate::SessionRecord,
+    mut next: ModeState,
+) -> Result<(crate::SessionRecord, bool)>
+where
+    S: Store,
+{
+    for value in [
+        &mut next.router_reason,
+        &mut next.lock_source,
+        &mut next.override_source,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *value = tm_memory::redact_dream_text(value).text;
+    }
     let changed = session.mode_state != next;
     if !changed {
         return Ok((session, false));
     }
     let from = Some(session.mode_state.mode.clone());
-    let updated = state.store.set_mode_state(session.id, next).await?;
-    let profile = mode_profile(&state.persona, &updated.mode_state.mode);
-    let event = state
-        .store
+    let updated = store.set_mode_state(session.id, next).await?;
+    let profile = mode_profile(persona, &updated.mode_state.mode);
+    let event = store
         .append_event(
             session.id,
             "mode",
@@ -270,7 +285,7 @@ where
             )?,
         )
         .await?;
-    let _ = state.sender(session.id).send(event);
+    let _ = sender.send(event);
     Ok((updated, true))
 }
 
@@ -280,19 +295,21 @@ pub(crate) fn mode_changed_payload(
     persona_status: crate::AssetStatus,
     profile: &ModeProfile,
 ) -> Result<Value> {
-    Ok(serde_json::to_value(StoreEvent::ModeChanged {
-        from,
-        mode: mode_state.mode.clone(),
-        label: profile.label.clone(),
-        voice_cap: profile.voice_cap.clone(),
-        capabilities: profile.capabilities.clone(),
-        active_skills: profile.active_skills.clone(),
-        router_reason: mode_state.router_reason.clone(),
-        lock_source: mode_state.lock_source.clone(),
-        override_source: mode_state.override_source.clone(),
-        updated_at: mode_state.updated_at,
-        persona_status,
-    })?)
+    Ok(serde_json::to_value(StoreEvent::ModeChanged(Box::new(
+        crate::store::ModeChangedStoreEvent {
+            from,
+            mode: mode_state.mode.clone(),
+            label: profile.label.clone(),
+            voice_cap: profile.voice_cap.clone(),
+            capabilities: profile.capabilities.clone(),
+            active_skills: profile.active_skills.clone(),
+            router_reason: mode_state.router_reason.clone(),
+            lock_source: mode_state.lock_source.clone(),
+            override_source: mode_state.override_source.clone(),
+            updated_at: mode_state.updated_at,
+            persona_status,
+        },
+    )))?)
 }
 
 pub(crate) fn mode_profile(persona: &ModesConfig, mode: &ModeId) -> ModeProfile {

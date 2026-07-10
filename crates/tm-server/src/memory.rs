@@ -14,8 +14,8 @@ pub const DEFAULT_MEMORY_RESOURCE_RECALL_LIMIT: usize = 20;
 
 pub use context::{MemoryContext, MemoryPromptBudget, MemoryPromptItem};
 pub use proposal::{
-    MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, profile_fact_record,
-    recall_chunk_record,
+    MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus,
+    ProfileFactProposalInput, profile_fact_record, recall_chunk_record,
 };
 pub use provider::{MemoryProvider, StoreMemoryProvider};
 pub use resource::MemoryResourceHandler;

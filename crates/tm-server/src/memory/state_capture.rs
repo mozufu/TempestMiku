@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::Result;
 
-use super::MemoryWriteProposal;
 use super::util::normalize_for_dedupe;
+use super::{MemoryWriteProposal, ProfileFactProposalInput};
 
 const MAX_STATE_CAPTURE_PROPOSALS_PER_TURN: usize = 6;
 const STATE_CAPTURE_MAX_TEXT_CHARS: usize = 280;
@@ -60,16 +60,16 @@ pub fn personal_assistant_state_capture_proposals(
         match candidate.category {
             StateCaptureCategory::StablePreference => {
                 proposals.push(
-                    MemoryWriteProposal::profile_fact(
-                        subject.to_string(),
-                        "prefers".to_string(),
-                        candidate.body,
-                        0.82,
-                        source.clone(),
-                        STATE_CAPTURE_PROVENANCE_LABEL.to_string(),
+                    MemoryWriteProposal::profile_fact(ProfileFactProposalInput {
+                        subject: subject.to_string(),
+                        predicate: "prefers".to_string(),
+                        object: candidate.body,
+                        confidence: 0.82,
+                        source: source.clone(),
+                        provenance_label: STATE_CAPTURE_PROVENANCE_LABEL.to_string(),
                         provenance,
                         created_at,
-                    )?
+                    })?
                     .with_importance_score(candidate.category.importance_score()),
                 );
             }
@@ -303,6 +303,7 @@ fn should_skip_state_capture_input(text: &str) -> bool {
     trimmed.is_empty()
         || trimmed.chars().count() > 2_000
         || trimmed.lines().count() > 20
+        || contains_redactable_sensitive_data(trimmed)
         || contains_secret_signal(trimmed)
         || contains_sensitive_pii_signal(trimmed)
         || looks_like_raw_log(trimmed)
@@ -311,7 +312,8 @@ fn should_skip_state_capture_input(text: &str) -> bool {
 }
 
 fn should_skip_state_capture_unit(unit: &str) -> bool {
-    contains_secret_signal(unit)
+    contains_redactable_sensitive_data(unit)
+        || contains_secret_signal(unit)
         || contains_sensitive_pii_signal(unit)
         || looks_like_raw_log(unit)
         || looks_like_project_command(unit)
@@ -408,6 +410,7 @@ fn contains_secret_signal(text: &str) -> bool {
     contains_any(
         &lower,
         &[
+            "[redacted_",
             "password",
             "passphrase",
             "api key",
@@ -422,6 +425,10 @@ fn contains_secret_signal(text: &str) -> bool {
             "oauth",
         ],
     )
+}
+
+fn contains_redactable_sensitive_data(text: &str) -> bool {
+    tm_memory::contains_sensitive_data(text)
 }
 
 fn contains_sensitive_pii_signal(text: &str) -> bool {
@@ -591,6 +598,7 @@ fn clean_state_capture_body(text: &str) -> Option<String> {
         .to_string();
     if cleaned.is_empty()
         || cleaned.chars().count() > STATE_CAPTURE_MAX_TEXT_CHARS
+        || contains_redactable_sensitive_data(&cleaned)
         || contains_secret_signal(&cleaned)
         || contains_sensitive_pii_signal(&cleaned)
         || looks_like_raw_log(&cleaned)

@@ -322,6 +322,8 @@ fn personal_assistant_state_capture_does_not_capture_noise_or_sensitive_content(
         "I'm overwhelmed and sad tonight.",
         "Just venting: that meeting was annoying.",
         "Please remember my password is hunter2.",
+        "Reminder: rotate sk-testsecret123456 tomorrow.",
+        "Remember to contact brian@example.com after release.",
         "Remember my passport number is X1234567.",
         "2026-07-03 ERROR failed to connect\n2026-07-03 WARN retrying\nstack backtrace:",
         "```text\nINFO raw logs should stay out of memory\nERROR nope\n```",

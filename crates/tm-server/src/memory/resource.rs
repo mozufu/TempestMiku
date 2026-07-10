@@ -71,14 +71,16 @@ where
         &self,
         uri: &str,
         selector: Option<&str>,
-        _ctx: &InvocationCtx,
+        ctx: &InvocationCtx,
     ) -> HostResult<ResourceContent> {
+        let authority = self.authority(ctx, uri)?;
         match parse_memory_uri(uri)? {
             MemoryUri::Root => self.root_resource(selector).await,
             MemoryUri::UserModel => self.user_model_resource(selector).await,
             MemoryUri::Dreams => self.dream_queue_resource(selector).await,
             MemoryUri::Dream { id } => {
                 let dream = self.store.dream(id).await.map_err(map_memory_store_error)?;
+                ensure_authorized_record(authority, &dream.subject, &dream.scope, uri)?;
                 self.text_resource(
                     &dream_uri(&dream),
                     "memory_dream",
@@ -88,6 +90,7 @@ where
                 )
             }
             MemoryUri::ProfileFact { subject, id } => {
+                ensure_authorized_subject(authority, &subject, uri)?;
                 let fact = self
                     .store
                     .profile_fact(&subject, id)
@@ -102,6 +105,7 @@ where
                 )
             }
             MemoryUri::RecallChunk { scope, id } => {
+                ensure_authorized_scope(authority, &scope, uri)?;
                 let chunk = self
                     .store
                     .recall_chunk(&scope, id)
@@ -121,6 +125,7 @@ where
                     .memory_summary(id)
                     .await
                     .map_err(map_memory_store_error)?;
+                ensure_authorized_record(authority, &summary.subject, &summary.scope, uri)?;
                 self.text_resource(
                     &summary_uri(&summary),
                     "memory_summary",
@@ -135,6 +140,17 @@ where
                     .skill_proposal(id)
                     .await
                     .map_err(map_memory_store_error)?;
+                let source_dream = self
+                    .store
+                    .dream(proposal.source_dream_id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                ensure_authorized_record(
+                    authority,
+                    &source_dream.subject,
+                    &source_dream.scope,
+                    uri,
+                )?;
                 self.text_resource(
                     &skill_proposal_uri(&proposal),
                     "memory_skill_proposal",
@@ -154,16 +170,16 @@ where
         Ok(content)
     }
 
-    async fn list(
-        &self,
-        uri: Option<&str>,
-        _ctx: &InvocationCtx,
-    ) -> HostResult<Vec<ResourceEntry>> {
+    async fn list(&self, uri: Option<&str>, ctx: &InvocationCtx) -> HostResult<Vec<ResourceEntry>> {
         let uri = uri.unwrap_or("memory://root");
+        let authority = self.authority(ctx, uri)?;
         match parse_memory_list_uri(uri)? {
             MemoryListUri::Root => self.root_entries().await,
             MemoryListUri::UserModel => self.profile_fact_entries().await,
-            MemoryListUri::ScopeChunks { scope } => self.recall_chunk_entries(&scope).await,
+            MemoryListUri::ScopeChunks { scope } => {
+                ensure_authorized_scope(authority, &scope, uri)?;
+                self.recall_chunk_entries(&scope).await
+            }
             MemoryListUri::Summaries => self.summary_entries(&self.scope).await,
             MemoryListUri::Dreams => self.dream_entries(&self.scope).await,
         }
@@ -174,6 +190,21 @@ impl<S> MemoryResourceHandler<S>
 where
     S: Store,
 {
+    fn authority<'a>(
+        &self,
+        ctx: &'a InvocationCtx,
+        uri: &str,
+    ) -> HostResult<&'a tm_host::MemoryAuthority> {
+        let authority = ctx
+            .memory_authority
+            .as_ref()
+            .ok_or_else(|| unauthorized_memory_resource(uri))?;
+        if authority.subject != self.subject || authority.scope != self.scope {
+            return Err(unauthorized_memory_resource(uri));
+        }
+        Ok(authority)
+    }
+
     async fn root_resource(&self, selector: Option<&str>) -> HostResult<ResourceContent> {
         let facts = self
             .store
@@ -380,6 +411,44 @@ where
             content: selected,
         })
     }
+}
+
+fn ensure_authorized_subject(
+    authority: &tm_host::MemoryAuthority,
+    subject: &str,
+    uri: &str,
+) -> HostResult<()> {
+    if authority.subject == subject {
+        Ok(())
+    } else {
+        Err(unauthorized_memory_resource(uri))
+    }
+}
+
+fn ensure_authorized_scope(
+    authority: &tm_host::MemoryAuthority,
+    scope: &str,
+    uri: &str,
+) -> HostResult<()> {
+    if authority.scope == scope {
+        Ok(())
+    } else {
+        Err(unauthorized_memory_resource(uri))
+    }
+}
+
+fn ensure_authorized_record(
+    authority: &tm_host::MemoryAuthority,
+    subject: &str,
+    scope: &str,
+    uri: &str,
+) -> HostResult<()> {
+    ensure_authorized_subject(authority, subject, uri)?;
+    ensure_authorized_scope(authority, scope, uri)
+}
+
+fn unauthorized_memory_resource(uri: &str) -> HostError {
+    HostError::NotFound(format!("memory resource {uri}"))
 }
 
 enum MemoryUri {
@@ -801,7 +870,9 @@ fn map_memory_store_error(err: ServerError) -> HostError {
         ServerError::NotFound(target) => HostError::NotFound(target),
         ServerError::Policy(message) => HostError::InvalidPath(message),
         ServerError::Forbidden => HostError::InvalidPath("forbidden memory resource".to_string()),
-        ServerError::InvalidRequest(message) => HostError::InvalidArgs(message),
+        ServerError::InvalidRequest(message) | ServerError::Conflict(message) => {
+            HostError::InvalidArgs(message)
+        }
         ServerError::Unauthorized => {
             HostError::CapabilityDenied("resources.read:memory".to_string())
         }

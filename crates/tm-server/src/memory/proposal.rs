@@ -74,17 +74,29 @@ pub struct MemoryRecordRef {
     pub kind: MemoryWriteKind,
 }
 
+pub struct ProfileFactProposalInput {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub confidence: f32,
+    pub source: String,
+    pub provenance_label: String,
+    pub provenance: Value,
+    pub created_at: DateTime<Utc>,
+}
+
 impl MemoryWriteProposal {
-    pub fn profile_fact(
-        subject: String,
-        predicate: String,
-        object: String,
-        confidence: f32,
-        source: String,
-        provenance_label: String,
-        provenance: Value,
-        created_at: DateTime<Utc>,
-    ) -> Result<Self> {
+    pub fn profile_fact(input: ProfileFactProposalInput) -> Result<Self> {
+        let ProfileFactProposalInput {
+            subject,
+            predicate,
+            object,
+            confidence,
+            source,
+            provenance_label,
+            provenance,
+            created_at,
+        } = input;
         let subject = clean_required("subject", subject)?;
         let predicate = clean_required("predicate", predicate)?;
         let object = clean_required("object", object)?;

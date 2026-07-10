@@ -18,8 +18,8 @@ use parking_lot::Mutex;
 use tm_artifacts::default_root;
 use tm_core::{Agent, AgentConfig, CellBudget, EventSink, Protocol, Sandbox};
 use tm_host::{
-    ApprovalDecision, ApprovalPolicy, DefaultDenyApprovalPolicy, HostError, LinkedFolders,
-    P0HostConfig,
+    ApprovalDecision, ApprovalPolicy, CapabilityGrants, DefaultDenyApprovalPolicy, HostError,
+    LinkedFolders, P0HostConfig,
 };
 use tm_llm::OpenAiClient;
 use tm_modes::{ModeId, ModesConfig};
@@ -280,6 +280,11 @@ fn build_sandbox(
     if args.stub_sandbox {
         return Ok(Arc::new(StubSandbox));
     }
+    // The standalone CLI is its own local authority boundary. A single configured
+    // linked folder is unambiguous; multiple folders remain fail-closed until the
+    // CLI grows an explicit project selector.
+    let policies = linked_folders.policies();
+    let session_scope = (policies.len() == 1).then(|| format!("project:{}", policies[0].alias));
     let linked_folders = (!linked_folders.is_empty()).then_some(linked_folders);
     Ok(Arc::new(DenoSandbox::new(DenoSandboxOptions {
         artifact_root: host_config
@@ -287,11 +292,20 @@ fn build_sandbox(
             .clone()
             .unwrap_or_else(default_root),
         session_id: args.session_id.clone().unwrap_or_else(|| "cli".to_string()),
+        session_scope,
         linked_folders,
+        grants: serious_engineer_grants(),
         approval_policy: approval_policy(host_config)?,
         approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
         ..DenoSandboxOptions::default()
     })))
+}
+
+fn serious_engineer_grants() -> CapabilityGrants {
+    let profile = ModesConfig::default()
+        .load_assets()
+        .profile_or_unknown(&ModeId::from("serious_engineer"));
+    CapabilityGrants::default().allow_many(profile.capabilities)
 }
 
 fn approval_policy(config: &P0HostConfig) -> Result<Arc<dyn ApprovalPolicy>> {
@@ -461,5 +475,12 @@ mod tests {
                 .contains("Serious Engineer Operating Notes")
         );
         assert!(cfg.system_prompt.contains("proc.run(cmd, args)"));
+
+        let grants = serious_engineer_grants();
+        assert!(grants.permits("fs.read"));
+        assert!(grants.permits("code.search"));
+        assert!(grants.permits("proc.run"));
+        assert!(grants.permits("resources.read:linked"));
+        assert!(!grants.permits("agents.spawn"));
     }
 }

@@ -220,11 +220,12 @@ impl StubOpenAiServer {
 
             let code = r#"
 const before = await fs.read("linked://repo/src/lib.rs");
-const [hit] = await code.search({
+const hits = await code.search({
   pattern: '"old"',
   paths: ["repo:src/lib.rs"],
   regex: false
 });
+const hit = hits[0];
 const edit = await code.edit({
   path: hit.path,
   tag: hit.tag,
@@ -290,9 +291,9 @@ display({ ...summary, artifact: artifact.uri });
                 tool_content.contains("ApprovalTimeoutError"),
                 "{tool_content}"
             );
-            assert!(tool_content.contains("\"testExit\": 0"), "{tool_content}");
+            assert!(tool_content.contains("\"testExit\":0"), "{tool_content}");
             assert!(
-                tool_content.contains("\"testStdoutHasOk\": true"),
+                tool_content.contains("\"testStdoutHasOk\":true"),
                 "{tool_content}"
             );
             let final_chunk = json!({

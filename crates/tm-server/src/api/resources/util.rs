@@ -1,5 +1,61 @@
 use super::schemes::{list_linked_resources, read_linked_resource};
 use super::*;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+};
+
+pub(crate) fn validate_authorized_memory_scope(
+    linked_folders: &tm_host::LinkedFolders,
+    scope: &str,
+) -> Result<()> {
+    if scope == "global" {
+        return Ok(());
+    }
+    let project = scope
+        .strip_prefix("project:")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ServerError::InvalidRequest(
+                "scope must be global or project:<active-linked-alias>".to_string(),
+            )
+        })?;
+    linked_folders
+        .policy(project)
+        .map_err(|_| ServerError::NotFound(format!("active linked project scope {scope}")))?;
+    Ok(())
+}
+
+pub(crate) fn authorized_project_id(
+    session: &crate::SessionRecord,
+    requested: Option<&str>,
+) -> Result<String> {
+    let project_id = session
+        .memory_scope
+        .strip_prefix("project:")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ServerError::NotFound("active project scope".to_string()))?;
+    if requested.is_some_and(|requested| requested != project_id) {
+        return Err(ServerError::NotFound(format!(
+            "project {}",
+            requested.unwrap_or_default()
+        )));
+    }
+    Ok(project_id.to_string())
+}
+
+pub(crate) fn authorized_linked_alias(session: &crate::SessionRecord, uri: &str) -> Result<String> {
+    let alias = uri
+        .strip_prefix("linked://")
+        .and_then(|path| path.split('/').next())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ServerError::NotFound("linked resource".to_string()))?;
+    let project_id = authorized_project_id(session, None)?;
+    if alias != project_id {
+        return Err(ServerError::NotFound(format!("linked resource {uri}")));
+    }
+    Ok(alias.to_string())
+}
 
 pub(crate) fn validate_relative_path(path: &str) -> Result<PathBuf> {
     if path.contains('\0') {
@@ -50,6 +106,9 @@ where
     C: ChatRunner,
 {
     let (project_id, view) = parse_project_uri(uri)?;
+    let session = state.store.get_session(session_id).await?;
+    validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    authorized_project_id(&session, Some(&project_id))?;
     if let Some(view) = view.as_deref()
         && let Some(linked_uri) = project_linked_uri(view)
     {
@@ -125,6 +184,9 @@ where
     C: ChatRunner,
 {
     let (project_id, view) = parse_project_uri(uri)?;
+    let session = state.store.get_session(session_id).await?;
+    validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    authorized_project_id(&session, Some(&project_id))?;
     if let Some(view) = view.as_deref() {
         if view == "memory" {
             let policy = active_project_link_policy(&project_id, &state.linked_folders)
@@ -318,9 +380,73 @@ fn parse_project_uri(uri: &str) -> Result<(String, Option<String>)> {
     Ok((project_id.to_string(), view))
 }
 
-pub(super) fn select_text(content: &str, selector: Option<&str>) -> Result<(String, bool)> {
+const DEFAULT_READ_LINES: usize = 200;
+const DEFAULT_READ_BYTES: usize = 64 * 1024;
+const MAX_READ_LINES: usize = 1_000;
+const MAX_READ_BYTES: usize = 256 * 1024;
+
+pub(super) fn read_text_page(path: &FsPath, selector: Option<&str>) -> Result<(String, bool)> {
+    let (start, end, byte_limit) = parse_text_selector(selector)?;
+    let normalize_selected_lines = selector.is_some();
+    let file = File::open(path).map_err(|err| ServerError::Store(err.to_string()))?;
+    let mut reader = BufReader::new(file);
+    for _ in 1..start {
+        if reader
+            .skip_until(b'\n')
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            == 0
+        {
+            return Ok((String::new(), false));
+        }
+    }
+
+    let mut selected = Vec::new();
+    let mut truncated = false;
+    for (selected_lines, _) in (start..=end).enumerate() {
+        let separator = usize::from(normalize_selected_lines && selected_lines > 0);
+        let remaining = byte_limit.saturating_sub(selected.len().saturating_add(separator));
+        let Some((mut line, line_truncated)) = read_bounded_line(&mut reader, remaining)? else {
+            break;
+        };
+        if normalize_selected_lines {
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            if separator == 1 {
+                selected.push(b'\n');
+            }
+        }
+        selected.extend_from_slice(&line);
+        if line_truncated {
+            truncated = true;
+            break;
+        }
+    }
+    let has_more = truncated
+        || !reader
+            .fill_buf()
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .is_empty();
+    if let Err(error) = std::str::from_utf8(&selected) {
+        if error.error_len().is_some() {
+            return Err(ServerError::InvalidRequest(
+                "workspace reads support UTF-8 text only".to_string(),
+            ));
+        }
+        selected.truncate(error.valid_up_to());
+    }
+    let selected = String::from_utf8(selected).map_err(|_| {
+        ServerError::InvalidRequest("workspace reads support UTF-8 text only".to_string())
+    })?;
+    Ok((selected, has_more))
+}
+
+fn parse_text_selector(selector: Option<&str>) -> Result<(usize, usize, usize)> {
     let Some(selector) = selector else {
-        return Ok((content.to_string(), false));
+        return Ok((1, DEFAULT_READ_LINES, DEFAULT_READ_BYTES));
     };
     let (start, end) = selector
         .split_once('-')
@@ -331,20 +457,53 @@ pub(super) fn select_text(content: &str, selector: Option<&str>) -> Result<(Stri
     let end: usize = end
         .parse()
         .map_err(|_| ServerError::InvalidRequest(format!("invalid selector {selector}")))?;
-    if start == 0 || end < start {
+    let line_count = end
+        .checked_sub(start)
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| ServerError::InvalidRequest(format!("invalid selector {selector}")))?;
+    if start == 0 || end < start || line_count > MAX_READ_LINES {
         return Err(ServerError::InvalidRequest(format!(
             "invalid selector {selector}"
         )));
     }
-    let lines = content.lines().collect::<Vec<_>>();
-    let selected = lines
-        .iter()
-        .skip(start - 1)
-        .take(end - start + 1)
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok((selected, end < lines.len()))
+    Ok((start, end, MAX_READ_BYTES))
+}
+
+fn read_bounded_line<R: BufRead>(reader: &mut R, limit: usize) -> Result<Option<(Vec<u8>, bool)>> {
+    let mut line = Vec::new();
+    loop {
+        let buffer = reader
+            .fill_buf()
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        if buffer.is_empty() {
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some((line, false)))
+            };
+        }
+        if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
+            let content = &buffer[..=newline];
+            let available = limit.saturating_sub(line.len());
+            let copied = content.len().min(available);
+            line.extend_from_slice(&content[..copied]);
+            if copied < content.len() {
+                reader.consume(copied);
+                return Ok(Some((line, true)));
+            }
+            reader.consume(newline + 1);
+            return Ok(Some((line, false)));
+        }
+
+        let available = limit.saturating_sub(line.len());
+        let buffer_len = buffer.len();
+        let copied = buffer_len.min(available);
+        line.extend_from_slice(&buffer[..copied]);
+        reader.consume(copied);
+        if copied < buffer_len || available == 0 {
+            return Ok(Some((line, true)));
+        }
+    }
 }
 
 pub(crate) fn map_host_error(err: tm_host::HostError) -> ServerError {
@@ -364,6 +523,36 @@ pub(crate) fn map_artifact_error(err: tm_artifacts::ArtifactError) -> ServerErro
         tm_artifacts::ArtifactError::InvalidSelector(selector) => {
             ServerError::InvalidRequest(selector)
         }
+        other @ tm_artifacts::ArtifactError::QuotaExceeded { .. }
+        | other @ tm_artifacts::ArtifactError::InvalidLimits(_) => {
+            ServerError::InvalidRequest(other.to_string())
+        }
+        tm_artifacts::ArtifactError::Integrity(target) => {
+            ServerError::Store(format!("artifact integrity check failed for {target}"))
+        }
         tm_artifacts::ArtifactError::Io(err) => ServerError::Store(err.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_text_pages_are_bounded_before_full_file_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.txt");
+        let content = (0..400)
+            .map(|line| format!("{line:04} {}\n", "x".repeat(512)))
+            .collect::<String>();
+        std::fs::write(&path, content).unwrap();
+
+        let (page, has_more) = read_text_page(&path, None).unwrap();
+        assert!(page.len() <= DEFAULT_READ_BYTES);
+        assert!(has_more);
+        assert!(matches!(
+            read_text_page(&path, Some("1-1001")),
+            Err(ServerError::InvalidRequest(_))
+        ));
     }
 }

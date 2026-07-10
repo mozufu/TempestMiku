@@ -29,7 +29,11 @@ where
         Some("workspace") => {
             read_workspace_resource(&state.artifact_root, session_id, uri, selector)
         }
-        Some("linked") => read_linked_resource(&state.linked_folders, uri, selector).await,
+        Some("linked") => {
+            let session = state.store.get_session(session_id).await?;
+            super::util::authorized_linked_alias(&session, uri)?;
+            read_linked_resource(&state.linked_folders, uri, selector).await
+        }
         Some("project") => {
             super::util::read_project_resource(state, session_id, uri, selector).await
         }
@@ -37,7 +41,7 @@ where
         Some("agent") => read_agent_resource(state, uri, selector).await,
         Some("history") => read_history_resource(state, uri, selector).await,
         Some("cron") => read_cron_resource(state, uri).await,
-        Some("drive") => read_drive_resource(state, uri, selector).await,
+        Some("drive") => read_drive_resource(state, session_id, uri, selector).await,
         Some(scheme) => Err(ServerError::Policy(format!(
             "unknown resource scheme {scheme}; registered: {}",
             registered_resource_schemes(state).join(", ")
@@ -107,7 +111,11 @@ where
                 .collect())
         }
         Some("workspace") => list_workspace_resources(&state.artifact_root, session_id, uri),
-        Some("linked") => list_linked_resources(&state.linked_folders, Some(uri)).await,
+        Some("linked") => {
+            let session = state.store.get_session(session_id).await?;
+            super::util::authorized_linked_alias(&session, uri)?;
+            list_linked_resources(&state.linked_folders, Some(uri)).await
+        }
         Some("project") => super::util::list_project_resources(state, session_id, uri).await,
         Some("memory") => list_memory_resources(state, session_id, uri).await,
         Some("agent") => list_agent_resources(state, uri).await,
@@ -115,7 +123,7 @@ where
             "history:// listing not supported — read a specific history://<id>".to_string(),
         )),
         Some("cron") => list_cron_resources(state, uri).await,
-        Some("drive") => list_drive_resources(state, uri).await,
+        Some("drive") => list_drive_resources(state, session_id, uri).await,
         Some(scheme) => Err(ServerError::Policy(format!(
             "unknown resource scheme {scheme}; registered: {}",
             registered_resource_schemes(state).join(", ")

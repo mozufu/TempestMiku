@@ -1,5 +1,5 @@
 use super::dispatch::registered_resource_schemes;
-use super::util::{map_host_error, select_text};
+use super::util::{map_host_error, read_text_page};
 use super::*;
 
 pub(super) async fn read_cron_resource<S, M, C>(
@@ -154,6 +154,7 @@ pub(super) async fn list_linked_resources(
 
 pub(super) async fn read_drive_resource<S, M, C>(
     state: &AppState<S, M, C>,
+    session_id: Uuid,
     uri: &str,
     selector: Option<&str>,
 ) -> Result<ResourceContent>
@@ -162,6 +163,7 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
+    let session = state.store.get_session(session_id).await?;
     let drive_store = state.drive_store.clone().ok_or_else(|| {
         ServerError::Policy(format!(
             "unknown resource scheme drive; registered: {}",
@@ -170,7 +172,9 @@ where
     })?;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(tm_drive::DriveResourceHandler::new(drive_store)));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"))
+        .with_session_id(session_id.to_string())
+        .with_session_scope(session.memory_scope);
     registry
         .read(uri, selector, &ctx)
         .await
@@ -179,6 +183,7 @@ where
 
 pub(super) async fn list_drive_resources<S, M, C>(
     state: &AppState<S, M, C>,
+    session_id: Uuid,
     uri: &str,
 ) -> Result<Vec<ResourceEntry>>
 where
@@ -186,6 +191,7 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
+    let session = state.store.get_session(session_id).await?;
     let drive_store = state.drive_store.clone().ok_or_else(|| {
         ServerError::Policy(format!(
             "unknown resource scheme drive; registered: {}",
@@ -194,7 +200,9 @@ where
     })?;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(tm_drive::DriveResourceHandler::new(drive_store)));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"))
+        .with_session_id(session_id.to_string())
+        .with_session_scope(session.memory_scope);
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 
@@ -210,13 +218,17 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
+    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    let subject = session.owner_subject;
+    let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
-        default_subject(),
-        mode_profile(&state.persona, &session.mode_state.mode).default_scope,
+        &subject,
+        &scope,
     )));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"))
+        .with_memory_authority(subject, scope);
     registry
         .read(uri, selector, &ctx)
         .await
@@ -234,13 +246,17 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
+    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    let subject = session.owner_subject;
+    let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
-        default_subject(),
-        mode_profile(&state.persona, &session.mode_state.mode).default_scope,
+        &subject,
+        &scope,
     )));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"))
+        .with_memory_authority(subject, scope);
     registry.preview(uri, &ctx).await.map_err(map_host_error)
 }
 
@@ -255,13 +271,17 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
+    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    let subject = session.owner_subject;
+    let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
-        default_subject(),
-        mode_profile(&state.persona, &session.mode_state.mode).default_scope,
+        &subject,
+        &scope,
     )));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"))
+        .with_memory_authority(subject, scope);
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 
@@ -347,7 +367,7 @@ pub(super) fn read_workspace_resource(
     let path = root.join(&relative);
     let canonical_root = root
         .canonicalize()
-        .map_err(|_| ServerError::NotFound(format!("workspace://session/")))?;
+        .map_err(|_| ServerError::NotFound("workspace://session/".to_string()))?;
     let canonical_path = path
         .canonicalize()
         .map_err(|_| ServerError::NotFound(uri.to_string()))?;
@@ -356,9 +376,12 @@ pub(super) fn read_workspace_resource(
             "workspace path escapes session root: {uri}"
         )));
     }
-    let content =
-        fs::read_to_string(&canonical_path).map_err(|err| ServerError::Store(err.to_string()))?;
-    let (selected, has_more) = select_text(&content, selector)?;
+    let size_bytes = fs::metadata(&canonical_path)
+        .map_err(|err| ServerError::Store(err.to_string()))?
+        .len()
+        .try_into()
+        .map_err(|_| ServerError::Store("workspace file is too large".to_string()))?;
+    let (selected, has_more) = read_text_page(&canonical_path, selector)?;
     Ok(ResourceContent {
         uri: super::util::workspace_uri(&relative),
         kind: "text".to_string(),
@@ -367,7 +390,7 @@ pub(super) fn read_workspace_resource(
             .file_name()
             .and_then(|name| name.to_str())
             .map(str::to_string),
-        size_bytes: content.len(),
+        size_bytes,
         selector: selector.map(str::to_string),
         has_more,
         preview: preview(&selected, 1024),
@@ -385,7 +408,7 @@ pub(super) fn list_workspace_resources(
     let dir = root.join(&relative);
     let canonical_root = root
         .canonicalize()
-        .map_err(|_| ServerError::NotFound(format!("workspace://session/")))?;
+        .map_err(|_| ServerError::NotFound("workspace://session/".to_string()))?;
     let canonical_dir = dir
         .canonicalize()
         .map_err(|_| ServerError::NotFound(uri.to_string()))?;

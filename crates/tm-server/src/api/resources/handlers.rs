@@ -10,14 +10,12 @@ pub(crate) struct ArtifactReadQuery {
 pub(crate) async fn list_artifacts<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
 ) -> Result<Json<Value>>
 where
     S: Store,
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     state.store.get_session(session_id).await?;
     let store = tm_artifacts::ArtifactStore::open(&state.artifact_root, session_id.to_string())
         .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -27,7 +25,6 @@ where
 pub(crate) async fn read_artifact<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path((session_id, artifact_id)): Path<(Uuid, String)>,
-    headers: HeaderMap,
     Query(query): Query<ArtifactReadQuery>,
 ) -> Result<Json<Value>>
 where
@@ -35,7 +32,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     state.store.get_session(session_id).await?;
     let store = tm_artifacts::ArtifactStore::open(&state.artifact_root, session_id.to_string())
         .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -61,7 +57,6 @@ pub(crate) struct DriveFeedQuery {
 pub(crate) async fn drive_feed<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<DriveFeedQuery>,
 ) -> Result<Json<Value>>
 where
@@ -69,71 +64,52 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
-    state.store.get_session(session_id).await?;
+    let session = state.store.get_session(session_id).await?;
+    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    let project = super::util::authorized_project_id(&session, query.project.as_deref())?;
     let store = state
         .drive_store
         .as_ref()
         .ok_or_else(|| ServerError::Policy("drive store is not configured".to_string()))?;
     let limit = query.limit.unwrap_or(20).clamp(1, 100);
-    let recent = if query
-        .project
-        .as_ref()
-        .is_some_and(|project| !project.trim().is_empty())
-    {
-        store
-            .search(tm_drive::DriveSearchOptions {
-                project: query.project.clone(),
-                limit,
-                return_snippets: true,
-                ..tm_drive::DriveSearchOptions::default()
+    let recent = store
+        .search(tm_drive::DriveSearchOptions {
+            project: Some(project.clone()),
+            limit,
+            return_snippets: true,
+            ..tm_drive::DriveSearchOptions::default()
+        })
+        .await
+        .map_err(|err| ServerError::Store(err.to_string()))?
+        .into_iter()
+        .map(|hit| {
+            json!({
+                "uri": hit.uri,
+                "path": hit.path,
+                "title": hit.title,
+                "docKind": hit.doc_kind,
+                "project": hit.project,
+                "tags": hit.tags,
+                "contentHash": hit.content_hash,
+                "snippet": hit.snippet,
+                "selector": hit.selector,
             })
-            .map_err(|err| ServerError::Store(err.to_string()))?
-            .into_iter()
-            .map(|hit| {
-                json!({
-                    "uri": hit.uri,
-                    "path": hit.path,
-                    "title": hit.title,
-                    "docKind": hit.doc_kind,
-                    "project": hit.project,
-                    "tags": hit.tags,
-                    "contentHash": hit.content_hash,
-                    "snippet": hit.snippet,
-                    "selector": hit.selector,
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        store
-            .list(tm_drive::DriveListOptions {
-                recursive: true,
-                limit,
-                include_archived: false,
-                ..tm_drive::DriveListOptions::default()
-            })
-            .map_err(|err| ServerError::Store(err.to_string()))?
-            .into_iter()
-            .map(|entry| {
-                json!({
-                    "uri": entry.uri,
-                    "path": entry.path,
-                    "title": entry.title,
-                    "docKind": entry.doc_kind,
-                    "project": entry.project,
-                    "tags": entry.tags,
-                    "contentHash": entry.content_hash,
-                    "sizeBytes": entry.size_bytes,
-                    "updatedAt": entry.updated_at,
-                    "summary": entry.summary,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
+        })
+        .collect::<Vec<_>>();
+    let project_path_prefix = format!("projects/{}/", tm_drive::slug(&project));
     let proposals = store
         .proposals()
+        .await
+        .map_err(|err| ServerError::Store(err.to_string()))?
         .into_iter()
-        .filter(|proposal| proposal.status == tm_drive::ProposalStatus::Pending)
+        .filter(|proposal| {
+            proposal.status == tm_drive::ProposalStatus::Pending
+                && (proposal.source_path.starts_with(&project_path_prefix)
+                    || proposal
+                        .proposed_path
+                        .as_deref()
+                        .is_some_and(|path| path.starts_with(&project_path_prefix)))
+        })
         .collect::<Vec<_>>();
     Ok(Json(json!({
         "recent": recent,
@@ -152,7 +128,6 @@ where
 pub(crate) async fn resolve_resource<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<ResourceQuery>,
 ) -> Result<Json<ResourceContent>>
 where
@@ -160,7 +135,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     state.store.get_session(session_id).await?;
     let uri = query.uri.ok_or_else(|| {
         ServerError::InvalidRequest("uri query parameter is required".to_string())
@@ -173,7 +147,6 @@ where
 pub(crate) async fn preview_resource<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<ResourceQuery>,
 ) -> Result<Json<ResourceContent>>
 where
@@ -181,7 +154,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     state.store.get_session(session_id).await?;
     let uri = query.uri.ok_or_else(|| {
         ServerError::InvalidRequest("uri query parameter is required".to_string())
@@ -194,7 +166,6 @@ where
 pub(crate) async fn list_resources<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<ResourceQuery>,
 ) -> Result<Json<Vec<ResourceEntry>>>
 where
@@ -202,7 +173,6 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     state.store.get_session(session_id).await?;
     list_resource_entries(&state, session_id, query.uri.as_deref())
         .await

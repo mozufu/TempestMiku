@@ -11,22 +11,13 @@ use tm_memory::{
 #[tokio::test]
 async fn project_views_and_promotion_are_idempotent() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
-    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri(format!("/sessions/{}/messages", session.id))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"content":"capture an open loop and decision for the code TODO"}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    let session = create_project_session(&app).await;
+    post_user_message(
+        &app,
+        session.id,
+        "capture an open loop and decision for the code TODO",
+    )
+    .await;
 
     let overview = app
         .clone()
@@ -99,6 +90,16 @@ async fn project_views_and_promotion_are_idempotent() {
 async fn promotion_can_import_project_workspace_attachment_into_drive() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("linked");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
     let drive_store = InMemoryDriveStore::new(ArtifactStore::open(temp.path(), "drive").unwrap());
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
@@ -111,9 +112,10 @@ async fn promotion_can_import_project_workspace_attachment_into_drive() {
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone())
+    .with_linked_folders(linked)
     .with_drive_store(drive_store.clone());
     let app = app(state);
-    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    let session = create_project_session(&app).await;
     let workspace = artifact_root
         .join("sessions")
         .join(session.id.to_string())
@@ -209,7 +211,7 @@ async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
     .with_artifact_root(artifact_root.clone())
     .with_linked_folders(linked);
     let (app, store) = test_app_with_state(state);
-    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    let session = create_project_session(&app).await;
     let artifact_store =
         tm_artifacts::ArtifactStore::open(&artifact_root, session.id.to_string()).unwrap();
     artifact_store
@@ -324,7 +326,7 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
     .with_artifact_root(artifact_root)
     .with_linked_folders(linked.clone());
     let (app, _) = test_app_with_state(state);
-    let session = create(&app).await;
+    let session = create_project_session(&app).await;
 
     let root = app
         .clone()
@@ -425,7 +427,7 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
         )
         .await
         .unwrap();
-    assert_eq!(other_memory.status(), StatusCode::FORBIDDEN);
+    assert_eq!(other_memory.status(), StatusCode::NOT_FOUND);
 
     let memory_entries = app
         .clone()
@@ -482,14 +484,7 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
         )
         .await
         .unwrap();
-    assert_eq!(other_links.status(), StatusCode::OK);
-    assert!(
-        response_json(other_links)
-            .await
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(other_links.status(), StatusCode::NOT_FOUND);
 
     let files = app
         .clone()
@@ -566,13 +561,13 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
         )
         .await
         .unwrap();
-    assert_eq!(revoked_memory.status(), StatusCode::FORBIDDEN);
+    assert_eq!(revoked_memory.status(), StatusCode::NOT_FOUND);
     let revoked_body = response_json(revoked_memory).await;
     assert!(!revoked_body.to_string().contains(scoped_recall));
     assert!(
         revoked_body
             .to_string()
-            .contains("project memory scope project:tempestmiku is not active")
+            .contains("active linked project scope project:tempestmiku")
     );
 
     let revoked_file = app
@@ -588,7 +583,7 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
         )
         .await
         .unwrap();
-    assert_eq!(revoked_file.status(), StatusCode::FORBIDDEN);
+    assert_eq!(revoked_file.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -597,6 +592,16 @@ async fn drive_resource_gateway_reads_lists_and_previews_when_configured() {
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
     let chat = Arc::new(EchoChatRunner);
     let artifact_root = tempfile::tempdir().unwrap();
+    let linked_root = artifact_root.path().join("linked");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "tempestmiku".to_string(),
+        path: linked_root,
+        mode: FsMode::Ro,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
     let drive_store =
         InMemoryDriveStore::new(ArtifactStore::open(artifact_root.path(), "drive").unwrap());
     let filed = drive_store
@@ -617,9 +622,10 @@ async fn drive_resource_gateway_reads_lists_and_previews_when_configured() {
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.path().to_path_buf())
+    .with_linked_folders(linked)
     .with_drive_store(drive_store.clone());
     let app = app(state);
-    let session = create(&app).await;
+    let session = create_project_session(&app).await;
 
     let resolved = app
         .clone()
@@ -663,8 +669,8 @@ async fn drive_resource_gateway_reads_lists_and_previews_when_configured() {
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     let missing = response_json(missing).await;
     let error = missing["error"].as_str().unwrap();
-    assert!(error.contains("nearby paths"));
-    assert!(error.contains(&filed.entry.path));
+    assert!(!error.contains("nearby paths"));
+    assert!(!error.contains(&filed.entry.path));
     assert!(!error.contains(artifact_root.path().to_str().unwrap()));
 
     let listed = app
@@ -691,7 +697,7 @@ async fn drive_resource_gateway_reads_lists_and_previews_when_configured() {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!(
-                    "/sessions/{}/drive/feed?project=TempestMiku&limit=5",
+                    "/sessions/{}/drive/feed?project=tempestmiku&limit=5",
                     session.id
                 ))
                 .body(Body::empty())
@@ -927,13 +933,73 @@ async fn memory_resource_gateway_reads_root_user_model_and_records() {
             "content for {uri}: {json}"
         );
     }
+
+    let other_fact_id = Uuid::new_v4();
+    store
+        .add_profile_fact(ProfileFactRecord {
+            id: other_fact_id,
+            subject: "someone-else".to_string(),
+            predicate: "prefers".to_string(),
+            object: "private data".to_string(),
+            confidence: 0.95,
+            importance: 0.72,
+            provenance: "test".to_string(),
+            valid_from: Utc::now(),
+            valid_to: None,
+        })
+        .await
+        .unwrap();
+    let other_chunk_id = Uuid::new_v4();
+    store
+        .add_recall_chunk(RecallChunkRecord {
+            id: other_chunk_id,
+            scope: "project:other".to_string(),
+            text: "other project private recall".to_string(),
+            source: "test".to_string(),
+            importance: 0.65,
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    for uri in [
+        format!("memory://profile/someone-else/facts/{other_fact_id}"),
+        format!("memory://scopes/project%3Aother/chunks/{other_chunk_id}"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{}/resources/resolve?uri={uri}",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
 }
 
 #[tokio::test]
 async fn memory_resource_gateway_reads_dream_summaries_and_skill_proposals() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
-    let dream_id = Uuid::new_v4();
+    let dream_id = store
+        .enqueue_dream(NewDreamQueueRecord {
+            session_id: session.id,
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::ManualReflect,
+            dedupe_key: format!("dream:summary-resource:{}", session.id),
+            source_event_seq: None,
+            available_at: Utc::now(),
+        })
+        .await
+        .unwrap()
+        .id;
     let evidence = vec![MemoryEvidenceRef {
         session_id: session.id,
         event_seq: Some(2),
@@ -1135,6 +1201,21 @@ async fn memory_resource_gateway_reads_dream_queue_and_records() {
             .iter()
             .all(|entry| entry["uri"] != json!(format!("memory://dreams/{}", other_scope.id)))
     );
+
+    let other_record = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=memory://dreams/{}",
+                    session.id, other_scope.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_record.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1217,7 +1298,7 @@ async fn session_resource_preview_returns_compact_bounded_memory_preview() {
 #[tokio::test]
 async fn miku_initiated_promotion_denies_by_default_on_timeout() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
-    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    let session = create_project_session(&app).await;
     let res = app
         .clone()
         .oneshot(

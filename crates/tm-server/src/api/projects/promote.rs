@@ -36,7 +36,6 @@ pub(crate) struct PromoteSessionResponse {
 pub(crate) async fn promote_session<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Json(payload): Json<PromoteSessionRequest>,
 ) -> Result<Json<PromoteSessionResponse>>
 where
@@ -44,11 +43,13 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = payload.project_id.clone().unwrap_or_else(|| {
-        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
-    });
+    resources::util::validate_authorized_memory_scope(
+        &state.linked_folders,
+        &session.memory_scope,
+    )?;
+    let project_id =
+        resources::util::authorized_project_id(&session, payload.project_id.as_deref())?;
     if payload.initiated_by == "miku" {
         let timeout = Duration::from_millis(payload.timeout_ms.unwrap_or(60_000));
         let sink = Arc::new(StoreCodingEventSink::new(
@@ -290,7 +291,8 @@ where
             &relative,
             &relative_slash,
             source_event_seq,
-        )?;
+        )
+        .await?;
         return Ok((ProjectItemKind::Workspace, target_uri));
     }
     promoted_resource_pointer_target(project_id, source_uri)
@@ -333,7 +335,7 @@ fn promoted_resource_pointer_target(
     )))
 }
 
-fn import_workspace_attachment_to_drive<S, M, C>(
+async fn import_workspace_attachment_to_drive<S, M, C>(
     state: &AppState<S, M, C>,
     session_id: Uuid,
     project_id: &str,
@@ -374,6 +376,7 @@ where
                 ..tm_drive::DrivePutOptions::default()
             },
         )
+        .await
         .map_err(|err| ServerError::Store(err.to_string()))?;
     Ok(filed.uri)
 }

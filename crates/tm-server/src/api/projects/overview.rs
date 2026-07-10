@@ -23,7 +23,6 @@ pub(crate) struct ProjectOverview {
 pub(crate) async fn project_overview<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<ProjectQuery>,
 ) -> Result<Json<ProjectOverview>>
 where
@@ -31,11 +30,12 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query.project_id.unwrap_or_else(|| {
-        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
-    });
+    resources::util::validate_authorized_memory_scope(
+        &state.linked_folders,
+        &session.memory_scope,
+    )?;
+    let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         build_project_overview(&state, session_id, project_id).await?,
     ))
@@ -44,7 +44,6 @@ where
 pub(crate) async fn project_open_loops<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<ProjectQuery>,
 ) -> Result<Json<Vec<ProjectItemRecord>>>
 where
@@ -52,11 +51,12 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query.project_id.unwrap_or_else(|| {
-        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
-    });
+    resources::util::validate_authorized_memory_scope(
+        &state.linked_folders,
+        &session.memory_scope,
+    )?;
+    let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         state
             .store
@@ -68,7 +68,6 @@ where
 pub(crate) async fn project_decisions<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<ProjectQuery>,
 ) -> Result<Json<Vec<ProjectItemRecord>>>
 where
@@ -76,11 +75,12 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query.project_id.unwrap_or_else(|| {
-        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
-    });
+    resources::util::validate_authorized_memory_scope(
+        &state.linked_folders,
+        &session.memory_scope,
+    )?;
+    let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         state
             .store
@@ -92,7 +92,6 @@ where
 pub(crate) async fn project_next_actions<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
-    headers: HeaderMap,
     Query(query): Query<ProjectQuery>,
 ) -> Result<Json<Vec<ProjectItemRecord>>>
 where
@@ -100,11 +99,12 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    state.auth.authorize(&headers)?;
     let session = state.store.get_session(session_id).await?;
-    let project_id = query.project_id.unwrap_or_else(|| {
-        project_id_from_scope(&mode_profile(&state.persona, &session.mode_state.mode).default_scope)
-    });
+    resources::util::validate_authorized_memory_scope(
+        &state.linked_folders,
+        &session.memory_scope,
+    )?;
+    let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         state
             .store

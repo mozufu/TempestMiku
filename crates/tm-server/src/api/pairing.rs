@@ -1,39 +1,61 @@
+use std::net::SocketAddr;
+
 use axum::{
+    extract::{ConnectInfo, State},
     http::{HeaderMap, header},
-    response::{Html, IntoResponse},
+    response::Html,
 };
 use qrcode::{QrCode, render::svg};
 
-use crate::{Result, ServerError};
+use crate::{AppState, AuthConfig, ChatRunner, MemoryProvider, Result, ServerError, Store};
 
-pub(crate) async fn page(headers: HeaderMap) -> Html<String> {
-    let base_url = public_base_url(&headers);
-    Html(pairing_page(&base_url))
-}
-
-pub(crate) async fn qr_svg(headers: HeaderMap) -> Result<impl IntoResponse> {
-    let base_url = public_base_url(&headers);
-    let link = pairing_link(&base_url);
-    let code = QrCode::new(link.as_bytes())
-        .map_err(|err| ServerError::InvalidRequest(format!("could not build pairing QR: {err}")))?;
-    let image = code
+pub(crate) async fn page<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    headers: HeaderMap,
+    connect: Option<ConnectInfo<SocketAddr>>,
+) -> Result<Html<String>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let peer = connect.map(|value| value.0);
+    let base_url = public_base_url(&headers, peer, &state);
+    let issued = super::auth_devices::issue_pairing_code(&state, &headers, peer, &base_url).await?;
+    let qr = QrCode::new(issued.pairing_link.as_bytes())
+        .map_err(|err| ServerError::InvalidRequest(format!("could not build pairing QR: {err}")))?
         .render::<svg::Color<'_>>()
         .min_dimensions(256, 256)
         .build();
-    Ok((
-        [
-            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        image,
-    ))
+    Ok(Html(pairing_page(
+        &base_url,
+        &issued.code,
+        &issued.expires_at.to_rfc3339(),
+        &qr,
+    )))
 }
 
-fn public_base_url(headers: &HeaderMap) -> String {
-    derive_public_base_url(headers, std::env::var("TM_PUBLIC_BASE_URL").ok().as_deref())
+pub(super) fn public_base_url<S, M, C>(
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    state: &AppState<S, M, C>,
+) -> String {
+    let trust_forwarded = match state.auth.config() {
+        AuthConfig::Forwarded(config) => peer.map(|peer| config.trusts(peer.ip())).unwrap_or(false),
+        _ => false,
+    };
+    derive_public_base_url(
+        headers,
+        std::env::var("TM_PUBLIC_BASE_URL").ok().as_deref(),
+        trust_forwarded,
+    )
 }
 
-pub(crate) fn derive_public_base_url(headers: &HeaderMap, env_override: Option<&str>) -> String {
+pub(crate) fn derive_public_base_url(
+    headers: &HeaderMap,
+    env_override: Option<&str>,
+    trust_forwarded: bool,
+) -> String {
     if let Some(value) = env_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -41,25 +63,23 @@ pub(crate) fn derive_public_base_url(headers: &HeaderMap, env_override: Option<&
         return trim_base_url(value);
     }
 
-    let scheme = forwarded_proto(headers).unwrap_or("http");
-    let host = forwarded_host(headers)
+    let scheme = trust_forwarded
+        .then(|| forwarded_proto(headers))
+        .flatten()
+        .unwrap_or("http");
+    let host = trust_forwarded
+        .then(|| forwarded_host(headers))
+        .flatten()
         .or_else(|| header_first(headers, header::HOST.as_str()))
         .unwrap_or("127.0.0.1:8787");
     trim_base_url(&format!("{scheme}://{host}"))
 }
 
-fn pairing_page(base_url: &str) -> String {
-    let link = pairing_link(base_url);
+fn pairing_page(base_url: &str, code: &str, expires_at: &str, qr: &str) -> String {
     let base_url_html = escape_html(base_url);
-    let link_html = escape_html(&link);
-    let warning = loopback_warning(base_url)
-        .map(|message| {
-            format!(
-                r#"<section class="warning"><strong>Loopback target</strong><p>{}</p></section>"#,
-                escape_html(message)
-            )
-        })
-        .unwrap_or_default();
+    let code_html = escape_html(code);
+    let expires_html = escape_html(expires_at);
+    let code_json = serde_json::to_string(code).expect("pairing code serializes");
 
     format!(
         r#"<!doctype html>
@@ -67,146 +87,70 @@ fn pairing_page(base_url: &str) -> String {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TempestMiku Pairing</title>
+  <meta name="referrer" content="no-referrer">
+  <title>TempestMiku secure pairing</title>
   <style>
-    :root {{
-      color-scheme: light dark;
-      --bg: #0f1418;
-      --panel: #161d22;
-      --text: #ecf2f4;
-      --muted: #9fb0b7;
-      --border: #2b3a41;
-      --accent: #5fd0c5;
-      --warn: #f6c35b;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      display: grid;
-      place-items: center;
-      padding: 24px;
-    }}
-    main {{
-      width: min(920px, 100%);
-      display: grid;
-      gap: 22px;
-    }}
-    header {{
-      display: flex;
-      justify-content: space-between;
-      gap: 18px;
-      align-items: end;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 18px;
-    }}
-    h1 {{
-      font-size: clamp(2rem, 6vw, 4.4rem);
-      line-height: 0.95;
-      margin: 0;
-      letter-spacing: 0;
-    }}
-    .health {{
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      color: var(--muted);
-      white-space: nowrap;
-    }}
-    .health b {{ color: var(--accent); }}
-    .grid {{
-      display: grid;
-      grid-template-columns: minmax(220px, 320px) 1fr;
-      gap: 22px;
-      align-items: start;
-    }}
-    .qr, .details, .warning {{
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--panel);
-    }}
-    .qr {{ padding: 18px; display: grid; gap: 14px; justify-items: center; }}
-    .qr img {{
-      width: min(256px, 100%);
-      height: auto;
-      background: white;
-      border-radius: 8px;
-      padding: 10px;
-    }}
-    .details {{ padding: 20px; display: grid; gap: 16px; }}
-    label {{ color: var(--muted); font-size: 0.86rem; }}
-    input {{
-      width: 100%;
-      margin-top: 6px;
-      padding: 12px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: #0b1013;
-      color: var(--text);
-      font: inherit;
-    }}
-    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; }}
-    a, button {{
-      min-height: 42px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      padding: 10px 14px;
-      color: var(--text);
-      background: #202a30;
-      text-decoration: none;
-      font: inherit;
-      cursor: pointer;
-    }}
-    a.primary {{ background: var(--accent); color: #061012; border-color: var(--accent); }}
-    .manual, .link {{ color: var(--muted); overflow-wrap: anywhere; }}
-    .warning {{ border-color: color-mix(in srgb, var(--warn) 70%, var(--border)); padding: 14px 16px; }}
-    .warning strong {{ color: var(--warn); }}
-    .warning p {{ margin: 6px 0 0; color: var(--muted); }}
-    @media (max-width: 720px) {{
-      header {{ align-items: start; flex-direction: column; }}
-      .grid {{ grid-template-columns: 1fr; }}
-      .health {{ white-space: normal; }}
-    }}
+    :root {{ color-scheme: dark; --bg:#0f1418; --panel:#161d22; --text:#ecf2f4; --muted:#9fb0b7; --border:#2b3a41; --accent:#5fd0c5; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); display:grid; place-items:center; padding:24px; }}
+    main {{ width:min(900px,100%); display:grid; gap:20px; }}
+    h1 {{ margin:0; font-size:clamp(2rem,6vw,4rem); line-height:1; }}
+    .lede,.meta {{ color:var(--muted); }}
+    .grid {{ display:grid; grid-template-columns:minmax(240px,320px) 1fr; gap:20px; }}
+    .card {{ border:1px solid var(--border); border-radius:12px; background:var(--panel); padding:20px; display:grid; gap:15px; }}
+    .qr svg {{ width:100%; height:auto; padding:10px; background:white; border-radius:8px; }}
+    code {{ overflow-wrap:anywhere; color:var(--accent); }}
+    button,a {{ min-height:44px; border-radius:8px; border:1px solid var(--border); padding:11px 14px; color:var(--text); background:#202a30; text-decoration:none; font:inherit; cursor:pointer; text-align:center; }}
+    button.primary,a.primary {{ background:var(--accent); color:#061012; border-color:var(--accent); }}
+    .actions {{ display:grid; gap:10px; }}
+    @media (max-width:700px) {{ .grid {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
   <main>
     <header>
-      <h1>TempestMiku Pairing</h1>
-      <div class="health">tm-server health: <b>ok</b></div>
+      <h1>Secure pairing</h1>
+      <p class="lede">This one-time code expires in five minutes and can authorize exactly one device.</p>
     </header>
-    {warning}
     <section class="grid">
-      <div class="qr">
-        <img src="/pair/qr.svg" alt="Android pairing QR code">
-        <div class="manual">Scan from Android, or open the pairing link below.</div>
+      <div class="card qr">
+        {qr}
       </div>
-      <div class="details">
-        <label>Server URL
-          <input id="server-url" readonly value="{base_url_html}">
-        </label>
+      <div class="card">
+        <div><div class="meta">Server</div><code>{base_url_html}</code></div>
+        <div><div class="meta">One-time code</div><code>{code_html}</code></div>
+        <div><div class="meta">Expires</div><code>{expires_html}</code></div>
         <div class="actions">
-          <a class="primary" href="{link_html}">Open Android App</a>
-          <button type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(document.getElementById('server-url').value)">Copy URL</button>
-          <a href="/">Open Web App</a>
+          <button id="pair-web" class="primary" type="button">Pair this web browser</button>
         </div>
-        <div class="manual">Manual fallback: Android app -> More -> Server target -> paste the Server URL.</div>
-        <div class="link">{link_html}</div>
+        <p id="status" class="meta">Only continue on a server you recognize.</p>
       </div>
     </section>
   </main>
+  <script>
+    document.getElementById('pair-web').addEventListener('click', async () => {{
+      const status = document.getElementById('status');
+      status.textContent = 'Pairing…';
+      const response = await fetch('/auth/pair', {{
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {{'content-type':'application/json'}},
+        body: JSON.stringify({{code:{code_json}, deviceName:'Web browser', platform:'web'}})
+      }});
+      if (!response.ok) {{ status.textContent = 'Pairing failed or the code expired. Refresh this page.'; return; }}
+      location.assign('/');
+    }});
+  </script>
 </body>
 </html>"#
     )
 }
 
-pub(crate) fn pairing_link(base_url: &str) -> String {
+pub(crate) fn pairing_link(base_url: &str, code: &str) -> String {
     format!(
-        "tempestmiku://pair?server={}",
-        percent_encode_query(trim_base_url(base_url).as_bytes())
+        "tempestmiku://pair?v=1&server={}&code={}",
+        percent_encode_query(trim_base_url(base_url).as_bytes()),
+        percent_encode_query(code.as_bytes())
     )
 }
 
@@ -241,26 +185,6 @@ fn header_first<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .split(',')
         .map(str::trim)
         .find(|value| !value.is_empty())
-}
-
-fn loopback_warning(base_url: &str) -> Option<&'static str> {
-    let lower = base_url.to_ascii_lowercase();
-    let host = lower
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(lower.as_str())
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split('@')
-        .next_back()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
-    matches!(host, "127.0.0.1" | "localhost" | "10.0.2.2").then_some(
-        "This server URL is only local to the current machine or emulator; use TM_PUBLIC_BASE_URL with a LAN or tailnet host for a physical Android device.",
-    )
 }
 
 fn trim_base_url(value: &str) -> String {

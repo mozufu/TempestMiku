@@ -13,20 +13,25 @@ pub mod error;
 pub mod memory;
 pub mod native_deno;
 pub mod omp_acp;
+pub mod runtime;
 pub mod scheduler;
 pub mod store;
 pub mod webui;
 
 pub use api::{AppState, app};
-pub use auth::{AuthConfig, ForwardedAuthConfig};
+pub use auth::{
+    AuthConfig, AuthContext, AuthDeviceRecord, AuthDeviceStore, AuthPrincipal, DeviceAuthConfig,
+    DeviceCredential, ForwardedAuthConfig, InMemoryAuthDeviceStore, NewAuthDevice, NewPairingCode,
+    PairingCodeRecord,
+};
 pub use chat::{
-    AgentChatRunner, ChatActorExecutor, ChatRunner, ChatTurn, EchoChatRunner, PersistingEventSink,
-    RosterCodingEventSink, ServerChatRunner,
+    AgentChatRunner, AgentChatRunnerOptions, ChatActorExecutor, ChatRunLimits, ChatRunner,
+    ChatTurn, EchoChatRunner, PersistingEventSink, RosterCodingEventSink, ServerChatRunner,
 };
 pub use coding_backend::{
     ApprovalBroker, ApprovalOption, ApprovalOutcome, ApprovalPrompt, ApprovalResolveDecision,
     ApprovalStatus, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
-    DetailedApprovalOutcome, ResolveApprovalRequest, StoreCodingEventSink,
+    DetailedApprovalOutcome, DurableApprovalSpec, ResolveApprovalRequest, StoreCodingEventSink,
 };
 pub use dream::{
     DreamModelRoles, DreamWorkerConfig, DreamWorkerDaemon, DreamWorkerDaemonHandle,
@@ -35,23 +40,29 @@ pub use dream::{
 pub use error::{Result, ServerError};
 pub use memory::{
     MemoryContext, MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal,
-    MemoryWriteStatus, StoreMemoryProvider,
+    MemoryWriteStatus, ProfileFactProposalInput, StoreMemoryProvider,
 };
-pub use native_deno::{HttpApprovalPolicy, NativeApprovalMode, NativeDenoBackend};
+pub use native_deno::{
+    HttpApprovalPolicy, NativeApprovalMode, NativeDenoBackend, NativeDenoBackendOptions,
+};
 pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
+pub use runtime::{RuntimeConfig, RuntimeStatus, RuntimeStatusSnapshot, ServerRole, run_server};
 pub use scheduler::{
     CronSchedule, SchedulerBounds, WEEKLY_SHIP_LEDGER_JOB_ID, WEEKLY_SHIP_LEDGER_SCHEDULE,
     ensure_weekly_ship_ledger_job, trigger_weekly_ship_ledger, weekly_ship_ledger_job,
 };
 pub use store::{
-    CronJobRecord, CronRunRecord, InMemoryStore, MessageRecord, ModeState, NewCronJobRecord,
-    NewCronRunRecord, NewProjectItem, NewSession, PostgresStore, ProjectItemKind,
-    ProjectItemRecord, SessionEvent, SessionRecord, SessionSummaryRecord, Store, StoreEvent,
+    ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronLease,
+    CronRunRecord, EndSessionDreamResult, InMemoryStore, MessageRecord, ModeState,
+    NewApprovalRequest, NewApprovalResolution, NewCronJobRecord, NewCronRunRecord, NewProjectItem,
+    NewSession, PostgresDriveMetadataStore, PostgresStore, ProjectItemKind, ProjectItemRecord,
+    SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreEvent,
+    StoreRuntimeMetrics,
 };
 pub use tm_agents::MailboxRegistry;
 pub use tm_memory::{
-    BudgetedDreamInput, DreamInputBudget, DreamInputChunk, DreamInputMessage, DreamLeaseStore,
-    DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport,
+    BudgetedDreamInput, DreamInputBudget, DreamInputChunk, DreamInputMessage, DreamLease,
+    DreamLeaseStore, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport,
     EpisodicMemoryStore, MemoryError, MemoryEvidenceRef, MemoryStoreError, MemoryStoreResult,
     MemorySummaryKind, MemorySummaryRecord, MemorySummaryStore, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, NoopDreamWorker, ProfileFactRecord,

@@ -1,9 +1,18 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
+use ipnet::IpNet;
 use tm_agents::MailboxRegistry;
 use tm_artifacts::{ArtifactStore, default_root};
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
-use tm_host::{ApprovalPolicy, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig};
+use tm_host::{
+    ApprovalPolicy, DefaultDenyApprovalPolicy, FsMode, FsPolicy, LinkedFolders, P0HostConfig,
+};
 use tm_llm::OpenAiClient;
 use tm_modes::ModesConfig;
 use tm_sandbox::DenoSandbox;
@@ -11,9 +20,10 @@ use tm_sandbox::DenoSandboxOptions;
 
 use tm_server::{
     AgentChatRunner, AppState, ApprovalBroker, AuthConfig, ChatActorExecutor, CodingBackend,
-    CodingEventSink, EchoChatRunner, HttpApprovalPolicy, InMemoryStore, NativeApprovalMode,
-    NativeDenoBackend, OmpAcpBackend, OmpAcpConfig, PostgresStore, RosterCodingEventSink,
-    ServerChatRunner, StoreMemoryProvider, app,
+    CodingEventSink, DeviceAuthConfig, EchoChatRunner, ForwardedAuthConfig, HttpApprovalPolicy,
+    InMemoryAuthDeviceStore, InMemoryStore, NativeApprovalMode, NativeDenoBackend, OmpAcpBackend,
+    OmpAcpConfig, PostgresDriveMetadataStore, PostgresStore, RosterCodingEventSink, RuntimeConfig,
+    RuntimeStatus, ServerChatRunner, ServerRole, Store, StoreMemoryProvider, run_server,
 };
 
 #[tokio::main]
@@ -27,58 +37,116 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = std::env::var("TM_SERVER_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:8787".to_string())
         .parse()?;
+    let database_dsn = std::env::var("TM_DATABASE_URL")
+        .ok()
+        .filter(|dsn| !dsn.trim().is_empty());
+    let role = std::env::var("TM_SERVER_ROLE")
+        .unwrap_or_else(|_| "api".to_string())
+        .parse::<ServerRole>()?;
+    let owner_subject = std::env::var("TM_OWNER_SUBJECT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_else(|| "brian".to_string());
+    let owner_subject = owner_subject.trim().to_string();
+    if owner_subject.len() > 128 || owner_subject.chars().any(char::is_control) {
+        return Err("TM_OWNER_SUBJECT must be 1-128 non-control characters".into());
+    }
+    if role.serves_api() && !addr.ip().is_loopback() && database_dsn.is_none() {
+        return Err(
+            "non-loopback deployments require TM_DATABASE_URL so device credentials survive restart"
+                .into(),
+        );
+    }
+    if role.runs_workers() && database_dsn.is_none() {
+        return Err(
+            "TM_SERVER_ROLE=worker/all requires TM_DATABASE_URL; embedded workers cannot use process-local state"
+                .into(),
+        );
+    }
+    let auth = if role.serves_api() {
+        server_auth_config(addr, &owner_subject)?
+    } else {
+        AuthConfig::NoAuth
+    };
     let persona = std::env::var_os("TM_MODES_PATH")
         .map(ModesConfig::from_path)
         .unwrap_or_default();
     let host_config = load_host_config()?;
     let linked_folders = host_config.linked_folders()?;
     let artifact_root = server_artifact_root(&host_config);
-    let drive_store =
-        tm_drive::InMemoryDriveStore::new(ArtifactStore::open(&artifact_root, "drive")?);
     let roster = Arc::new(MailboxRegistry::new());
     let approval_broker = Arc::new(ApprovalBroker::default());
-    let runtime = build_runtime(
-        &host_config,
-        &linked_folders,
-        artifact_root.clone(),
-        Some(drive_store.clone()),
-        Arc::clone(&roster),
-        Arc::clone(&approval_broker),
-    )?;
 
-    if let Ok(dsn) = std::env::var("TM_DATABASE_URL")
-        && !dsn.trim().is_empty()
-    {
+    if let Some(dsn) = database_dsn {
         let store = Arc::new(PostgresStore::connect(&dsn).await?);
+        let drive_metadata = PostgresDriveMetadataStore::connect(&dsn).await?;
+        let drive_store: tm_drive::SharedDriveStore =
+            Arc::new(tm_drive::DriveService::with_metadata(
+                ArtifactStore::open(&artifact_root, "drive")?,
+                drive_metadata,
+            ));
+        let link_hydration_failures = hydrate_drive_links(&drive_store, &linked_folders).await?;
+        let runtime = build_runtime(
+            &host_config,
+            &linked_folders,
+            artifact_root.clone(),
+            Some(drive_store.clone()),
+            Arc::clone(&roster),
+            Arc::clone(&approval_broker),
+        )?;
+        let backfilled = store.configure_owner_subject(&owner_subject).await?;
+        tracing::info!(%owner_subject, backfilled_sessions = backfilled, "configured server owner authority");
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let runtime_status = Arc::new(RuntimeStatus::new(role, true, true));
+        runtime_status.add_link_hydration_failures(link_hydration_failures as u64);
         let state = configure_coding_backend(
-            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
+            AppState::new(store.clone(), memory, runtime.chat, persona, auth.clone())
+                .with_auth_store(store)
                 .with_approval_broker(Arc::clone(&approval_broker))
                 .with_actor_roster(Arc::clone(&roster))
-                .with_drive_store(drive_store.clone()),
+                .with_drive_store(drive_store.clone())
+                .with_runtime_status(runtime_status)
+                .with_auto_turn_dispatcher(false),
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
         )?;
         state.wire_lifecycle_sink();
-        serve(addr, state).await?;
+        run_server(addr, state, role, RuntimeConfig::default()).await?;
     } else {
         tracing::warn!(
-            "TM_DATABASE_URL not set; using non-durable in-memory store for local development"
+            "TM_DATABASE_URL not set; using non-durable in-memory server and drive metadata stores for local development"
         );
+        let drive_store: tm_drive::SharedDriveStore = Arc::new(tm_drive::InMemoryDriveStore::new(
+            ArtifactStore::open(&artifact_root, "drive")?,
+        ));
+        let runtime = build_runtime(
+            &host_config,
+            &linked_folders,
+            artifact_root.clone(),
+            Some(drive_store.clone()),
+            Arc::clone(&roster),
+            Arc::clone(&approval_broker),
+        )?;
         let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject(&owner_subject).await?;
+        let auth_store = Arc::new(InMemoryAuthDeviceStore::default());
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let state = configure_coding_backend(
-            AppState::new(store, memory, runtime.chat, persona, AuthConfig::NoAuth)
+            AppState::new(store, memory, runtime.chat, persona, auth)
+                .with_auth_store(auth_store)
                 .with_approval_broker(Arc::clone(&approval_broker))
                 .with_actor_roster(roster)
-                .with_drive_store(drive_store),
+                .with_drive_store(drive_store)
+                .with_runtime_status(Arc::new(RuntimeStatus::new(role, false, false)))
+                .with_auto_turn_dispatcher(false),
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
         )?;
         state.wire_lifecycle_sink();
-        serve(addr, state).await?;
+        run_server(addr, state, role, RuntimeConfig::default()).await?;
     }
 
     Ok(())
@@ -100,7 +168,7 @@ fn build_runtime(
     host_config: &P0HostConfig,
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
-    drive_store: Option<tm_drive::InMemoryDriveStore>,
+    drive_store: Option<tm_drive::SharedDriveStore>,
     roster: Arc<MailboxRegistry>,
     approval_broker: Arc<ApprovalBroker>,
 ) -> Result<BuiltRuntime, Box<dyn std::error::Error>> {
@@ -130,7 +198,8 @@ fn build_runtime(
         },
         ..AgentConfig::default()
     };
-    let linked_folders = (!linked_folders.is_empty()).then_some(linked_folders.clone());
+    let linked_folders =
+        (drive_store.is_some() || !linked_folders.is_empty()).then_some(linked_folders.clone());
     let approval_mode = NativeApprovalMode::parse(&host_config.approvals.mode)?;
     let mut sandbox_options = DenoSandboxOptions {
         artifact_root,
@@ -160,14 +229,14 @@ fn build_runtime(
             move |session_id: uuid::Uuid,
                   actor_id: Option<&str>,
                   grants: &tm_host::CapabilityGrants,
+                  session_scope: Option<&str>,
                   cancellation: Option<Arc<dyn tm_core::CancellationToken>>| {
                 let mut opts = executor_options.clone();
                 opts.session_id = session_id.to_string();
                 opts.actor_id = actor_id.map(str::to_string);
+                opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants = opts
-                    .grants
-                    .clone()
+                opts.grants = tm_sandbox::core_sandbox_grants()
                     .allow_many(grants.names().map(str::to_string));
                 if matches!(approval_mode, NativeApprovalMode::Manual) {
                     let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
@@ -259,6 +328,66 @@ fn server_artifact_root(host_config: &P0HostConfig) -> PathBuf {
         .unwrap_or_else(default_root)
 }
 
+async fn hydrate_drive_links(
+    drive_store: &tm_drive::SharedDriveStore,
+    linked_folders: &LinkedFolders,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut failures = 0;
+    for link in drive_store.links().await? {
+        if link.status != tm_drive::DriveLinkStatus::Active {
+            let _ = linked_folders.remove_policy(&link.alias);
+            continue;
+        }
+        let stored_root = PathBuf::from(&link.canonical_root);
+        let validation = (|| -> Result<FsPolicy, String> {
+            let metadata = std::fs::symlink_metadata(&stored_root)
+                .map_err(|err| format!("linked root is unavailable: {err}"))?;
+            if metadata.file_type().is_symlink() {
+                return Err("linked root was replaced by a symlink".to_string());
+            }
+            let canonical = stored_root
+                .canonicalize()
+                .map_err(|err| format!("linked root cannot be canonicalized: {err}"))?;
+            if canonical != stored_root {
+                return Err(format!(
+                    "linked root canonical identity changed from {} to {}",
+                    stored_root.display(),
+                    canonical.display()
+                ));
+            }
+            if !canonical.is_dir() {
+                return Err("linked root is no longer a directory".to_string());
+            }
+            let mode = match link.mode.as_str() {
+                "ro" => FsMode::Ro,
+                "rw" => FsMode::Rw,
+                other => return Err(format!("persisted linked root has invalid mode {other}")),
+            };
+            Ok(FsPolicy {
+                alias: link.alias.clone(),
+                root: canonical,
+                mode,
+                commands: BTreeSet::new(),
+                safe_args: Vec::new(),
+            })
+        })()
+        .and_then(|policy| {
+            linked_folders
+                .insert_policy(policy)
+                .map_err(|err| err.to_string())
+        });
+        if let Err(reason) = validation {
+            failures += 1;
+            let _ = linked_folders.remove_policy(&link.alias);
+            drive_store.invalidate_link(&link.alias, &reason).await?;
+            let alias = tm_memory::redact_dream_text(&link.alias).text;
+            let reason = tm_memory::redact_dream_text(&reason).text;
+            tracing::warn!(%alias, %reason, "disabled invalid persisted drive link");
+        }
+    }
+    Ok(failures)
+}
+
 fn chat_approval_policy(
     config: &P0HostConfig,
 ) -> Result<Arc<dyn ApprovalPolicy>, Box<dyn std::error::Error>> {
@@ -268,17 +397,187 @@ fn chat_approval_policy(
     }
 }
 
-async fn serve<S, M, C>(
+fn server_auth_config(
     addr: SocketAddr,
-    state: AppState<S, M, C>,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    S: tm_server::Store,
-    M: tm_server::MemoryProvider,
-    C: tm_server::ChatRunner,
-{
-    tracing::info!(%addr, "tm-server listening");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app(state)).await?;
+    owner_subject: &str,
+) -> Result<AuthConfig, Box<dyn std::error::Error>> {
+    let mode = std::env::var("TM_AUTH_MODE").unwrap_or_else(|_| "device".to_string());
+    let public_url = std::env::var("TM_PUBLIC_BASE_URL").ok();
+    let allow_insecure = env_flag("TM_ALLOW_INSECURE_HTTP");
+    if allow_insecure && !cfg!(debug_assertions) {
+        return Err("TM_ALLOW_INSECURE_HTTP is available only in debug builds".into());
+    }
+    let allowed_origin = public_url.as_deref().map(public_origin).transpose()?;
+    validate_bind_security(addr, allow_insecure)?;
+
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "device" | "" => Ok(AuthConfig::Device(DeviceAuthConfig {
+            cookie_name: tm_server::auth::DEFAULT_DEVICE_COOKIE.to_string(),
+            secure_cookie: public_url
+                .as_deref()
+                .is_some_and(|url| url.trim().starts_with("https://")),
+            owner_subject: owner_subject.to_string(),
+            bootstrap_token_hash: std::env::var("TM_AUTH_BOOTSTRAP_TOKEN")
+                .ok()
+                .filter(|token| !token.trim().is_empty())
+                .map(|token| tm_server::auth::hash_secret(token.trim())),
+            allow_loopback_pairing: addr.ip().is_loopback(),
+            allowed_origin,
+        })),
+        "bearer" => {
+            let token = required_env("TM_AUTH_TOKEN")?;
+            Ok(AuthConfig::BearerToken(token))
+        }
+        "forwarded" => {
+            let user_header = required_env("TM_AUTH_FORWARDED_USER_HEADER")?;
+            let trusted_proxy_networks = std::env::var("TM_AUTH_TRUSTED_PROXY_CIDRS")
+                .or_else(|_| std::env::var("TM_AUTH_TRUSTED_PROXY_IPS"))
+                .map_err(|_| {
+                    "TM_AUTH_TRUSTED_PROXY_CIDRS is required for forwarded auth (TM_AUTH_TRUSTED_PROXY_IPS is a legacy alias)"
+                })?;
+            let trusted_proxy_cidrs = trusted_proxy_networks
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    if let Ok(network) = value.parse::<IpNet>() {
+                        Ok(network)
+                    } else {
+                        value
+                            .parse::<IpAddr>()
+                            .map(IpNet::from)
+                            .map_err(|error| format!("invalid trusted proxy CIDR {value}: {error}"))
+                    }
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if trusted_proxy_cidrs.is_empty() {
+                return Err("TM_AUTH_TRUSTED_PROXY_CIDRS must contain at least one network".into());
+            }
+            let expected_user = std::env::var("TM_AUTH_FORWARDED_EXPECTED_USER")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| owner_subject.to_string());
+            if expected_user != owner_subject {
+                return Err("TM_AUTH_FORWARDED_EXPECTED_USER must match TM_OWNER_SUBJECT".into());
+            }
+            Ok(AuthConfig::Forwarded(ForwardedAuthConfig {
+                user_header,
+                expected_user: Some(expected_user),
+                trusted_proxy_cidrs,
+            }))
+        }
+        "no_auth" | "none" => {
+            if !addr.ip().is_loopback() {
+                return Err("TM_AUTH_MODE=no_auth is restricted to loopback binds".into());
+            }
+            Ok(AuthConfig::NoAuth)
+        }
+        other => Err(format!("unsupported TM_AUTH_MODE {other}").into()),
+    }
+}
+
+fn validate_bind_security(
+    addr: SocketAddr,
+    allow_insecure: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !addr.ip().is_loopback() && !allow_insecure {
+        return Err(
+            "tm-server serves plain HTTP and must bind to loopback behind an HTTPS proxy or Tailscale Serve; TM_PUBLIC_BASE_URL does not secure a non-loopback bind (TM_ALLOW_INSECURE_HTTP=1 is debug-only)"
+                .into(),
+        );
+    }
     Ok(())
+}
+
+fn required_env(name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{name} is required").into())
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn public_origin(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let (scheme, rest) = url
+        .trim()
+        .split_once("://")
+        .ok_or("TM_PUBLIC_BASE_URL must include http:// or https://")?;
+    if !matches!(scheme, "http" | "https") {
+        return Err("TM_PUBLIC_BASE_URL must use http or https".into());
+    }
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return Err("TM_PUBLIC_BASE_URL must include a host and no userinfo".into());
+    }
+    Ok(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tm_host::LinkedFolderConfig;
+
+    #[test]
+    fn raw_http_bind_is_loopback_only_without_debug_override() {
+        assert!(validate_bind_security("127.0.0.1:8787".parse().unwrap(), false).is_ok());
+        let error = validate_bind_security("0.0.0.0:8787".parse().unwrap(), false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must bind to loopback"));
+        assert!(error.contains("TM_PUBLIC_BASE_URL does not secure"));
+        assert!(validate_bind_security("0.0.0.0:8787".parse().unwrap(), true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn durable_link_tombstones_override_static_config_on_restart() {
+        let artifacts = tempfile::tempdir().unwrap();
+        let revoked_root = tempfile::tempdir().unwrap();
+        let invalid_root = tempfile::tempdir().unwrap();
+        let drive: tm_drive::SharedDriveStore = Arc::new(tm_drive::InMemoryDriveStore::new(
+            ArtifactStore::open(artifacts.path(), "drive").unwrap(),
+        ));
+        let revoked =
+            tm_drive::drive_link_plan(revoked_root.path(), FsMode::Ro, Some("revoked-project"))
+                .unwrap();
+        let invalid =
+            tm_drive::drive_link_plan(invalid_root.path(), FsMode::Ro, Some("invalid-project"))
+                .unwrap();
+        drive.record_link(&revoked).await.unwrap();
+        drive.revoke_link(&revoked.alias).await.unwrap();
+        drive.record_link(&invalid).await.unwrap();
+        drive
+            .invalidate_link(&invalid.alias, "test invalidation")
+            .await
+            .unwrap();
+        let linked = LinkedFolders::from_configs(vec![
+            LinkedFolderConfig {
+                name: revoked.alias.clone(),
+                path: revoked_root.path().to_path_buf(),
+                mode: FsMode::Ro,
+                commands: Vec::new(),
+                safe_args: Vec::new(),
+            },
+            LinkedFolderConfig {
+                name: invalid.alias.clone(),
+                path: invalid_root.path().to_path_buf(),
+                mode: FsMode::Ro,
+                commands: Vec::new(),
+                safe_args: Vec::new(),
+            },
+        ])
+        .unwrap();
+
+        hydrate_drive_links(&drive, &linked).await.unwrap();
+        assert!(linked.policy(&revoked.alias).is_err());
+        assert!(linked.policy(&invalid.alias).is_err());
+    }
 }

@@ -2,7 +2,7 @@
 
 Last aligned: **2026-07-12**.
 
-Active milestone: **P6 push foundation landed; production provider canary next**.
+Active milestone: **P6 push foundation landed; production provider deferred**.
 
 `ROADMAP.md` remains the canonical milestone order. The P4/P5 mechanism slices and their deterministic
 acceptance coverage have landed, as has the production-hardening implementation: supervised roles,
@@ -12,6 +12,16 @@ physical-device verification matrix now passes, so P4/P5 are production-complete
 single-owner deployment. P6 now also has encrypted provider-neutral push registration/outbox and
 authenticated Android notification actions, while real remote delivery remains open. Keep this checklist aligned with core docs
 §05/§06/§07/§09/§11 and product docs §21, §22, §23, §24, §25, §27, and §29.
+
+### Explicit deferment — 2026-07-12
+
+- Do not begin Firebase/FCM setup or provider integration: available Firebase capacity is currently
+  exhausted. Keep production push disabled; do not add Firebase SDKs, a Firebase project config, or
+  server credentials.
+- Treat all production push delivery work as deferred until Firebase capacity is available again, or
+  the user explicitly reprioritizes an alternative such as UnifiedPush. The provider-neutral
+  registration/outbox and authenticated notification-action foundation remains landed, but does not
+  satisfy the remote killed-process delivery acceptance check.
 
 ## P5 North Star
 

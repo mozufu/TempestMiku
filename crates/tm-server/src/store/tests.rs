@@ -2490,12 +2490,32 @@ async fn gated_postgres_session_authority_and_durable_turns() {
     );
     let left = left.unwrap();
     let right = right.unwrap();
-    assert_eq!(left.is_some() as usize + right.is_some() as usize, 1);
-    let (claimed, worker_id) = match (left, right) {
-        (Some(turn), None) => (turn, first_worker),
-        (None, Some(turn)) => (turn, second_worker),
-        _ => unreachable!("exactly one worker claims a session"),
-    };
+    let mut claims = Vec::new();
+    claims.extend(left.map(|turn| (turn, first_worker)));
+    claims.extend(right.map(|turn| (turn, second_worker)));
+    assert_eq!(
+        claims
+            .iter()
+            .filter(|(turn, _)| turn.session_id == session.id)
+            .count(),
+        1
+    );
+    let target_index = claims
+        .iter()
+        .position(|(turn, _)| turn.session_id == session.id)
+        .unwrap();
+    let (claimed, worker_id) = claims.swap_remove(target_index);
+    for (unrelated, unrelated_worker) in claims {
+        store
+            .complete_turn(
+                unrelated.id,
+                unrelated_worker,
+                "unrelated queue cleanup",
+                now,
+            )
+            .await
+            .unwrap();
+    }
     assert_eq!(claimed.id, first.id);
     assert!(matches!(
         other_store.end_session(session.id).await,
@@ -3610,7 +3630,7 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
         )
         .await
         .unwrap();
-    assert_eq!(migrations.len(), 9);
+    assert_eq!(migrations.len(), 10);
     assert!(migrations.iter().enumerate().all(|(index, row)| {
         row.get::<_, i64>("version") == index as i64 + 1
             && row.get::<_, String>("checksum").len() == 64

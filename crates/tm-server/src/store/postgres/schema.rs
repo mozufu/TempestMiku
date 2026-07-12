@@ -56,6 +56,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "push_notifications",
         sql: include_str!("../../../migrations/0009_push_notifications.sql"),
     },
+    Migration {
+        version: 10,
+        name: "turn_session_serialization",
+        sql: include_str!("../../../migrations/0010_turn_session_serialization.sql"),
+    },
 ];
 
 impl PostgresStore {

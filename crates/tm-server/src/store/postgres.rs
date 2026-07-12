@@ -965,7 +965,7 @@ impl Store for PostgresStore {
         worker_id: Uuid,
         now: DateTime<Utc>,
     ) -> Result<Option<SessionTurnRecord>> {
-        let row = self
+        let row = match self
             .client
             .query_opt(
                 "with candidate_session as (
@@ -1004,7 +1004,11 @@ impl Store for PostgresStore {
                 &[&worker_id, &now],
             )
             .await
-            .map_err(|err| ServerError::Store(err.to_string()))?;
+        {
+            Ok(row) => row,
+            Err(err) if err.code() == Some(&SqlState::UNIQUE_VIOLATION) => return Ok(None),
+            Err(err) => return Err(ServerError::Store(err.to_string())),
+        };
         Ok(row.map(row_to_session_turn))
     }
 

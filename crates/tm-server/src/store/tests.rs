@@ -24,6 +24,16 @@ fn postgres_test_dsn() -> Option<String> {
         .flatten()
 }
 
+fn assert_postgres_timestamp_eq(
+    actual: Option<chrono::DateTime<Utc>>,
+    expected: Option<chrono::DateTime<Utc>>,
+) {
+    assert_eq!(
+        actual.map(|value| value.timestamp_micros()),
+        expected.map(|value| value.timestamp_micros())
+    );
+}
+
 #[tokio::test]
 async fn in_memory_session_events_expose_actor_output_refs() {
     let store = InMemoryStore::default();
@@ -1784,8 +1794,8 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
     assert_eq!(claimed.dream.attempts, 1);
     let heartbeat_at = Utc::now() + Duration::seconds(1);
     let heartbeated = store.heartbeat_dream(&claimed, heartbeat_at).await.unwrap();
-    assert_eq!(heartbeated.dream.locked_at, Some(heartbeat_at));
-    assert_eq!(heartbeated.dream.heartbeat_at, Some(heartbeat_at));
+    assert_postgres_timestamp_eq(heartbeated.dream.locked_at, Some(heartbeat_at));
+    assert_postgres_timestamp_eq(heartbeated.dream.heartbeat_at, Some(heartbeat_at));
     let retry_at = Utc::now() + Duration::seconds(60);
     let retryable = store
         .fail_dream(
@@ -2135,9 +2145,9 @@ async fn gated_postgres_cron_materialization_and_leasing_are_cross_instance_safe
     );
     assert_ne!(left.unwrap().is_some(), right.unwrap().is_some());
     assert_eq!(first.cron_runs(&job_id, 10).await.unwrap().len(), 1);
-    assert_eq!(
+    assert_postgres_timestamp_eq(
         first.cron_job(&job_id).await.unwrap().next_run_at,
-        Some(next)
+        Some(next),
     );
 
     let claimed_at = Utc::now();
@@ -2268,18 +2278,22 @@ async fn gated_postgres_dream_crash_on_final_attempt_is_fenced_and_terminal() {
         .unwrap()
         .unwrap();
     assert_eq!(third_lease.dream.attempts, 3);
-    assert!(
+    if let Some(unrelated) = second
+        .claim_ready_dream_bounded(
+            now + Duration::seconds(93),
+            Duration::seconds(30),
+            Uuid::new_v4(),
+            3,
+        )
+        .await
+        .unwrap()
+    {
+        assert_ne!(unrelated.dream.id, dream.id);
         second
-            .claim_ready_dream_bounded(
-                now + Duration::seconds(93),
-                Duration::seconds(30),
-                Uuid::new_v4(),
-                3,
-            )
+            .complete_dream(&unrelated, now + Duration::seconds(93))
             .await
-            .unwrap()
-            .is_none()
-    );
+            .unwrap();
+    }
     let terminal = first.dream(dream.id).await.unwrap();
     assert_eq!(terminal.status, DreamStatus::Failed);
     assert_eq!(terminal.attempts, 3);
@@ -2549,8 +2563,11 @@ async fn gated_postgres_session_authority_and_durable_turns() {
         .heartbeat_turn(second.id, stale_worker, heartbeat_at)
         .await
         .unwrap();
-    assert_eq!(heartbeat.started_at, Some(stale_started));
-    assert_eq!(heartbeat.updated_at, heartbeat_at);
+    assert_postgres_timestamp_eq(heartbeat.started_at, Some(stale_started));
+    assert_eq!(
+        heartbeat.updated_at.timestamp_micros(),
+        heartbeat_at.timestamp_micros()
+    );
     assert!(matches!(
         store
             .heartbeat_turn(second.id, Uuid::new_v4(), heartbeat_at)

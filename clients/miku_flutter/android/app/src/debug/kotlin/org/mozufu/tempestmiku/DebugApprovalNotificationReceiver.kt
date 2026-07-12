@@ -1,4 +1,4 @@
-package dev.tempestmiku.miku_flutter
+package org.mozufu.tempestmiku
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -21,7 +21,7 @@ class DebugApprovalNotificationReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        const val ACTION = "dev.tempestmiku.miku_flutter.DEBUG_APPROVAL_NOTIFICATION"
+        const val ACTION = "org.mozufu.tempestmiku.DEBUG_APPROVAL_NOTIFICATION"
         const val EXTRA_CANCEL = "cancel"
         const val EXTRA_SESSION_ID = "sessionId"
         const val EXTRA_APPROVAL_ID = "approvalId"

@@ -200,10 +200,10 @@ the notification while the debug app process is stopped, replace the session id 
 that currently has a matching pending approval:
 
 ```sh
-adb shell am force-stop dev.tempestmiku.miku_flutter
+adb shell am force-stop org.mozufu.tempestmiku
 adb shell am broadcast \
-  -a dev.tempestmiku.miku_flutter.DEBUG_APPROVAL_NOTIFICATION \
-  -n dev.tempestmiku.miku_flutter/.DebugApprovalNotificationReceiver \
+  -a org.mozufu.tempestmiku.DEBUG_APPROVAL_NOTIFICATION \
+  -n org.mozufu.tempestmiku/.DebugApprovalNotificationReceiver \
   --es sessionId '<session-id>' \
   --es approvalId '<approval-id>' \
   --es approvalAction 'proc.run cargo test'

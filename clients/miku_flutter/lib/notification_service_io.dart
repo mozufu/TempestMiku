@@ -5,10 +5,10 @@ import 'package:flutter/services.dart';
 import 'notification_service_platform.dart';
 
 const _notifications = MethodChannel(
-  'dev.tempestmiku.miku_flutter/notifications',
+  'org.mozufu.tempestmiku/notifications',
 );
 const _notificationActions = EventChannel(
-  'dev.tempestmiku.miku_flutter/notification-actions',
+  'org.mozufu.tempestmiku/notification-actions',
 );
 
 MikuNotificationService createNotificationService() =>

@@ -1,4 +1,4 @@
-package dev.tempestmiku.miku_flutter
+package org.mozufu.tempestmiku
 
 import android.Manifest
 import android.app.Notification
@@ -17,16 +17,16 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
 
 private const val ACTION_APPROVAL_DECISION =
-    "dev.tempestmiku.miku_flutter.APPROVAL_NOTIFICATION_DECISION"
+    "org.mozufu.tempestmiku.APPROVAL_NOTIFICATION_DECISION"
 private const val EXTRA_SESSION_ID = "sessionId"
 private const val EXTRA_APPROVAL_ID = "approvalId"
 private const val EXTRA_DECISION = "decision"
 
 class MainActivity : FlutterActivity() {
     companion object {
-        private const val CHANNEL = "dev.tempestmiku.miku_flutter/notifications"
+        private const val CHANNEL = "org.mozufu.tempestmiku/notifications"
         private const val ACTION_CHANNEL =
-            "dev.tempestmiku.miku_flutter/notification-actions"
+            "org.mozufu.tempestmiku/notification-actions"
         private const val REQUEST_NOTIFICATIONS = 701
     }
 

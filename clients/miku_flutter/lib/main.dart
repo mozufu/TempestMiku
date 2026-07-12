@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'ratex_formula.dart';
+import 'notification_service.dart';
 import 'session_client.dart';
 import 'session_models.dart';
 
@@ -31,5 +32,10 @@ part 'pairing_scanner.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(MikuApp(client: createDefaultClient()));
+  runApp(
+    MikuApp(
+      client: createDefaultClient(),
+      notifications: createNotificationService(),
+    ),
+  );
 }

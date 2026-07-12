@@ -1,16 +1,21 @@
 part of 'main.dart';
 
 class MikuHomePage extends StatefulWidget {
-  const MikuHomePage({super.key, required this.client});
+  const MikuHomePage({
+    super.key,
+    required this.client,
+    required this.notifications,
+  });
 
   final MikuSessionClient client;
+  final MikuNotificationService notifications;
 
   @override
   State<MikuHomePage> createState() => _MikuHomePageState();
 }
 
 class _MikuHomePageState extends State<MikuHomePage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final List<ApprovalPrompt> _approvals = [];
@@ -34,26 +39,35 @@ class _MikuHomePageState extends State<MikuHomePage>
   bool _modeLocked = false;
   bool _canSend = false;
   _UiLanguage _language = _UiLanguage.en;
+  AppLifecycleState _appLifecycle = AppLifecycleState.resumed;
 
   late final AnimationController _dotAnim;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _dotAnim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
+    unawaited(widget.notifications.initialize());
     unawaited(_boot());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _sub?.cancel();
     _dotAnim.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appLifecycle = state;
   }
 
   _Mode get _mode => _findMode(_modeId, _modes);
@@ -102,6 +116,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       );
       if (approved != true) return false;
       await client.pairWithCode(target);
+      await _requestApprovalNotifications();
       await _reconnectAfterPair(
         successMessage: _copy.pairedToServer(target.serverBaseUrl),
       );
@@ -279,6 +294,28 @@ class _MikuHomePageState extends State<MikuHomePage>
     _scrollToBottom();
   }
 
+  Future<void> _requestApprovalNotifications() async {
+    if (!widget.notifications.isSupported) return;
+    final granted = await widget.notifications.requestPermission();
+    if (!granted) {
+      _showSnack(
+        'Approval alerts are disabled. You can enable notifications in Android settings.',
+      );
+    }
+  }
+
+  void _notifyApprovalIfBackgrounded(ApprovalPrompt approval) {
+    if (_appLifecycle == AppLifecycleState.resumed) return;
+    final sessionId = _sessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    unawaited(
+      widget.notifications.showApproval(
+        sessionId: sessionId,
+        approvalId: approval.approvalId,
+      ),
+    );
+  }
+
   void _rememberEventCursor(MikuEvent e) {
     final eventId = e.id;
     if (eventId != null &&
@@ -384,12 +421,17 @@ class _MikuHomePageState extends State<MikuHomePage>
               (e.data['timeout_ms'] as num?)?.toInt(),
         );
         _upsertApproval(approval);
+        _notifyApprovalIfBackgrounded(approval);
         final proposal = MemoryWriteProposal.fromApproval(approval);
         if (proposal != null) {
           _upsertMemoryProposal(proposal, onlyIfMissing: true);
         }
       case 'approval_resolved':
-        _approvals.removeWhere((a) => a.approvalId == e.data['approvalId']);
+        final approvalId = e.data['approvalId'] as String?;
+        _approvals.removeWhere((a) => a.approvalId == approvalId);
+        if (approvalId != null && approvalId.isNotEmpty) {
+          unawaited(widget.notifications.cancelApproval(approvalId));
+        }
       case 'write_proposal':
         final proposal = MemoryWriteProposal.fromEvent(e.data);
         if (proposal != null) {

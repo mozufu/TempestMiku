@@ -3,13 +3,52 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:miku_flutter/main.dart';
+import 'package:miku_flutter/notification_service.dart';
 import 'package:miku_flutter/ratex_formula.dart';
 import 'package:miku_flutter/session_client_io.dart' as io_client;
 import 'package:miku_flutter/session_client_stub.dart';
 import 'package:miku_flutter/session_models.dart';
 import 'package:miku_flutter/session_sse.dart';
 
+class RecordingNotificationService implements MikuNotificationService {
+  final List<String> shownApprovals = [];
+  final List<String> cancelledApprovals = [];
+  var initialized = false;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<void> cancelApproval(String approvalId) async {
+    cancelledApprovals.add(approvalId);
+  }
+
+  @override
+  Future<void> initialize() async {
+    initialized = true;
+  }
+
+  @override
+  Future<bool> requestPermission() async => true;
+
+  @override
+  Future<void> showApproval({
+    required String sessionId,
+    required String approvalId,
+  }) async {
+    shownApprovals.add('$sessionId:$approvalId');
+  }
+}
+
 void main() {
+  test('approval notification policy only alerts outside the visible app', () {
+    expect(shouldNotifyApproval(AppLifecycleState.resumed), isFalse);
+    expect(shouldNotifyApproval(AppLifecycleState.inactive), isTrue);
+    expect(shouldNotifyApproval(AppLifecycleState.hidden), isTrue);
+    expect(shouldNotifyApproval(AppLifecycleState.paused), isTrue);
+    expect(shouldNotifyApproval(AppLifecycleState.detached), isTrue);
+  });
+
   test('client message ids are safe and unique', () {
     final first = newClientMessageId();
     final second = newClientMessageId();
@@ -371,6 +410,53 @@ void main() {
 
     expect(find.byKey(const ValueKey('resource:artifact://0')), findsOneWidget);
   });
+
+  testWidgets(
+    'background approvals notify and resolved approvals clear alerts',
+    (WidgetTester tester) async {
+      final client = ScriptedMikuClient();
+      final session = await client.createSession();
+      final notifications = RecordingNotificationService();
+
+      await tester.pumpWidget(
+        MikuApp(client: client, notifications: notifications),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(notifications.initialized, isTrue);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      client.emitEvent(
+        session.id,
+        const MikuEvent(
+          type: 'approval',
+          data: {
+            'approvalId': 'approval-background',
+            'action': 'proc.run cargo clean',
+            'scope': {},
+            'options': [],
+          },
+        ),
+      );
+      await tester.pump();
+
+      expect(notifications.shownApprovals, const [
+        'scripted-0:approval-background',
+      ]);
+
+      client.emitEvent(
+        session.id,
+        const MikuEvent(
+          type: 'approval_resolved',
+          data: {'approvalId': 'approval-background'},
+        ),
+      );
+      await tester.pump();
+
+      expect(notifications.cancelledApprovals, const ['approval-background']);
+    },
+  );
 
   testWidgets('shows and resolves pending drive filing approval', (
     WidgetTester tester,

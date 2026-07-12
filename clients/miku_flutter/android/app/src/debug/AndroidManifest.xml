@@ -7,5 +7,9 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:usesCleartextTraffic="true"
-        tools:replace="android:usesCleartextTraffic"/>
+        tools:replace="android:usesCleartextTraffic">
+        <receiver
+            android:name=".DebugApprovalNotificationReceiver"
+            android:exported="true" />
+    </application>
 </manifest>

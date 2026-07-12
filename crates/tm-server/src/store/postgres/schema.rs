@@ -51,6 +51,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "turn_heartbeats",
         sql: include_str!("../../../migrations/0008_turn_heartbeats.sql"),
     },
+    Migration {
+        version: 9,
+        name: "push_notifications",
+        sql: include_str!("../../../migrations/0009_push_notifications.sql"),
+    },
 ];
 
 impl PostgresStore {

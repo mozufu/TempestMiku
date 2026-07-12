@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +16,11 @@ class RecordingNotificationService implements MikuNotificationService {
   final List<String> shownApprovals = [];
   final List<String> cancelledApprovals = [];
   var initialized = false;
+  final actionController =
+      StreamController<ApprovalNotificationAction>.broadcast(sync: true);
+
+  @override
+  Stream<ApprovalNotificationAction> get actions => actionController.stream;
 
   @override
   bool get isSupported => true;
@@ -35,6 +42,8 @@ class RecordingNotificationService implements MikuNotificationService {
   Future<void> showApproval({
     required String sessionId,
     required String approvalId,
+    required String action,
+    String? expiresAt,
   }) async {
     shownApprovals.add('$sessionId:$approvalId');
   }
@@ -457,6 +466,140 @@ void main() {
       expect(notifications.cancelledApprovals, const ['approval-background']);
     },
   );
+
+  testWidgets(
+    'notification action loads the target session and approves once',
+    (WidgetTester tester) async {
+      final client = ScriptedMikuClient();
+      final session = await client.createSession();
+      client.seedPendingApproval(
+        session.id,
+        approvalId: 'approval-notification-action',
+        action: 'proc.run cargo test',
+      );
+      final notifications = RecordingNotificationService();
+      addTearDown(notifications.actionController.close);
+
+      await tester.pumpWidget(
+        MikuApp(client: client, notifications: notifications),
+      );
+      await tester.pump();
+      for (var i = 0; i < 20 && client.driveFeedRequests == 0; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(client.driveFeedRequests, greaterThan(0));
+      expect(notifications.actionController.hasListener, isTrue);
+
+      notifications.actionController.add(
+        ApprovalNotificationAction(
+          sessionId: session.id,
+          approvalId: 'approval-notification-action',
+          decision: 'approve',
+          requiresConfirmation: false,
+        ),
+      );
+      await tester.pump();
+      for (var i = 0; i < 10 && client.resolvedApprovals.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(
+        client.resolvedApprovals,
+        contains('approval-notification-action:approve'),
+      );
+      expect(
+        notifications.cancelledApprovals,
+        contains('approval-notification-action'),
+      );
+    },
+  );
+
+  testWidgets('stale notification action syncs and reports expiry', (
+    WidgetTester tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    final notifications = RecordingNotificationService();
+    addTearDown(notifications.actionController.close);
+
+    await tester.pumpWidget(
+      MikuApp(client: client, notifications: notifications),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    notifications.actionController.add(
+      ApprovalNotificationAction(
+        sessionId: session.id,
+        approvalId: 'approval-already-expired',
+        decision: 'deny',
+        requiresConfirmation: false,
+      ),
+    );
+    await tester.pump();
+    for (
+      var i = 0;
+      i < 10 && notifications.cancelledApprovals.isEmpty;
+      i++
+    ) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.pump();
+
+    expect(client.resolvedApprovals, isEmpty);
+    expect(
+      notifications.cancelledApprovals,
+      contains('approval-already-expired'),
+    );
+    expect(
+      find.text('This approval was already resolved or has expired.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('legacy Android notification action requires in-app confirmation', (
+    WidgetTester tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    client.seedPendingApproval(
+      session.id,
+      approvalId: 'approval-legacy-confirm',
+      action: 'drive.put inbox/report.md',
+      backend: 'drive',
+    );
+    final notifications = RecordingNotificationService();
+    addTearDown(notifications.actionController.close);
+
+    await tester.pumpWidget(
+      MikuApp(client: client, notifications: notifications),
+    );
+    await tester.pump();
+    for (var i = 0; i < 20 && client.driveFeedRequests == 0; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    notifications.actionController.add(
+      ApprovalNotificationAction(
+        sessionId: session.id,
+        approvalId: 'approval-legacy-confirm',
+        decision: 'deny',
+        requiresConfirmation: true,
+      ),
+    );
+    await tester.pump();
+    for (var i = 0; i < 10 && find.byType(AlertDialog).evaluate().isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(client.resolvedApprovals, isEmpty);
+    expect(find.text('drive.put inbox/report.md'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Deny'));
+    await tester.pump();
+    for (var i = 0; i < 10 && client.resolvedApprovals.isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(client.resolvedApprovals, contains('approval-legacy-confirm:deny'));
+  });
 
   testWidgets('shows and resolves pending drive filing approval', (
     WidgetTester tester,

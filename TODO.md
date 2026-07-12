@@ -1,15 +1,16 @@
 # TODO
 
-Last aligned: **2026-07-10**.
+Last aligned: **2026-07-12**.
 
-Active milestone: **audit hardening closed; remaining P6 sequencing**.
+Active milestone: **P6 push foundation landed; production provider canary next**.
 
 `ROADMAP.md` remains the canonical milestone order. The P4/P5 mechanism slices and their deterministic
 acceptance coverage have landed, as has the production-hardening implementation: supervised roles,
 durable approvals/effects, fenced leases, ordered checksummed migrations, authoritative session
 scope, durable turns/SSE replay, and Postgres drive metadata/link state. The complete automated and
 physical-device verification matrix now passes, so P4/P5 are production-complete for the documented
-single-owner deployment. Keep this checklist aligned with core docs
+single-owner deployment. P6 now also has encrypted provider-neutral push registration/outbox and
+authenticated Android notification actions, while real remote delivery remains open. Keep this checklist aligned with core docs
 §05/§06/§07/§09/§11 and product docs §21, §22, §23, §24, §25, §27, and §29.
 
 ## P5 North Star
@@ -518,7 +519,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 | `http.*` hardening | **P5 or P7** | Do it in P5 only if research needs live egress. Otherwise defer to P7 hardening. |
 | `secrets.use` | **P7** | Requires opaque egress-scoped handles and audit guarantees that never expose secret values to JS/model/artifacts/drive. |
 | `tm-mcp` | **P7 or explicit later slice** | External resources/tools can feed the same resource/approval model later; do not block local-first drive. |
-| Android OS integrations | **P6** | Secure QR pairing, credential storage, HTTPS release policy, backup exclusion, signing enforcement, and the physical-device canary pass in the shared Flutter client; push notifications and broader OS integration remain P6 work. |
+| Android OS integrations | **P6** | Secure QR/release gates plus encrypted provider-neutral registration, leased approval outbox, fake-provider coverage, and authenticated notification actions have landed. A production FCM/UnifiedPush adapter, remote killed-process canary, and broader OS integration remain. |
 
 ## Parallelization Seams
 
@@ -575,7 +576,7 @@ until a second concrete user exists.
 
 The audit has no open implementation decisions. Later roadmap work may decide:
 
-- push-approval notification UX and broader Android OS integration as the next P6 slice;
+- production push-provider selection/integration, physical killed-process delivery canary, and broader Android OS integration as the next P6 slice;
 - cloud-drive synchronization/conflict UX after the local Postgres authority is proven;
 - pgvector/graph/LLM-backed memory retrieval and richer scoped APIs;
 - live external research, secret-broker, MCP import, and trace/replay surfaces under P7 gates.

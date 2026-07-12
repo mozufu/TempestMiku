@@ -27,6 +27,10 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void>? _sessionFuture;
   StreamSubscription<MikuEvent>? _sub;
+  StreamSubscription<ApprovalNotificationAction>? _notificationActionSub;
+  final List<ApprovalNotificationAction> _pendingNotificationActions = [];
+  bool _processingNotificationActions = false;
+  bool _sessionBootComplete = false;
   String? _sessionId;
   String? _lastEventId;
   String _modeId = '';
@@ -52,6 +56,9 @@ class _MikuHomePageState extends State<MikuHomePage>
       duration: const Duration(milliseconds: 1200),
     )..repeat();
     unawaited(widget.notifications.initialize());
+    _notificationActionSub = widget.notifications.actions.listen(
+      _enqueueNotificationAction,
+    );
     unawaited(_boot());
   }
 
@@ -61,6 +68,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _sub?.cancel();
+    _notificationActionSub?.cancel();
     _dotAnim.dispose();
     super.dispose();
   }
@@ -82,6 +90,8 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _boot() async {
     await _ensureSession();
+    _sessionBootComplete = true;
+    await _drainNotificationActions();
   }
 
   Future<bool> _applyPairingLink(String rawLink) async {
@@ -312,8 +322,137 @@ class _MikuHomePageState extends State<MikuHomePage>
       widget.notifications.showApproval(
         sessionId: sessionId,
         approvalId: approval.approvalId,
+        action: approval.action,
       ),
     );
+  }
+
+  void _enqueueNotificationAction(ApprovalNotificationAction action) {
+    _pendingNotificationActions.removeWhere(
+      (queued) => queued.approvalId == action.approvalId,
+    );
+    _pendingNotificationActions.add(action);
+    unawaited(_drainNotificationActions());
+  }
+
+  Future<void> _drainNotificationActions() async {
+    if (_processingNotificationActions || !_sessionBootComplete) return;
+    _processingNotificationActions = true;
+    try {
+      while (mounted && _pendingNotificationActions.isNotEmpty) {
+        final action = _pendingNotificationActions.removeAt(0);
+        await _handleNotificationAction(action);
+      }
+    } finally {
+      _processingNotificationActions = false;
+    }
+  }
+
+  Future<void> _handleNotificationAction(
+    ApprovalNotificationAction notificationAction,
+  ) async {
+    try {
+      await _loadModes();
+      await _syncNotificationSession(notificationAction.sessionId);
+      if (!mounted) return;
+      ApprovalPrompt? approval;
+      for (final candidate in _approvals) {
+        if (candidate.approvalId == notificationAction.approvalId) {
+          approval = candidate;
+          break;
+        }
+      }
+      if (approval == null) {
+        await widget.notifications.cancelApproval(
+          notificationAction.approvalId,
+        );
+        _showSnack('This approval was already resolved or has expired.');
+        return;
+      }
+      if (notificationAction.requiresConfirmation) {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder:
+              (dialogContext) => AlertDialog(
+                title: Text(
+                  notificationAction.decision == 'approve'
+                      ? _copy.approveOnce
+                      : _copy.deny,
+                ),
+                content: Text(
+                  approval!.scope.isEmpty
+                      ? approval.action
+                      : '${approval.action}\n\nScope: ${approval.scope}',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    child: Text(_copy.cancel),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                    child: Text(
+                      notificationAction.decision == 'approve'
+                          ? _copy.approveOnce
+                          : _copy.deny,
+                    ),
+                  ),
+                ],
+              ),
+        );
+        if (confirmed != true) return;
+      }
+      await widget.client.resolveApproval(
+        notificationAction.sessionId,
+        notificationAction.approvalId,
+        notificationAction.decision,
+      );
+      if (!mounted) return;
+      setState(
+        () => _approvals.removeWhere(
+          (candidate) => candidate.approvalId == notificationAction.approvalId,
+        ),
+      );
+      await widget.notifications.cancelApproval(notificationAction.approvalId);
+    } catch (error) {
+      if (!mounted) return;
+      try {
+        await _syncNotificationSession(notificationAction.sessionId);
+      } catch (_) {}
+      if (!mounted) return;
+      final stillPending = _approvals.any(
+        (approval) => approval.approvalId == notificationAction.approvalId,
+      );
+      if (!stillPending) {
+        await widget.notifications.cancelApproval(
+          notificationAction.approvalId,
+        );
+        _showSnack('This approval was already resolved or has expired.');
+      } else {
+        _showSnack('Could not resolve approval: $error');
+      }
+    }
+  }
+
+  Future<void> _syncNotificationSession(String sessionId) async {
+    final loaded = await widget.client.loadSession(sessionId);
+    if (_sessionId != sessionId) {
+      await _attachSession(
+        loaded.session,
+        messages: loaded.messages,
+        pendingEvents: loaded.pendingEvents,
+      );
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _approvals.clear();
+      _memoryProposals.clear();
+      for (final event in loaded.pendingEvents) {
+        _applyEvent(event);
+      }
+    });
   }
 
   void _rememberEventCursor(MikuEvent e) {

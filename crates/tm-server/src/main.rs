@@ -22,9 +22,12 @@ use tm_server::{
     AgentChatRunner, AppState, ApprovalBroker, AuthConfig, ChatActorExecutor, CodingBackend,
     CodingEventSink, DeviceAuthConfig, EchoChatRunner, ForwardedAuthConfig, HttpApprovalPolicy,
     InMemoryAuthDeviceStore, InMemoryStore, NativeApprovalMode, NativeDenoBackend, OmpAcpBackend,
-    OmpAcpConfig, PostgresDriveMetadataStore, PostgresStore, RosterCodingEventSink, RuntimeConfig,
-    RuntimeStatus, ServerChatRunner, ServerRole, Store, StoreMemoryProvider, run_server,
+    OmpAcpConfig, PostgresDriveMetadataStore, PostgresPushStore, PostgresStore, PushCipher,
+    PushProvider, PushService, RosterCodingEventSink, RuntimeConfig, RuntimeStatus,
+    ServerChatRunner, ServerRole, Store, StoreMemoryProvider, run_server,
 };
+
+type ConfiguredPush = (Arc<dyn PushProvider>, PushCipher);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let artifact_root = server_artifact_root(&host_config);
     let roster = Arc::new(MailboxRegistry::new());
     let approval_broker = Arc::new(ApprovalBroker::default());
+    let push_config = push_config_from_env()?;
 
     if let Some(dsn) = database_dsn {
         let store = Arc::new(PostgresStore::connect(&dsn).await?);
@@ -100,14 +104,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
         let runtime_status = Arc::new(RuntimeStatus::new(role, true, true));
         runtime_status.add_link_hydration_failures(link_hydration_failures as u64);
+        let mut state = AppState::new(store.clone(), memory, runtime.chat, persona, auth.clone())
+            .with_auth_store(store)
+            .with_approval_broker(Arc::clone(&approval_broker))
+            .with_actor_roster(Arc::clone(&roster))
+            .with_drive_store(drive_store.clone())
+            .with_runtime_status(runtime_status)
+            .with_auto_turn_dispatcher(false);
+        if let Some((provider, cipher)) = &push_config {
+            let push_store = Arc::new(PostgresPushStore::connect(&dsn).await?);
+            state = state.with_push_service(Arc::new(PushService::new(
+                push_store,
+                Arc::clone(provider),
+                cipher.clone(),
+            )));
+        }
         let state = configure_coding_backend(
-            AppState::new(store.clone(), memory, runtime.chat, persona, auth.clone())
-                .with_auth_store(store)
-                .with_approval_broker(Arc::clone(&approval_broker))
-                .with_actor_roster(Arc::clone(&roster))
-                .with_drive_store(drive_store.clone())
-                .with_runtime_status(runtime_status)
-                .with_auto_turn_dispatcher(false),
+            state,
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
@@ -133,14 +146,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store.configure_owner_subject(&owner_subject).await?;
         let auth_store = Arc::new(InMemoryAuthDeviceStore::default());
         let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+        let mut state = AppState::new(store, memory, runtime.chat, persona, auth)
+            .with_auth_store(auth_store)
+            .with_approval_broker(Arc::clone(&approval_broker))
+            .with_actor_roster(roster)
+            .with_drive_store(drive_store)
+            .with_runtime_status(Arc::new(RuntimeStatus::new(role, false, false)))
+            .with_auto_turn_dispatcher(false);
+        if let Some((provider, cipher)) = &push_config {
+            state = state.with_push_service(Arc::new(PushService::new(
+                Arc::new(tm_server::InMemoryPushStore::default()),
+                Arc::clone(provider),
+                cipher.clone(),
+            )));
+        }
         let state = configure_coding_backend(
-            AppState::new(store, memory, runtime.chat, persona, auth)
-                .with_auth_store(auth_store)
-                .with_approval_broker(Arc::clone(&approval_broker))
-                .with_actor_roster(roster)
-                .with_drive_store(drive_store)
-                .with_runtime_status(Arc::new(RuntimeStatus::new(role, false, false)))
-                .with_auto_turn_dispatcher(false),
+            state,
             &linked_folders,
             artifact_root.clone(),
             runtime.native_deno,
@@ -150,6 +171,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn push_config_from_env() -> Result<Option<ConfiguredPush>, Box<dyn std::error::Error>> {
+    let provider = std::env::var("TM_PUSH_PROVIDER").unwrap_or_else(|_| "disabled".to_string());
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "" | "disabled" | "none" => Ok(None),
+        "fake" if cfg!(debug_assertions) => {
+            let key = required_env("TM_PUSH_ENCRYPTION_KEY")?;
+            Ok(Some((
+                Arc::new(tm_server::FakePushProvider::default()),
+                PushCipher::from_base64(&key)?,
+            )))
+        }
+        "fake" => Err("TM_PUSH_PROVIDER=fake is unavailable in release builds".into()),
+        other => Err(format!(
+            "unsupported TM_PUSH_PROVIDER={other}; this slice ships only disabled production mode"
+        )
+        .into()),
+    }
 }
 
 struct BuiltRuntime {

@@ -18,8 +18,10 @@ canary proved in-app QR confirmation, durable chat, cold-start credential/sessio
 exact-once offline SSE replay, and immediate device revocation. The audit hardening gate is closed
 for the documented single-owner deployment. Production exposure must remain loopback-only behind
 an HTTPS reverse proxy or Tailscale Serve; Postgres is mandatory outside loopback and for
-`worker`/`all` roles. Broader P6/P7 work such as push notifications, MCP/trace, cloud drive sync,
-live egress, and self-evolution remains out of scope.
+`worker`/`all` roles. P6 now includes encrypted provider-neutral push registration/outbox and
+authenticated Android notification actions; a production provider and remote killed-process canary
+remain open. Broader P6/P7 work such as MCP/trace, cloud drive sync, live egress, and self-evolution
+remains out of scope.
 
 ## Project docs
 

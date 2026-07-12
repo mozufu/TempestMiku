@@ -91,6 +91,7 @@ TM_PUBLIC_BASE_URL=https://miku.example.test # production external origin only
 TM_HOST_CONFIG=.tempestmiku/config.json
 TM_CONFIG=.tempestmiku/config.json
 TM_OMP_ACP_ENABLED=0
+TM_PUSH_PROVIDER=disabled # production providers are not shipped yet
 ```
 
 Without `TM_DATABASE_URL`, sessions, memory, and drive metadata use non-durable in-memory stores.
@@ -105,6 +106,12 @@ or more `api` and `worker` processes against the same Postgres database and shar
 Shutdown stops new claims, continues heartbeats while draining, and aborts remaining work after the
 30-second grace period. The default `api` role without a worker can create/read state but will leave
 new turns queued.
+
+Push support is disabled by default. This slice accepts `TM_PUSH_PROVIDER=fake` only in debug builds
+for API/worker testing; it requires `TM_PUSH_ENCRYPTION_KEY`, a base64-encoded 32-byte key shared by
+split API and worker processes. No production FCM or UnifiedPush adapter is currently selectable.
+Future adapters reuse the encrypted `device_push_registrations` and leased
+`approval_push_deliveries` tables.
 
 Postgres startup applies ordered, checksummed migrations from `crates/tm-server/migrations` and
 preserves existing session/memory history. A checksum mismatch or failed migration aborts startup;
@@ -184,6 +191,26 @@ preferences, but changing servers clears credential, session, and cursor before 
 target. Android API level 23 is the minimum; credential storage is excluded from backup/device
 transfer. QR scanning uses bundled `mobile_scanner` 7.2.0 and the camera permission, so it works
 offline against the displayed code.
+
+Background approval events use a private Android notification with **Approve once** and **Deny**.
+The public lock-screen version contains no action or scope. Android 12+ requires device
+authentication before delivering an action; Android 6–11 opens the app for confirmation. The
+action reloads the target session and calls the normal authenticated approval endpoint. To exercise
+the notification while the debug app process is stopped, replace the session id with a real session
+that currently has a matching pending approval:
+
+```sh
+adb shell am force-stop dev.tempestmiku.miku_flutter
+adb shell am broadcast \
+  -a dev.tempestmiku.miku_flutter.DEBUG_APPROVAL_NOTIFICATION \
+  -n dev.tempestmiku.miku_flutter/.DebugApprovalNotificationReceiver \
+  --es sessionId '<session-id>' \
+  --es approvalId '<approval-id>' \
+  --es approvalAction 'proc.run cargo test'
+```
+
+This is an ADB/local-SSE probe, not proof of remote killed-process push delivery. P6 remains open
+until a production provider adapter and physical remote-delivery canary pass.
 
 ```sh
 nix develop --command bash -lc \

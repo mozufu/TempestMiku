@@ -190,8 +190,13 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   bearer token lives in `flutter_secure_storage` 10.3.1; server/session cursor preferences are cleared
   with the credential when origins change. Android min SDK is 23, credential backup/transfer is
   excluded, release cleartext is disabled, and release builds require a configured non-debug key.
-  Debug/profile retain emulator-only cleartext support. Push approval notifications and broader OS
-  integrations remain P6 work; there is still **no on-device sandbox** or second execution path.
+  Debug/profile retain emulator-only cleartext support. The provider-neutral push foundation binds
+  encrypted registration secrets to existing device authority, materializes approval request and
+  resolution deliveries through a leased Postgres outbox, and keeps provider payloads limited to
+  opaque routing identifiers. Android background-SSE notifications expose Approve once / Deny;
+  Android 12+ requires device authentication, older releases reopen the authenticated approval UI,
+  and lock-screen content remains generic. A real FCM or UnifiedPush adapter and remote killed-process
+  canary remain P6 work; there is still **no on-device sandbox** or second execution path.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 
@@ -202,7 +207,7 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 - **Inbound (client→server):** **custom authenticated session API + SSE** is primary:
   `POST /sessions`, durable `POST /sessions/:id/messages`, `GET /sessions/:id/turns/:turnId`,
   `POST /sessions/:id/scope`, `POST /sessions/:id/end`, `GET /sessions/:id/events`,
-  `POST /sessions/:id/approvals/:approval_id`, `POST /sessions/:id/memory/proposals`,
+  `GET|POST /sessions/:id/approvals/:approval_id`, `POST /sessions/:id/memory/proposals`,
   `POST /sessions/:id/promote`, `GET /modes`, mode lock / override endpoints, session-scoped
   resource endpoints (§09), protected `GET /ready`/`GET /metrics`, and minimal public `GET /health`.
   Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
@@ -215,6 +220,14 @@ device, or an explicit bootstrap credential. `GET /auth/devices`, device revocat
 authenticated. The pairing response returns a bearer token only to non-Web clients; Web receives an
 HttpOnly cookie and no script-visible token. Device revocation invalidates new API calls and existing
 SSE connections on their periodic auth check.
+
+Push registration extends that same device identity rather than creating a second credential model.
+`PUT /auth/push-registration` upserts the authenticated device's provider token and
+`DELETE /auth/push-registration` disables it. Registration secrets are XChaCha20-Poly1305 encrypted
+with device/provider-bound AAD and never serialized or logged. Logout, device revocation, invalid
+provider registrations, approval expiry, and approval resolution all close the corresponding
+notification lifecycle. Notification approval omits `optionId`, so the existing broker selects
+`allow_once` before any wider allow option.
 
 The session resource gateway supports resolve/list/preview for the live P0-P5 schemes:
 `artifact://`, `workspace://session/...`, `linked://...`, `project://...`, the P2 `memory://`

@@ -175,6 +175,9 @@ where
         .devices()
         .revoke_auth_device(device.id, Utc::now())
         .await?;
+    if let Some(push) = &state.push {
+        push.unregister(device.id).await?;
+    }
     let mut response = Json(json!({ "device": device })).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
@@ -217,6 +220,9 @@ where
         .devices()
         .revoke_auth_device(device_id, Utc::now())
         .await?;
+    if let Some(push) = &state.push {
+        push.unregister(device.id).await?;
+    }
     Ok(Json(json!({ "device": device })))
 }
 

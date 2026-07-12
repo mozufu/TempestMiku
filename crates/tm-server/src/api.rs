@@ -18,7 +18,7 @@ use axum::{
     http::HeaderMap,
     middleware,
     response::{IntoResponse, Sse, sse::Event},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -86,6 +86,7 @@ mod mode_suggest;
 pub(crate) mod modes;
 pub(crate) mod pairing;
 mod projects;
+mod push_notifications;
 mod resources;
 pub(crate) mod sessions;
 
@@ -117,6 +118,7 @@ pub struct AppState<S, M, C> {
     pub linked_folders: LinkedFolders,
     pub drive_store: Option<SharedDriveStore>,
     pub actor_roster: Arc<MailboxRegistry>,
+    pub push: Option<Arc<crate::PushService>>,
     runtime_status: Arc<crate::RuntimeStatus>,
     auto_start_turn_dispatcher: bool,
     turn_notify: Arc<tokio::sync::Notify>,
@@ -139,6 +141,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             linked_folders: self.linked_folders.clone(),
             drive_store: self.drive_store.clone(),
             actor_roster: Arc::clone(&self.actor_roster),
+            push: self.push.clone(),
             runtime_status: Arc::clone(&self.runtime_status),
             auto_start_turn_dispatcher: self.auto_start_turn_dispatcher,
             turn_notify: Arc::clone(&self.turn_notify),
@@ -173,6 +176,7 @@ impl<S, M, C> AppState<S, M, C> {
             linked_folders: LinkedFolders::default(),
             drive_store: None,
             actor_roster: Arc::new(MailboxRegistry::new()),
+            push: None,
             runtime_status: Arc::new(crate::RuntimeStatus::local_test()),
             // Production startup is role-supervised. Unit tests retain the small embedded
             // dispatcher so router tests can exercise the durable API without a daemon.
@@ -219,6 +223,11 @@ impl<S, M, C> AppState<S, M, C> {
 
     pub fn with_drive_store(mut self, drive_store: impl IntoSharedDriveStore) -> Self {
         self.drive_store = Some(drive_store.into_shared_drive_store());
+        self
+    }
+
+    pub fn with_push_service(mut self, push: Arc<crate::PushService>) -> Self {
+        self.push = Some(push);
         self
     }
 
@@ -386,6 +395,11 @@ where
         .route("/auth/devices", get(auth_devices::list_devices::<S, M, C>))
         .route("/auth/logout", post(auth_devices::logout::<S, M, C>))
         .route(
+            "/auth/push-registration",
+            put(push_notifications::register::<S, M, C>)
+                .delete(push_notifications::unregister::<S, M, C>),
+        )
+        .route(
             "/auth/devices/:device_id",
             delete(auth_devices::revoke_device::<S, M, C>),
         )
@@ -436,7 +450,8 @@ where
         )
         .route(
             "/sessions/:id/approvals/:approval_id",
-            post(approvals::resolve_approval::<S, M, C>),
+            get(push_notifications::approval::<S, M, C>)
+                .post(approvals::resolve_approval::<S, M, C>),
         )
         .route(
             "/sessions/:id/project",
@@ -546,6 +561,10 @@ where
     C: ChatRunner,
 {
     let store = state.store.runtime_metrics(Utc::now()).await?;
+    let push = match &state.push {
+        Some(push) => Some(push.runtime_metrics().await?),
+        None => None,
+    };
     Ok(Json(json!({
         "runtime": state.runtime_status().snapshot(),
         "queues": {
@@ -566,6 +585,13 @@ where
                 "depth": store.approval_effect_queue_depth,
                 "oldestAgeSeconds": store.approval_effect_oldest_age_seconds,
             },
+            "push": push.map(|push| json!({
+                "depth": push.queue_depth,
+                "oldestAgeSeconds": push.oldest_age_seconds,
+                "retries": push.retries,
+                "failedDeliveries": push.failed_deliveries,
+                "disabledRegistrations": push.disabled_registrations,
+            })),
         },
         "pendingApprovals": store.pending_approvals,
         "leaseReclaims": store.lease_reclaims,

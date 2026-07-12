@@ -5,6 +5,9 @@ MikuNotificationService createNotificationService() =>
 
 class _NoopNotificationService implements MikuNotificationService {
   @override
+  Stream<ApprovalNotificationAction> get actions => const Stream.empty();
+
+  @override
   bool get isSupported => false;
 
   @override
@@ -20,5 +23,7 @@ class _NoopNotificationService implements MikuNotificationService {
   Future<void> showApproval({
     required String sessionId,
     required String approvalId,
+    required String action,
+    String? expiresAt,
   }) async {}
 }

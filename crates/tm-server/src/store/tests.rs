@@ -8,7 +8,11 @@ use tm_modes::{AssetStatus, ModeId};
 use uuid::Uuid;
 
 use super::*;
-use crate::{AuthDeviceStore, ServerError};
+use crate::{
+    AuthDeviceStore, FakePushProvider, PostgresPushStore, PushCipher, PushMessageKind, PushService,
+    ServerError,
+};
+use std::sync::Arc;
 
 fn postgres_test_dsn() -> Option<String> {
     (std::env::var("TM_POSTGRES_TESTS").ok().as_deref() == Some("1"))
@@ -3390,6 +3394,131 @@ async fn gated_postgres_runs_versioned_auth_migrations_and_redeems_once() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn gated_postgres_push_outbox_delivers_request_and_resolution_once() {
+    let Some(dsn) = postgres_test_dsn() else {
+        return;
+    };
+    let store = PostgresStore::connect(&dsn).await.unwrap();
+    store.configure_owner_subject("brian").await.unwrap();
+    let now = Utc::now();
+    let raw_code = format!("push-pair-{}", Uuid::new_v4());
+    store
+        .create_pairing_code(crate::NewPairingCode {
+            id: Uuid::new_v4(),
+            code_hash: crate::auth::hash_secret(&raw_code),
+            created_at: now,
+            expires_at: now + Duration::minutes(5),
+            created_by_device_id: None,
+        })
+        .await
+        .unwrap();
+    let device = store
+        .consume_pairing_code(
+            &crate::auth::hash_secret(&raw_code),
+            crate::NewAuthDevice {
+                id: Uuid::new_v4(),
+                owner_subject: "brian".to_string(),
+                name: "Push outbox test".to_string(),
+                platform: "android".to_string(),
+                token_hash: crate::auth::hash_secret(&format!("push-device-{}", Uuid::new_v4())),
+                created_at: now,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let approval_id = Uuid::new_v4();
+    store
+        .create_approval_request(NewApprovalRequest {
+            id: approval_id,
+            session_id: session.id,
+            turn_id: None,
+            requester_id: Uuid::new_v4(),
+            origin: "native-deno".to_string(),
+            action: "proc.run cargo test".to_string(),
+            scope_json: json!({"capability": "proc.run"}),
+            options_json: json!([
+                {"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
+                {"optionId": "reject", "name": "Reject", "kind": "reject_once"}
+            ]),
+            effect_type: "approval_continuation".to_string(),
+            effect_payload_json: json!({}),
+            resumable: true,
+            created_at: now,
+            expires_at: now + Duration::minutes(5),
+        })
+        .await
+        .unwrap();
+    let request_event = store
+        .append_event(session.id, "approval", json!({"approvalId": approval_id}))
+        .await
+        .unwrap();
+    store
+        .link_approval_event(session.id, approval_id, "approval", request_event.seq)
+        .await
+        .unwrap();
+
+    let provider = Arc::new(FakePushProvider::default());
+    let cipher = PushCipher::generate_for_tests();
+    let service = PushService::new(
+        Arc::new(PostgresPushStore::connect(&dsn).await.unwrap()),
+        provider.clone(),
+        cipher.clone(),
+    );
+    let other_service = PushService::new(
+        Arc::new(PostgresPushStore::connect(&dsn).await.unwrap()),
+        provider.clone(),
+        cipher,
+    );
+    service
+        .register(device.id, "fake", "opaque-registration")
+        .await
+        .unwrap();
+    let (first_worker, second_worker) = tokio::join!(
+        service.tick(Uuid::new_v4()),
+        other_service.tick(Uuid::new_v4())
+    );
+    assert_eq!(first_worker.unwrap() + second_worker.unwrap(), 1);
+    let deliveries = provider.deliveries();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries[0].1.kind, PushMessageKind::ApprovalRequested);
+    assert_eq!(deliveries[0].1.session_id, session.id);
+    assert_eq!(deliveries[0].1.approval_id, approval_id);
+
+    store
+        .resolve_approval_request_with_event(
+            session.id,
+            approval_id,
+            NewApprovalResolution {
+                status: "denied".to_string(),
+                selected_option_id: Some("reject".to_string()),
+                resolution_json: json!({"status": "denied"}),
+                resolved_at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+    let (first_worker, second_worker) = tokio::join!(
+        service.tick(Uuid::new_v4()),
+        other_service.tick(Uuid::new_v4())
+    );
+    assert_eq!(first_worker.unwrap() + second_worker.unwrap(), 1);
+    let deliveries = provider.deliveries();
+    assert_eq!(deliveries.len(), 2);
+    assert_eq!(deliveries[1].1.kind, PushMessageKind::ApprovalResolved);
+    assert_eq!(service.runtime_metrics().await.unwrap().queue_depth, 0);
 }
 
 #[tokio::test]

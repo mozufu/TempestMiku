@@ -30,7 +30,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **P3+ — live actor mailbox** ✓ | Live MPSC resident delivery (`agents.send/wait/inbox/list/broadcast/cancel/pipeline`); active supervision (restart/subtree cancel); child approval routing through `ApprovalBroker`; DAG acyclicity + protocol invariants; Flutter smoke coverage | 5 | M2 | live siblings coordinate via `send`/`wait`; child cancel yields replayable `Cancelled` event; child approval requests reach the user; restart/timeout/subtree-failure decisions are replayable; Flutter attach/approve/reconnect pass |
 | **P4 — dreaming + proactivity** ✓ | consolidation + `skills/` generation (§22/§26); scheduler/cron (§27.2) | all | — | transactional session end, durable approvals/effects, fenced leases, enforced cron bounds, supervised roles, recovery tests, and final client verification pass |
 | **P5 — drive + research** ✓ | `drive.*` + auto-organizer (§24): transducers + virtual dirs; deep-research workspace (P3+P4+P5) | 4/5 | — | Postgres metadata/organizer/link persistence, CAS application, tombstones, startup link revalidation, and final restart/client verification pass |
-| **P6 — Android package + OS integrations (security slice verified)** | Ship the Android target of the existing Flutter client after the hardened server contracts pass | all | — | Android/Web share authenticated durable turns and SSE; in-app QR pairing, secure token storage, HTTPS-only release networking, backup exclusion, release signing, and the physical-device canary pass; push notifications and broader OS integrations remain |
+| **P6 — Android package + OS integrations (push foundation landed)** | Ship the Android target of the existing Flutter client after the hardened server contracts pass | all | — | Android/Web share authenticated durable turns and SSE; secure pairing/release gates and the physical-device canary pass; encrypted provider-neutral registration, leased push outbox, private approval actions, and fake-provider probes landed; production provider delivery and broader OS integrations remain |
 | **P7 — self-evolution tiers + hardening** | tiers (§26); isolation / egress hardening | all | M3–M4 | tier switch changes write-scope; conservative writes only memory+skills; audit trail |
 
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
@@ -88,7 +88,7 @@ target into multi-tenancy or arbitrary public-internet hosting.
 
 Also not production-complete: `tm-mcp`, `tm-trace`, fuller `tm-memory` mechanisms beyond the P4
 acceptance slice (pgvector dense retrieval, graph extraction, LLM-backed extraction, richer scoped
-`memory.*` APIs), first-class skill import/reload/write surfaces, remaining Android push/OS integration, optional
+`memory.*` APIs), first-class skill import/reload/write surfaces, a production Android push provider and remaining OS integration, optional
 drive cloud sync, generated SDK docs from the runtime registry, and production egress/secret
 hardening.
 
@@ -108,14 +108,14 @@ each milestone is done only when its acceptance checks pass.
 | 6+ | **DONE — P3+ live actor mailbox + supervision** | 4–8d | Landed per-actor bounded inbox + `Agent::run` inbox draining, `agents.send/broadcast/wait/inbox/list/cancel/pipeline`, child approval routing through the live broker, parent-session child artifacts, parent-driven cancel tokens with replayable `actor_cancelled`, plain-prose enforcement, live-wait DAG acyclicity checks, pipeline digest-reference wiring, active restart strategies (`one_for_one`, `one_for_all`, `rest_for_one`), wall-clock budget enforcement, fail-fast sibling-subtree supervision, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and tm-e2e/Flutter actor smoke coverage. | Tests prove live sibling coordination, cancel/replay, child approval routing, restart decisions, actor timeouts, fail-fast sibling-subtree cancellation, event-log resource provenance, and Flutter attach/approve/reconnect smoke coverage. |
 | 7 | **DONE — P4 dreaming + scheduler production hardening** | 6–10d | Added transactional lifecycle writes, durable approval requests/effects, fenced owner/epoch leases with heartbeat/retry limits, atomic cron cursor materialization, deny-only execution bounds, supervised worker roles, and recovery metrics. | Deterministic, gated, split-process, and physical-client verification cover stale-owner rejection, bounded retries, transactional enqueue, restart recovery, and authenticated replay. |
 | 8 | **DONE — P5 drive + research workspace production hardening** | 5–9d | Added `DriveMetadataStore`, Postgres entries/proposals/organizer/corrections/version/link/tombstone state, CAS moves/apply, startup canonical-root revalidation, and the documented no-database historical metadata exception. | Deterministic, gated, split-process, and physical-client verification cover persistence, revocation, hydration, concurrent application, and restart-safe access. |
-| 9 | **P6 SECURITY SLICE VERIFIED — remaining OS integrations next** | 4–7d | The shared Flutter client now scans versioned pairing QR data in-app, confirms origin/device authority, stores origin-bound tokens in secure storage, sends bearer auth on HTTP/SSE, disables release cleartext/backup, and requires a real release key. Push approvals and broader OS integrations remain. | Authenticated Android debug/release builds, HTTPS pairing/chat/reconnect/revocation, and non-debug release certificate checks pass. |
+| 9 | **P6 PUSH FOUNDATION LANDED — provider canary next** | 4–7d | Secure QR/device authority and release gates now feed encrypted provider-neutral registrations, a leased/deduplicated approval delivery outbox, fake-provider tests, private lock-screen notifications, authenticated Approve once / Deny actions, and stale-action resync. A production provider adapter remains. | Existing authenticated Android canary and package gates pass; deterministic fake-provider and debug killed-process probes cover the new foundation. Remote provider delivery while the app is killed is not yet accepted. |
 | 10 | **P7 — self-evolution + hardening** | 6–12d | Implement evolution tiers; write-scope switches; audit trail; MCP import/reload gates; egress/isolation hardening; add replay checks. | Tier switch changes allowed writes; conservative writes only memory+skills proposals; audit/replay can explain every gated write. |
 
 ### Immediate next task queue
 
-1. **Resume the remaining P6 Android OS integrations** — push approvals and notification lifecycle
-   must reuse the authenticated Flutter/Web client model, durable turn/SSE API, approval surface,
-   resource gateway, drive browser, and reconnect path.
+1. **Select and integrate the production P6 push provider** — add FCM or UnifiedPush behind the
+   landed provider contract, then prove remote approval request/resolution delivery while the app is
+   killed on a physical device. Keep the payload identifier-only and reuse authenticated resync.
 2. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
    artifacts, and HTTP-routed manual approvals.

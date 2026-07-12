@@ -65,6 +65,7 @@ pub struct RuntimeConfig {
     pub turn_concurrency: usize,
     pub turn_poll_interval: Duration,
     pub approval_poll_interval: Duration,
+    pub push_poll_interval: Duration,
     pub scheduler_poll_interval: Duration,
     pub shutdown_grace: Duration,
 }
@@ -75,6 +76,7 @@ impl Default for RuntimeConfig {
             turn_concurrency: 4,
             turn_poll_interval: Duration::from_millis(250),
             approval_poll_interval: Duration::from_millis(500),
+            push_poll_interval: Duration::from_millis(500),
             scheduler_poll_interval: Duration::from_secs(5),
             shutdown_grace: Duration::from_secs(30),
         }
@@ -281,6 +283,13 @@ where
         shutdown.clone(),
         config.approval_poll_interval,
     ));
+    let push = state.push.clone().map(|push| {
+        tokio::spawn(run_push_worker(
+            push,
+            shutdown.clone(),
+            config.push_poll_interval,
+        ))
+    });
     let dream = state
         .dream_worker(DreamWorkerConfig::default())
         .into_daemon();
@@ -293,7 +302,34 @@ where
         shutdown,
         config.scheduler_poll_interval,
     ));
-    vec![turn, approvals, dream, scheduler]
+    let mut workers = vec![turn, approvals, dream, scheduler];
+    workers.extend(push);
+    workers
+}
+
+async fn run_push_worker(
+    push: Arc<crate::PushService>,
+    mut shutdown: watch::Receiver<bool>,
+    poll_interval: Duration,
+) {
+    let owner_id = Uuid::new_v4();
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        if let Err(error) = push.tick(owner_id).await {
+            let error = tm_memory::redact_dream_text(&error.to_string()).text;
+            tracing::warn!(%error, "push worker tick failed");
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+            _ = tokio::time::sleep(poll_interval) => {}
+        }
+    }
 }
 
 async fn run_approval_worker<S, M, C>(

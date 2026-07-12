@@ -14,14 +14,25 @@ import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
+
+private const val ACTION_APPROVAL_DECISION =
+    "dev.tempestmiku.miku_flutter.APPROVAL_NOTIFICATION_DECISION"
+private const val EXTRA_SESSION_ID = "sessionId"
+private const val EXTRA_APPROVAL_ID = "approvalId"
+private const val EXTRA_DECISION = "decision"
 
 class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "dev.tempestmiku.miku_flutter/notifications"
+        private const val ACTION_CHANNEL =
+            "dev.tempestmiku.miku_flutter/notification-actions"
         private const val REQUEST_NOTIFICATIONS = 701
     }
 
     private var permissionResult: MethodChannel.Result? = null
+    private var actionSink: EventChannel.EventSink? = null
+    private val pendingActions = mutableListOf<Map<String, Any>>()
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -35,11 +46,22 @@ class MainActivity : FlutterActivity() {
                 }
                 "requestPermission" -> requestNotificationPermission(result)
                 "showApproval" -> {
+                    val sessionId = call.argument<String>("sessionId")
                     val approvalId = call.argument<String>("approvalId")
-                    if (approvalId.isNullOrBlank()) {
-                        result.error("invalid_approval", "approvalId is required", null)
+                    val action = call.argument<String>("action")
+                    if (sessionId.isNullOrBlank() || approvalId.isNullOrBlank()) {
+                        result.error(
+                            "invalid_approval",
+                            "sessionId and approvalId are required",
+                            null,
+                        )
                     } else {
-                        ApprovalNotifications.show(this, approvalId)
+                        ApprovalNotifications.show(
+                            this,
+                            sessionId,
+                            approvalId,
+                            action.orEmpty(),
+                        )
                         result.success(null)
                     }
                 }
@@ -52,6 +74,27 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, ACTION_CHANNEL)
+            .setStreamHandler(
+                object : EventChannel.StreamHandler {
+                    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                        actionSink = events
+                        pendingActions.toList().forEach(events::success)
+                        pendingActions.clear()
+                    }
+
+                    override fun onCancel(arguments: Any?) {
+                        actionSink = null
+                    }
+                },
+            )
+        handleNotificationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
     }
 
     override fun onRequestPermissionsResult(
@@ -85,6 +128,35 @@ class MainActivity : FlutterActivity() {
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
     }
 
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent?.action != ACTION_APPROVAL_DECISION) return
+        val sessionId = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+        val approvalId = intent.getStringExtra(EXTRA_APPROVAL_ID).orEmpty()
+        val decision = intent.getStringExtra(EXTRA_DECISION).orEmpty()
+        if (sessionId.isEmpty() || approvalId.isEmpty() || decision !in setOf("approve", "deny")) {
+            return
+        }
+        val payload = mapOf(
+            "sessionId" to sessionId,
+            "approvalId" to approvalId,
+            "decision" to decision,
+            "requiresConfirmation" to (Build.VERSION.SDK_INT < Build.VERSION_CODES.S),
+        )
+        val sink = actionSink
+        if (sink == null) {
+            pendingActions.removeAll { queued ->
+                queued["approvalId"] == approvalId
+            }
+            pendingActions.add(payload)
+        } else {
+            sink.success(payload)
+        }
+        intent.action = Intent.ACTION_MAIN
+        intent.removeExtra(EXTRA_SESSION_ID)
+        intent.removeExtra(EXTRA_APPROVAL_ID)
+        intent.removeExtra(EXTRA_DECISION)
+    }
+
 }
 
 internal object ApprovalNotifications {
@@ -104,7 +176,7 @@ internal object ApprovalNotifications {
         notificationManager(context).createNotificationChannel(channel)
     }
 
-    fun show(context: Context, approvalId: String) {
+    fun show(context: Context, sessionId: String, approvalId: String, action: String) {
         ensureChannel(context)
         val openApp = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -115,19 +187,33 @@ internal object ApprovalNotifications {
             openApp,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val approve = notificationAction(context, sessionId, approvalId, "approve", "Approve once")
+        val deny = notificationAction(context, sessionId, approvalId, "deny", "Deny")
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(context, APPROVAL_CHANNEL_ID)
         } else {
             Notification.Builder(context)
         }
+        val publicNotification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(context, APPROVAL_CHANNEL_ID)
+        } else {
+            Notification.Builder(context)
+        }.setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("TempestMiku needs your approval")
+            .setContentText("Unlock to review the request.")
+            .build()
         val notification = builder
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("TempestMiku needs your approval")
-            .setContentText("Open the app to review a pending request.")
+            .setContentText(sanitizeAction(action))
             .setCategory(Notification.CATEGORY_STATUS)
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicNotification)
+            .addAction(approve)
+            .addAction(deny)
             .build()
         notificationManager(context).notify(notificationId(approvalId), notification)
     }
@@ -138,6 +224,41 @@ internal object ApprovalNotifications {
 
     private fun notificationManager(context: Context): NotificationManager =
         context.getSystemService(NotificationManager::class.java)
+
+    private fun notificationAction(
+        context: Context,
+        sessionId: String,
+        approvalId: String,
+        decision: String,
+        title: String,
+    ): Notification.Action {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_APPROVAL_DECISION
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_SESSION_ID, sessionId)
+            putExtra(EXTRA_APPROVAL_ID, approvalId)
+            putExtra(EXTRA_DECISION, decision)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            "$approvalId:$decision".hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = Notification.Action.Builder(null, title, pendingIntent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAuthenticationRequired(true)
+        }
+        return builder.build()
+    }
+
+    private fun sanitizeAction(action: String): String {
+        val sanitized = action
+            .filterNot(Char::isISOControl)
+            .trim()
+            .take(160)
+        return sanitized.ifEmpty { "Open the app to review a pending request." }
+    }
 
     private fun notificationId(approvalId: String): Int = approvalId.hashCode()
 }

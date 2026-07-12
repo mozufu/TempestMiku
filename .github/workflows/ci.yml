@@ -14,6 +14,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  FLUTTER_VERSION: "3.32.0"
   RUST_BACKTRACE: "1"
 
 jobs:
@@ -101,6 +102,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Resolve Flutter dependencies
@@ -126,6 +128,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Resolve Flutter dependencies
@@ -133,6 +136,14 @@ jobs:
 
       - name: Build Flutter web client
         run: flutter build web --release --no-pub
+
+      - name: Upload Flutter web client
+        uses: actions/upload-artifact@v4
+        with:
+          name: miku-flutter-web
+          path: clients/miku_flutter/build/web
+          if-no-files-found: error
+          retention-days: 1
 
   android-build:
     name: Android debug build
@@ -155,6 +166,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Resolve Flutter dependencies
@@ -184,6 +196,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Resolve Flutter dependencies
@@ -215,6 +228,7 @@ jobs:
 
   web-smoke:
     name: Playwright web smoke
+    needs: flutter-web-build
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -257,6 +271,12 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
         working-directory: clients/miku_web
+
+      - name: Download Flutter web client
+        uses: actions/download-artifact@v4
+        with:
+          name: miku-flutter-web
+          path: clients/miku_flutter/build/web
 
       - name: Build server used by the smoke test
         run: cargo build -p tm-server --locked

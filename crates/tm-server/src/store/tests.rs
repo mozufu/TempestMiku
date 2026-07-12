@@ -3504,7 +3504,10 @@ async fn gated_postgres_push_outbox_delivers_request_and_resolution_once() {
             NewApprovalResolution {
                 status: "denied".to_string(),
                 selected_option_id: Some("reject".to_string()),
-                resolution_json: json!({"status": "denied"}),
+                resolution_json: json!({
+                    "approvalId": approval_id,
+                    "status": "denied"
+                }),
                 resolved_at: Utc::now(),
             },
         )
@@ -3590,7 +3593,7 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
         )
         .await
         .unwrap();
-    assert_eq!(migrations.len(), 8);
+    assert_eq!(migrations.len(), 9);
     assert!(migrations.iter().enumerate().all(|(index, row)| {
         row.get::<_, i64>("version") == index as i64 + 1
             && row.get::<_, String>("checksum").len() == 64

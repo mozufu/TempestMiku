@@ -80,7 +80,9 @@ of truth.
  * P0/P2 surface: no ambient filesystem, process, network, secret, shell, or
  * host access. Every external effect goes through capability-checked SDK
  * namespaces. P2 memory is exposed as memory:// resources behind
- * resources.read:memory, not as a memory.* namespace. Bundled skill
+ * resources.read:memory, not as a memory.* namespace. P7.0 adds bounded
+ * evolution audit and review-only proposal resources without adding an
+ * evolution namespace or a second model-visible tool. Bundled skill
  * markdown may be labeled skill://... inside composed prompts, but that
  * label is not a resources.read/list/preview surface until the P7 skill
  * import/reload lifecycle work registers a handler and grants.
@@ -569,6 +571,9 @@ imply `tools.call(...)` routing.
   `tools.call`. Future namespaces that exist but have incomplete methods throw `NotImplementedError`.
 - P2 memory reads use `resources.read("memory://...")` through `resources.read:memory`; the global
   `memory` namespace remains `undefined` until a later `memory.*` API is explicitly shipped.
+- P7.0 review candidates use the same capability-gated resource path at
+  `memory://review-proposals/<id>` and `memory://evolution-audits`; there is no `evolution.*`
+  namespace, file-patch API, persona/mode apply call, or additional chat-native tool.
 - P2 skill markdown is prompt-composed under `skill://...` labels only. `skill://...` is not a
   resource URI yet; `resources.read/preview/list("skill://...")` fails closed as an unknown scheme
   until P4/P7 ships the skill resource lifecycle.

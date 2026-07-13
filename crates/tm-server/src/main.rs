@@ -109,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_approval_broker(Arc::clone(&approval_broker))
             .with_actor_roster(Arc::clone(&roster))
             .with_drive_store(drive_store.clone())
+            .with_self_evolution_tier(host_config.self_evolution.tier)
             .with_runtime_status(runtime_status)
             .with_auto_turn_dispatcher(false);
         if let Some((provider, cipher)) = &push_config {
@@ -151,6 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_approval_broker(Arc::clone(&approval_broker))
             .with_actor_roster(roster)
             .with_drive_store(drive_store)
+            .with_self_evolution_tier(host_config.self_evolution.tier)
             .with_runtime_status(Arc::new(RuntimeStatus::new(role, false, false)))
             .with_auto_turn_dispatcher(false);
         if let Some((provider, cipher)) = &push_config {
@@ -357,6 +359,7 @@ fn load_host_config() -> Result<P0HostConfig, Box<dyn std::error::Error>> {
             linked_folders: Vec::new(),
             approvals: Default::default(),
             artifact_root: None,
+            self_evolution: Default::default(),
         }),
     }
 }

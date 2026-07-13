@@ -11,6 +11,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use tm_host::{EvolutionTargetClass, SelfEvolutionTier};
 use tm_memory::{
     DreamInputMessage, DreamQueueRecord, DreamStatus, DreamWorker, DreamWorkerReport,
     MemorySummaryKind, NewMemorySummaryRecord, redact_dream_text,
@@ -20,7 +21,7 @@ use crate::{CodingEventSink, Result, ServerError, SessionEvent, Store, StoreCodi
 
 use super::config::DreamWorkerConfig;
 use super::proposals::{
-    DreamSkillProposal, dream_skill_proposal, spawn_memory_write_proposal,
+    DreamSkillProposal, MemoryProposalContext, dream_skill_proposal, spawn_memory_write_proposal,
     spawn_skill_write_proposal,
 };
 use super::summary::{
@@ -36,6 +37,7 @@ pub struct ServerDreamWorker<S> {
     approval_broker: Arc<crate::ApprovalBroker>,
     sender_for: SenderFactory,
     config: DreamWorkerConfig,
+    self_evolution_tier: SelfEvolutionTier,
     owner_id: Uuid,
 }
 
@@ -64,8 +66,14 @@ impl<S> ServerDreamWorker<S> {
             approval_broker,
             sender_for,
             config,
+            self_evolution_tier: SelfEvolutionTier::default(),
             owner_id: Uuid::new_v4(),
         }
+    }
+
+    pub fn with_self_evolution_tier(mut self, tier: SelfEvolutionTier) -> Self {
+        self.self_evolution_tier = tier;
+        self
     }
 
     pub fn into_daemon(self) -> DreamWorkerDaemon<S> {
@@ -333,22 +341,104 @@ where
             .await?;
         }
 
+        let mut proposal_count = 0;
         for proposal in memory_proposals.iter().cloned() {
+            let target = crate::evolution::memory_target_class(proposal.memory_kind);
+            if let Err(error) = crate::evolution::ensure_evolution_proposal_reachable(
+                self.self_evolution_tier,
+                target,
+            ) {
+                let record = crate::evolution::denied_evolution_audit_record(
+                    crate::evolution::DeniedEvolutionAuditSpec {
+                        tier: self.self_evolution_tier,
+                        target_class: target,
+                        target_id: proposal.proposal_id.to_string(),
+                        actor_id: "dream-worker".to_string(),
+                        session_id: dream.session_id,
+                        dream_id: Some(dream.id),
+                        content: &proposal,
+                        occurred_at: Utc::now(),
+                    },
+                )?;
+                self.store
+                    .append_evolution_audit(crate::EvolutionAuditEntry {
+                        idempotency_key: format!("proposal:{}:denied", proposal.proposal_id),
+                        record,
+                    })
+                    .await?;
+                sink.emit(
+                    "dream_progress",
+                    json!({
+                        "dreamId": dream.id,
+                        "phase": "evolution_denied",
+                        "targetClass": target,
+                        "reason": error.to_string(),
+                    }),
+                )
+                .await?;
+                continue;
+            }
             spawn_memory_write_proposal(
                 Arc::clone(&self.store),
                 Arc::clone(&self.approval_broker),
                 Arc::clone(&self.sender_for),
-                dream.session_id,
                 proposal,
                 self.config.proposal_timeout,
+                MemoryProposalContext {
+                    session_id: dream.session_id,
+                    dream_id: dream.id,
+                    self_evolution_tier: self.self_evolution_tier,
+                },
             )
             .await?;
+            proposal_count += 1;
         }
 
-        let mut proposal_count = memory_proposals.len();
         if let Some(skill_outcome) = dream_skill_proposal(dream, &redacted_messages, &evidence) {
             match skill_outcome {
                 DreamSkillProposal::Accepted(skill_proposal) => {
+                    if let Err(error) = crate::evolution::ensure_evolution_proposal_reachable(
+                        self.self_evolution_tier,
+                        EvolutionTargetClass::SkillProposal,
+                    ) {
+                        let proposal_id = crate::evolution::deterministic_evolution_proposal_id(
+                            "skill",
+                            &skill_proposal.dedupe_key,
+                        );
+                        let record = crate::evolution::denied_evolution_audit_record(
+                            crate::evolution::DeniedEvolutionAuditSpec {
+                                tier: self.self_evolution_tier,
+                                target_class: EvolutionTargetClass::SkillProposal,
+                                target_id: proposal_id.to_string(),
+                                actor_id: "dream-worker".to_string(),
+                                session_id: dream.session_id,
+                                dream_id: Some(dream.id),
+                                content: &skill_proposal,
+                                occurred_at: Utc::now(),
+                            },
+                        )?;
+                        self.store
+                            .append_evolution_audit(crate::EvolutionAuditEntry {
+                                idempotency_key: format!("proposal:{proposal_id}:denied"),
+                                record,
+                            })
+                            .await?;
+                        sink.emit(
+                            "dream_progress",
+                            json!({
+                                "dreamId": dream.id,
+                                "phase": "evolution_denied",
+                                "targetClass": EvolutionTargetClass::SkillProposal,
+                                "reason": error.to_string(),
+                            }),
+                        )
+                        .await?;
+                        return Ok(DreamWorkerReport {
+                            attempted: 1,
+                            completed: 0,
+                            proposals: proposal_count,
+                        });
+                    }
                     let skill = self.store.upsert_skill_proposal(skill_proposal).await?;
                     proposal_count += 1;
                     spawn_skill_write_proposal(
@@ -357,6 +447,7 @@ where
                         Arc::clone(&self.sender_for),
                         skill,
                         self.config.proposal_timeout,
+                        self.self_evolution_tier,
                     )
                     .await?;
                 }

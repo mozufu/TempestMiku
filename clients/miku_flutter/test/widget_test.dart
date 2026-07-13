@@ -356,6 +356,114 @@ void main() {
     expect(shouldRememberEventId('drive_put', const {}), isTrue);
   });
 
+  test('parses typed evolution review proposals without apply authority', () {
+    final proposal = EvolutionReviewProposal.fromEvent(const {
+      'kind': 'evolution_review',
+      'proposalId': 'proposal-1',
+      'target': {'kind': 'mode', 'modeId': 'serious_engineer'},
+      'status': 'approved',
+      'preview': 'Review verification guidance.',
+      'uri': 'memory://review-proposals/proposal-1',
+      'applyEnabled': false,
+    });
+    expect(proposal, isNotNull);
+    expect(proposal!.targetKind, 'mode');
+    expect(proposal.targetId, 'serious_engineer');
+    expect(proposal.status, 'approved');
+    expect(proposal.applyEnabled, isFalse);
+    expect(proposal.resourceUri, startsWith('memory://review-proposals/'));
+  });
+
+  testWidgets('renders server-owned moderate review lifecycle and approval', (
+    WidgetTester tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    const sessionId = 'scripted-0';
+    client.emitEvent(
+      sessionId,
+      const MikuEvent(
+        type: 'write_proposal',
+        id: 'review-1',
+        data: {
+          'kind': 'evolution_review',
+          'proposalId': 'proposal-review',
+          'target': {'kind': 'mode', 'modeId': 'serious_engineer'},
+          'status': 'pending',
+          'preview': 'Prefer replayable verification evidence.',
+          'uri': 'memory://review-proposals/proposal-review',
+          'applyEnabled': false,
+        },
+      ),
+    );
+    client.seedPendingApproval(
+      sessionId,
+      approvalId: 'approval-review',
+      backend: 'evolution-review',
+      action: 'review mode addendum serious_engineer',
+      scope: const {
+        'kind': 'evolution_review',
+        'proposalId': 'proposal-review',
+        'preview': 'Prefer replayable verification evidence.',
+        'uri': 'memory://review-proposals/proposal-review',
+        'applyEnabled': false,
+      },
+    );
+    client.emitEvent(
+      sessionId,
+      const MikuEvent(
+        type: 'approval',
+        id: 'review-2',
+        data: {
+          'approvalId': 'approval-review',
+          'backend': 'evolution-review',
+          'action': 'review mode addendum serious_engineer',
+          'scope': {
+            'kind': 'evolution_review',
+            'proposalId': 'proposal-review',
+            'preview': 'Prefer replayable verification evidence.',
+            'uri': 'memory://review-proposals/proposal-review',
+            'applyEnabled': false,
+          },
+          'options': [
+            {
+              'optionId': 'allow',
+              'name': 'Accept for review',
+              'kind': 'allow_once',
+            },
+            {
+              'optionId': 'reject',
+              'name': 'Reject proposal',
+              'kind': 'reject_once',
+            },
+          ],
+          'timeoutMs': 60000,
+        },
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('mode addendum · serious_engineer · pending'), findsWidgets);
+    expect(find.textContaining('Review only · apply disabled'), findsOneWidget);
+    final card = find.byKey(
+      const ValueKey('approval:review mode addendum serious_engineer'),
+    );
+    expect(card, findsOneWidget);
+    await tester.ensureVisible(card);
+    await tester.tap(card);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.textContaining('applyEnabled: false'), findsOneWidget);
+    expect(find.text('Accept for review'), findsOneWidget);
+    await tester.ensureVisible(find.text('Accept for review'));
+    await tester.tap(find.text('Accept for review'));
+    await tester.pump();
+    expect(client.resolvedApprovals, contains('approval-review:approve'));
+  });
+
   testWidgets('compact mobile chrome stays readable at 390px', (
     WidgetTester tester,
   ) async {

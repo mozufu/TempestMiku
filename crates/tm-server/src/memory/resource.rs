@@ -78,6 +78,24 @@ where
             MemoryUri::Root => self.root_resource(selector).await,
             MemoryUri::UserModel => self.user_model_resource(selector).await,
             MemoryUri::Dreams => self.dream_queue_resource(selector).await,
+            MemoryUri::EvolutionAudits => {
+                let session_id = Uuid::parse_str(&ctx.session_id)
+                    .map_err(|_| unauthorized_memory_resource(uri))?;
+                let records = self
+                    .store
+                    .evolution_audits(session_id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                let content = serde_json::to_string_pretty(&records)
+                    .map_err(|error| HostError::HostCall(error.to_string()))?;
+                self.text_resource(
+                    "memory://evolution-audits",
+                    "memory_evolution_audits",
+                    Some("Self-evolution audit history".to_string()),
+                    content,
+                    selector,
+                )
+            }
             MemoryUri::Dream { id } => {
                 let dream = self.store.dream(id).await.map_err(map_memory_store_error)?;
                 ensure_authorized_record(authority, &dream.subject, &dream.scope, uri)?;
@@ -159,6 +177,48 @@ where
                     selector,
                 )
             }
+            MemoryUri::EvolutionProposal { id } => {
+                let proposal = self
+                    .store
+                    .evolution_memory_proposal(id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                ensure_authorized_record(authority, &proposal.subject, &proposal.scope, uri)?;
+                let content = serde_json::to_string_pretty(&proposal)
+                    .map_err(|error| HostError::HostCall(error.to_string()))?;
+                self.text_resource(
+                    &evolution_proposal_uri(id),
+                    "memory_evolution_proposal",
+                    Some(format!("evolution proposal {}", short_id(id))),
+                    content,
+                    selector,
+                )
+            }
+            MemoryUri::ReviewProposal { id } => {
+                let session_id = Uuid::parse_str(&ctx.session_id)
+                    .map_err(|_| unauthorized_memory_resource(uri))?;
+                let proposal = self
+                    .store
+                    .evolution_review_proposal(id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                if proposal.session_id != session_id {
+                    return Err(unauthorized_memory_resource(uri));
+                }
+                let content = serde_json::to_string_pretty(&proposal)
+                    .map_err(|error| HostError::HostCall(error.to_string()))?;
+                self.text_resource(
+                    &review_proposal_uri(id),
+                    "memory_evolution_review_proposal",
+                    Some(format!(
+                        "{} addendum proposal {}",
+                        proposal.target.kind(),
+                        short_id(id)
+                    )),
+                    content,
+                    selector,
+                )
+            }
         }
     }
 
@@ -182,6 +242,16 @@ where
             }
             MemoryListUri::Summaries => self.summary_entries(&self.scope).await,
             MemoryListUri::Dreams => self.dream_entries(&self.scope).await,
+            MemoryListUri::SkillProposals => {
+                let session_id = Uuid::parse_str(&ctx.session_id)
+                    .map_err(|_| unauthorized_memory_resource(uri))?;
+                self.skill_proposal_entries(session_id).await
+            }
+            MemoryListUri::ReviewProposals => {
+                let session_id = Uuid::parse_str(&ctx.session_id)
+                    .map_err(|_| unauthorized_memory_resource(uri))?;
+                self.review_proposal_entries(session_id).await
+            }
         }
     }
 }
@@ -302,6 +372,30 @@ where
                 size_bytes: None,
                 modified_at: None,
             },
+            ResourceEntry {
+                uri: "memory://evolution-audits".to_string(),
+                name: "evolution-audits".to_string(),
+                kind: "memory_evolution_audits".to_string(),
+                title: Some("Self-evolution audit history".to_string()),
+                size_bytes: None,
+                modified_at: None,
+            },
+            ResourceEntry {
+                uri: "memory://skill-proposals".to_string(),
+                name: "skill-proposals".to_string(),
+                kind: "memory_skill_proposal_collection".to_string(),
+                title: Some("Skill proposals".to_string()),
+                size_bytes: None,
+                modified_at: None,
+            },
+            ResourceEntry {
+                uri: "memory://review-proposals".to_string(),
+                name: "review-proposals".to_string(),
+                kind: "memory_evolution_review_proposal_collection".to_string(),
+                title: Some("Persona and mode review proposals".to_string()),
+                size_bytes: None,
+                modified_at: None,
+            },
         ];
         entries.extend(self.dream_entries(&self.scope).await?);
         entries.extend(self.profile_fact_entries().await?);
@@ -366,6 +460,49 @@ where
                 title: Some(preview(&chunk.text, 120)),
                 size_bytes: Some(chunk.text.len()),
                 modified_at: Some(chunk.created_at.to_rfc3339()),
+            })
+            .collect())
+    }
+
+    async fn skill_proposal_entries(&self, session_id: Uuid) -> HostResult<Vec<ResourceEntry>> {
+        let proposals = self
+            .store
+            .skill_proposals_for_session(session_id)
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(proposals
+            .into_iter()
+            .map(|proposal| ResourceEntry {
+                uri: skill_proposal_uri(&proposal),
+                name: proposal.name.clone(),
+                kind: "memory_skill_proposal".to_string(),
+                title: Some(format!("{} ({})", proposal.name, proposal.status)),
+                size_bytes: Some(proposal.body.len()),
+                modified_at: Some(proposal.updated_at.to_rfc3339()),
+            })
+            .collect())
+    }
+
+    async fn review_proposal_entries(&self, session_id: Uuid) -> HostResult<Vec<ResourceEntry>> {
+        let proposals = self
+            .store
+            .evolution_review_proposals_for_session(session_id)
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(proposals
+            .into_iter()
+            .map(|proposal| ResourceEntry {
+                uri: review_proposal_uri(proposal.id),
+                name: short_id(proposal.id),
+                kind: "memory_evolution_review_proposal".to_string(),
+                title: Some(format!(
+                    "{} {} ({})",
+                    proposal.target.kind(),
+                    proposal.target.id(),
+                    proposal.status
+                )),
+                size_bytes: serde_json::to_vec(&proposal).ok().map(|value| value.len()),
+                modified_at: Some(proposal.updated_at.to_rfc3339()),
             })
             .collect())
     }
@@ -455,11 +592,14 @@ enum MemoryUri {
     Root,
     UserModel,
     Dreams,
+    EvolutionAudits,
     Dream { id: Uuid },
     ProfileFact { subject: String, id: Uuid },
     RecallChunk { scope: String, id: Uuid },
     Summary { id: Uuid },
     SkillProposal { id: Uuid },
+    EvolutionProposal { id: Uuid },
+    ReviewProposal { id: Uuid },
 }
 
 enum MemoryListUri {
@@ -468,6 +608,8 @@ enum MemoryListUri {
     ScopeChunks { scope: String },
     Summaries,
     Dreams,
+    SkillProposals,
+    ReviewProposals,
 }
 
 fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
@@ -482,6 +624,9 @@ fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
     }
     if path == "dreams" {
         return Ok(MemoryUri::Dreams);
+    }
+    if path == "evolution-audits" {
+        return Ok(MemoryUri::EvolutionAudits);
     }
     let parts = path.split('/').collect::<Vec<_>>();
     match parts.as_slice() {
@@ -500,6 +645,12 @@ fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
             id: parse_memory_uuid(id, uri)?,
         }),
         ["skill-proposals", id] => Ok(MemoryUri::SkillProposal {
+            id: parse_memory_uuid(id, uri)?,
+        }),
+        ["evolution-proposals", id] => Ok(MemoryUri::EvolutionProposal {
+            id: parse_memory_uuid(id, uri)?,
+        }),
+        ["review-proposals", id] => Ok(MemoryUri::ReviewProposal {
             id: parse_memory_uuid(id, uri)?,
         }),
         _ => Err(unsupported_memory_uri(uri)),
@@ -525,6 +676,8 @@ fn parse_memory_list_uri(uri: &str) -> HostResult<MemoryListUri> {
             scope: decode_memory_segment(scope)?,
         }),
         ["summaries"] => Ok(MemoryListUri::Summaries),
+        ["skill-proposals"] => Ok(MemoryListUri::SkillProposals),
+        ["review-proposals"] => Ok(MemoryListUri::ReviewProposals),
         _ => Err(unsupported_memory_uri(uri)),
     }
 }
@@ -563,6 +716,14 @@ fn summary_uri(summary: &MemorySummaryRecord) -> String {
 
 fn skill_proposal_uri(proposal: &SkillProposalRecord) -> String {
     format!("memory://skill-proposals/{}", proposal.id)
+}
+
+fn evolution_proposal_uri(id: Uuid) -> String {
+    format!("memory://evolution-proposals/{id}")
+}
+
+fn review_proposal_uri(id: Uuid) -> String {
+    format!("memory://review-proposals/{id}")
 }
 
 fn render_dream_queue(scope: &str, dreams: &[DreamQueueRecord]) -> String {
@@ -800,11 +961,21 @@ fn render_summary(summary: &MemorySummaryRecord) -> String {
 }
 
 fn render_skill_proposal(proposal: &SkillProposalRecord) -> String {
+    let lifecycle = tm_memory::skill_proposal_lifecycle(proposal);
     let mut lines = vec![
         format!("Skill proposal {}", proposal.id),
         format!("URI: {}", skill_proposal_uri(proposal)),
         format!("Name: {}", proposal.name),
         format!("Status: {}", proposal.status),
+        format!("Normalized name: {}", lifecycle.normalized_name),
+        format!("Candidate version: {}", lifecycle.version),
+        format!("Content digest: {}", lifecycle.content_digest),
+        format!("Reviewable: {}", lifecycle.reviewable),
+        format!("Installable: {}", lifecycle.installable),
+        format!("Conflict policy: {:?}", lifecycle.conflict_policy),
+        format!("Rollback contract: {:?}", lifecycle.rollback),
+        format!("Catalog reload: {:?}", lifecycle.catalog_reload),
+        format!("Validation violations: {}", lifecycle.violations.join(", ")),
         format!("Description: {}", proposal.description),
         format!("Trigger: {}", proposal.trigger),
         format!("Use criteria: {}", proposal.use_criteria),

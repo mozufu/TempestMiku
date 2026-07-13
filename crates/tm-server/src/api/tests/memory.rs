@@ -1,6 +1,64 @@
 use super::*;
 
 #[tokio::test]
+async fn memory_write_proposal_fails_closed_when_self_evolution_is_off() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+    let state = AppState::new(
+        Arc::clone(&store),
+        memory,
+        Arc::new(EchoChatRunner),
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_self_evolution_tier(tm_host::SelfEvolutionTier::Off);
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/memory/proposals", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "memoryKind": "profile_fact",
+                        "predicate": "prefers",
+                        "object": "writes while disabled"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(
+        response_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("evolution_disabled")
+    );
+    assert!(store.profile_facts("brian").await.unwrap().is_empty());
+    assert!(
+        store
+            .events_after(session.id, None)
+            .await
+            .unwrap()
+            .iter()
+            .all(|event| event.event_type != "write_proposal")
+    );
+    let audits = store.evolution_audits(session.id).await.unwrap();
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].status, tm_host::EvolutionAuditStatus::Denied);
+    assert_eq!(
+        audits[0].error_code,
+        Some(tm_host::EvolutionPolicyReason::DisabledTier)
+    );
+    assert!(audits[0].approval_id.is_none() && audits[0].effect_id.is_none());
+}
+
+#[tokio::test]
 async fn memory_context_injects_profile_facts_and_recall_chunks() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     store
@@ -76,13 +134,65 @@ async fn memory_write_proposal_approval_persists_profile_fact_and_replays() {
     assert_eq!(pending["kind"], json!("memory"));
     assert_eq!(pending["memoryKind"], json!("profile_fact"));
     assert_eq!(pending["status"], json!("pending"));
-    assert_eq!(pending["provenanceLabel"], json!("user-confirmed"));
+    assert!(pending.get("provenanceLabel").is_none());
+    assert!(
+        pending["uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("memory://evolution-proposals/")
+    );
+    assert!(
+        pending["contentDigest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    let candidate_uri = pending["uri"].as_str().unwrap();
+    let candidate_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{session_id}/resources/resolve?uri={candidate_uri}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(candidate_response.status(), StatusCode::OK);
+    let candidate_resource = response_json(candidate_response).await;
+    assert!(
+        candidate_resource["content"]
+            .as_str()
+            .unwrap()
+            .contains("user-confirmed")
+    );
     let approval = wait_for_event_payload(&store, session_id, "approval").await;
     assert_eq!(approval["backend"], json!("memory"));
     assert_eq!(
         approval["scope"]["proposal"]["proposalId"],
         pending["proposalId"]
     );
+    let audit_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{session_id}/resources/resolve?uri=memory://evolution-audits"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit_response.status(), StatusCode::OK);
+    let audit_resource = response_json(audit_response).await;
+    let audit_content = audit_resource["content"].as_str().unwrap();
+    assert!(audit_content.contains("awaiting_approval"));
+    assert!(!audit_content.contains("user-confirmed"));
     let approval_id = approval["approvalId"]
         .as_str()
         .unwrap()
@@ -522,16 +632,22 @@ async fn personal_assistant_state_capture_proposes_memory_through_approval_flow(
     assert_eq!(pending["memoryKind"], json!("profile_fact"));
     assert_eq!(pending["status"], json!("pending"));
     assert_eq!(
-        pending["provenanceLabel"],
-        json!("personal-assistant-state-capture")
+        pending["preview"],
+        json!("brian prefers approval-backed state capture summaries")
     );
-    assert_eq!(pending["predicate"], json!("prefers"));
+    assert!(pending.get("predicate").is_none());
+    assert!(pending.get("object").is_none());
+    let proposal_id = pending["proposalId"].as_str().unwrap().parse().unwrap();
+    let candidate = store.evolution_memory_proposal(proposal_id).await.unwrap();
+    assert_eq!(candidate.predicate.as_deref(), Some("prefers"));
     assert_eq!(
-        pending["object"],
-        json!("approval-backed state capture summaries")
+        candidate.object.as_deref(),
+        Some("approval-backed state capture summaries")
     );
-    assert_eq!(pending["importanceScore"], json!(0.72));
-    assert_eq!(pending["provenance"]["importanceScore"], json!(0.72));
+    assert_eq!(
+        candidate.provenance_label,
+        "personal-assistant-state-capture"
+    );
     assert!(store.profile_facts("brian").await.unwrap().is_empty());
 
     let approval = wait_for_event_payload(&store, session_id, "approval").await;
@@ -582,19 +698,18 @@ async fn personal_assistant_reminder_capture_persists_approved_recall_chunk() {
     assert_eq!(pending["memoryKind"], json!("recall_chunk"));
     assert_eq!(pending["status"], json!("pending"));
     assert_eq!(
-        pending["provenanceLabel"],
-        json!("personal-assistant-state-capture")
-    );
-    assert_eq!(
-        pending["provenance"]["capturedCategory"],
-        json!("personal_reminder")
-    );
-    assert_eq!(
-        pending["text"],
+        pending["preview"],
         json!("Reminder: review the P2 acceptance checklist by Friday")
     );
-    assert_eq!(pending["importanceScore"], json!(0.64));
-    assert_eq!(pending["provenance"]["importanceScore"], json!(0.64));
+    assert!(pending.get("text").is_none());
+    assert!(pending.get("provenance").is_none());
+    let proposal_id = pending["proposalId"].as_str().unwrap().parse().unwrap();
+    let candidate = store.evolution_memory_proposal(proposal_id).await.unwrap();
+    assert_eq!(
+        candidate.provenance["capturedCategory"],
+        "personal_reminder"
+    );
+    assert_eq!(candidate.importance_score, 0.64);
     assert!(
         store
             .recall_chunks("global", "P2 acceptance checklist", 5)

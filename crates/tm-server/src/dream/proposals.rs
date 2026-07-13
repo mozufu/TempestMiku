@@ -4,6 +4,7 @@ use std::time::Duration as StdDuration;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use tm_host::{EvolutionTargetClass, SelfEvolutionTier};
 use tm_memory::{
     DreamQueueRecord, MemoryEvidenceRef, NewSkillProposalRecord, SkillProposalRecord,
     SkillProposalStatus, SkillVerification,
@@ -14,6 +15,12 @@ use crate::{
     ApprovalBroker, ApprovalOption, ApprovalPrompt, CodingEventSink, DurableApprovalSpec, Result,
     Store, StoreCodingEventSink,
 };
+
+pub(super) struct MemoryProposalContext {
+    pub session_id: Uuid,
+    pub dream_id: Uuid,
+    pub self_evolution_tier: SelfEvolutionTier,
+}
 
 use super::util::{
     RedactedMessage, normalize_key, preview_text, reusable_workflow_signal, skill_name,
@@ -96,17 +103,26 @@ pub(super) async fn spawn_memory_write_proposal<S>(
     store: Arc<S>,
     approval_broker: Arc<ApprovalBroker>,
     sender_for: SenderFactory,
-    session_id: Uuid,
     proposal: MemoryWriteProposal,
     timeout: StdDuration,
+    context: MemoryProposalContext,
 ) -> Result<()>
 where
     S: Store,
 {
+    let evolution = crate::evolution::evolution_effect_metadata(
+        context.self_evolution_tier,
+        crate::evolution::memory_target_class(proposal.memory_kind),
+        proposal.proposal_id.to_string(),
+        "dream-worker",
+        context.session_id,
+        Some(context.dream_id),
+        &proposal,
+    )?;
     let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
-        session_id,
+        context.session_id,
         Arc::clone(&store),
-        sender_for(session_id),
+        sender_for(context.session_id),
     ));
     sink.emit(
         "write_proposal",
@@ -115,12 +131,15 @@ where
     .await?;
     approval_broker
         .enqueue_permission_for_backend(DurableApprovalSpec {
-            session_id,
+            session_id: context.session_id,
             origin: "memory".to_string(),
             prompt: memory_write_approval_prompt(&proposal, timeout),
             timeout,
             effect_type: "memory_write".to_string(),
-            effect_payload_json: json!({ "proposal": proposal }),
+            effect_payload_json: json!({
+                "evolution": evolution,
+                "proposal": proposal,
+            }),
             resumable: true,
             sink,
         })
@@ -134,10 +153,20 @@ pub(super) async fn spawn_skill_write_proposal<S>(
     sender_for: SenderFactory,
     proposal: SkillProposalRecord,
     timeout: StdDuration,
+    self_evolution_tier: SelfEvolutionTier,
 ) -> Result<()>
 where
     S: Store,
 {
+    let evolution = crate::evolution::evolution_effect_metadata(
+        self_evolution_tier,
+        EvolutionTargetClass::SkillProposal,
+        proposal.id.to_string(),
+        "dream-worker",
+        proposal.source_session_id,
+        Some(proposal.source_dream_id),
+        &proposal,
+    )?;
     let session_id = proposal.source_session_id;
     let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
         session_id,
@@ -156,7 +185,10 @@ where
             prompt: skill_write_approval_prompt(&proposal, timeout),
             timeout,
             effect_type: "skill_write".to_string(),
-            effect_payload_json: json!({ "proposalId": proposal.id }),
+            effect_payload_json: json!({
+                "evolution": evolution,
+                "proposalId": proposal.id,
+            }),
             resumable: true,
             sink,
         })
@@ -172,7 +204,7 @@ fn memory_write_approval_prompt(
         action: format!(
             "memory.write {}: {}",
             proposal.memory_kind.as_str(),
-            proposal.text
+            proposal.preview_text()
         ),
         scope: json!({
             "proposal": proposal.approval_scope(),
@@ -204,8 +236,9 @@ fn skill_write_approval_prompt(
             "kind": "skill",
             "proposalId": proposal.id,
             "name": proposal.name,
-            "description": proposal.description,
+            "preview": bounded_preview(&proposal.description, 512),
             "uri": skill_proposal_uri(proposal.id),
+            "contentDigest": skill_content_digest(proposal),
             "timeoutMs": timeout.as_millis(),
         }),
         options: vec![
@@ -232,18 +265,30 @@ pub(crate) fn skill_proposal_payload(
         "proposalId": proposal.id,
         "status": status,
         "name": proposal.name,
-        "description": proposal.description,
-        "trigger": proposal.trigger,
-        "useCriteria": proposal.use_criteria,
-        "selfCritique": proposal.self_critique,
-        "verification": proposal.verification,
-        "dedupeKey": proposal.dedupe_key,
+        "preview": bounded_preview(&proposal.description, 512),
+        "contentDigest": skill_content_digest(proposal),
         "sourceDreamId": proposal.source_dream_id,
         "sourceSessionId": proposal.source_session_id,
         "uri": skill_proposal_uri(proposal.id),
         "createdAt": proposal.created_at,
         "updatedAt": proposal.updated_at,
     })
+}
+
+fn skill_content_digest(proposal: &SkillProposalRecord) -> String {
+    tm_memory::skill_proposal_lifecycle(proposal).content_digest
+}
+
+fn bounded_preview(value: &str, max_bytes: usize) -> String {
+    let redacted = tm_memory::redact_dream_text(value).text;
+    if redacted.len() <= max_bytes {
+        return redacted;
+    }
+    let mut end = max_bytes.saturating_sub('…'.len_utf8());
+    while !redacted.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &redacted[..end])
 }
 
 fn skill_proposal_uri(id: Uuid) -> String {

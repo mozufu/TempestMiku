@@ -477,6 +477,9 @@ class ApprovalPrompt {
     final proposal = proposalScope;
     return proposal != null && _stringValue(proposal['kind']) == 'memory';
   }
+
+  bool get isEvolutionReview =>
+      backend == 'evolution-review' || _stringValue(scope['kind']) == 'evolution_review';
 }
 
 class ApprovalOption {
@@ -588,6 +591,49 @@ class MemoryWriteProposal {
       'source': _stringValue(proposal['source']),
       'provenance': _mapValue(proposal['provenance']) ?? const {},
     });
+  }
+}
+
+class EvolutionReviewProposal {
+  const EvolutionReviewProposal({
+    required this.proposalId,
+    required this.targetKind,
+    required this.targetId,
+    required this.status,
+    required this.preview,
+    required this.resourceUri,
+    required this.applyEnabled,
+  });
+
+  final String proposalId;
+  final String targetKind;
+  final String targetId;
+  final String status;
+  final String preview;
+  final String resourceUri;
+  final bool applyEnabled;
+
+  static EvolutionReviewProposal? fromEvent(Map<String, Object?> data) {
+    if (_stringValue(data['kind']) != 'evolution_review') return null;
+    final proposalId = _stringValue(data['proposalId']);
+    final target = _mapValue(data['target']);
+    if (proposalId.isEmpty || target == null) return null;
+    final targetKind = _stringValue(target['kind']);
+    final targetId = switch (targetKind) {
+      'persona' => _stringValue(target['personaId'] ?? target['persona_id']),
+      'mode' => _stringValue(target['modeId'] ?? target['mode_id']),
+      _ => '',
+    };
+    if (targetId.isEmpty) return null;
+    return EvolutionReviewProposal(
+      proposalId: proposalId,
+      targetKind: targetKind,
+      targetId: targetId,
+      status: _stringValue(data['status']),
+      preview: _stringValue(data['preview']),
+      resourceUri: _stringValue(data['uri']),
+      applyEnabled: data['applyEnabled'] == true,
+    );
   }
 }
 

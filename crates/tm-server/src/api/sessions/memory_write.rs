@@ -64,6 +64,40 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
+    let evolution = crate::evolution::evolution_effect_metadata(
+        state.self_evolution_tier,
+        crate::evolution::memory_target_class(proposal.memory_kind),
+        proposal.proposal_id.to_string(),
+        "owner",
+        session_id,
+        None,
+        &proposal,
+    );
+    let evolution = match evolution {
+        Ok(evolution) => evolution,
+        Err(error) => {
+            let record = crate::evolution::denied_evolution_audit_record(
+                crate::evolution::DeniedEvolutionAuditSpec {
+                    tier: state.self_evolution_tier,
+                    target_class: crate::evolution::memory_target_class(proposal.memory_kind),
+                    target_id: proposal.proposal_id.to_string(),
+                    actor_id: "owner".to_string(),
+                    session_id,
+                    dream_id: None,
+                    content: &proposal,
+                    occurred_at: Utc::now(),
+                },
+            )?;
+            state
+                .store
+                .append_evolution_audit(crate::EvolutionAuditEntry {
+                    idempotency_key: format!("proposal:{}:denied", proposal.proposal_id),
+                    record,
+                })
+                .await?;
+            return Err(error);
+        }
+    };
     let sink: Arc<dyn crate::CodingEventSink> = Arc::new(StoreCodingEventSink::new(
         session_id,
         Arc::clone(&state.store),
@@ -83,7 +117,10 @@ where
             prompt: memory_write_approval_prompt(&proposal, timeout),
             timeout,
             effect_type: "memory_write".to_string(),
-            effect_payload_json: json!({ "proposal": proposal.clone() }),
+            effect_payload_json: json!({
+                "evolution": evolution,
+                "proposal": proposal.clone(),
+            }),
             resumable: true,
             sink: Arc::clone(&sink),
         })
@@ -107,6 +144,8 @@ where
             state.store.as_ref(),
             &approval,
             &lease,
+            state.self_evolution_tier,
+            &state.persona,
             Arc::clone(&sink),
         )
         .await?;
@@ -165,6 +204,40 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
+    let evolution = crate::evolution::evolution_effect_metadata(
+        state.self_evolution_tier,
+        crate::evolution::memory_target_class(proposal.memory_kind),
+        proposal.proposal_id.to_string(),
+        "personal-assistant-state-capture",
+        session_id,
+        None,
+        &proposal,
+    );
+    let evolution = match evolution {
+        Ok(evolution) => evolution,
+        Err(error) => {
+            let record = crate::evolution::denied_evolution_audit_record(
+                crate::evolution::DeniedEvolutionAuditSpec {
+                    tier: state.self_evolution_tier,
+                    target_class: crate::evolution::memory_target_class(proposal.memory_kind),
+                    target_id: proposal.proposal_id.to_string(),
+                    actor_id: "personal-assistant-state-capture".to_string(),
+                    session_id,
+                    dream_id: None,
+                    content: &proposal,
+                    occurred_at: Utc::now(),
+                },
+            )?;
+            state
+                .store
+                .append_evolution_audit(crate::EvolutionAuditEntry {
+                    idempotency_key: format!("proposal:{}:denied", proposal.proposal_id),
+                    record,
+                })
+                .await?;
+            return Err(error);
+        }
+    };
     let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
         session_id,
         Arc::clone(&state.store),
@@ -183,7 +256,10 @@ where
             prompt: memory_write_approval_prompt(&proposal, timeout),
             timeout,
             effect_type: "memory_write".to_string(),
-            effect_payload_json: json!({ "proposal": proposal }),
+            effect_payload_json: json!({
+                "evolution": evolution,
+                "proposal": proposal,
+            }),
             resumable: true,
             sink,
         })
@@ -275,7 +351,7 @@ fn memory_write_approval_prompt(
         action: format!(
             "memory.write {}: {}",
             proposal.memory_kind.as_str(),
-            proposal.text
+            proposal.preview_text()
         ),
         scope: json!({
             "proposal": proposal.approval_scope(),

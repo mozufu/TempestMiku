@@ -61,6 +61,16 @@ const MIGRATIONS: &[Migration] = &[
         name: "turn_session_serialization",
         sql: include_str!("../../../migrations/0010_turn_session_serialization.sql"),
     },
+    Migration {
+        version: 11,
+        name: "evolution_audit",
+        sql: include_str!("../../../migrations/0011_evolution_audit.sql"),
+    },
+    Migration {
+        version: 12,
+        name: "evolution_review_proposals",
+        sql: include_str!("../../../migrations/0012_evolution_review_proposals.sql"),
+    },
 ];
 
 impl PostgresStore {

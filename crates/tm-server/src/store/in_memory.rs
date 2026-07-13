@@ -4,28 +4,31 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
+use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus};
 use tm_memory::{
     DreamLease, DreamQueueRecord, DreamStatus, MemorySummaryRecord, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
 };
+use tm_modes::{ReviewApplyContract, ReviewProposalStatus};
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
 
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_cron_job_persistence,
-    sanitize_cron_run_persistence, sanitize_memory_summary_persistence,
-    sanitize_project_item_persistence, sanitize_skill_proposal_persistence, turn_content_hash,
-    validate_persistence_identifier, validate_profile_fact_persistence,
-    validate_recall_chunk_persistence,
+    sanitize_cron_run_persistence, sanitize_evolution_review_proposal_persistence,
+    sanitize_memory_summary_persistence, sanitize_project_item_persistence,
+    sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
+    validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
 
 use super::{
     ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronLease,
-    CronRunRecord, EndSessionDreamResult, MessageRecord, ModeState, NewApprovalRequest,
-    NewApprovalResolution, NewCronJobRecord, NewCronRunRecord, NewProjectItem, NewSession,
-    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent,
-    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
+    CronRunRecord, EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord,
+    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution, NewCronJobRecord,
+    NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession, ProfileFactRecord,
+    ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord,
+    SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -42,6 +45,8 @@ struct Inner {
     turns: Vec<SessionTurnRecord>,
     approval_requests: Vec<ApprovalRequestRecord>,
     approval_effects: Vec<ApprovalEffectRecord>,
+    evolution_audits: Vec<EvolutionAuditEntry>,
+    evolution_review_proposals: Vec<EvolutionReviewProposalRecord>,
     profile_facts: Vec<ProfileFactRecord>,
     recall_chunks: Vec<RecallChunkRecord>,
     project_items: Vec<ProjectItemRecord>,
@@ -50,6 +55,22 @@ struct Inner {
     skill_proposals: Vec<SkillProposalRecord>,
     cron_jobs: Vec<CronJobRecord>,
     cron_runs: Vec<CronRunRecord>,
+}
+
+fn append_evolution_audit_in_memory(
+    inner: &mut Inner,
+    entry: EvolutionAuditEntry,
+) -> Result<EvolutionAuditRecord> {
+    if let Some(existing) = inner
+        .evolution_audits
+        .iter()
+        .find(|existing| existing.idempotency_key == entry.idempotency_key)
+    {
+        return Ok(existing.record.clone());
+    }
+    let record = entry.record.clone();
+    inner.evolution_audits.push(entry);
+    Ok(record)
 }
 
 fn stale_dream_lease(lease: &DreamLease) -> ServerError {
@@ -131,6 +152,27 @@ fn resolve_approval_in_memory(
             "approval {approval_id} is already resolved"
         )));
     }
+    let effect_payload = inner
+        .approval_effects
+        .iter()
+        .find(|effect| effect.approval_id == approval_id)
+        .map(|effect| (effect.id, effect.payload_json.clone()));
+    let audit = if let Some((effect_id, payload)) = effect_payload {
+        crate::evolution::evolution_audit_record(
+            &payload,
+            approval_id,
+            effect_id,
+            crate::evolution::audit_status_from_approval(&resolution.status)?,
+            resolution.resolved_at,
+            None,
+        )?
+        .map(|record| EvolutionAuditEntry {
+            idempotency_key: format!("approval:{approval_id}:resolution:{}", resolution.status),
+            record,
+        })
+    } else {
+        None
+    };
     {
         let approval = &mut inner.approval_requests[index];
         approval.status = resolution.status;
@@ -174,6 +216,9 @@ fn resolve_approval_in_memory(
             created_at: resolution.resolved_at,
             updated_at: resolution.resolved_at,
         });
+    }
+    if let Some(audit) = audit {
+        append_evolution_audit_in_memory(inner, audit)?;
     }
     Ok(inner.approval_requests[index].clone())
 }
@@ -958,6 +1003,18 @@ impl Store for InMemoryStore {
                 "approval expiry must be after creation".to_string(),
             ));
         }
+        let audit = crate::evolution::evolution_audit_record(
+            &request.effect_payload_json,
+            request.id,
+            request.id,
+            EvolutionAuditStatus::AwaitingApproval,
+            request.created_at,
+            None,
+        )?
+        .map(|record| EvolutionAuditEntry {
+            idempotency_key: format!("approval:{}:attempt", request.id),
+            record,
+        });
         let mut inner = self.inner.lock();
         if !inner.sessions.contains_key(&request.session_id) {
             return Err(ServerError::NotFound(format!(
@@ -977,6 +1034,7 @@ impl Store for InMemoryStore {
             .approval_requests
             .iter()
             .find(|approval| approval.id == request.id)
+            .cloned()
         {
             let effect_matches = inner.approval_effects.iter().any(|effect| {
                 effect.approval_id == request.id
@@ -995,7 +1053,10 @@ impl Store for InMemoryStore {
                 && existing.created_at == request.created_at
                 && existing.expires_at == request.expires_at
             {
-                return Ok(existing.clone());
+                if let Some(audit) = audit {
+                    append_evolution_audit_in_memory(&mut inner, audit)?;
+                }
+                return Ok(existing);
             }
             return Err(ServerError::Conflict(format!(
                 "approval {} already exists with different content",
@@ -1042,6 +1103,9 @@ impl Store for InMemoryStore {
             created_at: request.created_at,
             updated_at: request.created_at,
         });
+        if let Some(audit) = audit {
+            append_evolution_audit_in_memory(&mut inner, audit)?;
+        }
         Ok(record)
     }
 
@@ -1261,6 +1325,27 @@ impl Store for InMemoryStore {
         )))
     }
 
+    async fn heartbeat_approval_effect(
+        &self,
+        lease: &ApprovalEffectLease,
+        now: DateTime<Utc>,
+    ) -> Result<ApprovalEffectRecord> {
+        let mut inner = self.inner.lock();
+        let effect = inner
+            .approval_effects
+            .iter_mut()
+            .find(|effect| {
+                effect.id == lease.effect.id
+                    && effect.status == "claimed"
+                    && effect.lease_owner == Some(lease.owner_id)
+                    && effect.lease_epoch == lease.epoch
+            })
+            .ok_or_else(|| stale_approval_effect_lease(lease))?;
+        effect.locked_at = Some(now);
+        effect.updated_at = now;
+        Ok(effect.clone())
+    }
+
     async fn complete_approval_effect(
         &self,
         lease: &ApprovalEffectLease,
@@ -1317,7 +1402,7 @@ impl Store for InMemoryStore {
             .ok_or_else(|| stale_approval_effect_lease(lease))?;
         if !matches!(
             inner.approval_effects[index].effect_type.as_str(),
-            "memory_write" | "skill_write"
+            "memory_write" | "skill_write" | "evolution_review"
         ) {
             return Err(ServerError::InvalidRequest(
                 "only durable proposal effects may complete with a write_proposal event"
@@ -1336,6 +1421,18 @@ impl Store for InMemoryStore {
         {
             return Err(ServerError::NotFound(format!("turn {turn_id}")));
         }
+        let audit = crate::evolution::evolution_audit_record(
+            &inner.approval_effects[index].payload_json,
+            inner.approval_effects[index].approval_id,
+            inner.approval_effects[index].id,
+            EvolutionAuditStatus::Applied,
+            applied_at,
+            None,
+        )?
+        .map(|record| EvolutionAuditEntry {
+            idempotency_key: format!("effect:{}:applied", lease.effect.id),
+            record,
+        });
 
         let event = {
             let events = inner.events.entry(session_id).or_default();
@@ -1362,6 +1459,9 @@ impl Store for InMemoryStore {
         if let Some(session) = inner.sessions.get_mut(&session_id) {
             session.updated_at = applied_at;
         }
+        if let Some(audit) = audit {
+            append_evolution_audit_in_memory(&mut inner, audit)?;
+        }
         Ok((effect, event))
     }
 
@@ -1374,16 +1474,30 @@ impl Store for InMemoryStore {
     ) -> Result<ApprovalEffectRecord> {
         let error = redact_persisted_text(error);
         let mut inner = self.inner.lock();
-        let effect = inner
+        let index = inner
             .approval_effects
-            .iter_mut()
-            .find(|effect| {
+            .iter()
+            .position(|effect| {
                 effect.id == lease.effect.id
                     && effect.status == "claimed"
                     && effect.lease_owner == Some(lease.owner_id)
                     && effect.lease_epoch == lease.epoch
             })
             .ok_or_else(|| stale_approval_effect_lease(lease))?;
+        let failed_at = Utc::now();
+        let audit = crate::evolution::evolution_audit_record(
+            &inner.approval_effects[index].payload_json,
+            inner.approval_effects[index].approval_id,
+            inner.approval_effects[index].id,
+            EvolutionAuditStatus::Failed,
+            failed_at,
+            crate::evolution::evolution_policy_error_code(&error),
+        )?
+        .map(|record| EvolutionAuditEntry {
+            idempotency_key: format!("effect:{}:failure:{}", lease.effect.id, lease.epoch),
+            record,
+        });
+        let effect = &mut inner.approval_effects[index];
         effect.status = if effect.attempts >= max_attempts {
             "failed".to_string()
         } else {
@@ -1392,10 +1506,147 @@ impl Store for InMemoryStore {
         effect.available_at = next_available_at;
         effect.locked_at = None;
         effect.lease_owner = None;
-        effect.updated_at = Utc::now();
-        effect.error_at = Some(Utc::now());
+        effect.updated_at = failed_at;
+        effect.error_at = Some(failed_at);
         effect.last_error = Some(error);
-        Ok(effect.clone())
+        let effect = effect.clone();
+        if let Some(audit) = audit {
+            append_evolution_audit_in_memory(&mut inner, audit)?;
+        }
+        Ok(effect)
+    }
+
+    async fn append_evolution_audit(
+        &self,
+        entry: EvolutionAuditEntry,
+    ) -> Result<EvolutionAuditRecord> {
+        let mut inner = self.inner.lock();
+        if !inner.sessions.contains_key(&entry.record.origin.session_id) {
+            return Err(ServerError::NotFound(format!(
+                "session {}",
+                entry.record.origin.session_id
+            )));
+        }
+        append_evolution_audit_in_memory(&mut inner, entry)
+    }
+
+    async fn evolution_audits(&self, session_id: Uuid) -> Result<Vec<EvolutionAuditRecord>> {
+        let records = self
+            .inner
+            .lock()
+            .evolution_audits
+            .iter()
+            .filter(|entry| entry.record.origin.session_id == session_id)
+            .map(|entry| entry.record.clone())
+            .collect::<Vec<_>>();
+        Ok(records)
+    }
+
+    async fn evolution_memory_proposal(
+        &self,
+        proposal_id: Uuid,
+    ) -> Result<crate::MemoryWriteProposal> {
+        self.inner
+            .lock()
+            .approval_effects
+            .iter()
+            .filter_map(|effect| effect.payload_json.get("proposal"))
+            .find(|proposal| {
+                proposal
+                    .get("proposalId")
+                    .and_then(Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    == Some(proposal_id)
+            })
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution proposal {proposal_id}")))
+    }
+
+    async fn create_evolution_review_proposal(
+        &self,
+        proposal: NewEvolutionReviewProposal,
+    ) -> Result<EvolutionReviewProposalRecord> {
+        let proposal = sanitize_evolution_review_proposal_persistence(proposal)?;
+        self.get_session(proposal.session_id).await?;
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .evolution_review_proposals
+            .iter()
+            .find(|existing| existing.id == proposal.id)
+        {
+            if existing.session_id == proposal.session_id
+                && existing.target == proposal.target
+                && existing.base_version == proposal.base_version
+                && existing.base_digest == proposal.base_digest
+                && existing.changes == proposal.changes
+                && existing.content_digest == proposal.content_digest
+            {
+                return Ok(existing.clone());
+            }
+            return Err(ServerError::Conflict(format!(
+                "evolution review proposal {} already exists with different content",
+                proposal.id
+            )));
+        }
+        let now = Utc::now();
+        let record = EvolutionReviewProposalRecord {
+            id: proposal.id,
+            session_id: proposal.session_id,
+            target: proposal.target,
+            base_version: proposal.base_version,
+            base_digest: proposal.base_digest,
+            changes: proposal.changes,
+            content_digest: proposal.content_digest,
+            status: ReviewProposalStatus::Pending,
+            apply_contract: ReviewApplyContract::Disabled,
+            created_at: now,
+            updated_at: now,
+        };
+        inner.evolution_review_proposals.push(record.clone());
+        Ok(record)
+    }
+
+    async fn evolution_review_proposal(&self, id: Uuid) -> Result<EvolutionReviewProposalRecord> {
+        self.inner
+            .lock()
+            .evolution_review_proposals
+            .iter()
+            .find(|proposal| proposal.id == id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("evolution review proposal {id}")))
+    }
+
+    async fn evolution_review_proposals_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<EvolutionReviewProposalRecord>> {
+        self.get_session(session_id).await?;
+        Ok(self
+            .inner
+            .lock()
+            .evolution_review_proposals
+            .iter()
+            .filter(|proposal| proposal.session_id == session_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn update_evolution_review_proposal_status(
+        &self,
+        id: Uuid,
+        status: ReviewProposalStatus,
+    ) -> Result<EvolutionReviewProposalRecord> {
+        let mut inner = self.inner.lock();
+        let proposal = inner
+            .evolution_review_proposals
+            .iter_mut()
+            .find(|proposal| proposal.id == id)
+            .ok_or_else(|| ServerError::NotFound(format!("evolution review proposal {id}")))?;
+        proposal.status = status;
+        proposal.updated_at = Utc::now();
+        Ok(proposal.clone())
     }
 
     async fn add_profile_fact(&self, fact: ProfileFactRecord) -> Result<()> {

@@ -1,6 +1,7 @@
 use super::*;
 
 mod crud;
+pub(crate) mod evolution_review;
 mod memory_write;
 mod turn;
 
@@ -12,6 +13,8 @@ pub(crate) use crud::{
     create_session, end_session, get_session, get_session_messages, list_sessions,
     set_session_scope,
 };
+pub(crate) use evolution_review::propose_evolution_review;
+pub use evolution_review::{EvolutionReviewProposalResponse, ProposeEvolutionReviewRequest};
 pub(crate) use memory_write::propose_memory_write;
 pub use memory_write::{MemoryWriteProposalResponse, ProposeMemoryWriteRequest};
 pub use turn::{PostMessageRequest, PostMessageResponse};

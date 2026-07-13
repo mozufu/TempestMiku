@@ -8,7 +8,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tm_artifacts::{ResourceContent, preview};
 
-use crate::{HostError, Result};
+use crate::{HostError, Result, SelfEvolutionConfig};
 
 use super::util::{
     ensure_existing_ancestor_under_root, ensure_under_root, linked_uri, parse_linked_path,
@@ -24,6 +24,8 @@ pub struct P0HostConfig {
     pub approvals: ApprovalConfig,
     #[serde(default)]
     pub artifact_root: Option<PathBuf>,
+    #[serde(default)]
+    pub self_evolution: SelfEvolutionConfig,
 }
 
 impl P0HostConfig {

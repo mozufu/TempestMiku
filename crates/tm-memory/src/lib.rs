@@ -24,8 +24,10 @@ pub use redaction::{
     Redaction, RedactionReport, contains_sensitive_data, redact_dream_text, redact_json_value,
 };
 pub use skill::{
-    NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus, SkillVerification,
-    UnknownSkillProposalStatus,
+    MAX_SKILL_PROPOSAL_BODY_BYTES, MAX_SKILL_PROPOSAL_REFERENCES, NewSkillProposalRecord,
+    SkillCatalogReloadContract, SkillConflictPolicy, SkillProposalLifecycle, SkillProposalRecord,
+    SkillProposalStatus, SkillRollbackContract, SkillVerification, UnknownSkillProposalStatus,
+    new_skill_proposal_lifecycle, skill_proposal_lifecycle,
 };
 pub use store::{
     DreamLeaseStore, EpisodicMemoryStore, MemoryStoreError, MemoryStoreResult, MemorySummaryStore,

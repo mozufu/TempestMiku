@@ -41,6 +41,9 @@ Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
 - **Raw terminal → curated `proc.run`** (allowlisted, approval-gated, linked-folder) (§25.2).
 - **Adds:** persistent character chat over a streaming server + WebUI / Android (§27);
   code-as-orchestration `agents.*` (§23); drive auto-organize (§24); self-evolution tiers (§26).
+- **Bounds P7.0 self-evolution:** Conservative reaches only memory/profile and skill proposals;
+  Moderate adds typed persona/mode addendum review with durable approval and status-only effects.
+  Apply/reload, raw patches, aggressive authority, and `SOUL.md` mutation remain unavailable (§26).
 - **Replaces Honcho** (today's memory service) with a self-built `tm-memory` engine — episodic +
   vector + BM25 + facts fused by RRF + memory-stream scoring; the user model / ToM and "dreaming"
   are ours, no external memory dependency (§22).

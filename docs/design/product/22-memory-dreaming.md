@@ -283,7 +283,10 @@ memory summary for Brian and the active session scope; `memory://user-model` ret
 profile/facts view; approved write proposals expose exact record views at
 `memory://profile/<subject>/facts/<id>` and `memory://scopes/<scope>/chunks/<id>`; P4 dream outputs
 add `memory://dreams` queue status, exact `memory://dreams/<id>` dream records,
-`memory://summaries/<id>`, and `memory://skill-proposals/<id>` previews. The server grants these reads
+`memory://summaries/<id>`, and `memory://skill-proposals/<id>` previews. P7.0 adds bounded
+`memory://evolution-audits`, `memory://evolution-proposals/<id>`, and typed review-only
+`memory://review-proposals/<id>` resources without giving dreaming a persona/mode write path. The
+server grants these reads
 through `resources.read:memory`, and unknown memory paths or missing grants are denied. The JS/TS SDK
 types these as resource URIs; the global `memory` namespace remains `undefined` until an explicit
 `memory.*` API ships. Broader resources such as `…/MEMORY.md`, `…/episodic?q=…`, and

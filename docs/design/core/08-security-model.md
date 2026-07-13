@@ -22,7 +22,15 @@
 - **Approval gates.** Capabilities flagged `sensitive` pause for human approval before execution.
   Postgres persists requests and an idempotent effect outbox; resolution is compare-and-swap with its
   event in the same transaction. Durable proposal effects resume exactly once, while ACP/V8 waits are
-  non-resumable and become cancelled after origin loss. Timeout and unsupported flows deny by default.
+  non-resumable and become cancelled after origin loss. P7.0 memory, skill, and review-only
+  persona/mode effects also carry a typed
+  target and creation tier; the worker re-derives the target, rechecks the current tier, and renews
+  its owner/epoch lease before mutation, so forged, downgraded, or stale work fails before a write.
+  The append-only evolution audit projection is written transactionally with proposal/effect state,
+  uses idempotency keys for retry/replay, and persists only redacted provenance, typed targets, and
+  digests. Full candidates require the existing `resources.read:memory` capability. Timeout and
+  unsupported flows deny by default. Moderate review effects persist only status: they recheck the
+  live persona/mode base digest after approval and have no file-write or catalog-reload dispatch.
 - **Untrusted-content discipline.** Data fetched from the world is treated as data, never as
   instructions; the runtime never auto-promotes tool output into the system/instruction channel.
 

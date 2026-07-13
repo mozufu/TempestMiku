@@ -139,6 +139,18 @@ impl MikuClient {
         .await
     }
 
+    pub async fn propose_evolution_review(
+        &self,
+        session_id: &str,
+        proposal: Value,
+    ) -> Result<Value> {
+        self.post_json(
+            &format!("/sessions/{session_id}/evolution/review-proposals"),
+            proposal,
+        )
+        .await
+    }
+
     pub async fn promote_session(
         &self,
         session_id: &str,

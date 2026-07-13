@@ -109,7 +109,7 @@ each milestone is done only when its acceptance checks pass.
 | 7 | **DONE — P4 dreaming + scheduler production hardening** | 6–10d | Added transactional lifecycle writes, durable approval requests/effects, fenced owner/epoch leases with heartbeat/retry limits, atomic cron cursor materialization, deny-only execution bounds, supervised worker roles, and recovery metrics. | Deterministic, gated, split-process, and physical-client verification cover stale-owner rejection, bounded retries, transactional enqueue, restart recovery, and authenticated replay. |
 | 8 | **DONE — P5 drive + research workspace production hardening** | 5–9d | Added `DriveMetadataStore`, Postgres entries/proposals/organizer/corrections/version/link/tombstone state, CAS moves/apply, startup canonical-root revalidation, and the documented no-database historical metadata exception. | Deterministic, gated, split-process, and physical-client verification cover persistence, revocation, hydration, concurrent application, and restart-safe access. |
 | 9 | **P6 PUSH FOUNDATION LANDED — provider deferred** | 4–7d | Secure QR/device authority and release gates now feed encrypted provider-neutral registrations, a leased/deduplicated approval delivery outbox, fake-provider tests, private lock-screen notifications, authenticated Approve once / Deny actions, and stale-action resync. Production delivery is explicitly deferred while Firebase capacity is exhausted; no Firebase SDK, project configuration, or server credential should be added. | Existing authenticated Android canary and package gates pass; deterministic fake-provider and debug killed-process probes cover the new foundation. Remote provider delivery while the app is killed is not yet accepted. |
-| 10 | **P7 — self-evolution + hardening** | 6–12d | Implement evolution tiers; write-scope switches; audit trail; MCP import/reload gates; egress/isolation hardening; add replay checks. | Tier switch changes allowed writes; conservative writes only memory+skills proposals; audit/replay can explain every gated write. |
+| 10 | **P7.0 DONE — self-evolution safety foundation; later P7 slices deferred** | 6–12d | Typed tiers/targets, least-authority effect enforcement, append-only audit history, bounded replay payloads, capability-gated candidate/skill resources, typed Moderate review-only addenda, Flutter/Web rendering, and the public `evolution-policy` evidence recorder are implemented. Live installation/apply, aggressive writes, MCP, and egress remain disabled for later explicitly approved slices. | Tier switch changes reachable targets; conservative authority stays within memory/profile and skill proposals; moderate approval changes status but applies nothing; aggressive and forged targets fail closed; audit/public replay explains every gated attempt. Strict workspace, gated Postgres migration/restart/concurrency, Flutter, and authenticated Web gates pass; the evidence manifest reports `ok: true`. |
 
 ### Immediate next task queue
 
@@ -122,9 +122,11 @@ each milestone is done only when its acceptance checks pass.
    artifacts, and HTTP-routed manual approvals. The network-free
    `tm-e2e record native-coding` gate now proves linked-repo edit/test/spill behavior,
    approve/deny/timeout effects, and durable turn-aware SSE replay through the public API.
-3. **Defer MCP, trace, live external research, cloud drive sync, and self-evolution surfaces until
-   their roadmap stages** — `tm-mcp`, `tm-trace`, live egress, optional cloud sync, and P7 hardening
-   should layer on the same server/resource surface.
+3. **Choose the next explicit P7 slice while P6 provider work is blocked** — P7.0 is closed with
+   ordered migration/restart/concurrent-resolution coverage and a passing `evolution-policy`
+   manifest. Keep skill installation, persona/mode apply, aggressive writes, `tm-mcp`, `tm-trace`,
+   live egress, and optional cloud sync deferred until a later slice is separately scoped and
+   accepted. The completed P7.0 checklist and verification commands live in `TODO.md`.
 
 ### Deferred SDK namespace placement
 

@@ -173,17 +173,9 @@ impl MemoryWriteProposal {
             "proposalId": self.proposal_id,
             "memoryKind": self.memory_kind,
             "status": status,
-            "subject": self.subject,
-            "scope": self.scope,
-            "text": self.text,
-            "predicate": self.predicate,
-            "object": self.object,
-            "confidence": self.confidence,
-            "importanceScore": importance_json(self.importance_score),
-            "source": self.source,
-            "provenanceLabel": self.provenance_label,
-            "provenance": self.provenance,
-            "dedupeKey": self.dedupe_key,
+            "preview": self.preview_text(),
+            "uri": self.proposal_uri(),
+            "contentDigest": self.content_digest(),
             "recordId": self.record_id,
             "record": record,
             "createdAt": self.created_at,
@@ -195,17 +187,27 @@ impl MemoryWriteProposal {
             "kind": "memory",
             "proposalId": self.proposal_id,
             "memoryKind": self.memory_kind,
-            "subject": self.subject,
-            "scope": self.scope,
-            "text": self.text,
-            "predicate": self.predicate,
-            "object": self.object,
-            "confidence": self.confidence,
-            "importanceScore": importance_json(self.importance_score),
-            "provenanceLabel": self.provenance_label,
-            "dedupeKey": self.dedupe_key,
+            "preview": self.preview_text(),
+            "uri": self.proposal_uri(),
+            "contentDigest": self.content_digest(),
             "recordId": self.record_id,
         })
+    }
+
+    pub fn preview_text(&self) -> String {
+        let redacted = tm_memory::redact_dream_text(&self.text).text;
+        bounded_utf8_preview(&redacted, 512)
+    }
+
+    pub fn proposal_uri(&self) -> String {
+        format!("memory://evolution-proposals/{}", self.proposal_id)
+    }
+
+    fn content_digest(&self) -> String {
+        crate::evolution::evolution_content_digest(self)
+            .expect("memory proposal has a valid content digest")
+            .as_str()
+            .to_string()
     }
 
     pub fn record_ref(&self) -> MemoryRecordRef {
@@ -230,6 +232,17 @@ impl MemoryWriteProposal {
             kind: self.memory_kind,
         }
     }
+}
+
+fn bounded_utf8_preview(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes.saturating_sub('…'.len_utf8());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &value[..end])
 }
 
 pub fn profile_fact_record(proposal: &MemoryWriteProposal) -> Result<ProfileFactRecord> {

@@ -182,7 +182,8 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
   The P2/P4 memory gateway currently exposes `memory://root`, `memory://user-model`, exact approved
   profile fact / scoped recall record URIs, dream queue/record previews, dream summaries, and skill
-  proposal previews, with compact previews and fail-closed unknown paths (§22.9).
+  proposal previews, P7.0 evolution audit history, and typed persona/mode review-proposal resources,
+  with compact previews and fail-closed unknown paths (§22.9 / §26.4).
 - **Android target (P6 security slice).** The same Flutter app uses an in-app camera scanner
   (`mobile_scanner` 7.2.0, bundled ML Kit) for versioned one-time pairing QR data. No exported Android
   intent filter accepts the `tempestmiku://pair?...` payload and URL-only target changes are disabled.
@@ -208,6 +209,7 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   `POST /sessions`, durable `POST /sessions/:id/messages`, `GET /sessions/:id/turns/:turnId`,
   `POST /sessions/:id/scope`, `POST /sessions/:id/end`, `GET /sessions/:id/events`,
   `GET|POST /sessions/:id/approvals/:approval_id`, `POST /sessions/:id/memory/proposals`,
+  `POST /sessions/:id/evolution/review-proposals`,
   `POST /sessions/:id/promote`, `GET /modes`, mode lock / override endpoints, session-scoped
   resource endpoints (§09), protected `GET /ready`/`GET /metrics`, and minimal public `GET /health`.
   Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party

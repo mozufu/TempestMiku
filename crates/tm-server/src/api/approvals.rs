@@ -76,13 +76,23 @@ where
             state.sender(session_id),
         )),
     };
-    apply_approval_effect_lease(state.store.as_ref(), &approval, &lease, sink).await
+    apply_approval_effect_lease(
+        state.store.as_ref(),
+        &approval,
+        &lease,
+        state.self_evolution_tier,
+        &state.persona,
+        sink,
+    )
+    .await
 }
 
 pub(crate) async fn apply_approval_effect_lease<S>(
     store: &S,
     approval: &ApprovalRequestRecord,
     lease: &crate::ApprovalEffectLease,
+    self_evolution_tier: SelfEvolutionTier,
+    persona: &tm_modes::ModesConfig,
     sink: Arc<dyn CodingEventSink>,
 ) -> Result<()>
 where
@@ -96,9 +106,37 @@ where
         return Ok(());
     }
 
+    store
+        .heartbeat_approval_effect(lease, Utc::now())
+        .await
+        .map_err(|error| match error {
+            ServerError::NotFound(_) | ServerError::Conflict(_) => crate::evolution::policy_error(
+                tm_host::EvolutionPolicyReason::StaleApproval,
+                format!(
+                    "approval effect {} owner {} epoch {} is stale",
+                    lease.effect.id, lease.owner_id, lease.epoch
+                ),
+            ),
+            other => other,
+        })?;
+
     let proposal_payload = match lease.effect.effect_type.as_str() {
-        "memory_write" => apply_memory_write_effect(store, approval, &lease.effect).await,
-        "skill_write" => apply_skill_write_effect(store, approval, &lease.effect).await,
+        "memory_write" => {
+            apply_memory_write_effect(store, approval, &lease.effect, self_evolution_tier).await
+        }
+        "skill_write" => {
+            apply_skill_write_effect(store, approval, &lease.effect, self_evolution_tier).await
+        }
+        "evolution_review" => {
+            apply_evolution_review_effect(
+                store,
+                approval,
+                &lease.effect,
+                self_evolution_tier,
+                persona,
+            )
+            .await
+        }
         other => Err(ServerError::Store(format!(
             "unknown approval effect type {other}"
         ))),
@@ -144,6 +182,7 @@ async fn apply_memory_write_effect<S>(
     store: &S,
     approval: &ApprovalRequestRecord,
     effect: &ApprovalEffectRecord,
+    self_evolution_tier: SelfEvolutionTier,
 ) -> Result<Value>
 where
     S: Store,
@@ -157,6 +196,14 @@ where
     )?;
     let status = approval_memory_status(&approval.status)?;
     let record = if approval.status == "approved" {
+        let digest = crate::evolution::evolution_content_digest(&proposal)?;
+        crate::evolution::verify_approved_evolution_effect(
+            self_evolution_tier,
+            &effect.payload_json,
+            crate::evolution::memory_target_class(proposal.memory_kind),
+            &proposal.proposal_id.to_string(),
+            &digest,
+        )?;
         match proposal.memory_kind {
             MemoryWriteKind::ProfileFact => {
                 store
@@ -180,6 +227,7 @@ async fn apply_skill_write_effect<S>(
     store: &S,
     approval: &ApprovalRequestRecord,
     effect: &ApprovalEffectRecord,
+    self_evolution_tier: SelfEvolutionTier,
 ) -> Result<Value>
 where
     S: Store,
@@ -191,6 +239,17 @@ where
         .and_then(|value| Uuid::parse_str(value).ok())
         .ok_or_else(|| ServerError::Store("skill effect missing proposalId".to_string()))?;
     let status = approval_skill_status(&approval.status)?;
+    let proposal = store.skill_proposal(proposal_id).await?;
+    if approval.status == "approved" {
+        let digest = crate::evolution::evolution_content_digest(&proposal)?;
+        crate::evolution::verify_approved_evolution_effect(
+            self_evolution_tier,
+            &effect.payload_json,
+            tm_host::EvolutionTargetClass::SkillProposal,
+            &proposal_id.to_string(),
+            &digest,
+        )?;
+    }
     let proposal = store
         .update_skill_proposal_status(proposal_id, status)
         .await?;
@@ -199,12 +258,82 @@ where
     ))
 }
 
+async fn apply_evolution_review_effect<S>(
+    store: &S,
+    approval: &ApprovalRequestRecord,
+    effect: &ApprovalEffectRecord,
+    self_evolution_tier: SelfEvolutionTier,
+    persona: &tm_modes::ModesConfig,
+) -> Result<Value>
+where
+    S: Store,
+{
+    let proposal_id = effect
+        .payload_json
+        .get("proposalId")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| ServerError::Store("review effect missing proposalId".to_string()))?;
+    let status = approval_review_status(&approval.status)?;
+    let proposal = store.evolution_review_proposal(proposal_id).await?;
+    if approval.status == "approved" {
+        let digest = tm_host::EvolutionDigest::new(proposal.content_digest.clone())
+            .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+        crate::evolution::verify_approved_review_effect(
+            self_evolution_tier,
+            &effect.payload_json,
+            crate::api::sessions::evolution_review::review_target_class(&proposal.target),
+            &proposal_id.to_string(),
+            &digest,
+        )?;
+        let current = crate::api::sessions::evolution_review::review_base_snapshot(
+            persona,
+            &proposal.target,
+        )?;
+        if current != (proposal.base_version, proposal.base_digest.clone()) {
+            return Err(crate::evolution::policy_error(
+                tm_host::EvolutionPolicyReason::StaleApproval,
+                format!("review proposal {proposal_id} base changed after approval"),
+            ));
+        }
+        let current_digest = crate::api::sessions::evolution_review::review_content_digest(
+            &proposal.target,
+            proposal.base_version,
+            &proposal.base_digest,
+            &proposal.changes,
+        )?;
+        if current_digest != proposal.content_digest {
+            return Err(crate::evolution::policy_error(
+                tm_host::EvolutionPolicyReason::InvalidPayload,
+                format!("review proposal {proposal_id} digest changed"),
+            ));
+        }
+    }
+    let proposal = store
+        .update_evolution_review_proposal_status(proposal_id, status)
+        .await?;
+    Ok(crate::api::sessions::evolution_review::evolution_review_proposal_payload(&proposal))
+}
+
 fn approval_memory_status(status: &str) -> Result<MemoryWriteStatus> {
     match status {
         "approved" => Ok(MemoryWriteStatus::Approved),
         "denied" => Ok(MemoryWriteStatus::Denied),
         "timed_out" => Ok(MemoryWriteStatus::TimedOut),
         "cancelled" => Ok(MemoryWriteStatus::Cancelled),
+        other => Err(ServerError::Store(format!(
+            "approval has non-terminal status {other}"
+        ))),
+    }
+}
+
+fn approval_review_status(status: &str) -> Result<tm_modes::ReviewProposalStatus> {
+    use tm_modes::ReviewProposalStatus::{Approved, Cancelled, Denied, TimedOut};
+    match status {
+        "approved" => Ok(Approved),
+        "denied" => Ok(Denied),
+        "timed_out" => Ok(TimedOut),
+        "cancelled" => Ok(Cancelled),
         other => Err(ServerError::Store(format!(
             "approval has non-terminal status {other}"
         ))),

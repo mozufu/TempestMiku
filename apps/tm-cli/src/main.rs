@@ -214,6 +214,7 @@ fn load_host_config(path: Option<&PathBuf>) -> Result<P0HostConfig> {
             linked_folders: Vec::new(),
             approvals: Default::default(),
             artifact_root: None,
+            self_evolution: Default::default(),
         }),
     }
 }
@@ -458,6 +459,7 @@ mod tests {
             linked_folders: Vec::new(),
             approvals: Default::default(),
             artifact_root: None,
+            self_evolution: Default::default(),
         };
         let linked = host_config.linked_folders().unwrap();
         let cfg = build_agent_config(

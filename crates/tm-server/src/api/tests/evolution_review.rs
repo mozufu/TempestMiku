@@ -1,0 +1,459 @@
+use super::*;
+
+fn moderate_state() -> AppState<InMemoryStore, StoreMemoryProvider<InMemoryStore>, EchoChatRunner> {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+    AppState::new(
+        store,
+        memory,
+        Arc::new(EchoChatRunner),
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate)
+}
+
+fn mode_review_request(timeout_ms: u64) -> Value {
+    json!({
+        "target": { "kind": "mode", "modeId": "serious_engineer" },
+        "changes": [{
+            "section": "description",
+            "before": {
+                "label": "Current description",
+                "summary": "Coding mode handles focused engineering tasks."
+            },
+            "after": {
+                "label": "Reviewable description addendum",
+                "summary": "Prefer explicit verification evidence when closing roadmap gates."
+            }
+        }],
+        "timeoutMs": timeout_ms
+    })
+}
+
+async fn post_review_proposal(
+    app: &Router,
+    session_id: Uuid,
+    body: Value,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/evolution/review-proposals"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn moderate_review_approval_updates_only_durable_proposal_and_replays() {
+    let state = moderate_state();
+    let store = Arc::clone(&state.store);
+    let before_assets = state.persona.load_assets();
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+
+    let response = post_review_proposal(&app, session.id, mode_review_request(5_000)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    assert_eq!(response["status"], json!("pending"));
+    assert_eq!(response["applyEnabled"], json!(false));
+    let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
+    let approval_id = response["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+
+    let pending = store.evolution_review_proposal(proposal_id).await.unwrap();
+    assert_eq!(pending.status, tm_modes::ReviewProposalStatus::Pending);
+    assert_eq!(
+        pending.apply_contract,
+        tm_modes::ReviewApplyContract::Disabled
+    );
+    let pending_event = wait_for_event_payload(&store, session.id, "write_proposal").await;
+    assert_eq!(pending_event["kind"], json!("evolution_review"));
+    assert_eq!(pending_event["applyEnabled"], json!(false));
+    assert!(pending_event.get("changes").is_none());
+    assert!(pending_event["preview"].as_str().unwrap().len() <= 512);
+    let approval = wait_for_event_payload(&store, session.id, "approval").await;
+    assert_eq!(approval["backend"], json!("evolution-review"));
+    assert_eq!(approval["scope"]["applyEnabled"], json!(false));
+    assert_eq!(approval["scope"]["uri"], response["resourceUri"]);
+
+    let resource = get_session_resource_json(
+        &app,
+        session.id,
+        "resolve",
+        response["resourceUri"].as_str().unwrap(),
+    )
+    .await;
+    let content = resource["content"].as_str().unwrap();
+    assert!(content.contains("Prefer explicit verification evidence"));
+    assert!(content.contains("\"applyContract\": \"disabled\""));
+
+    resolve_test_approval(&app, session.id, approval_id, "approve").await;
+    let approved = store.evolution_review_proposal(proposal_id).await.unwrap();
+    assert_eq!(approved.status, tm_modes::ReviewProposalStatus::Approved);
+    assert_eq!(
+        approved.apply_contract,
+        tm_modes::ReviewApplyContract::Disabled
+    );
+    let after_assets = ModesConfig::default().load_assets();
+    assert_eq!(after_assets.soul, before_assets.soul);
+    assert_eq!(after_assets.modes, before_assets.modes);
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    let statuses = events
+        .iter()
+        .filter(|event| event.event_type == "write_proposal")
+        .map(|event| event.payload_json["status"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(statuses, vec!["pending", "approved"]);
+    assert!(events.iter().any(|event| {
+        event.event_type == "approval_resolved" && event.payload_json["status"] == json!("approved")
+    }));
+    let audits = store.evolution_audits(session.id).await.unwrap();
+    assert!(
+        audits
+            .iter()
+            .any(|audit| audit.status == tm_host::EvolutionAuditStatus::Applied)
+    );
+    assert!(
+        audits
+            .iter()
+            .all(|audit| audit.target.id.as_str() == proposal_id.to_string())
+    );
+}
+
+#[tokio::test]
+async fn conservative_review_attempt_is_denied_before_proposal_or_approval() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let response = post_review_proposal(&app, session.id, mode_review_request(5_000)).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(
+        response_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("evolution_insufficient_tier")
+    );
+    assert!(
+        store
+            .evolution_review_proposals_for_session(session.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| { !matches!(event.event_type.as_str(), "write_proposal" | "approval") })
+    );
+    let audits = store.evolution_audits(session.id).await.unwrap();
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].status, tm_host::EvolutionAuditStatus::Denied);
+}
+
+#[tokio::test]
+async fn moderate_review_deny_and_timeout_are_durable_no_apply_outcomes() {
+    for (decision, expected) in [
+        (Some("deny"), tm_modes::ReviewProposalStatus::Denied),
+        (None, tm_modes::ReviewProposalStatus::TimedOut),
+    ] {
+        let state = moderate_state();
+        let store = Arc::clone(&state.store);
+        let persona = state.persona.clone();
+        let (app, _) = test_app_with_state(state);
+        let session = create(&app).await;
+        let response = post_review_proposal(&app, session.id, mode_review_request(25)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response_json(response).await;
+        let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
+        let approval_id = response["approvalId"].as_str().unwrap().parse().unwrap();
+
+        if let Some(decision) = decision {
+            resolve_test_approval(&app, session.id, approval_id, decision).await;
+        } else {
+            let events = store
+                .expire_pending_approvals(Utc::now() + chrono::Duration::seconds(1))
+                .await
+                .unwrap();
+            assert_eq!(events.len(), 1);
+            let lease = store
+                .claim_approval_effect(
+                    approval_id,
+                    Uuid::new_v4(),
+                    Utc::now() + chrono::Duration::seconds(1),
+                    chrono::Duration::seconds(30),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let approval = store
+                .approval_request(session.id, approval_id)
+                .await
+                .unwrap();
+            crate::api::approvals::apply_approval_effect_lease(
+                store.as_ref(),
+                &approval,
+                &lease,
+                tm_host::SelfEvolutionTier::Moderate,
+                &persona,
+                Arc::new(crate::StoreCodingEventSink::new(
+                    session.id,
+                    Arc::clone(&store),
+                    tokio::sync::broadcast::channel(8).0,
+                )),
+            )
+            .await
+            .unwrap();
+        }
+        let proposal = store.evolution_review_proposal(proposal_id).await.unwrap();
+        assert_eq!(proposal.status, expected);
+        assert_eq!(
+            proposal.apply_contract,
+            tm_modes::ReviewApplyContract::Disabled
+        );
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert!(events.iter().any(|event| {
+            event.event_type == "write_proposal"
+                && event.payload_json["status"] == json!(expected.as_str())
+                && event.payload_json["applyEnabled"] == json!(false)
+        }));
+        let expected_audit = match expected {
+            tm_modes::ReviewProposalStatus::Denied => tm_host::EvolutionAuditStatus::Denied,
+            tm_modes::ReviewProposalStatus::TimedOut => tm_host::EvolutionAuditStatus::TimedOut,
+            _ => unreachable!(),
+        };
+        assert!(
+            store
+                .evolution_audits(session.id)
+                .await
+                .unwrap()
+                .iter()
+                .any(|audit| audit.status == expected_audit)
+        );
+    }
+}
+
+#[tokio::test]
+async fn approved_review_fails_closed_when_the_live_base_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    write_mode_assets_fixture(temp.path());
+    let persona = ModesConfig::from_path(temp.path());
+    let store = Arc::new(InMemoryStore::default());
+    let state = AppState::new(
+        Arc::clone(&store),
+        Arc::new(StoreMemoryProvider::new(Arc::clone(&store))),
+        Arc::new(EchoChatRunner),
+        persona,
+        AuthConfig::NoAuth,
+    )
+    .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate);
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+    let mut request = mode_review_request(5_000);
+    request["target"]["modeId"] = json!("general");
+    let response = post_review_proposal(&app, session.id, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
+    let approval_id = response["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+
+    let mode_path = temp.path().join("modes.json");
+    let mut catalog: Value =
+        serde_json::from_str(&std::fs::read_to_string(&mode_path).unwrap()).unwrap();
+    catalog["modes"][0]["description"] = json!("Base changed after proposal creation.");
+    std::fs::write(&mode_path, serde_json::to_vec_pretty(&catalog).unwrap()).unwrap();
+
+    let resolution = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/approvals/{approval_id}", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "decision": "approve" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolution.status(), StatusCode::FORBIDDEN);
+    assert!(
+        response_json(resolution).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("evolution_stale_approval")
+    );
+    let proposal = store.evolution_review_proposal(proposal_id).await.unwrap();
+    assert_eq!(proposal.status, tm_modes::ReviewProposalStatus::Pending);
+    assert_eq!(
+        proposal.apply_contract,
+        tm_modes::ReviewApplyContract::Disabled
+    );
+    assert!(
+        store
+            .evolution_audits(session.id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|audit| {
+                audit.status == tm_host::EvolutionAuditStatus::Failed
+                    && audit.error_code == Some(tm_host::EvolutionPolicyReason::StaleApproval)
+            })
+    );
+}
+
+#[tokio::test]
+async fn evolution_audit_resource_represents_every_terminal_query_status() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let template = crate::evolution::denied_evolution_audit_record(
+        crate::evolution::DeniedEvolutionAuditSpec {
+            tier: tm_host::SelfEvolutionTier::Conservative,
+            target_class: tm_host::EvolutionTargetClass::ModeProposal,
+            target_id: Uuid::new_v4().to_string(),
+            actor_id: "audit-query-test".to_string(),
+            session_id: session.id,
+            dream_id: None,
+            content: &json!({ "bounded": true }),
+            occurred_at: Utc::now(),
+        },
+    )
+    .unwrap();
+    let statuses = [
+        tm_host::EvolutionAuditStatus::Attempted,
+        tm_host::EvolutionAuditStatus::Denied,
+        tm_host::EvolutionAuditStatus::AwaitingApproval,
+        tm_host::EvolutionAuditStatus::Approved,
+        tm_host::EvolutionAuditStatus::TimedOut,
+        tm_host::EvolutionAuditStatus::Superseded,
+        tm_host::EvolutionAuditStatus::Failed,
+        tm_host::EvolutionAuditStatus::Applied,
+    ];
+    for status in statuses {
+        let mut record = template.clone();
+        record.id = Uuid::new_v4();
+        record.status = status;
+        store
+            .append_evolution_audit(crate::EvolutionAuditEntry {
+                idempotency_key: format!("audit-query:{status:?}"),
+                record,
+            })
+            .await
+            .unwrap();
+    }
+    let resource =
+        get_session_resource_json(&app, session.id, "resolve", "memory://evolution-audits").await;
+    let content = resource["content"].as_str().unwrap();
+    for status in [
+        "attempted",
+        "denied",
+        "awaiting_approval",
+        "approved",
+        "timed_out",
+        "superseded",
+        "failed",
+        "applied",
+    ] {
+        assert!(content.contains(&format!("\"status\": \"{status}\"")));
+    }
+}
+
+#[tokio::test]
+async fn gated_postgres_review_migrates_restarts_and_resolves_once() {
+    let Some(dsn) = postgres_test_dsn() else {
+        return;
+    };
+    let store = Arc::new(PostgresStore::connect(&dsn).await.unwrap());
+    store.configure_owner_subject("brian").await.unwrap();
+    let state = AppState::new(
+        Arc::clone(&store),
+        Arc::new(StoreMemoryProvider::new(Arc::clone(&store))),
+        Arc::new(EchoChatRunner),
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate);
+    let app = app(state);
+    let session = create(&app).await;
+    let response = post_review_proposal(&app, session.id, mode_review_request(5_000)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    let proposal_id = response["proposalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let approval_id = response["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+
+    let resolve = |app: Router| async move {
+        app.oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/approvals/{approval_id}", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "decision": "approve" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+    };
+    let (left, right) = tokio::join!(resolve(app.clone()), resolve(app.clone()));
+    assert!(matches!(
+        (left, right),
+        (StatusCode::OK, StatusCode::CONFLICT) | (StatusCode::CONFLICT, StatusCode::OK)
+    ));
+
+    let restarted = PostgresStore::connect(&dsn).await.unwrap();
+    let proposal = restarted
+        .evolution_review_proposal(proposal_id)
+        .await
+        .unwrap();
+    assert_eq!(proposal.status, tm_modes::ReviewProposalStatus::Approved);
+    assert_eq!(
+        proposal.apply_contract,
+        tm_modes::ReviewApplyContract::Disabled
+    );
+    let row_count: i64 = restarted
+        .client()
+        .query_one(
+            "select count(*) from evolution_review_proposals where id = $1",
+            &[&proposal_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(row_count, 1);
+    let events = restarted.events_after(session.id, None).await.unwrap();
+    let statuses = events
+        .iter()
+        .filter(|event| {
+            event.event_type == "write_proposal"
+                && event.payload_json["proposalId"] == json!(proposal_id)
+        })
+        .map(|event| event.payload_json["status"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(statuses, vec!["pending", "approved"]);
+    let audits = restarted.evolution_audits(session.id).await.unwrap();
+    assert!(
+        audits
+            .iter()
+            .any(|audit| audit.status == tm_host::EvolutionAuditStatus::Applied)
+    );
+}

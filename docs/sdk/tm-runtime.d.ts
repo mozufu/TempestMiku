@@ -5,7 +5,8 @@
  * host access. Every external effect goes through capability-checked SDK
  * namespaces. P2 memory is exposed as memory:// resources behind
  * resources.read:memory, not as a memory.* namespace. P4 adds constrained
- * memory:// dream queues/records, summaries, and skill-proposal previews;
+ * memory:// dream queues/records, summaries, skill-proposal previews, bounded
+ * evolution audit history, and review-only persona/mode addendum proposals;
  * bundled skill markdown may still be labeled skill://... inside composed
  * prompts, but that label is not a resources.read/list/preview surface until
  * the P7 import/reload lifecycle registers a handler and grants.
@@ -69,11 +70,16 @@ type MemoryResourceUri =
   | "memory://root"
   | "memory://user-model"
   | "memory://dreams"
+  | "memory://evolution-audits"
+  | "memory://skill-proposals"
+  | "memory://review-proposals"
   | `memory://dreams/${string}`
   | `memory://profile/${string}/facts/${string}`
   | `memory://scopes/${string}/chunks/${string}`
   | `memory://summaries/${string}`
-  | `memory://skill-proposals/${string}`;
+  | `memory://skill-proposals/${string}`
+  | `memory://evolution-proposals/${string}`
+  | `memory://review-proposals/${string}`;
 
 type ProjectResourceUri = `project://${string}`;
 type CronResourceUri =

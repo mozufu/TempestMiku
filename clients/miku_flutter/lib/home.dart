@@ -744,6 +744,26 @@ class _MikuHomePageState extends State<MikuHomePage>
           actorId: actorId,
         );
       case 'write_proposal':
+        final review = EvolutionReviewProposal.fromEvent(data);
+        if (review != null) {
+          return _ActivityItem(
+            icon: Icons.fact_check_outlined,
+            title:
+                '${review.targetKind} addendum · ${review.targetId} · ${review.status}',
+            detail: _joinedDetail([
+              review.preview,
+              review.applyEnabled ? 'Apply enabled' : 'Review only · apply disabled',
+            ]),
+            state: switch (review.status) {
+              'approved' => _ActivityState.done,
+              'denied' || 'timed_out' || 'cancelled' => _ActivityState.failed,
+              _ => _ActivityState.info,
+            },
+            kind: 'evolution_review',
+            resourceUris:
+                review.resourceUri.isEmpty ? const [] : [review.resourceUri],
+          );
+        }
         if (_eventText(data, 'kind') != 'drive') return null;
         final preview = _eventMap(data['preview']);
         return _ActivityItem(

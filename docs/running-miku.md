@@ -356,6 +356,9 @@ Minimal repo-linked config:
     "mode": "manual",
     "timeout_ms": 60000
   },
+  "self_evolution": {
+    "tier": "conservative"
+  },
   "artifact_root": ".tempestmiku/artifacts"
 }
 ```
@@ -368,6 +371,14 @@ Notes:
 - `safe_args` entries are argv prefixes that can run without approval.
 - Approval mode `deny` is the default. Approval mode `manual` asks before non-safe writes or
   commands.
+- `self_evolution.tier` accepts `off`, `conservative` (the compatibility-preserving default), or
+  `moderate`. Existing `approvals.mode` and timeout settings remain orthogonal and still gate
+  reachable writes; selecting a tier does not grant a capability or bypass approval. P7.0 rejects
+  `aggressive`; moderate review does not apply persona or mode files. Authenticated `/ready` exposes
+  only the effective tier, never proposal content or credentials.
+- Moderate review candidates enter through `POST /sessions/:id/evolution/review-proposals` and are
+  readable at `memory://review-proposals/<id>`. Approval only changes durable review status;
+  `applyEnabled` remains false and the live persona/mode files are never written or reloaded.
 - The CLI prompts on the tty; the server emits approval events to the UI/API.
 - There is no raw shell escape hatch. Commands run as argv vectors.
 
@@ -394,6 +405,14 @@ test, artifact spill, approval approve/deny/timeout, and durable turn replay):
 
 ```sh
 nix develop --command cargo run -p tm-e2e -- record native-coding
+```
+
+For the P7.0 public self-evolution policy record (Conservative allow/deny, Moderate review-only
+approval, timeout, downgrade decision, forged target, retry idempotency, bounded resource spill,
+and replay continuity):
+
+```sh
+nix develop --command cargo run -p tm-e2e -- record evolution-policy
 ```
 
 For a credentialed live speaker run:

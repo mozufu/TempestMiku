@@ -105,7 +105,7 @@ String _cleanResourceUri(String uri) {
 
 bool _isOpenableResourceUri(String uri) {
   return RegExp(
-          r'^(?:artifact|workspace|linked|project|drive|agent|history)://')
+          r'^(?:artifact|workspace|linked|project|drive|memory|agent|history)://')
       .hasMatch(uri);
 }
 

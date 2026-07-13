@@ -414,6 +414,8 @@ where
             state.store.as_ref(),
             &approval,
             &lease,
+            state.self_evolution_tier,
+            &state.persona,
             sink,
         )
         .await

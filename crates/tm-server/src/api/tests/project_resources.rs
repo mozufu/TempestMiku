@@ -1098,6 +1098,52 @@ async fn memory_resource_gateway_reads_dream_summaries_and_skill_proposals() {
             .iter()
             .any(|entry| entry["uri"] == json!(format!("memory://summaries/{}", summary.id)))
     );
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=memory://skill-proposals",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = response_json(listed).await;
+    assert!(
+        listed.as_array().unwrap().iter().any(|entry| {
+            entry["uri"] == json!(format!("memory://skill-proposals/{}", skill.id))
+        })
+    );
+
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/preview?uri=memory://skill-proposals/{}",
+                    session.id, skill.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let preview = response_json(preview).await;
+    assert_eq!(preview["content"], json!(""));
+    assert!(
+        preview["preview"]
+            .as_str()
+            .unwrap()
+            .contains("Installable: false")
+    );
 }
 
 #[tokio::test]

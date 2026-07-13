@@ -2664,6 +2664,16 @@ async fn gated_postgres_approval_resolution_and_effect_claims_are_cross_instance
     let now = Utc::now();
     let approval_id = Uuid::new_v4();
     let proposal_id = Uuid::new_v4();
+    let evolution = crate::evolution::evolution_effect_metadata(
+        tm_host::SelfEvolutionTier::Conservative,
+        tm_host::EvolutionTargetClass::ScopedMemory,
+        proposal_id.to_string(),
+        "postgres-test",
+        session.id,
+        None,
+        &json!({"candidate": "cross-instance durable reminder"}),
+    )
+    .unwrap();
     store
         .create_approval_request(NewApprovalRequest {
             id: approval_id,
@@ -2678,7 +2688,10 @@ async fn gated_postgres_approval_resolution_and_effect_claims_are_cross_instance
                 {"id": "deny", "label": "Deny"}
             ]),
             effect_type: "memory_write".to_string(),
-            effect_payload_json: json!({"proposalId": proposal_id}),
+            effect_payload_json: json!({
+                "evolution": evolution,
+                "proposalId": proposal_id,
+            }),
             resumable: true,
             created_at: now,
             expires_at: now + Duration::minutes(5),
@@ -2825,6 +2838,20 @@ async fn gated_postgres_approval_resolution_and_effect_claims_are_cross_instance
             })
             .count(),
         1
+    );
+    let restarted = PostgresStore::connect(&dsn).await.unwrap();
+    let audits = restarted.evolution_audits(session.id).await.unwrap();
+    assert_eq!(audits.len(), 3);
+    assert_eq!(
+        audits
+            .iter()
+            .map(|record| record.status)
+            .collect::<Vec<_>>(),
+        vec![
+            tm_host::EvolutionAuditStatus::AwaitingApproval,
+            tm_host::EvolutionAuditStatus::Approved,
+            tm_host::EvolutionAuditStatus::Applied,
+        ]
     );
 
     let expired_id = Uuid::new_v4();
@@ -3334,7 +3361,13 @@ async fn gated_postgres_runs_versioned_auth_migrations_and_redeems_once() {
         return;
     };
     let store = PostgresStore::connect(&dsn).await.unwrap();
-    for table in ["schema_migrations", "auth_devices", "pairing_codes"] {
+    for table in [
+        "schema_migrations",
+        "auth_devices",
+        "pairing_codes",
+        "evolution_audits",
+        "evolution_review_proposals",
+    ] {
         let name = format!("public.{table}");
         let exists: bool = store
             .client()
@@ -3630,7 +3663,7 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
         )
         .await
         .unwrap();
-    assert_eq!(migrations.len(), 10);
+    assert_eq!(migrations.len(), 12);
     assert!(migrations.iter().enumerate().all(|(index, row)| {
         row.get::<_, i64>("version") == index as i64 + 1
             && row.get::<_, String>("checksum").len() == 64

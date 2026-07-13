@@ -461,7 +461,13 @@ async fn resolve_test_approval(app: &Router, session_id: Uuid, approval_id: Uuid
         )
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    let status = res.status();
+    if status != StatusCode::OK {
+        panic!(
+            "approval resolution failed with {status}: {}",
+            response_json(res).await
+        );
+    }
 }
 
 fn write_mode_assets_fixture(root: &std::path::Path) {
@@ -565,6 +571,7 @@ where
 mod auth;
 mod coding_native;
 mod core_flow;
+mod evolution_review;
 mod memory;
 mod pairing;
 mod project_resources;

@@ -12,3 +12,10 @@
   `/health` stays public and intentionally reveals only `{ "status": "ok" }`.
 - **Redaction boundary:** bearer/pairing/provider credentials and detected secret material are redacted
   before tracing, events, memory, artifacts, cron/approval persistence, or OMP transcript storage.
+- **Evolution evidence:** append-only `evolution_audits` records project proposal, approval, and effect
+  transitions with typed targets, stable status/error codes, digests, and provenance. Full candidates
+  stay behind `memory://evolution-proposals/<id>`, `memory://skill-proposals/<id>`, or
+  `memory://review-proposals/<id>`; replay events contain only bounded previews and resource links.
+  `cargo run -p tm-e2e -- record evolution-policy` records the public conservative allow/deny,
+  Moderate review-only approval, timeout, forged-target, retry, downgrade-policy, spill, and replay
+  evidence under `target/tm-e2e`.

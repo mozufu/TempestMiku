@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::MemoryEvidenceRef;
@@ -78,7 +79,8 @@ pub struct SkillProposalRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct NewSkillProposalRecord {
     pub name: String,
     pub description: String,
@@ -91,4 +93,235 @@ pub struct NewSkillProposalRecord {
     pub dedupe_key: String,
     pub source_dream_id: Uuid,
     pub source_session_id: Uuid,
+}
+
+pub const MAX_SKILL_PROPOSAL_BODY_BYTES: usize = 64 * 1024;
+pub const MAX_SKILL_PROPOSAL_REFERENCES: usize = 64;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillConflictPolicy {
+    RejectNameCollision,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillRollbackContract {
+    NoLiveMutation,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillCatalogReloadContract {
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillProposalLifecycle {
+    pub version: u16,
+    pub normalized_name: String,
+    pub content_digest: String,
+    pub source_dream_id: Uuid,
+    pub source_session_id: Uuid,
+    pub conflict_policy: SkillConflictPolicy,
+    pub rollback: SkillRollbackContract,
+    pub catalog_reload: SkillCatalogReloadContract,
+    pub reviewable: bool,
+    pub installable: bool,
+    pub violations: Vec<String>,
+}
+
+pub fn skill_proposal_lifecycle(proposal: &SkillProposalRecord) -> SkillProposalLifecycle {
+    skill_lifecycle(
+        &proposal.name,
+        &proposal.body,
+        proposal.source_dream_id,
+        proposal.source_session_id,
+        proposal,
+    )
+}
+
+pub fn new_skill_proposal_lifecycle(proposal: &NewSkillProposalRecord) -> SkillProposalLifecycle {
+    skill_lifecycle(
+        &proposal.name,
+        &proposal.body,
+        proposal.source_dream_id,
+        proposal.source_session_id,
+        proposal,
+    )
+}
+
+fn skill_lifecycle(
+    name: &str,
+    body: &str,
+    source_dream_id: Uuid,
+    source_session_id: Uuid,
+    content: &impl Serialize,
+) -> SkillProposalLifecycle {
+    let normalized_name = normalize_skill_name(name);
+    let mut violations = Vec::new();
+    if normalized_name != name || normalized_name.is_empty() || normalized_name.len() > 64 {
+        violations.push("invalid_normalized_name".to_string());
+    }
+    if body.len() > MAX_SKILL_PROPOSAL_BODY_BYTES {
+        violations.push("body_too_large".to_string());
+    }
+    if !body.starts_with(&format!("# {name}\n")) {
+        violations.push("title_mismatch".to_string());
+    }
+    for (heading, code) in [
+        ("## Trigger", "missing_trigger"),
+        ("## Procedure", "missing_procedure"),
+        ("## Guardrails", "missing_guardrails"),
+    ] {
+        if !body.contains(heading) {
+            violations.push(code.to_string());
+        }
+    }
+    validate_skill_references(body, &mut violations);
+    validate_skill_authority(body, &mut violations);
+
+    let mut value = serde_json::to_value(content).expect("skill proposal serializes");
+    crate::redact_json_value(&mut value);
+    let encoded = serde_json::to_vec(&value).expect("skill proposal JSON encodes");
+    let reviewable = violations.is_empty();
+    SkillProposalLifecycle {
+        version: 1,
+        normalized_name,
+        content_digest: format!("sha256:{:x}", Sha256::digest(encoded)),
+        source_dream_id,
+        source_session_id,
+        conflict_policy: SkillConflictPolicy::RejectNameCollision,
+        rollback: SkillRollbackContract::NoLiveMutation,
+        catalog_reload: SkillCatalogReloadContract::Disabled,
+        reviewable,
+        installable: false,
+        violations,
+    }
+}
+
+fn normalize_skill_name(name: &str) -> String {
+    name.trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn validate_skill_references(body: &str, violations: &mut Vec<String>) {
+    let references = body
+        .match_indices("](")
+        .filter_map(|(start, _)| {
+            let rest = &body[start + 2..];
+            rest.find(')').map(|end| &rest[..end])
+        })
+        .collect::<Vec<_>>();
+    if references.len() > MAX_SKILL_PROPOSAL_REFERENCES {
+        violations.push("too_many_references".to_string());
+    }
+    if references.iter().any(|reference| {
+        reference.is_empty()
+            || reference.starts_with('/')
+            || reference.contains("..")
+            || reference.contains('\\')
+            || reference.contains(':')
+            || reference.chars().any(char::is_control)
+    }) {
+        violations.push("unsafe_reference".to_string());
+    }
+}
+
+fn validate_skill_authority(body: &str, violations: &mut Vec<String>) {
+    let prohibited = [
+        "soul.md",
+        "capability configuration",
+        "fs.write",
+        "code.edit",
+        "proc.run",
+        "secrets.",
+        "install automatically",
+        "activate automatically",
+        "reload the skill",
+    ];
+    let has_prohibited_authority = body.lines().any(|line| {
+        let line = line.trim().to_ascii_lowercase();
+        !line.starts_with("- do not ")
+            && !line.starts_with("do not ")
+            && prohibited.iter().any(|needle| line.contains(needle))
+    });
+    if has_prohibited_authority {
+        violations.push("prohibited_authority".to_string());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    fn proposal(body: String) -> NewSkillProposalRecord {
+        NewSkillProposalRecord {
+            name: "safe-workflow".to_string(),
+            description: "A safe workflow".to_string(),
+            body,
+            trigger: "When requested".to_string(),
+            use_criteria: "Only when requested".to_string(),
+            evidence: Vec::new(),
+            self_critique: "Narrow and reviewable".to_string(),
+            verification: SkillVerification {
+                passed: true,
+                checks: vec!["shape:pass".to_string()],
+            },
+            dedupe_key: "skill:safe-workflow".to_string(),
+            source_dream_id: Uuid::nil(),
+            source_session_id: Uuid::nil(),
+        }
+    }
+
+    #[test]
+    fn valid_skill_is_reviewable_but_never_installable_in_p7_0() {
+        let lifecycle = new_skill_proposal_lifecycle(&proposal(
+            "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\n- Review.\n\n## Guardrails\n- Do not edit SOUL.md.\n"
+                .to_string(),
+        ));
+        assert!(lifecycle.reviewable);
+        assert!(!lifecycle.installable);
+        assert_eq!(
+            lifecycle.catalog_reload,
+            SkillCatalogReloadContract::Disabled
+        );
+        assert!(lifecycle.content_digest.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn unsafe_paths_authority_and_oversized_bodies_are_not_reviewable() {
+        let body = format!(
+            "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\n[read](/etc/passwd)\nUse fs.write.\n\n## Guardrails\n{}",
+            "x".repeat(MAX_SKILL_PROPOSAL_BODY_BYTES)
+        );
+        let lifecycle = new_skill_proposal_lifecycle(&proposal(body));
+        assert!(!lifecycle.reviewable);
+        assert!(!lifecycle.installable);
+        assert!(
+            lifecycle
+                .violations
+                .contains(&"unsafe_reference".to_string())
+        );
+        assert!(
+            lifecycle
+                .violations
+                .contains(&"prohibited_authority".to_string())
+        );
+        assert!(lifecycle.violations.contains(&"body_too_large".to_string()));
+    }
 }

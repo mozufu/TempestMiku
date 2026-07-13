@@ -3,8 +3,8 @@ use std::{env, path::PathBuf};
 use anyhow::{Result, bail};
 use tm_e2e::{
     LiveSpeaker, MikuClient, RecordOptions, ScriptedSpeaker, WorkflowOptions, load_dotenv,
-    run_record_api, run_record_live_api, run_record_native_actor, run_record_native_coding,
-    run_record_suite, run_record_ui, run_workflow, write_workflow_record,
+    run_record_api, run_record_evolution_policy, run_record_live_api, run_record_native_actor,
+    run_record_native_coding, run_record_suite, run_record_ui, run_workflow, write_workflow_record,
 };
 
 #[tokio::main]
@@ -69,9 +69,10 @@ async fn run_record(args: RecordCliArgs) -> Result<()> {
         "live-api" => run_record_live_api(options).await?,
         "native-actor" => run_record_native_actor(options).await?,
         "native-coding" => run_record_native_coding(options).await?,
+        "evolution-policy" => run_record_evolution_policy(options).await?,
         other => {
             bail!(
-                "unsupported tm-e2e record mode {other}; expected suite, api, ui, live-api, native-actor, or native-coding"
+                "unsupported tm-e2e record mode {other}; expected suite, api, ui, live-api, native-actor, native-coding, or evolution-policy"
             )
         }
     };
@@ -270,6 +271,7 @@ fn print_help() {
   TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api [--output-dir path]\n  \
   TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record native-actor [--output-dir path]\n\n\
            cargo run -p tm-e2e -- record native-coding [--output-dir path]\n\n\
+           cargo run -p tm-e2e -- record evolution-policy [--output-dir path]\n\n\
          Environment:\n  \
            TM_MIKU_BASE_URL          server URL, default http://127.0.0.1:8787\n  \
            TM_MIKU_BEARER_TOKEN      optional bearer token for tm-server auth\n  \

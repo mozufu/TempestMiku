@@ -5,14 +5,17 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use rows::{
     row_to_approval_effect, row_to_approval_request, row_to_cron_job, row_to_cron_run,
-    row_to_dream_record, row_to_memory_summary, row_to_message_record, row_to_project_item,
-    row_to_session_record, row_to_session_turn, row_to_skill_proposal,
+    row_to_dream_record, row_to_evolution_audit, row_to_evolution_review_proposal,
+    row_to_memory_summary, row_to_message_record, row_to_project_item, row_to_session_record,
+    row_to_session_turn, row_to_skill_proposal,
 };
 use serde_json::{Value, json};
+use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus, EvolutionPolicyReason};
 use tm_memory::{
     DreamLease, DreamQueueRecord, DreamStatus, MemorySummaryRecord, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
 };
+use tm_modes::{ReviewApplyContract, ReviewProposalStatus, ReviewProposalTarget};
 use tokio_postgres::{Config as PostgresConfig, NoTls, Row, error::SqlState};
 use uuid::Uuid;
 
@@ -23,19 +26,55 @@ use crate::{
 
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_cron_job_persistence,
-    sanitize_cron_run_persistence, sanitize_memory_summary_persistence,
-    sanitize_project_item_persistence, sanitize_skill_proposal_persistence, turn_content_hash,
-    validate_persistence_identifier, validate_profile_fact_persistence,
-    validate_recall_chunk_persistence,
+    sanitize_cron_run_persistence, sanitize_evolution_review_proposal_persistence,
+    sanitize_memory_summary_persistence, sanitize_project_item_persistence,
+    sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
+    validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
 
 use super::{
     ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronLease,
-    CronRunRecord, EndSessionDreamResult, MessageRecord, ModeState, NewApprovalRequest,
-    NewApprovalResolution, NewCronJobRecord, NewCronRunRecord, NewProjectItem, NewSession,
-    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent,
-    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
+    CronRunRecord, EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord,
+    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution, NewCronJobRecord,
+    NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession, ProfileFactRecord,
+    ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord,
+    SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
 };
+
+fn evolution_audit_entry(
+    payload: &Value,
+    approval_id: Uuid,
+    effect_id: Uuid,
+    status: EvolutionAuditStatus,
+    occurred_at: DateTime<Utc>,
+    error_code: Option<EvolutionPolicyReason>,
+    idempotency_key: String,
+) -> Result<Option<EvolutionAuditEntry>> {
+    Ok(crate::evolution::evolution_audit_record(
+        payload,
+        approval_id,
+        effect_id,
+        status,
+        occurred_at,
+        error_code,
+    )?
+    .map(|record| EvolutionAuditEntry {
+        idempotency_key,
+        record,
+    }))
+}
+
+fn evolution_audit_params(
+    entry: Option<EvolutionAuditEntry>,
+) -> Result<(Option<Value>, Option<String>)> {
+    entry
+        .map(|entry| {
+            serde_json::to_value(entry.record)
+                .map(|record| (Some(record), Some(entry.idempotency_key)))
+                .map_err(|error| ServerError::Store(error.to_string()))
+        })
+        .unwrap_or_else(|| Ok((None, None)))
+}
 
 pub struct PostgresStore {
     client: tokio_postgres::Client,
@@ -1190,6 +1229,15 @@ impl Store for PostgresStore {
                 return Err(ServerError::NotFound(format!("turn {turn_id}")));
             }
         }
+        let (audit_json, audit_key) = evolution_audit_params(evolution_audit_entry(
+            &request.effect_payload_json,
+            request.id,
+            request.id,
+            EvolutionAuditStatus::AwaitingApproval,
+            request.created_at,
+            None,
+            format!("approval:{}:attempt", request.id),
+        )?)?;
         let row = self
             .client
             .query_one(
@@ -1215,7 +1263,29 @@ impl Store for PostgresStore {
                            request.expires_at, null, null, 0, null, null, null,
                            request.created_at, request.created_at
                       from request
-                    on conflict (approval_id) do nothing
+                    on conflict (approval_id) do update
+                       set id = approval_effects.id
+                    returning id
+                 ), audit as (
+                    insert into evolution_audits(
+                        id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                        target_class, target_id, content_digest, configured_tier, decision_json,
+                        approval_id, effect_id, status, error_code, record_json, created_at
+                    )
+                    select ($14::jsonb ->> 'id')::uuid, $15,
+                           ($14::jsonb #>> '{origin,sessionId}')::uuid,
+                           nullif($14::jsonb #>> '{origin,dreamId}', '')::uuid,
+                           $14::jsonb #>> '{origin,actorId}',
+                           ($14::jsonb ->> 'proposalId')::uuid,
+                           $14::jsonb #>> '{target,class}', $14::jsonb #>> '{target,id}',
+                           $14::jsonb ->> 'contentDigest', $14::jsonb ->> 'configuredTier',
+                           $14::jsonb -> 'decision',
+                           nullif($14::jsonb ->> 'approvalId', '')::uuid,
+                           nullif($14::jsonb ->> 'effectId', '')::uuid,
+                           $14::jsonb ->> 'status', $14::jsonb ->> 'errorCode', $14,
+                           ($14::jsonb ->> 'createdAt')::timestamptz
+                      from effect where $14::jsonb is not null
+                    on conflict (idempotency_key) do nothing
                  )
                  select * from request",
                 &[
@@ -1232,6 +1302,8 @@ impl Store for PostgresStore {
                     &request.expires_at,
                     &request.effect_type,
                     &request.effect_payload_json,
+                    &audit_json,
+                    &audit_key,
                 ],
             )
             .await
@@ -1351,6 +1423,28 @@ impl Store for PostgresStore {
                 resolution.status
             )));
         }
+        let effect = self
+            .client
+            .query_opt(
+                "select id, payload_json from approval_effects where approval_id = $1",
+                &[&approval_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let audit = if let Some(effect) = effect {
+            evolution_audit_entry(
+                &effect.get::<_, Value>("payload_json"),
+                approval_id,
+                effect.get("id"),
+                crate::evolution::audit_status_from_approval(&resolution.status)?,
+                resolution.resolved_at,
+                None,
+                format!("approval:{approval_id}:resolution:{}", resolution.status),
+            )?
+        } else {
+            None
+        };
+        let (audit_json, audit_key) = evolution_audit_params(audit)?;
         let row = self
             .client
             .query_opt(
@@ -1378,6 +1472,27 @@ impl Store for PostgresStore {
                            status = 'pending', available_at = $6, locked_at = null,
                            lease_owner = null, updated_at = $6, error_at = null,
                            last_error = null
+                    returning id
+                 ), audit as (
+                    insert into evolution_audits(
+                        id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                        target_class, target_id, content_digest, configured_tier, decision_json,
+                        approval_id, effect_id, status, error_code, record_json, created_at
+                    )
+                    select ($7::jsonb ->> 'id')::uuid, $8,
+                           ($7::jsonb #>> '{origin,sessionId}')::uuid,
+                           nullif($7::jsonb #>> '{origin,dreamId}', '')::uuid,
+                           $7::jsonb #>> '{origin,actorId}',
+                           ($7::jsonb ->> 'proposalId')::uuid,
+                           $7::jsonb #>> '{target,class}', $7::jsonb #>> '{target,id}',
+                           $7::jsonb ->> 'contentDigest', $7::jsonb ->> 'configuredTier',
+                           $7::jsonb -> 'decision',
+                           nullif($7::jsonb ->> 'approvalId', '')::uuid,
+                           nullif($7::jsonb ->> 'effectId', '')::uuid,
+                           $7::jsonb ->> 'status', $7::jsonb ->> 'errorCode', $7,
+                           ($7::jsonb ->> 'createdAt')::timestamptz
+                      from resolved, effect where $7::jsonb is not null
+                    on conflict (idempotency_key) do nothing
                  )
                  select * from resolved",
                 &[
@@ -1387,6 +1502,8 @@ impl Store for PostgresStore {
                     &resolution.selected_option_id,
                     &resolution.resolution_json,
                     &resolution.resolved_at,
+                    &audit_json,
+                    &audit_key,
                 ],
             )
             .await
@@ -1427,6 +1544,28 @@ impl Store for PostgresStore {
                 "approval resolution event payload has a different approvalId".to_string(),
             ));
         }
+        let effect = self
+            .client
+            .query_opt(
+                "select id, payload_json from approval_effects where approval_id = $1",
+                &[&approval_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let audit = if let Some(effect) = effect {
+            evolution_audit_entry(
+                &effect.get::<_, Value>("payload_json"),
+                approval_id,
+                effect.get("id"),
+                crate::evolution::audit_status_from_approval(&resolution.status)?,
+                resolution.resolved_at,
+                None,
+                format!("approval:{approval_id}:resolution:{}", resolution.status),
+            )?
+        } else {
+            None
+        };
+        let (audit_json, audit_key) = evolution_audit_params(audit)?;
         let session_key = session_id.to_string();
         let row = self
             .client
@@ -1463,6 +1602,27 @@ impl Store for PostgresStore {
                            status = 'pending', available_at = $6, locked_at = null,
                            lease_owner = null, updated_at = $6, error_at = null,
                            last_error = null
+                    returning id
+                 ), audit as (
+                    insert into evolution_audits(
+                        id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                        target_class, target_id, content_digest, configured_tier, decision_json,
+                        approval_id, effect_id, status, error_code, record_json, created_at
+                    )
+                    select ($8::jsonb ->> 'id')::uuid, $9,
+                           ($8::jsonb #>> '{origin,sessionId}')::uuid,
+                           nullif($8::jsonb #>> '{origin,dreamId}', '')::uuid,
+                           $8::jsonb #>> '{origin,actorId}',
+                           ($8::jsonb ->> 'proposalId')::uuid,
+                           $8::jsonb #>> '{target,class}', $8::jsonb #>> '{target,id}',
+                           $8::jsonb ->> 'contentDigest', $8::jsonb ->> 'configuredTier',
+                           $8::jsonb -> 'decision',
+                           nullif($8::jsonb ->> 'approvalId', '')::uuid,
+                           nullif($8::jsonb ->> 'effectId', '')::uuid,
+                           $8::jsonb ->> 'status', $8::jsonb ->> 'errorCode', $8,
+                           ($8::jsonb ->> 'createdAt')::timestamptz
+                      from resolved, effect where $8::jsonb is not null
+                    on conflict (idempotency_key) do nothing
                  ), inserted as (
                     insert into session_events
                         (session_id, seq, event_type, payload_json, actor_id, artifact_uri,
@@ -1487,6 +1647,8 @@ impl Store for PostgresStore {
                     &resolution.resolution_json,
                     &resolution.resolved_at,
                     &session_key,
+                    &audit_json,
+                    &audit_key,
                 ],
             )
             .await
@@ -1734,6 +1896,34 @@ impl Store for PostgresStore {
         }))
     }
 
+    async fn heartbeat_approval_effect(
+        &self,
+        lease: &ApprovalEffectLease,
+        now: DateTime<Utc>,
+    ) -> Result<ApprovalEffectRecord> {
+        let row = self
+            .client
+            .query_opt(
+                "update approval_effects
+                    set locked_at = $2, updated_at = $2
+                  where id = $1 and status = 'claimed'
+                    and lease_owner = $3 and lease_epoch = $4
+                  returning id, approval_id, session_id, effect_type, payload_json, status,
+                            attempts, available_at, locked_at, lease_owner, lease_epoch,
+                            applied_at, error_at, last_error, created_at, updated_at",
+                &[&lease.effect.id, &now, &lease.owner_id, &lease.epoch],
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .ok_or_else(|| {
+                ServerError::NotFound(format!(
+                    "active approval effect lease {} owner {} epoch {}",
+                    lease.effect.id, lease.owner_id, lease.epoch
+                ))
+            })?;
+        Ok(row_to_approval_effect(row))
+    }
+
     async fn complete_approval_effect(
         &self,
         lease: &ApprovalEffectLease,
@@ -1772,6 +1962,15 @@ impl Store for PostgresStore {
         applied_at: DateTime<Utc>,
     ) -> Result<(ApprovalEffectRecord, SessionEvent)> {
         let proposal_payload_json = redact_persisted_json(proposal_payload_json);
+        let (audit_json, audit_key) = evolution_audit_params(evolution_audit_entry(
+            &lease.effect.payload_json,
+            lease.effect.approval_id,
+            lease.effect.id,
+            EvolutionAuditStatus::Applied,
+            applied_at,
+            None,
+            format!("effect:{}:applied", lease.effect.id),
+        )?)?;
         let row = self
             .client
             .query_opt(
@@ -1779,7 +1978,7 @@ impl Store for PostgresStore {
                     select id, session_id
                       from approval_effects
                      where id = $1
-                       and effect_type in ('memory_write', 'skill_write')
+                       and effect_type in ('memory_write', 'skill_write', 'evolution_review')
                        and status = 'claimed'
                        and lease_owner = $2
                        and lease_epoch = $3
@@ -1827,6 +2026,26 @@ impl Store for PostgresStore {
                               effect.lease_owner, effect.lease_epoch, effect.applied_at,
                               effect.error_at, effect.last_error, effect.created_at,
                               effect.updated_at
+                 ), audit as (
+                    insert into evolution_audits(
+                        id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                        target_class, target_id, content_digest, configured_tier, decision_json,
+                        approval_id, effect_id, status, error_code, record_json, created_at
+                    )
+                    select ($7::jsonb ->> 'id')::uuid, $8,
+                           ($7::jsonb #>> '{origin,sessionId}')::uuid,
+                           nullif($7::jsonb #>> '{origin,dreamId}', '')::uuid,
+                           $7::jsonb #>> '{origin,actorId}',
+                           ($7::jsonb ->> 'proposalId')::uuid,
+                           $7::jsonb #>> '{target,class}', $7::jsonb #>> '{target,id}',
+                           $7::jsonb ->> 'contentDigest', $7::jsonb ->> 'configuredTier',
+                           $7::jsonb -> 'decision',
+                           nullif($7::jsonb ->> 'approvalId', '')::uuid,
+                           nullif($7::jsonb ->> 'effectId', '')::uuid,
+                           $7::jsonb ->> 'status', $7::jsonb ->> 'errorCode', $7,
+                           ($7::jsonb ->> 'createdAt')::timestamptz
+                      from updated_effect where $7::jsonb is not null
+                    on conflict (idempotency_key) do nothing
                  ), touch as (
                     update sessions
                        set updated_at = $4
@@ -1844,6 +2063,8 @@ impl Store for PostgresStore {
                     &applied_at,
                     &turn_id,
                     &proposal_payload_json,
+                    &audit_json,
+                    &audit_key,
                 ],
             )
             .await
@@ -1876,17 +2097,51 @@ impl Store for PostgresStore {
         max_attempts: i32,
     ) -> Result<ApprovalEffectRecord> {
         let error = redact_persisted_text(error);
+        let failed_at = Utc::now();
+        let (audit_json, audit_key) = evolution_audit_params(evolution_audit_entry(
+            &lease.effect.payload_json,
+            lease.effect.approval_id,
+            lease.effect.id,
+            EvolutionAuditStatus::Failed,
+            failed_at,
+            crate::evolution::evolution_policy_error_code(&error),
+            format!("effect:{}:failure:{}", lease.effect.id, lease.epoch),
+        )?)?;
         let row = self
             .client
             .query_opt(
-                "update approval_effects
-                    set status = case when attempts >= $4 then 'failed' else 'pending' end,
-                        available_at = $3, locked_at = null, lease_owner = null,
-                        updated_at = now(), error_at = now(), last_error = $2
-                  where id = $1 and status = 'claimed' and lease_owner = $5 and lease_epoch = $6
-                  returning id, approval_id, session_id, effect_type, payload_json, status,
-                            attempts, available_at, locked_at, lease_owner, lease_epoch,
-                            applied_at, error_at, last_error, created_at, updated_at",
+                "with updated_effect as (
+                    update approval_effects
+                       set status = case when attempts >= $4 then 'failed' else 'pending' end,
+                           available_at = $3, locked_at = null, lease_owner = null,
+                           updated_at = $7, error_at = $7, last_error = $2
+                     where id = $1 and status = 'claimed'
+                       and lease_owner = $5 and lease_epoch = $6
+                    returning id, approval_id, session_id, effect_type, payload_json, status,
+                              attempts, available_at, locked_at, lease_owner, lease_epoch,
+                              applied_at, error_at, last_error, created_at, updated_at
+                 ), audit as (
+                    insert into evolution_audits(
+                        id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                        target_class, target_id, content_digest, configured_tier, decision_json,
+                        approval_id, effect_id, status, error_code, record_json, created_at
+                    )
+                    select ($8::jsonb ->> 'id')::uuid, $9,
+                           ($8::jsonb #>> '{origin,sessionId}')::uuid,
+                           nullif($8::jsonb #>> '{origin,dreamId}', '')::uuid,
+                           $8::jsonb #>> '{origin,actorId}',
+                           ($8::jsonb ->> 'proposalId')::uuid,
+                           $8::jsonb #>> '{target,class}', $8::jsonb #>> '{target,id}',
+                           $8::jsonb ->> 'contentDigest', $8::jsonb ->> 'configuredTier',
+                           $8::jsonb -> 'decision',
+                           nullif($8::jsonb ->> 'approvalId', '')::uuid,
+                           nullif($8::jsonb ->> 'effectId', '')::uuid,
+                           $8::jsonb ->> 'status', $8::jsonb ->> 'errorCode', $8,
+                           ($8::jsonb ->> 'createdAt')::timestamptz
+                      from updated_effect where $8::jsonb is not null
+                    on conflict (idempotency_key) do nothing
+                 )
+                 select * from updated_effect",
                 &[
                     &lease.effect.id,
                     &error,
@@ -1894,6 +2149,9 @@ impl Store for PostgresStore {
                     &max_attempts,
                     &lease.owner_id,
                     &lease.epoch,
+                    &failed_at,
+                    &audit_json,
+                    &audit_key,
                 ],
             )
             .await
@@ -1905,6 +2163,198 @@ impl Store for PostgresStore {
                 ))
             })?;
         Ok(row_to_approval_effect(row))
+    }
+
+    async fn append_evolution_audit(
+        &self,
+        entry: EvolutionAuditEntry,
+    ) -> Result<EvolutionAuditRecord> {
+        let idempotency_key = entry.idempotency_key;
+        let record_json = serde_json::to_value(entry.record)
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let row = self
+            .client
+            .query_one(
+                "insert into evolution_audits(
+                    id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                    target_class, target_id, content_digest, configured_tier, decision_json,
+                    approval_id, effect_id, status, error_code, record_json, created_at
+                 )
+                 values (
+                    ($1::jsonb ->> 'id')::uuid, $2,
+                    ($1::jsonb #>> '{origin,sessionId}')::uuid,
+                    nullif($1::jsonb #>> '{origin,dreamId}', '')::uuid,
+                    $1::jsonb #>> '{origin,actorId}',
+                    ($1::jsonb ->> 'proposalId')::uuid,
+                    $1::jsonb #>> '{target,class}', $1::jsonb #>> '{target,id}',
+                    $1::jsonb ->> 'contentDigest', $1::jsonb ->> 'configuredTier',
+                    $1::jsonb -> 'decision',
+                    nullif($1::jsonb ->> 'approvalId', '')::uuid,
+                    nullif($1::jsonb ->> 'effectId', '')::uuid,
+                    $1::jsonb ->> 'status', $1::jsonb ->> 'errorCode', $1,
+                    ($1::jsonb ->> 'createdAt')::timestamptz
+                 )
+                 on conflict (idempotency_key) do update
+                    set idempotency_key = excluded.idempotency_key
+                 returning record_json",
+                &[&record_json, &idempotency_key],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        row_to_evolution_audit(row)
+    }
+
+    async fn evolution_audits(&self, session_id: Uuid) -> Result<Vec<EvolutionAuditRecord>> {
+        self.get_session(session_id).await?;
+        self.client
+            .query(
+                "select record_json from evolution_audits
+                  where session_id = $1 order by audit_seq",
+                &[&session_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .into_iter()
+            .map(row_to_evolution_audit)
+            .collect()
+    }
+
+    async fn evolution_memory_proposal(
+        &self,
+        proposal_id: Uuid,
+    ) -> Result<crate::MemoryWriteProposal> {
+        let proposal_id = proposal_id.to_string();
+        let row = self
+            .client
+            .query_opt(
+                "select payload_json -> 'proposal' as proposal
+                   from approval_effects
+                  where payload_json #>> '{proposal,proposalId}' = $1
+                  order by created_at desc limit 1",
+                &[&proposal_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution proposal {proposal_id}")))?;
+        serde_json::from_value(row.get("proposal"))
+            .map_err(|error| ServerError::Store(error.to_string()))
+    }
+
+    async fn create_evolution_review_proposal(
+        &self,
+        proposal: NewEvolutionReviewProposal,
+    ) -> Result<EvolutionReviewProposalRecord> {
+        let proposal = sanitize_evolution_review_proposal_persistence(proposal)?;
+        self.get_session(proposal.session_id).await?;
+        let now = Utc::now();
+        let record = EvolutionReviewProposalRecord {
+            id: proposal.id,
+            session_id: proposal.session_id,
+            target: proposal.target,
+            base_version: proposal.base_version,
+            base_digest: proposal.base_digest,
+            changes: proposal.changes,
+            content_digest: proposal.content_digest,
+            status: ReviewProposalStatus::Pending,
+            apply_contract: ReviewApplyContract::Disabled,
+            created_at: now,
+            updated_at: now,
+        };
+        let target_class = match &record.target {
+            ReviewProposalTarget::Persona { .. } => "persona_proposal",
+            ReviewProposalTarget::Mode { .. } => "mode_proposal",
+        };
+        let target_id = record.target.id();
+        let base_version = i64::try_from(record.base_version).map_err(|_| {
+            ServerError::InvalidRequest("review proposal base version is too large".to_string())
+        })?;
+        let record_json = serde_json::to_value(&record)?;
+        let row = self
+            .client
+            .query_one(
+                "insert into evolution_review_proposals(
+                id, session_id, target_class, target_id, status, base_version, base_digest,
+                content_digest, record_json, created_at, updated_at
+             ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+             on conflict (id) do update set id = excluded.id
+             returning record_json",
+                &[
+                    &record.id,
+                    &record.session_id,
+                    &target_class,
+                    &target_id,
+                    &record.status.as_str(),
+                    &base_version,
+                    &record.base_digest,
+                    &record.content_digest,
+                    &record_json,
+                    &now,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let stored = row_to_evolution_review_proposal(row)?;
+        if stored != record {
+            return Err(ServerError::Conflict(format!(
+                "evolution review proposal {} already exists with different content",
+                record.id
+            )));
+        }
+        Ok(stored)
+    }
+
+    async fn evolution_review_proposal(&self, id: Uuid) -> Result<EvolutionReviewProposalRecord> {
+        self.client
+            .query_opt(
+                "select record_json from evolution_review_proposals where id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .map(row_to_evolution_review_proposal)
+            .transpose()?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution review proposal {id}")))
+    }
+
+    async fn evolution_review_proposals_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<EvolutionReviewProposalRecord>> {
+        self.get_session(session_id).await?;
+        self.client
+            .query(
+                "select record_json from evolution_review_proposals
+                  where session_id = $1 order by created_at, id",
+                &[&session_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .into_iter()
+            .map(row_to_evolution_review_proposal)
+            .collect()
+    }
+
+    async fn update_evolution_review_proposal_status(
+        &self,
+        id: Uuid,
+        status: ReviewProposalStatus,
+    ) -> Result<EvolutionReviewProposalRecord> {
+        let mut record = self.evolution_review_proposal(id).await?;
+        record.status = status;
+        record.updated_at = Utc::now();
+        let record_json = serde_json::to_value(&record)?;
+        let row = self
+            .client
+            .query_opt(
+                "update evolution_review_proposals
+                set status = $2, record_json = $3, updated_at = $4
+              where id = $1 returning record_json",
+                &[&id, &status.as_str(), &record_json, &record.updated_at],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution review proposal {id}")))?;
+        row_to_evolution_review_proposal(row)
     }
 
     async fn add_profile_fact(&self, fact: ProfileFactRecord) -> Result<()> {

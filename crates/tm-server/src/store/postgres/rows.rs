@@ -1,4 +1,5 @@
 use serde_json::Value;
+use tm_host::EvolutionAuditRecord;
 use tm_memory::{
     DreamQueueRecord, DreamReason, DreamStatus, MemorySummaryKind, MemorySummaryRecord,
     SkillProposalRecord, SkillProposalStatus, SkillVerification,
@@ -7,8 +8,9 @@ use tm_memory::{
 use crate::{Result, ServerError};
 
 use super::{
-    ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronRunRecord, MessageRecord,
-    ModeState, ProjectItemRecord, SessionRecord, SessionTurnRecord,
+    ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronRunRecord,
+    EvolutionReviewProposalRecord, MessageRecord, ModeState, ProjectItemRecord, SessionRecord,
+    SessionTurnRecord,
 };
 
 pub(super) fn row_to_approval_request(row: tokio_postgres::Row) -> ApprovalRequestRecord {
@@ -54,6 +56,18 @@ pub(super) fn row_to_approval_effect(row: tokio_postgres::Row) -> ApprovalEffect
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
+}
+
+pub(super) fn row_to_evolution_audit(row: tokio_postgres::Row) -> Result<EvolutionAuditRecord> {
+    serde_json::from_value(row.get("record_json"))
+        .map_err(|error| ServerError::Store(format!("invalid evolution audit record: {error}")))
+}
+
+pub(super) fn row_to_evolution_review_proposal(
+    row: tokio_postgres::Row,
+) -> Result<EvolutionReviewProposalRecord> {
+    serde_json::from_value(row.get("record_json"))
+        .map_err(|error| ServerError::Store(format!("invalid evolution review proposal: {error}")))
 }
 
 pub(super) fn row_to_cron_job(row: tokio_postgres::Row) -> CronJobRecord {

@@ -40,7 +40,6 @@ class _ApprovalSheetState extends State<_ApprovalSheet> {
       setState(() => _secs--);
       if (_secs <= 0) {
         _timer?.cancel();
-        widget.onDeny();
       }
     });
   }

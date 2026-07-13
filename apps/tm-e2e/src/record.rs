@@ -52,6 +52,258 @@ pub async fn run_record_api(options: RecordOptions) -> Result<EvidenceManifest> 
     run_recorded("api", options, true, true, false, false).await
 }
 
+pub async fn run_record_evolution_policy(options: RecordOptions) -> Result<EvidenceManifest> {
+    crate::load_dotenv();
+    let root = options
+        .output_dir
+        .clone()
+        .unwrap_or_else(|| default_run_dir("evolution-policy"));
+    let command = env::args().collect::<Vec<_>>().join(" ");
+    let recorder = EvidenceRecorder::create(&root, command)?;
+    let result = run_evolution_policy_scenario(&recorder).await;
+    let manifest = recorder.finish(result.is_ok())?;
+    if let Err(error) = result {
+        bail!(
+            "tm-e2e record evolution-policy failed: {error}; evidence: {}",
+            manifest.run_dir
+        );
+    }
+    Ok(manifest)
+}
+
+async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()> {
+    let started_at = timestamp();
+    let result = async {
+        let conservative = RecordingServer::start_with_tier(
+            &recorder.root().join("conservative-server"),
+            tm_host::SelfEvolutionTier::Conservative,
+        )
+        .await?;
+        let conservative_client = MikuClient::new(E2eConfig {
+            base_url: conservative.base_url.clone(),
+            bearer_token: None,
+            timeout: Duration::from_secs(30),
+        })?
+        .with_recorder(recorder.clone());
+        let conservative_session = conservative_client.create_session(None).await?;
+
+        let allow_client = conservative_client.clone();
+        let allow_session = conservative_session.id.clone();
+        let allow = tokio::spawn(async move {
+            allow_client
+                .propose_profile_fact(
+                    &allow_session,
+                    "prefers",
+                    "bounded evolution evidence",
+                    5_000,
+                )
+                .await
+        });
+        let (_, approval) = conservative_client
+            .wait_for_event(&conservative_session.id, Some(0), |event| {
+                event.event_type == "approval" && event.data["backend"] == "memory"
+            })
+            .await?;
+        let approval_id = approval.data["approvalId"]
+            .as_str()
+            .context("conservative approval id")?;
+        conservative_client
+            .resolve_approval(&conservative_session.id, approval_id, "approve")
+            .await?;
+        let allowed = allow
+            .await
+            .context("joining conservative allow proposal")??;
+        ensure!(
+            allowed["status"] == "approved",
+            "conservative write was not approved"
+        );
+
+        let timed_out = conservative_client
+            .propose_profile_fact(
+                &conservative_session.id,
+                "prefers",
+                "default deny timeouts",
+                25,
+            )
+            .await?;
+        ensure!(
+            timed_out["status"] == "timed_out",
+            "timeout was not default-deny"
+        );
+        let denied = conservative_client
+            .propose_evolution_review(
+                &conservative_session.id,
+                json!({
+                    "target": { "kind": "mode", "modeId": "serious_engineer" },
+                    "changes": [{
+                        "section": "description",
+                        "before": null,
+                        "after": { "label": "Denied", "summary": "Conservative cannot reach this." }
+                    }]
+                }),
+            )
+            .await
+            .expect_err("conservative moderate target must be denied");
+        ensure!(denied.to_string().contains("evolution_insufficient_tier"));
+
+        capture_resource(
+            recorder,
+            &conservative_client,
+            &conservative_session.id,
+            "memory://evolution-audits",
+        )
+        .await?;
+        drop(conservative);
+
+        let moderate = RecordingServer::start_with_tier(
+            &recorder.root().join("moderate-server"),
+            tm_host::SelfEvolutionTier::Moderate,
+        )
+        .await?;
+        recorder.set_server(ServerEvidence {
+            base_url: moderate.base_url.clone(),
+            artifact_root: moderate.artifact_root.display().to_string(),
+            store: "in-memory".to_string(),
+            coding_backend: "tm-e2e-evolution-policy-fixture".to_string(),
+        });
+        let moderate_client = MikuClient::new(E2eConfig {
+            base_url: moderate.base_url.clone(),
+            bearer_token: None,
+            timeout: Duration::from_secs(30),
+        })?
+        .with_recorder(recorder.clone());
+        let session = moderate_client.create_session(None).await?;
+        let large_summary = format!("bounded review body {} tail-marker", "x".repeat(3_000));
+        let proposal = moderate_client
+            .propose_evolution_review(
+                &session.id,
+                json!({
+                    "target": { "kind": "mode", "modeId": "serious_engineer" },
+                    "changes": [{
+                        "section": "description",
+                        "before": {
+                            "label": "Current",
+                            "summary": "Serious engineering mode."
+                        },
+                        "after": {
+                            "label": "Evidence addendum",
+                            "summary": large_summary
+                        }
+                    }],
+                    "timeoutMs": 5_000
+                }),
+            )
+            .await?;
+        ensure!(
+            proposal["applyEnabled"] == false,
+            "moderate apply must stay disabled"
+        );
+        let proposal_id = proposal["proposalId"].as_str().context("proposal id")?;
+        let approval_id = proposal["approvalId"].as_str().context("approval id")?;
+        let resource_uri = proposal["resourceUri"].as_str().context("resource URI")?;
+        let (pending_batch, _) = moderate_client
+            .wait_for_event(&session.id, Some(0), |event| {
+                event.event_type == "write_proposal"
+                    && event.data["proposalId"] == proposal_id
+                    && event.data["status"] == "pending"
+            })
+            .await?;
+        let pending = pending_batch
+            .iter()
+            .find(|event| {
+                event.event_type == "write_proposal" && event.data["proposalId"] == proposal_id
+            })
+            .context("pending review event")?;
+        ensure!(
+            pending.data["preview"].as_str().unwrap_or_default().len() <= 512,
+            "review event preview exceeded bound"
+        );
+        ensure!(
+            pending.data.get("changes").is_none(),
+            "full diff leaked into event"
+        );
+        capture_resource(recorder, &moderate_client, &session.id, resource_uri).await?;
+        moderate_client
+            .resolve_approval(&session.id, approval_id, "approve")
+            .await?;
+        let duplicate_resolution = moderate_client
+            .resolve_approval(&session.id, approval_id, "approve")
+            .await
+            .expect_err("duplicate resolution must conflict");
+        ensure!(
+            duplicate_resolution
+                .to_string()
+                .contains("already resolved")
+        );
+        let (replay, _) = moderate_client
+            .wait_for_event(&session.id, Some(0), |event| {
+                event.event_type == "write_proposal"
+                    && event.data["proposalId"] == proposal_id
+                    && event.data["status"] == "approved"
+            })
+            .await?;
+        let statuses = replay
+            .iter()
+            .filter(|event| {
+                event.event_type == "write_proposal" && event.data["proposalId"] == proposal_id
+            })
+            .filter_map(|event| event.data["status"].as_str())
+            .collect::<Vec<_>>();
+        ensure!(
+            statuses == ["pending", "approved"],
+            "replay lifecycle was not contiguous: {statuses:?}"
+        );
+        ensure!(
+            replay
+                .iter()
+                .any(|event| event.event_type == "approval_resolved")
+        );
+        capture_resource(
+            recorder,
+            &moderate_client,
+            &session.id,
+            "memory://evolution-audits",
+        )
+        .await?;
+
+        let forged = moderate_client
+            .propose_evolution_review(
+                &session.id,
+                json!({
+                    "target": { "kind": "mode", "modeId": "serious_engineer", "path": "SOUL.md" },
+                    "changes": []
+                }),
+            )
+            .await
+            .expect_err("raw path target must fail deserialization");
+        ensure!(forged.to_string().contains("422 Unprocessable Entity"));
+        let downgrade = tm_host::decide_evolution_target(
+            tm_host::SelfEvolutionTier::Conservative,
+            tm_host::EvolutionTargetClass::ModeProposal,
+        );
+        ensure!(
+            downgrade.outcome == tm_host::EvolutionPolicyOutcome::Denied,
+            "tier downgrade did not revoke moderate target"
+        );
+        Ok::<Value, anyhow::Error>(json!({
+            "conservativeSessionId": conservative_session.id,
+            "moderateSessionId": session.id,
+            "proposalId": proposal_id,
+            "conservativeAllowed": allowed["status"],
+            "timeoutStatus": timed_out["status"],
+            "moderateApplyEnabled": proposal["applyEnabled"],
+            "replayStatuses": statuses,
+            "duplicateResolution": "conflict",
+            "forgedTarget": "rejected",
+            "tierDowngradeDecision": downgrade,
+            "largeCandidateResource": resource_uri,
+        }))
+    }
+    .await;
+    record_scenario_result(recorder, "evolution-policy", started_at, &result);
+    result.map(|_| ())
+}
+
 pub async fn run_record_ui(options: RecordOptions) -> Result<EvidenceManifest> {
     run_recorded("ui", options, false, false, true, false).await
 }
@@ -1091,6 +1343,10 @@ struct RecordingServer {
 
 impl RecordingServer {
     async fn start(run_root: &Path) -> Result<Self> {
+        Self::start_with_tier(run_root, tm_host::SelfEvolutionTier::Conservative).await
+    }
+
+    async fn start_with_tier(run_root: &Path, tier: tm_host::SelfEvolutionTier) -> Result<Self> {
         let artifact_root = run_root.join("server-artifacts");
         fs::create_dir_all(&artifact_root)
             .with_context(|| format!("creating {}", artifact_root.display()))?;
@@ -1115,6 +1371,7 @@ impl RecordingServer {
             AuthConfig::NoAuth,
         )
         .with_auto_turn_dispatcher(true)
+        .with_self_evolution_tier(tier)
         .with_approval_broker(Arc::clone(&broker))
         .with_artifact_root(artifact_root.clone())
         .with_linked_folders(linked_folders)

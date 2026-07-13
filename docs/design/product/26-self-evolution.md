@@ -70,30 +70,92 @@ Dreaming *adds to* these substrates; it doesn't invent a new one. Skill / memory
 `write_approval: true` + `skills.write_approval: true` (§27.6 / §22.8) — even conservative writes can
 be approval-gated by config.
 
-## 26.3 Write-scope tiers (decision: user-selectable) — least-authority framing
+## 26.3 Write-scope tiers (P7.0 contract) — least-authority framing
 
-A config knob (`self_evolution.tier`); capabilities are config (§10.4, principle #9). **Default
-conservative.** Tiers are **attenuated write-capabilities** (object-capability least authority, cf.
-§24): the gate sits at the **config / registry boundary**, not in a prompt — a lower tier
-**physically cannot** reach a higher tier's targets.
+A config knob (`self_evolution.tier`); capabilities are config (§10.4, principle #9). P7.0 defines
+`off`, `conservative`, and `moderate`. The compatibility-preserving fail-closed default is
+`conservative`, matching the existing approval-backed P4 memory and skill-proposal behavior;
+deployments can explicitly select `off`. `aggressive` is reserved but **unsupported in P7.0** and
+fails deserialization/startup rather than silently falling back. Tiers are **attenuated
+write-capabilities** (object-capability least authority, cf. §24): the shared policy lives in
+`tm-host`, so config validation and effect dispatch use the same matrix rather than prompt or client
+logic.
 
-| Tier | May write | Applied |
-|---|---|---|
-| **conservative** (default) | long-term memory / user-model, `skills/` | auto (dreaming), subject to `write_approval` — the Voyager + Reflexion loop, fully on |
-| **moderate** | + *proposals* to persona presets / mode addenda (§21) / playbooks | **after Brian's review** (Self-Refine'd diffs) |
-| **aggressive** | + its own prompts / personas / capability config | autonomously — the Gödel-machine-adjacent extreme |
+Targets are typed classes, never paths:
 
-- **conservative never touches the SOUL identity or modes** — protecting the §20 non-goal from drift.
-  (`SOUL.md` stays authoritative and hand-owned unless Brian opts into a higher tier — and even then,
-  he edits identity himself.)
-- **aggressive** requires explicit enable + a full audit trail (§12); recommended **off**.
+| Tier | `profile_fact` | `scoped_memory` | `skill_proposal` | `persona_proposal` | `mode_proposal` |
+|---|---|---|---|---|---|
+| **off** | deny | deny | deny | deny | deny |
+| **conservative** (default) | reachable | reachable | reachable | deny | deny |
+| **moderate** | reachable | reachable | reachable | approval required | approval required |
+
+"Reachable" is only the tier upper bound. The exact registered capability, per-turn grant, payload
+validation, and applicable write approval still must pass. A moderate approval changes review state
+only in P7.0; persona and mode apply remain disabled. `SOUL.md`, prompts, capability configuration,
+source code, deployment configuration, and arbitrary filesystem paths have no target class and cannot
+be dispatched through this contract.
+
+Stable policy reason codes are `evolution_disabled`, `evolution_insufficient_tier`,
+`evolution_aggressive_unsupported`, `evolution_unknown_target`,
+`evolution_approval_required`, `evolution_stale_approval`, and `evolution_invalid_payload`.
+
+The version-1 proposal envelope carries only proposal/origin identifiers, a typed target, a bounded
+1 KiB preview, a SHA-256 digest, a byte count, and a capability-gated `memory://`, `artifact://`, or
+`blob:sha256:` resource reference. Target identifiers are bounded opaque names and reject `/`, `\\`,
+`:`, dot traversal, and control characters during deserialization. The matching audit wire record
+carries provenance, configured tier, decision, approval/effect identifiers, status, timestamps, and
+digest but no full candidate body. Unknown enum values fail closed; unknown object fields are ignored
+for compatible additive evolution of the versioned envelope.
+
+The first P7.0 enforcement slice threads the effective tier through HTTP proposal creation, personal
+state capture, dream-generated memory/skill proposals, synchronous approval resolution, and the
+supervised approval-effect worker. Durable `memory_write` and `skill_write` effects persist typed
+evolution metadata containing their creation tier and target. Immediately before an approved
+mutation, the server derives the target again from the actual payload, requires an exact metadata
+match, re-evaluates the current tier, and heartbeats the owner/epoch-fenced effect lease. Missing,
+unknown, mismatched, downgraded, or stale effects fail with stable policy codes before memory or
+proposal state changes. Denied and timed-out approvals may still finalize their review state, but
+never write the target. Tier checks remain orthogonal to exact capability grants and manual approval;
+they add an upper bound and grant nothing themselves.
+
+P7.0 audit history is an append-only projection of that existing approval/effect source of truth,
+not a competing state machine. Migration 11 creates bounded `evolution_audits` rows and backfills one
+snapshot for pre-existing typed effects. New proposal attempts, terminal approval resolutions,
+applied effects, and failed attempts append idempotency-keyed records in the same Store transaction as
+the corresponding request/effect transition. Each row contains only typed provenance, target,
+configured tier, decision, digest, stable identifiers/status/error code, and timestamps. Candidate
+bodies stay in the existing durable effect/proposal store: memory candidates are readable through
+the capability-gated `memory://evolution-proposals/<id>` resource, and skill candidates through
+`memory://skill-proposals/<id>`. Replayable `write_proposal` and approval scopes carry only a
+redacted 512-byte preview, SHA-256 digest, and resource URI; they do not duplicate the full body.
+The active session's bounded typed history is queryable through the same capability boundary at
+`memory://evolution-audits`.
 
 ## 26.4 Review surface
 
-`moderate` proposals land as **reviewable diffs** (clients, §27.1 / §27.4) against `persona` /
-`modes` / `skills` config, surfaced as `write_proposal` events (§27.1). Accept / reject; accepted
-edits are versioned and replayable (#6). **This human-in-the-loop is what stands in for the Gödel
-machine's proof obligation** — Brian's approval, not a formal proof, certifies a self-change.
+`moderate` proposals land as **reviewable typed diffs** (clients, §27.1 / §27.4) for persona or mode
+addenda, surfaced as `write_proposal` events (§27.1). In P7.0, accept / reject updates durable review
+state but accepted proposals are not applied. A later slice must separately prove atomic versioned
+write and rollback before enabling apply. **This human-in-the-loop is what stands in for the Gödel
+machine's proof obligation** — Brian's approval, not a formal proof, certifies a proposed self-change.
+
+P7.0 implements this as `POST /sessions/:id/evolution/review-proposals`. The request accepts only a
+tagged `persona` or `mode` target plus typed addendum sections; serde rejects path fields and raw patch
+payloads. Persona proposals may contain only behavior/voice guidance, while mode proposals may
+contain only description/routing guidance. The server snapshots a version and digest from the loaded
+persona/mode assets, bounds the complete change set to 8 KiB and 16 changes, persists it in migration
+12, and emits only a redacted 512-byte preview, digest, and
+`memory://review-proposals/<id>` link. Full before/after metadata remains behind
+`resources.read:memory`.
+
+Every Moderate proposal creates a durable manual approval with `applyEnabled: false`; no auto-approve
+branch exists. Approve, deny, timeout, and cancellation update only the durable proposal status and
+append the normal approval/effect audit chain. Immediately before an approved status transition, the
+effect rechecks the current tier, typed target, proposal digest, and live base version/digest. A tier
+downgrade, forged payload, or changed base fails closed. `ReviewApplyContract::Disabled` is persisted
+with every record, and neither the endpoint nor the effect dispatcher contains a persona/mode file
+write or reload operation. Flutter/Web renders the same server-owned approval and `write_proposal`
+lifecycle, opens the resource link, and lets server timeout events own default-deny semantics.
 
 **Implemented P4 conservative skill-proposal path:** post-session dreaming can distill a reusable
 workflow into a `SkillProposalRecord` with name, description, trigger/use criteria, `SKILL.md`-style
@@ -104,8 +166,18 @@ neither path installs, imports, reloads, or mutates the live skill catalog. Low-
 create skill proposals, and candidates that fail self-verification emit a replayable
 `skill_proposal_rejected` dream progress event instead of failing the whole dream or surfacing an unsafe
 proposal. Completed dream re-runs reuse the existing queued dream/skill records and do not duplicate
-skill approvals. The constrained preview resource is `memory://skill-proposals/<id>`; `skill://<name>`
+skill approvals. The constrained candidate resource is `memory://skill-proposals/<id>`; `skill://<name>`
 remains prompt-composition-only until P7.
+
+P7.0 keeps that `SkillProposalRecord` as the only candidate format. `memory://skill-proposals` lists
+session proposals, and read/preview expose the capability-gated candidate plus a deterministic
+lifecycle descriptor: normalized identity, version, redacted SHA-256 digest, dream/session
+provenance, reject-on-name-collision policy, no-live-mutation rollback contract, and disabled catalog
+reload. Validation bounds the body and references, requires the title/Trigger/Procedure/Guardrails
+shape, rejects traversal/absolute/schemed references and affirmative requests for prohibited
+authority, and still marks every P7.0 candidate `installable: false`. Approval can therefore review
+or reject the proposal and append audit history, but there is no install/import/reload dispatch and
+no path from the conservative evolution target to `fs.write`, `code.edit`, or a hand-authored skill.
 
 ## 26.5 Crate layout
 
@@ -116,7 +188,9 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
 - Future `tm-host` skills registry (`skills.*`, §07) — the **Voyager skill library**: store /
   embedding-index / retrieve / compose.
 - `tm-server` (§27) — **tier enforcement** at the config / registry boundary; the review surface
-  (`write_proposal` events §27.1); the audit trail (§12).
+  (`write_proposal` events §27.1), typed review persistence, base/digest revalidation, and the audit
+  trail (§12).
+- `tm-modes` — typed persona/mode addendum targets and sections only; no write/reload authority.
 - config — `self_evolution.tier` (+ the `write_approval` knobs, §26.2).
 
 ## 26.6 Failure modes & degradation
@@ -126,7 +200,8 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
 - **Skill-library bloat** — embedding-indexed retrieval surfaces only relevant skills; dreaming
   dedups / consolidates them (§22.5).
 - **Profile drift / wrong fact** — bi-temporal supersede (§22, Zep lineage); Brian edits `memory://`.
-- **Tier misconfig** — default is conservative; aggressive needs explicit enable; lower tiers
+- **Tier misconfig** — default is conservative for P4 compatibility; aggressive and unknown values
+  are rejected; lower tiers
   **fail closed** — they cannot reach higher-tier targets.
 - **Approval timeout** — the write is deferred / denied (§27.6) and the loop continues; nothing
   self-applies under conservative without the gate.
@@ -156,4 +231,5 @@ Machines: Fully Self-Referential Optimal Universal Self-Improvers* (**arXiv cs/0
 any own code only on a formal proof of higher utility; the unbounded self-rewrite extreme we refuse).
 Object-capability least authority for the tier boundary (§24). **Decision holds: conservative default;
 identity (`SOUL.md`) hand-owned; self-improvement is bounded skill + user-model growth, governed by
-tiers + human review, never unbounded self-rewrite.**
+tiers + human review, never unbounded self-rewrite. P7.0 defaults conservative and does not apply
+moderate or aggressive changes.**

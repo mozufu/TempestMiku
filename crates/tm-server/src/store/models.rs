@@ -3,12 +3,16 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tm_host::EvolutionAuditRecord;
 use tm_memory::{
     DreamLease, DreamQueueRecord, MemoryEvidenceRef, MemorySummaryRecord, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, ProfileFactRecord, RecallChunkRecord,
     SkillProposalRecord, SkillProposalStatus,
 };
-use tm_modes::{AssetStatus, ModeId};
+use tm_modes::{
+    AssetStatus, ModeId, ReviewAddendumChange, ReviewApplyContract, ReviewProposalStatus,
+    ReviewProposalTarget,
+};
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
@@ -257,6 +261,64 @@ pub(crate) fn sanitize_skill_proposal_persistence(
     Ok(proposal)
 }
 
+pub(crate) fn sanitize_evolution_review_proposal_persistence(
+    mut proposal: NewEvolutionReviewProposal,
+) -> Result<NewEvolutionReviewProposal> {
+    validate_persistence_identifier("review proposal target", proposal.target.id())?;
+    validate_persistence_identifier("review proposal base digest", &proposal.base_digest)?;
+    validate_persistence_identifier("review proposal content digest", &proposal.content_digest)?;
+    if proposal.base_version == 0 {
+        return Err(ServerError::InvalidRequest(
+            "review proposal base version must be positive".to_string(),
+        ));
+    }
+    if proposal.changes.is_empty() || proposal.changes.len() > tm_modes::MAX_REVIEW_PROPOSAL_CHANGES
+    {
+        return Err(ServerError::InvalidRequest(format!(
+            "review proposal must contain 1..={} changes",
+            tm_modes::MAX_REVIEW_PROPOSAL_CHANGES
+        )));
+    }
+    if serde_json::to_vec(&proposal.changes)?.len() > tm_modes::MAX_REVIEW_METADATA_BYTES {
+        return Err(ServerError::InvalidRequest(format!(
+            "review proposal metadata exceeds {} bytes",
+            tm_modes::MAX_REVIEW_METADATA_BYTES
+        )));
+    }
+    let target_kind = proposal.target.kind();
+    for change in &mut proposal.changes {
+        if !review_section_allowed(target_kind, change.section) {
+            return Err(ServerError::InvalidRequest(format!(
+                "review section {:?} is not valid for {target_kind}",
+                change.section
+            )));
+        }
+        change.after.label = redact_persisted_text(&change.after.label);
+        change.after.summary = redact_persisted_text(&change.after.summary);
+        if change.after.label.trim().is_empty() || change.after.summary.trim().is_empty() {
+            return Err(ServerError::InvalidRequest(
+                "review proposal labels and summaries must not be empty".to_string(),
+            ));
+        }
+        if let Some(before) = &mut change.before {
+            before.label = redact_persisted_text(&before.label);
+            before.summary = redact_persisted_text(&before.summary);
+        }
+    }
+    Ok(proposal)
+}
+
+fn review_section_allowed(target_kind: &str, section: tm_modes::ReviewAddendumSection) -> bool {
+    use tm_modes::ReviewAddendumSection::{
+        BehaviorGuidance, Description, RoutingGuidance, VoiceGuidance,
+    };
+    match target_kind {
+        "persona" => matches!(section, BehaviorGuidance | VoiceGuidance),
+        "mode" => matches!(section, Description | RoutingGuidance),
+        _ => false,
+    }
+}
+
 pub(crate) fn sanitize_cron_job_persistence(mut job: NewCronJobRecord) -> Result<NewCronJobRecord> {
     reject_sensitive_persistence_fields([
         ("cron job id", job.id.as_str()),
@@ -346,6 +408,41 @@ pub struct NewApprovalResolution {
     pub selected_option_id: Option<String>,
     pub resolution_json: Value,
     pub resolved_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EvolutionAuditEntry {
+    pub idempotency_key: String,
+    pub record: EvolutionAuditRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EvolutionReviewProposalRecord {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub target: ReviewProposalTarget,
+    pub base_version: u64,
+    pub base_digest: String,
+    pub changes: Vec<ReviewAddendumChange>,
+    pub content_digest: String,
+    pub status: ReviewProposalStatus,
+    pub apply_contract: ReviewApplyContract,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NewEvolutionReviewProposal {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub target: ReviewProposalTarget,
+    pub base_version: u64,
+    pub base_digest: String,
+    pub changes: Vec<ReviewAddendumChange>,
+    pub content_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -714,6 +811,15 @@ pub trait Store: Send + Sync + 'static {
         now: DateTime<Utc>,
         lease_timeout: Duration,
     ) -> Result<Option<ApprovalEffectLease>>;
+    async fn heartbeat_approval_effect(
+        &self,
+        _lease: &ApprovalEffectLease,
+        _now: DateTime<Utc>,
+    ) -> Result<ApprovalEffectRecord> {
+        Err(ServerError::Store(
+            "approval effect lease heartbeat is not implemented".to_string(),
+        ))
+    }
     async fn complete_approval_effect(
         &self,
         lease: &ApprovalEffectLease,
@@ -733,6 +839,57 @@ pub trait Store: Send + Sync + 'static {
         next_available_at: DateTime<Utc>,
         max_attempts: i32,
     ) -> Result<ApprovalEffectRecord>;
+    async fn append_evolution_audit(
+        &self,
+        _entry: EvolutionAuditEntry,
+    ) -> Result<EvolutionAuditRecord> {
+        Err(ServerError::Store(
+            "evolution audit persistence is not implemented".to_string(),
+        ))
+    }
+    async fn evolution_audits(&self, _session_id: Uuid) -> Result<Vec<EvolutionAuditRecord>> {
+        Err(ServerError::Store(
+            "evolution audit query is not implemented".to_string(),
+        ))
+    }
+    async fn evolution_memory_proposal(
+        &self,
+        _proposal_id: Uuid,
+    ) -> Result<crate::MemoryWriteProposal> {
+        Err(ServerError::Store(
+            "evolution proposal query is not implemented".to_string(),
+        ))
+    }
+    async fn create_evolution_review_proposal(
+        &self,
+        _proposal: NewEvolutionReviewProposal,
+    ) -> Result<EvolutionReviewProposalRecord> {
+        Err(ServerError::Store(
+            "evolution review proposal persistence is not implemented".to_string(),
+        ))
+    }
+    async fn evolution_review_proposal(&self, _id: Uuid) -> Result<EvolutionReviewProposalRecord> {
+        Err(ServerError::Store(
+            "evolution review proposal query is not implemented".to_string(),
+        ))
+    }
+    async fn evolution_review_proposals_for_session(
+        &self,
+        _session_id: Uuid,
+    ) -> Result<Vec<EvolutionReviewProposalRecord>> {
+        Err(ServerError::Store(
+            "evolution review proposal list is not implemented".to_string(),
+        ))
+    }
+    async fn update_evolution_review_proposal_status(
+        &self,
+        _id: Uuid,
+        _status: ReviewProposalStatus,
+    ) -> Result<EvolutionReviewProposalRecord> {
+        Err(ServerError::Store(
+            "evolution review proposal update is not implemented".to_string(),
+        ))
+    }
     async fn add_profile_fact(&self, fact: ProfileFactRecord) -> Result<()>;
     async fn add_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<()>;
     async fn upsert_profile_fact(&self, fact: ProfileFactRecord) -> Result<ProfileFactRecord>;

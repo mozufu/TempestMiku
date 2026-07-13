@@ -33,7 +33,7 @@ use tm_core::DEFAULT_SYSTEM_PROMPT;
 use tm_drive::{IntoSharedDriveStore, SharedDriveStore};
 use tm_host::{
     CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
-    ResourceRegistry,
+    ResourceRegistry, SelfEvolutionTier,
 };
 use tm_memory::DreamQueueRecord;
 
@@ -101,7 +101,8 @@ use resources::validate_relative_path;
 pub use modes::{ModeRequest, ModeResponse};
 pub use sessions::{
     CreateSessionRequest, CreateSessionResponse, EndSessionRequest, EndSessionResponse,
-    ListSessionsResponse, MemoryWriteProposalResponse, PostMessageRequest, PostMessageResponse,
+    EvolutionReviewProposalResponse, ListSessionsResponse, MemoryWriteProposalResponse,
+    PostMessageRequest, PostMessageResponse, ProposeEvolutionReviewRequest,
     ProposeMemoryWriteRequest, SessionMessagesResponse, SetSessionScopeRequest,
     SetSessionScopeResponse,
 };
@@ -119,6 +120,7 @@ pub struct AppState<S, M, C> {
     pub drive_store: Option<SharedDriveStore>,
     pub actor_roster: Arc<MailboxRegistry>,
     pub push: Option<Arc<crate::PushService>>,
+    pub self_evolution_tier: SelfEvolutionTier,
     runtime_status: Arc<crate::RuntimeStatus>,
     auto_start_turn_dispatcher: bool,
     turn_notify: Arc<tokio::sync::Notify>,
@@ -142,6 +144,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             drive_store: self.drive_store.clone(),
             actor_roster: Arc::clone(&self.actor_roster),
             push: self.push.clone(),
+            self_evolution_tier: self.self_evolution_tier,
             runtime_status: Arc::clone(&self.runtime_status),
             auto_start_turn_dispatcher: self.auto_start_turn_dispatcher,
             turn_notify: Arc::clone(&self.turn_notify),
@@ -177,6 +180,7 @@ impl<S, M, C> AppState<S, M, C> {
             drive_store: None,
             actor_roster: Arc::new(MailboxRegistry::new()),
             push: None,
+            self_evolution_tier: SelfEvolutionTier::default(),
             runtime_status: Arc::new(crate::RuntimeStatus::local_test()),
             // Production startup is role-supervised. Unit tests retain the small embedded
             // dispatcher so router tests can exercise the durable API without a daemon.
@@ -231,6 +235,11 @@ impl<S, M, C> AppState<S, M, C> {
         self
     }
 
+    pub fn with_self_evolution_tier(mut self, tier: SelfEvolutionTier) -> Self {
+        self.self_evolution_tier = tier;
+        self
+    }
+
     pub fn with_runtime_status(mut self, runtime_status: Arc<crate::RuntimeStatus>) -> Self {
         self.runtime_status = runtime_status;
         self
@@ -263,6 +272,7 @@ impl<S, M, C> AppState<S, M, C> {
             sender_for,
             config,
         )
+        .with_self_evolution_tier(self.self_evolution_tier)
     }
 
     pub(crate) fn sender(&self, session_id: Uuid) -> broadcast::Sender<SessionEvent> {
@@ -430,6 +440,10 @@ where
             "/sessions/:id/memory/proposals",
             post(sessions::propose_memory_write::<S, M, C>),
         )
+        .route(
+            "/sessions/:id/evolution/review-proposals",
+            post(sessions::propose_evolution_review::<S, M, C>),
+        )
         .route("/sessions/:id/mode", get(modes::get_mode::<S, M, C>))
         .route(
             "/sessions/:id/mode/suggest",
@@ -550,6 +564,9 @@ where
         Json(json!({
             "status": status,
             "runtime": runtime,
+            "selfEvolution": {
+                "tier": state.self_evolution_tier,
+            },
         })),
     ))
 }

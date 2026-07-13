@@ -10,6 +10,7 @@ pub mod chat;
 pub mod coding_backend;
 pub mod dream;
 pub mod error;
+mod evolution;
 pub mod memory;
 pub mod native_deno;
 pub mod omp_acp;
@@ -59,11 +60,11 @@ pub use scheduler::{
 };
 pub use store::{
     ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronLease,
-    CronRunRecord, EndSessionDreamResult, InMemoryStore, MessageRecord, ModeState,
-    NewApprovalRequest, NewApprovalResolution, NewCronJobRecord, NewCronRunRecord, NewProjectItem,
-    NewSession, PostgresDriveMetadataStore, PostgresStore, ProjectItemKind, ProjectItemRecord,
-    SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreEvent,
-    StoreRuntimeMetrics,
+    CronRunRecord, EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord,
+    InMemoryStore, MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
+    NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
+    PostgresDriveMetadataStore, PostgresStore, ProjectItemKind, ProjectItemRecord, SessionEvent,
+    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreEvent, StoreRuntimeMetrics,
 };
 pub use tm_agents::MailboxRegistry;
 pub use tm_memory::{
@@ -77,4 +78,6 @@ pub use tm_memory::{
 };
 pub use tm_modes::{
     AssetStatus, ComposedPrompt, ModeAssets, ModeCatalog, ModeId, ModeProfile, ModesConfig,
+    ReviewAddendumChange, ReviewAddendumSection, ReviewApplyContract, ReviewMetadata,
+    ReviewProposalStatus, ReviewProposalTarget,
 };

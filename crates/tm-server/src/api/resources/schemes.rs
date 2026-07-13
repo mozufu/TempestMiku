@@ -228,6 +228,7 @@ where
         &scope,
     )));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"))
+        .with_session_id(session_id.to_string())
         .with_memory_authority(subject, scope);
     registry
         .read(uri, selector, &ctx)
@@ -256,6 +257,7 @@ where
         &scope,
     )));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"))
+        .with_session_id(session_id.to_string())
         .with_memory_authority(subject, scope);
     registry.preview(uri, &ctx).await.map_err(map_host_error)
 }
@@ -281,6 +283,7 @@ where
         &scope,
     )));
     let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:memory"))
+        .with_session_id(session_id.to_string())
         .with_memory_authority(subject, scope);
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }

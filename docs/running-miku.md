@@ -146,6 +146,12 @@ server, then reopen the paired TempestMiku app. The official connector registers
 endpoint and Web Push keys through the authenticated device API. Incoming payloads must decrypt
 successfully before the native service can show or cancel an approval notification.
 
+The checked-in lumo deployment runs `TM_SERVER_ROLE=all` as a separate OpenRC/Podman service beside
+Hermes, reuses the local PostgreSQL Unix socket and CLIProxyAPI, and reads the persistent encryption
+key from SOPS. `https://miku.justaslime.dev/health`, the 12 ordered migrations, and state-preserving
+service restart passed on 2026-07-14. This closes server deployment only; the signed Android
+killed-process request/resolution canary remains required for P6.
+
 Postgres startup applies ordered, checksummed migrations from `crates/tm-server/migrations` and
 preserves existing session/memory history. A checksum mismatch or failed migration aborts startup;
 do not recreate the schema to upgrade. Protected `GET /ready` and `GET /metrics` expose migration,

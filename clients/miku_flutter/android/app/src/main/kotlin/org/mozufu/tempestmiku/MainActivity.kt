@@ -15,6 +15,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.EventChannel
+import org.unifiedpush.android.connector.UnifiedPush
 
 private const val ACTION_APPROVAL_DECISION =
     "org.mozufu.tempestmiku.APPROVAL_NOTIFICATION_DECISION"
@@ -27,6 +28,8 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL = "org.mozufu.tempestmiku/notifications"
         private const val ACTION_CHANNEL =
             "org.mozufu.tempestmiku/notification-actions"
+        private const val UNIFIED_PUSH_CHANNEL =
+            "org.mozufu.tempestmiku/unified-push-events"
         private const val REQUEST_NOTIFICATIONS = 701
     }
 
@@ -71,6 +74,24 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(null)
                 }
+                "registerUnifiedPush" -> {
+                    UnifiedPush.tryUseCurrentOrDefaultDistributor(this) { success ->
+                        if (success) {
+                            UnifiedPush.register(
+                                this,
+                                messageForDistributor = "TempestMiku approval alerts",
+                            )
+                        } else {
+                            UnifiedPushEvents.emit(mapOf("type" to "registrationFailed"))
+                        }
+                        result.success(null)
+                    }
+                }
+                "unregisterUnifiedPush" -> {
+                    UnifiedPush.unregister(this)
+                    UnifiedPushEvents.emit(mapOf("type" to "unregistered"))
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -85,6 +106,18 @@ class MainActivity : FlutterActivity() {
 
                     override fun onCancel(arguments: Any?) {
                         actionSink = null
+                    }
+                },
+            )
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, UNIFIED_PUSH_CHANNEL)
+            .setStreamHandler(
+                object : EventChannel.StreamHandler {
+                    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                        UnifiedPushEvents.listen(events)
+                    }
+
+                    override fun onCancel(arguments: Any?) {
+                        UnifiedPushEvents.cancel()
                     }
                 },
             )

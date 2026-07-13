@@ -94,7 +94,7 @@ TM_MODES_PATH=/absolute/path/to/persona-assets # optional hand-authored SOUL/mod
 TM_MANAGED_SKILLS_PATH=/shared/path/to/managed-skills # optional; defaults under artifact root
 TM_MANAGED_MODE_ADDENDA_PATH=/shared/path/to/managed-mode-addenda # optional; defaults under artifact root
 TM_OMP_ACP_ENABLED=0
-TM_PUSH_PROVIDER=disabled # production providers are not shipped yet
+TM_PUSH_PROVIDER=disabled # set unifiedpush only after configuring the exact endpoint origin
 ```
 
 Without `TM_DATABASE_URL`, sessions, memory, and drive metadata use non-durable in-memory stores.
@@ -123,11 +123,28 @@ Shutdown stops new claims, continues heartbeats while draining, and aborts remai
 30-second grace period. The default `api` role without a worker can create/read state but will leave
 new turns queued.
 
-Push support is disabled by default. This slice accepts `TM_PUSH_PROVIDER=fake` only in debug builds
-for API/worker testing; it requires `TM_PUSH_ENCRYPTION_KEY`, a base64-encoded 32-byte key shared by
-split API and worker processes. No production FCM or UnifiedPush adapter is currently selectable.
-Future adapters reuse the encrypted `device_push_registrations` and leased
-`approval_push_deliveries` tables.
+Push support is disabled by default. `TM_PUSH_PROVIDER=fake` remains debug-only. Production
+UnifiedPush uses `TM_PUSH_PROVIDER=unifiedpush`, `TM_UNIFIED_PUSH_ENDPOINT_ORIGIN` set to one HTTPS
+origin, and `TM_PUSH_ENCRYPTION_KEY`, a base64-encoded 32-byte key shared by split API and worker
+processes. Registrations are encrypted in `device_push_registrations`; deliveries use the leased
+`approval_push_deliveries` outbox. The provider rejects endpoints outside the configured origin,
+does not follow redirects, encrypts routing-only payloads with RFC 8291 `aes128gcm`, and treats
+404/410 as permanent endpoint loss. There is no Firebase SDK or credential path.
+
+For the checked-in self-hosted deployment, `~/deployment-config` exposes ntfy at
+`https://push.justaslime.dev`. Configure both server roles with:
+
+```bash
+TM_PUSH_PROVIDER=unifiedpush
+TM_UNIFIED_PUSH_ENDPOINT_ORIGIN=https://push.justaslime.dev
+TM_PUSH_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+```
+
+Generate the encryption key once and persist the same value for API and worker roles; do not generate
+it independently at each start. On Android, install the ntfy distributor, select the self-hosted
+server, then reopen the paired TempestMiku app. The official connector registers a high-entropy
+endpoint and Web Push keys through the authenticated device API. Incoming payloads must decrypt
+successfully before the native service can show or cancel an approval notification.
 
 Postgres startup applies ordered, checksummed migrations from `crates/tm-server/migrations` and
 preserves existing session/memory history. A checksum mismatch or failed migration aborts startup;

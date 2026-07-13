@@ -198,8 +198,11 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   resolution deliveries through a leased Postgres outbox, and keeps provider payloads limited to
   opaque routing identifiers. Android background-SSE notifications expose Approve once / Deny;
   Android 12+ requires device authentication, older releases reopen the authenticated approval UI,
-  and lock-screen content remains generic. A real FCM or UnifiedPush adapter and remote killed-process
-  canary remain P6 work; there is still **no on-device sandbox** or second execution path.
+  and lock-screen content remains generic. The production UnifiedPush adapter accepts only encrypted
+  Android endpoint/key envelopes under one configured HTTPS origin, refuses redirects, and sends
+  RFC 8291 `aes128gcm` routing payloads to the self-hosted ntfy distributor. The connector's native
+  service renders/cancels notifications while Flutter is killed; the remote physical-device canary
+  remains the P6 acceptance gate. There is still **no on-device sandbox** or second execution path.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 

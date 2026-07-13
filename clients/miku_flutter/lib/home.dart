@@ -28,6 +28,7 @@ class _MikuHomePageState extends State<MikuHomePage>
   Future<void>? _sessionFuture;
   StreamSubscription<MikuEvent>? _sub;
   StreamSubscription<ApprovalNotificationAction>? _notificationActionSub;
+  StreamSubscription<UnifiedPushEvent>? _unifiedPushSub;
   final List<ApprovalNotificationAction> _pendingNotificationActions = [];
   bool _processingNotificationActions = false;
   bool _sessionBootComplete = false;
@@ -59,6 +60,13 @@ class _MikuHomePageState extends State<MikuHomePage>
     _notificationActionSub = widget.notifications.actions.listen(
       _enqueueNotificationAction,
     );
+    final pushNotifications = _unifiedPushNotifications;
+    if (pushNotifications != null) {
+      _unifiedPushSub = pushNotifications.pushEvents.listen(
+        _handleUnifiedPushEvent,
+      );
+      unawaited(_initializeUnifiedPush(pushNotifications));
+    }
     unawaited(_boot());
   }
 
@@ -69,6 +77,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     _scrollCtrl.dispose();
     _sub?.cancel();
     _notificationActionSub?.cancel();
+    _unifiedPushSub?.cancel();
     _dotAnim.dispose();
     super.dispose();
   }
@@ -85,6 +94,14 @@ class _MikuHomePageState extends State<MikuHomePage>
   ServerTargetClient? get _serverTargetClient =>
       widget.client is ServerTargetClient
           ? widget.client as ServerTargetClient
+          : null;
+  PushRegistrationClient? get _pushRegistrationClient =>
+      widget.client is PushRegistrationClient
+          ? widget.client as PushRegistrationClient
+          : null;
+  UnifiedPushNotificationService? get _unifiedPushNotifications =>
+      widget.notifications is UnifiedPushNotificationService
+          ? widget.notifications as UnifiedPushNotificationService
           : null;
   bool get _sessionEnded => _status == 'ended';
 
@@ -127,6 +144,10 @@ class _MikuHomePageState extends State<MikuHomePage>
       if (approved != true) return false;
       await client.pairWithCode(target);
       await _requestApprovalNotifications();
+      final pushNotifications = _unifiedPushNotifications;
+      if (pushNotifications != null) {
+        await _initializeUnifiedPush(pushNotifications);
+      }
       await _reconnectAfterPair(
         successMessage: _copy.pairedToServer(target.serverBaseUrl),
       );
@@ -143,6 +164,51 @@ class _MikuHomePageState extends State<MikuHomePage>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
     });
+  }
+
+  Future<void> _initializeUnifiedPush(
+    UnifiedPushNotificationService notifications,
+  ) async {
+    try {
+      final client = _pushRegistrationClient;
+      if (client == null || !await client.hasDeviceCredential()) return;
+      final registration = await notifications.registerUnifiedPush();
+      if (registration != null) {
+        await client.registerPush(
+          endpoint: registration.endpoint,
+          p256dh: registration.p256dh,
+          auth: registration.auth,
+        );
+      }
+    } catch (_) {
+      // Push is optional and must not turn successful pairing into a failed login.
+    }
+  }
+
+  Future<void> _handleUnifiedPushEvent(UnifiedPushEvent event) async {
+    try {
+      final client = _pushRegistrationClient;
+      if (client == null || !await client.hasDeviceCredential()) return;
+      switch (event.type) {
+        case UnifiedPushEventType.registration:
+          final registration = event.registration;
+          if (registration != null) {
+            await client.registerPush(
+              endpoint: registration.endpoint,
+              p256dh: registration.p256dh,
+              auth: registration.auth,
+            );
+          }
+          return;
+        case UnifiedPushEventType.unregistered:
+          await client.unregisterPush();
+          return;
+        case UnifiedPushEventType.registrationFailed:
+          return;
+      }
+    } catch (_) {
+      // The durable registration is retried the next time the app starts.
+    }
   }
 
   // ── Session ────────────────────────────────────────────────────────────────

@@ -831,6 +831,18 @@ abstract class ServerTargetClient {
   Future<void> logout();
 }
 
+abstract class PushRegistrationClient {
+  Future<bool> hasDeviceCredential();
+
+  Future<void> registerPush({
+    required String endpoint,
+    required String p256dh,
+    required String auth,
+  });
+
+  Future<void> unregisterPush();
+}
+
 Map<String, Object?>? _mapValue(Object? value) {
   if (value is Map<String, Object?>) return value;
   if (value is Map) return value.cast<String, Object?>();

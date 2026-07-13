@@ -24,7 +24,7 @@ use tm_server::{
     InMemoryAuthDeviceStore, InMemoryStore, NativeApprovalMode, NativeDenoBackend, OmpAcpBackend,
     OmpAcpConfig, PostgresDriveMetadataStore, PostgresPushStore, PostgresStore, PushCipher,
     PushProvider, PushService, RosterCodingEventSink, RuntimeConfig, RuntimeStatus,
-    ServerChatRunner, ServerRole, Store, StoreMemoryProvider, run_server,
+    ServerChatRunner, ServerRole, Store, StoreMemoryProvider, UnifiedPushProvider, run_server,
 };
 
 type ConfiguredPush = (Arc<dyn PushProvider>, PushCipher);
@@ -197,8 +197,16 @@ fn push_config_from_env() -> Result<Option<ConfiguredPush>, Box<dyn std::error::
             )))
         }
         "fake" => Err("TM_PUSH_PROVIDER=fake is unavailable in release builds".into()),
+        "unifiedpush" => {
+            let key = required_env("TM_PUSH_ENCRYPTION_KEY")?;
+            let endpoint_origin = required_env("TM_UNIFIED_PUSH_ENDPOINT_ORIGIN")?;
+            Ok(Some((
+                Arc::new(UnifiedPushProvider::new(&endpoint_origin)?),
+                PushCipher::from_base64(&key)?,
+            )))
+        }
         other => Err(format!(
-            "unsupported TM_PUSH_PROVIDER={other}; this slice ships only disabled production mode"
+            "unsupported TM_PUSH_PROVIDER={other}; expected disabled or unifiedpush"
         )
         .into()),
     }

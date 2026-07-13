@@ -90,7 +90,8 @@ class MemoryDeviceTokenStore implements DeviceTokenStore {
       this.credential = credential;
 }
 
-class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
+class NativeMikuSessionClient
+    implements MikuSessionClient, ServerTargetClient, PushRegistrationClient {
   NativeMikuSessionClient({DeviceTokenStore? tokenStore})
     : _tokenStore = tokenStore ?? SecureDeviceTokenStore();
 
@@ -161,6 +162,12 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     final previous = prefs.getString(_serverBaseUrlKey);
     final previousNormalized =
         previous == null ? null : _tryNormalizeServerBaseUrl(previous);
+    if (previousNormalized != null) {
+      // The connector endpoint is stable across app registrations. Retire the old device's
+      // server-side route before publishing the replacement credential so an old pairing cannot
+      // continue targeting this installation.
+      await _unregisterPushBestEffort();
+    }
     if (previousNormalized != normalized) {
       await _clearDeviceToken();
     }
@@ -188,6 +195,40 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
       await prefs.remove(_sessionIdKey);
       await prefs.remove(_lastEventIdKey);
     }
+  }
+
+  @override
+  Future<bool> hasDeviceCredential() async {
+    try {
+      return (await _deviceToken()) != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<void> registerPush({
+    required String endpoint,
+    required String p256dh,
+    required String auth,
+  }) async {
+    await _request(
+      'PUT',
+      '/auth/device/push',
+      body: {
+        'provider': 'unifiedpush',
+        'registration': jsonEncode({
+          'endpoint': endpoint,
+          'p256dh': p256dh,
+          'auth': auth,
+        }),
+      },
+    );
+  }
+
+  @override
+  Future<void> unregisterPush() async {
+    await _request('DELETE', '/auth/device/push');
   }
 
   @override
@@ -576,6 +617,14 @@ class NativeMikuSessionClient implements MikuSessionClient, ServerTargetClient {
     await _tokenStore.delete();
     _cachedCredential = null;
     _tokenLoaded = true;
+  }
+
+  Future<void> _unregisterPushBestEffort() async {
+    try {
+      await unregisterPush();
+    } catch (_) {
+      // Re-pairing must still work when the previous server is offline or already revoked.
+    }
   }
 
   Uri _resolveAgainst(String base, String path) {

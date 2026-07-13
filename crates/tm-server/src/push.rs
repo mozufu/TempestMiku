@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
@@ -10,6 +13,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{Config as PostgresConfig, NoTls};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
@@ -210,6 +214,166 @@ impl PushProviderResult {
 pub trait PushProvider: Send + Sync + 'static {
     fn name(&self) -> &str;
     async fn deliver(&self, registration: &str, message: &PushMessage) -> PushProviderResult;
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UnifiedPushRegistration {
+    endpoint: String,
+    p256dh: String,
+    auth: String,
+}
+
+#[derive(Clone)]
+pub struct UnifiedPushProvider {
+    client: reqwest::Client,
+    allowed_origin: Url,
+}
+
+impl fmt::Debug for UnifiedPushProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnifiedPushProvider")
+            .field("allowed_origin", &self.allowed_origin.as_str())
+            .finish_non_exhaustive()
+    }
+}
+
+impl UnifiedPushProvider {
+    pub fn new(allowed_origin: &str) -> Result<Self> {
+        Self::build(allowed_origin, false)
+    }
+
+    fn build(allowed_origin: &str, allow_http: bool) -> Result<Self> {
+        let mut allowed_origin = Url::parse(allowed_origin).map_err(|_| {
+            ServerError::InvalidRequest(
+                "TM_UNIFIED_PUSH_ENDPOINT_ORIGIN must be an absolute URL".to_string(),
+            )
+        })?;
+        if (!allow_http && allowed_origin.scheme() != "https")
+            || allowed_origin.cannot_be_a_base()
+            || allowed_origin.host_str().is_none()
+            || !allowed_origin.username().is_empty()
+            || allowed_origin.password().is_some()
+            || allowed_origin.query().is_some()
+            || allowed_origin.fragment().is_some()
+        {
+            return Err(ServerError::InvalidRequest(
+                "TM_UNIFIED_PUSH_ENDPOINT_ORIGIN must be an HTTPS origin without credentials, path, query, or fragment"
+                    .to_string(),
+            ));
+        }
+        if allowed_origin.path() != "/" {
+            return Err(ServerError::InvalidRequest(
+                "TM_UNIFIED_PUSH_ENDPOINT_ORIGIN must not contain a path".to_string(),
+            ));
+        }
+        allowed_origin.set_path("");
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+        Ok(Self {
+            client,
+            allowed_origin,
+        })
+    }
+
+    fn parse_registration(&self, raw: &str) -> Result<(Url, Vec<u8>, Vec<u8>)> {
+        let registration: UnifiedPushRegistration = serde_json::from_str(raw).map_err(|_| {
+            ServerError::InvalidRequest("invalid UnifiedPush registration envelope".to_string())
+        })?;
+        let endpoint = Url::parse(&registration.endpoint).map_err(|_| {
+            ServerError::InvalidRequest("invalid UnifiedPush endpoint URL".to_string())
+        })?;
+        if endpoint.origin() != self.allowed_origin.origin()
+            || endpoint.scheme() != self.allowed_origin.scheme()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(ServerError::Policy(
+                "UnifiedPush endpoint is outside the configured origin".to_string(),
+            ));
+        }
+        let public_key = URL_SAFE_NO_PAD.decode(registration.p256dh).map_err(|_| {
+            ServerError::InvalidRequest("invalid UnifiedPush p256dh key".to_string())
+        })?;
+        let auth = URL_SAFE_NO_PAD.decode(registration.auth).map_err(|_| {
+            ServerError::InvalidRequest("invalid UnifiedPush auth secret".to_string())
+        })?;
+        if public_key.len() != 65 || public_key.first() != Some(&4) || auth.len() != 16 {
+            return Err(ServerError::InvalidRequest(
+                "invalid UnifiedPush Web Push key material".to_string(),
+            ));
+        }
+        Ok((endpoint, public_key, auth))
+    }
+
+    fn invalid_registration(error: impl fmt::Display) -> PushProviderResult {
+        PushProviderResult {
+            outcome: PushProviderOutcome::PermanentRegistrationFailure,
+            error: Some(error.to_string()),
+        }
+    }
+
+    fn transient(error: impl fmt::Display) -> PushProviderResult {
+        PushProviderResult {
+            outcome: PushProviderOutcome::TransientFailure,
+            error: Some(error.to_string()),
+        }
+    }
+}
+
+#[async_trait]
+impl PushProvider for UnifiedPushProvider {
+    fn name(&self) -> &str {
+        "unifiedpush"
+    }
+
+    async fn deliver(&self, registration: &str, message: &PushMessage) -> PushProviderResult {
+        let (endpoint, public_key, auth) = match self.parse_registration(registration) {
+            Ok(parsed) => parsed,
+            Err(error) => return Self::invalid_registration(error),
+        };
+        let payload = match serde_json::to_vec(message) {
+            Ok(payload) => payload,
+            Err(_) => return Self::transient("UnifiedPush payload serialization failed"),
+        };
+        let encrypted = match ece::encrypt(&public_key, &auth, &payload) {
+            Ok(encrypted) => encrypted,
+            Err(_) => {
+                return Self::invalid_registration("UnifiedPush registration encryption failed");
+            }
+        };
+        let ttl = (message.expires_at - Utc::now())
+            .num_seconds()
+            .clamp(0, 3600);
+        let response = match self
+            .client
+            .post(endpoint)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .header(reqwest::header::CONTENT_ENCODING, "aes128gcm")
+            .header("TTL", ttl)
+            .header("Urgency", "high")
+            .body(encrypted)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => return Self::transient("UnifiedPush delivery transport failed"),
+        };
+        let status = response.status();
+        if status.is_success() {
+            PushProviderResult::delivered()
+        } else if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::GONE {
+            Self::invalid_registration(format!("UnifiedPush endpoint returned {status}"))
+        } else {
+            Self::transient(format!("UnifiedPush endpoint returned {status}"))
+        }
+    }
 }
 
 #[async_trait]
@@ -963,6 +1127,12 @@ impl PushStore for InMemoryPushStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        Router,
+        body::Bytes,
+        http::{HeaderMap, StatusCode},
+        routing::post,
+    };
 
     #[derive(Debug)]
     struct ScriptedPushStore {
@@ -1124,6 +1294,114 @@ mod tests {
         for forbidden in ["action", "scope", "token", "transcript", "credential"] {
             assert!(!value.to_string().contains(forbidden));
         }
+    }
+
+    #[test]
+    fn unified_push_origin_and_registration_fail_closed() {
+        assert!(UnifiedPushProvider::new("http://push.example.test").is_err());
+        assert!(UnifiedPushProvider::new("https://user@push.example.test").is_err());
+        assert!(UnifiedPushProvider::new("https://push.example.test/path").is_err());
+
+        let provider = UnifiedPushProvider::new("https://push.example.test").unwrap();
+        let valid_keys = serde_json::json!({
+            "endpoint": "https://push.example.test/up-secret",
+            "p256dh": "BLMbF9ffKBiWQLCKvTHb6LO8Nb6dcUh6TItC455vu2kElga6PQvUmaFyCdykxY2nOSSL3yKgfbmFLRTUaGv4yV8",
+            "auth": "xS03Fi5ErfTNH_l9WHE9Ig"
+        });
+        assert!(provider.parse_registration(&valid_keys.to_string()).is_ok());
+
+        let wrong_origin = serde_json::json!({
+            "endpoint": "https://internal.example.test/up-secret",
+            "p256dh": valid_keys["p256dh"],
+            "auth": valid_keys["auth"]
+        });
+        assert!(
+            provider
+                .parse_registration(&wrong_origin.to_string())
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn unified_push_posts_encrypted_routing_payload() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (sent_tx, sent_rx) = tokio::sync::oneshot::channel();
+        let sent_tx = Arc::new(Mutex::new(Some(sent_tx)));
+        let app = Router::new().route(
+            "/up-secret",
+            post({
+                let sent_tx = Arc::clone(&sent_tx);
+                move |headers: HeaderMap, body: Bytes| async move {
+                    if let Some(sender) = sent_tx.lock().take() {
+                        let _ = sender.send((headers, body));
+                    }
+                    StatusCode::OK
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = UnifiedPushProvider::build(&origin, true).unwrap();
+        let message = PushMessage {
+            version: 1,
+            delivery_id: Uuid::new_v4(),
+            kind: PushMessageKind::ApprovalRequested,
+            session_id: Uuid::new_v4(),
+            approval_id: Uuid::new_v4(),
+            expires_at: Utc::now() + chrono::Duration::minutes(5),
+        };
+        let registration = serde_json::json!({
+            "endpoint": format!("{origin}/up-secret"),
+            "p256dh": "BLMbF9ffKBiWQLCKvTHb6LO8Nb6dcUh6TItC455vu2kElga6PQvUmaFyCdykxY2nOSSL3yKgfbmFLRTUaGv4yV8",
+            "auth": "xS03Fi5ErfTNH_l9WHE9Ig"
+        });
+
+        let result = provider.deliver(&registration.to_string(), &message).await;
+        assert_eq!(result.outcome, PushProviderOutcome::Delivered);
+        let (headers, body) = sent_rx.await.unwrap();
+        assert_eq!(headers[reqwest::header::CONTENT_ENCODING], "aes128gcm");
+        assert_eq!(
+            headers[reqwest::header::CONTENT_TYPE],
+            "application/octet-stream"
+        );
+        assert_eq!(headers["urgency"], "high");
+        assert!(!body.is_empty());
+        let approval_id = message.approval_id.to_string();
+        assert!(
+            !body
+                .windows(approval_id.len())
+                .any(|part| part == approval_id.as_bytes())
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn unified_push_transport_errors_do_not_expose_endpoint_capabilities() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let provider = UnifiedPushProvider::build(&origin, true).unwrap();
+        let message = PushMessage {
+            version: 1,
+            delivery_id: Uuid::new_v4(),
+            kind: PushMessageKind::ApprovalRequested,
+            session_id: Uuid::new_v4(),
+            approval_id: Uuid::new_v4(),
+            expires_at: Utc::now() + chrono::Duration::minutes(5),
+        };
+        let registration = serde_json::json!({
+            "endpoint": format!("{origin}/up-secret-capability"),
+            "p256dh": "BLMbF9ffKBiWQLCKvTHb6LO8Nb6dcUh6TItC455vu2kElga6PQvUmaFyCdykxY2nOSSL3yKgfbmFLRTUaGv4yV8",
+            "auth": "xS03Fi5ErfTNH_l9WHE9Ig"
+        });
+
+        let result = provider.deliver(&registration.to_string(), &message).await;
+        assert_eq!(result.outcome, PushProviderOutcome::TransientFailure);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("UnifiedPush delivery transport failed")
+        );
+        assert!(!result.error.unwrap().contains("up-secret-capability"));
     }
 
     #[tokio::test]

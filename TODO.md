@@ -2,12 +2,12 @@
 
 Last aligned: **2026-07-13**.
 
-Active milestone: **none — P7.2a managed mode addenda is closed**.
+Active milestone: **P6.1 UnifiedPush production delivery — implementation landed, live canary pending**.
 
 `ROADMAP.md` remains the canonical milestone order. P0-P5 are complete for the documented
 single-owner deployment. P6 pairing, release hardening, provider-neutral push registration/outbox,
-and authenticated Android notification actions have landed; production remote delivery is blocked
-on provider availability and is not part of the active implementation queue.
+and authenticated Android notification actions have landed. The production UnifiedPush/ntfy path is
+implemented; deployment plus the physical killed-process request/resolution canary remain open.
 
 This file records the closed P7.1/P7.2a checklists and the explicitly deferred queue. Keep it aligned
 with core docs §07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. Closure is backed
@@ -26,20 +26,30 @@ by deterministic tests plus replayable public-surface evidence, not roadmap pros
       rather than accumulate authority.
 - [x] The closed audit-hardening and native coding acceptance gates remain regression baselines.
 
-## Blocking P6 Deferment
+## P6.1 UnifiedPush Production Delivery
 
-- [ ] Revisit a production Android push adapter only when Firebase capacity becomes available or the
-      user explicitly selects another provider such as UnifiedPush.
-- [ ] After selecting a provider, prove approval request and resolution delivery while the release
-      app is killed on a physical device.
+- [x] Select UnifiedPush with a self-hosted ntfy distributor; Firebase/FCM remains disabled.
+- [x] Add a production `unifiedpush` server provider that accepts only an explicitly configured HTTPS
+      endpoint origin, refuses redirects, encrypts the routing-only payload with RFC 8291
+      `aes128gcm`, and preserves transient/permanent retry semantics.
+- [x] Register the Android app through the official UnifiedPush connector, send the encrypted
+      endpoint/key envelope through the authenticated device API, and render request/resolution
+      notifications from a killed app process without starting a second Flutter execution path.
+- [x] Add the self-hosted ntfy service and public `push.justaslime.dev` Traefik route to `~/deployment-config`.
+- [ ] Deploy ntfy and start API/worker roles with the same `TM_PUSH_ENCRYPTION_KEY`,
+      `TM_PUSH_PROVIDER=unifiedpush`, and
+      `TM_UNIFIED_PUSH_ENDPOINT_ORIGIN=https://push.justaslime.dev`.
+- [ ] Install/configure the ntfy Android distributor against the self-hosted origin, install a signed
+      TempestMiku release APK, and refresh the in-app device registration.
+- [ ] Prove approval request and resolution delivery while the release app is killed on a physical
+      device; preserve timestamps/logs as the P6 closeout evidence.
 
-While blocked:
+Until the live canary passes:
 
-- Do not add Firebase SDKs, Firebase project configuration, server credentials, or a nominal adapter
-  that cannot pass the physical killed-process canary.
-- Keep production push disabled; fake-provider and debug probes remain the deterministic regression
-  path.
-- Do not treat blocked P6 work as a prerequisite for P7 skill lifecycle work.
+- Do not mark P6 complete or replace the physical canary with fake-provider/debug evidence.
+- Do not add Firebase SDKs, Firebase project configuration, or server credentials.
+- Keep the provider disabled by default; fake-provider and encrypted local-provider tests remain the
+  deterministic regression path.
 
 ## P7.0 North Star
 
@@ -254,7 +264,7 @@ Verification commands:
 - `tm-trace` extraction unless audit implementation proves a second concrete consumer.
 - Live external research, generic `http.*`, production egress allowlists, and the secret broker.
 - Cloud drive sync, CRDT/conflict UX, pgvector/graph recall, and LLM-backed extraction.
-- Production Android push-provider integration until the blocking condition is removed.
+- Firebase/FCM integration; UnifiedPush/ntfy is the selected production path.
 
 ## Ownership
 

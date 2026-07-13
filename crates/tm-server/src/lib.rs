@@ -51,7 +51,7 @@ pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
 pub use push::{
     FakePushProvider, InMemoryPushStore, PostgresPushStore, PushCipher, PushMessage,
     PushMessageKind, PushProvider, PushProviderOutcome, PushProviderResult,
-    PushRegistrationMetadata, PushRuntimeMetrics, PushService, PushStore,
+    PushRegistrationMetadata, PushRuntimeMetrics, PushService, PushStore, UnifiedPushProvider,
 };
 pub use runtime::{RuntimeConfig, RuntimeStatus, RuntimeStatusSnapshot, ServerRole, run_server};
 pub use scheduler::{

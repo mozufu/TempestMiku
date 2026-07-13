@@ -88,6 +88,7 @@ struct AgentRequest {
 
 pub struct AgentChatRunner {
     senders: Vec<mpsc::Sender<AgentRequest>>,
+    workers: Vec<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +143,7 @@ struct CachedSession {
 impl AgentChatRunner {
     pub fn new(agent: Agent) -> Self {
         let (sender, receiver) = mpsc::channel::<AgentRequest>();
-        thread::spawn(move || {
+        let worker = thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -162,6 +163,7 @@ impl AgentChatRunner {
         });
         Self {
             senders: vec![sender],
+            workers: vec![worker],
         }
     }
 
@@ -219,13 +221,14 @@ impl AgentChatRunner {
         );
         let sandbox_factory: Arc<SandboxFactory> = Arc::new(sandbox_factory);
         let mut senders = Vec::with_capacity(runner_options.shard_count);
+        let mut workers = Vec::with_capacity(runner_options.shard_count);
         for shard_id in 0..runner_options.shard_count {
             let (sender, receiver) = mpsc::channel::<AgentRequest>();
             senders.push(sender);
             let llm = Arc::clone(&llm);
             let cfg = cfg.clone();
             let sandbox_factory = Arc::clone(&sandbox_factory);
-            thread::Builder::new()
+            let worker = thread::Builder::new()
                 .name(format!("tm-agent-shard-{shard_id}"))
                 .spawn(move || {
                     run_agent_shard(
@@ -237,8 +240,22 @@ impl AgentChatRunner {
                     );
                 })
                 .expect("agent shard thread starts");
+            workers.push(worker);
         }
-        Self { senders }
+        Self { senders, workers }
+    }
+}
+
+impl Drop for AgentChatRunner {
+    fn drop(&mut self) {
+        // Disconnect every shard before joining so its receive loop exits and cached
+        // !Send sessions (including V8 isolates) are destroyed on their owning thread.
+        // Detached teardown can otherwise overlap the next runner and corrupt V8's
+        // thread-local HandleScope state.
+        self.senders.clear();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -515,6 +532,7 @@ mod tests {
         wall_budgets: Arc<Mutex<Vec<u64>>>,
         active: Arc<AtomicUsize>,
         max_active: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
         delay: Duration,
     }
 
@@ -532,6 +550,7 @@ mod tests {
                 wall_budgets: Arc::clone(&self.wall_budgets),
                 active: Arc::clone(&self.active),
                 max_active: Arc::clone(&self.max_active),
+                drops: Arc::clone(&self.drops),
                 delay: self.delay,
                 _not_send: Rc::new(()),
             }))
@@ -545,8 +564,15 @@ mod tests {
         wall_budgets: Arc<Mutex<Vec<u64>>>,
         active: Arc<AtomicUsize>,
         max_active: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
         delay: Duration,
         _not_send: Rc<()>,
+    }
+
+    impl Drop for StatefulSession {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     #[async_trait(?Send)]
@@ -583,6 +609,7 @@ mod tests {
         wall_budgets: Arc<Mutex<Vec<u64>>>,
         active: Arc<AtomicUsize>,
         max_active: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
     }
 
     impl Harness {
@@ -594,6 +621,7 @@ mod tests {
                 wall_budgets: Arc::new(Mutex::new(Vec::new())),
                 active: Arc::new(AtomicUsize::new(0)),
                 max_active: Arc::new(AtomicUsize::new(0)),
+                drops: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -604,6 +632,7 @@ mod tests {
             let wall_budgets = Arc::clone(&self.wall_budgets);
             let active = Arc::clone(&self.active);
             let max_active = Arc::clone(&self.max_active);
+            let drops = Arc::clone(&self.drops);
             AgentChatRunner::new_with_sandbox_factory_and_options(
                 llm,
                 AgentConfig {
@@ -620,6 +649,7 @@ mod tests {
                         wall_budgets: Arc::clone(&wall_budgets),
                         active: Arc::clone(&active),
                         max_active: Arc::clone(&max_active),
+                        drops: Arc::clone(&drops),
                         delay,
                     })
                 },
@@ -702,6 +732,20 @@ mod tests {
             *harness.evaluations.lock().unwrap(),
             vec![(first, 1), (second, 1), (first, 2)]
         );
+    }
+
+    #[tokio::test]
+    async fn dropping_runner_joins_workers_and_destroys_cached_sessions() {
+        let harness = Harness::new();
+        let runner = harness.runner(options(2, Duration::from_secs(60)), Duration::ZERO);
+
+        run(&runner, chat_turn(Uuid::from_u128(1))).await;
+        run(&runner, chat_turn(Uuid::from_u128(2))).await;
+        assert_eq!(harness.drops.load(Ordering::SeqCst), 0);
+
+        drop(runner);
+
+        assert_eq!(harness.drops.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

@@ -214,7 +214,7 @@ class NativeMikuSessionClient
   }) async {
     await _request(
       'PUT',
-      '/auth/device/push',
+      '/auth/push-registration',
       body: {
         'provider': 'unifiedpush',
         'registration': jsonEncode({
@@ -228,7 +228,7 @@ class NativeMikuSessionClient
 
   @override
   Future<void> unregisterPush() async {
-    await _request('DELETE', '/auth/device/push');
+    await _request('DELETE', '/auth/push-registration');
   }
 
   @override

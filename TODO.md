@@ -2,13 +2,13 @@
 
 Last aligned: **2026-07-14**.
 
-Active milestone: **P6.1 UnifiedPush production delivery — implementation landed, live canary pending**.
+Active milestone: **P6.1 UnifiedPush production delivery — complete; next P6 OS integration unselected**.
 
 `ROADMAP.md` remains the canonical milestone order. P0-P5 are complete for the documented
 single-owner deployment. P6 pairing, release hardening, provider-neutral push registration/outbox,
 and authenticated Android notification actions have landed. The production UnifiedPush/ntfy path is
-implemented and deployed on lumo; Android distributor setup plus the physical killed-process
-request/resolution canary remain open.
+implemented, deployed on lumo, and proven by the physical killed-process request/resolution canary.
+Broader P6 OS integrations remain separate follow-up work.
 
 This file records the closed P7.1/P7.2a checklists and the explicitly deferred queue. Keep it aligned
 with core docs §07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. Closure is backed
@@ -41,14 +41,17 @@ by deterministic tests plus replayable public-surface evidence, not roadmap pros
       `TM_PUSH_ENCRYPTION_KEY`, `TM_PUSH_PROVIDER=unifiedpush`, and
       `TM_UNIFIED_PUSH_ENDPOINT_ORIGIN=https://push.justaslime.dev`. Loopback/public health,
       12 ordered migrations, restart persistence, and Hermes coexistence pass.
-- [ ] Install/configure the ntfy Android distributor against the self-hosted origin, install a signed
-      TempestMiku release APK, and refresh the in-app device registration.
-- [ ] Prove approval request and resolution delivery while the release app is killed on a physical
-      device; preserve timestamps/logs as the P6 closeout evidence.
+- [x] Install ntfy Android 1.24.0 from the official F-Droid release, configure
+      `https://push.justaslime.dev`, install the signed TempestMiku release APK, pair it to lumo, and
+      persist one active encrypted device registration without provider errors.
+- [x] Prove approval request and resolution delivery on a physical Android 15 device while Flutter
+      is killed. The request delivered at 2026-07-14 07:32:24 +08:00 and the timeout resolution at
+      07:33:23, both in one attempt without provider errors; the native service created and then
+      cancelled the notification while the Flutter activity stayed closed.
 
-Until the live canary passes:
+Closed-canary invariants:
 
-- Do not mark P6 complete or replace the physical canary with fake-provider/debug evidence.
+- Do not treat the P6.1 closeout as completion of broader P6 OS integrations.
 - Do not add Firebase SDKs, Firebase project configuration, or server credentials.
 - Keep the provider disabled by default; fake-provider and encrypted local-provider tests remain the
   deterministic regression path.

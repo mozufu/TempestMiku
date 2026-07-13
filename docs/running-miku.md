@@ -149,8 +149,8 @@ successfully before the native service can show or cancel an approval notificati
 The checked-in lumo deployment runs `TM_SERVER_ROLE=all` as a separate OpenRC/Podman service beside
 Hermes, reuses the local PostgreSQL Unix socket and CLIProxyAPI, and reads the persistent encryption
 key from SOPS. `https://miku.justaslime.dev/health`, the 12 ordered migrations, and state-preserving
-service restart passed on 2026-07-14. This closes server deployment only; the signed Android
-killed-process request/resolution canary remains required for P6.
+service restart passed on 2026-07-14. The signed Android killed-process request/resolution canary
+described below closes the P6.1 production-delivery gate.
 
 Postgres startup applies ordered, checksummed migrations from `crates/tm-server/migrations` and
 preserves existing session/memory history. A checksum mismatch or failed migration aborts startup;
@@ -248,8 +248,14 @@ adb shell am broadcast \
   --es approvalAction 'proc.run cargo test'
 ```
 
-This is an ADB/local-SSE probe, not proof of remote killed-process push delivery. P6 remains open
-until a production provider adapter and physical remote-delivery canary pass.
+This is an ADB/local-SSE probe, not proof of remote killed-process push delivery. The production
+proof was captured on 2026-07-14 with a signed `org.mozufu.tempestmiku` release on an Android 15
+physical device and ntfy Android 1.24.0 configured for `https://push.justaslime.dev`. After the
+Flutter app was killed, `approval_requested` delivered at 07:32:24 +08:00 and created the private
+notification; `approval_resolved` delivered at 07:33:23 after timeout and cancelled it. Each outbox
+row completed in one attempt without a provider error, and the Flutter activity remained closed.
+The canary release signer SHA-256 fingerprint is
+`503f865843464347cb2d2f90be3ab4dbf68bae690443bf8fd262e0dcc0b58ee1`.
 
 ```sh
 nix develop --command bash -lc \

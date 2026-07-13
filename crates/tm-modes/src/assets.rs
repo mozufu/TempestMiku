@@ -7,8 +7,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ManagedSkillActivation, ManagedSkillError, ManagedSkillInstall, ManagedSkillState, ModeCatalog,
-    ModeId, ModeProfile, SkillActivation, SkillTrigger,
+    ManagedModeAddendumActivation, ManagedModeAddendumError, ManagedModeAddendumInstall,
+    ManagedModeAddendumState, ManagedModeAddendumVersion, ManagedSkillActivation,
+    ManagedSkillError, ManagedSkillInstall, ManagedSkillState, ModeCatalog, ModeId, ModeProfile,
+    SkillActivation, SkillTrigger,
 };
 
 const BUNDLED_MODES_SOURCE: &str = "bundled:tm-modes/default-modes";
@@ -82,6 +84,7 @@ impl ModeAssets {
 pub struct ModesConfig {
     pub asset_path: Option<PathBuf>,
     pub managed_skills_path: Option<PathBuf>,
+    pub managed_mode_addenda_path: Option<PathBuf>,
 }
 
 impl ModesConfig {
@@ -89,6 +92,7 @@ impl ModesConfig {
         Self {
             asset_path: Some(path.into()),
             managed_skills_path: None,
+            managed_mode_addenda_path: None,
         }
     }
 
@@ -99,6 +103,70 @@ impl ModesConfig {
 
     pub fn managed_skills_path(&self) -> Option<&Path> {
         self.managed_skills_path.as_deref()
+    }
+
+    pub fn with_managed_mode_addenda_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.managed_mode_addenda_path = Some(path.into());
+        self
+    }
+
+    pub fn managed_mode_addenda_path(&self) -> Option<&Path> {
+        self.managed_mode_addenda_path.as_deref()
+    }
+
+    pub fn install_managed_mode_addendum(
+        &self,
+        install: ManagedModeAddendumInstall,
+    ) -> Result<ManagedModeAddendumActivation, ManagedModeAddendumError> {
+        if self
+            .load_base_assets()
+            .modes
+            .profile(&install.mode_id)
+            .is_none()
+        {
+            return Err(ManagedModeAddendumError::from_message(format!(
+                "managed mode addendum target {} is not in the base catalog",
+                install.mode_id
+            )));
+        }
+        crate::mode_addendum::install(
+            crate::mode_addendum::configured_root(&self.managed_mode_addenda_path)?,
+            install,
+        )
+    }
+
+    pub fn rollback_managed_mode_addendum(
+        &self,
+        mode_id: &ModeId,
+        expected_active_digest: &str,
+        target_digest: Option<&str>,
+    ) -> Result<ManagedModeAddendumActivation, ManagedModeAddendumError> {
+        crate::mode_addendum::rollback(
+            crate::mode_addendum::configured_root(&self.managed_mode_addenda_path)?,
+            mode_id,
+            expected_active_digest,
+            target_digest,
+        )
+    }
+
+    pub fn managed_mode_addendum(
+        &self,
+        mode_id: &ModeId,
+    ) -> Result<ManagedModeAddendumState, ManagedModeAddendumError> {
+        crate::mode_addendum::state(
+            crate::mode_addendum::configured_root(&self.managed_mode_addenda_path)?,
+            mode_id,
+        )
+    }
+
+    pub fn active_managed_mode_addendum(
+        &self,
+        mode_id: &ModeId,
+    ) -> Result<Option<ManagedModeAddendumVersion>, ManagedModeAddendumError> {
+        crate::mode_addendum::active(
+            crate::mode_addendum::configured_root(&self.managed_mode_addenda_path)?,
+            mode_id,
+        )
     }
 
     pub fn load_status(&self) -> AssetStatus {

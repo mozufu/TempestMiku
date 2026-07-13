@@ -90,6 +90,7 @@ impl std::fmt::Display for ReviewProposalStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ReviewApplyContract {
     Disabled,
+    VersionedModeAddendum,
 }
 
 #[cfg(test)]
@@ -109,10 +110,14 @@ mod tests {
     }
 
     #[test]
-    fn review_contract_serializes_without_apply_authority() {
+    fn review_contract_serializes_explicit_apply_authority() {
         assert_eq!(
             serde_json::to_value(ReviewApplyContract::Disabled).unwrap(),
             json!("disabled")
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewApplyContract::VersionedModeAddendum).unwrap(),
+            json!("versioned_mode_addendum")
         );
     }
 }

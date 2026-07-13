@@ -92,6 +92,7 @@ TM_HOST_CONFIG=.tempestmiku/config.json
 TM_CONFIG=.tempestmiku/config.json
 TM_MODES_PATH=/absolute/path/to/persona-assets # optional hand-authored SOUL/modes/skills
 TM_MANAGED_SKILLS_PATH=/shared/path/to/managed-skills # optional; defaults under artifact root
+TM_MANAGED_MODE_ADDENDA_PATH=/shared/path/to/managed-mode-addenda # optional; defaults under artifact root
 TM_OMP_ACP_ENABLED=0
 TM_PUSH_PROVIDER=disabled # production providers are not shipped yet
 ```
@@ -107,6 +108,13 @@ Approved P7.1 skill proposals are stored as immutable digest-addressed versions 
 processes in a split deployment must share the same managed-skill root just as they share the artifact
 root. Activation and rollback atomically replace only the per-skill active pointer. Bundled or
 `TM_MODES_PATH` hand-authored skills cannot be shadowed by managed versions.
+
+Approved P7.2a mode proposals are stored as immutable typed addendum versions beneath
+`TM_MANAGED_MODE_ADDENDA_PATH`; when unset, the server uses
+`<artifact-root>/managed-mode-addenda`. API and worker processes must share this root. Activation and
+rollback atomically replace only the per-mode active pointer. Addenda compose description/routing
+guidance into the next prompt; they cannot alter `SOUL.md`, voice caps, capabilities, scopes, skills,
+or the hand-authored `modes.json` catalog.
 
 `api` serves HTTP only, `worker` dispatches durable turns and runs approval effects, dreams, and cron,
 and `all` runs both in one process. `worker` and `all` require Postgres. A split deployment runs one
@@ -382,11 +390,13 @@ Notes:
 - `self_evolution.tier` accepts `off`, `conservative` (the compatibility-preserving default), or
   `moderate`. Existing `approvals.mode` and timeout settings remain orthogonal and still gate
   reachable writes; selecting a tier does not grant a capability or bypass approval. P7.0 rejects
-  `aggressive`; moderate review does not apply persona or mode files. Authenticated `/ready` exposes
-  only the effective tier, never proposal content or credentials.
+  `aggressive`; moderate review never applies persona files or rewrites hand-authored mode assets.
+  Authenticated `/ready` exposes only the effective tier, never proposal content or credentials.
 - Moderate review candidates enter through `POST /sessions/:id/evolution/review-proposals` and are
-  readable at `memory://review-proposals/<id>`. Approval only changes durable review status;
-  `applyEnabled` remains false and the live persona/mode files are never written or reloaded.
+  readable at `memory://review-proposals/<id>`. Persona proposals remain review-only. When the
+  managed mode-addendum catalog is configured, a mode proposal returns `applyEnabled: true`; approval
+  installs an immutable guidance-only version, and
+  `POST /sessions/:id/evolution/modes/:mode_id/rollback` creates a separate durable rollback approval.
 - The CLI prompts on the tty; the server emits approval events to the UI/API.
 - There is no raw shell escape hatch. Commands run as argv vectors.
 

@@ -14,8 +14,11 @@ pub(crate) use crud::{
     create_session, end_session, get_session, get_session_messages, list_sessions,
     set_session_scope,
 };
-pub(crate) use evolution_review::propose_evolution_review;
-pub use evolution_review::{EvolutionReviewProposalResponse, ProposeEvolutionReviewRequest};
+pub use evolution_review::{
+    EvolutionReviewProposalResponse, ModeAddendumRollbackResponse, ProposeEvolutionReviewRequest,
+    ProposeModeAddendumRollbackRequest,
+};
+pub(crate) use evolution_review::{propose_evolution_review, propose_mode_addendum_rollback};
 pub(crate) use memory_write::propose_memory_write;
 pub use memory_write::{MemoryWriteProposalResponse, ProposeMemoryWriteRequest};
 pub(crate) use skill_lifecycle::propose_skill_rollback;

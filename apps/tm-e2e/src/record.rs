@@ -259,6 +259,11 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
         })?
         .with_recorder(recorder.clone());
         let session = moderate_client.create_session(None).await?;
+        let serious_mode = ModeId::new("serious_engineer");
+        let base_profile = moderate
+            .persona
+            .load_assets()
+            .profile_or_unknown(&serious_mode);
         let large_summary = format!("bounded review body {} tail-marker", "x".repeat(3_000));
         let proposal = moderate_client
             .propose_evolution_review(
@@ -281,8 +286,8 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
             )
             .await?;
         ensure!(
-            proposal["applyEnabled"] == false,
-            "moderate apply must stay disabled"
+            proposal["applyEnabled"] == true,
+            "moderate mode addendum apply was not enabled"
         );
         let proposal_id = proposal["proposalId"].as_str().context("proposal id")?;
         let approval_id = proposal["approvalId"].as_str().context("approval id")?;
@@ -344,6 +349,65 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
                 .iter()
                 .any(|event| event.event_type == "approval_resolved")
         );
+        let applied = replay
+            .iter()
+            .find(|event| {
+                event.event_type == "write_proposal"
+                    && event.data["proposalId"] == proposal_id
+                    && event.data["status"] == "approved"
+            })
+            .context("approved mode addendum event")?;
+        let active_digest = applied.data["activation"]["active"]["contentDigest"]
+            .as_str()
+            .context("active mode addendum digest")?;
+        ensure!(
+            moderate
+                .persona
+                .build_system_prompt(&serious_mode, "base", "", "close this gate")
+                .system_prompt
+                .contains("tail-marker"),
+            "approved mode addendum did not compose on the next prompt"
+        );
+        ensure!(
+            moderate
+                .persona
+                .load_assets()
+                .profile_or_unknown(&serious_mode)
+                == base_profile,
+            "mode addendum changed the base capability profile"
+        );
+        let mode_rollback = moderate_client
+            .propose_mode_addendum_rollback(&session.id, serious_mode.as_str(), active_digest, None)
+            .await?;
+        let mode_rollback_approval_id = mode_rollback["approvalId"]
+            .as_str()
+            .context("mode rollback approval id")?;
+        moderate_client
+            .resolve_approval(&session.id, mode_rollback_approval_id, "approve")
+            .await?;
+        let mode_rollback_applied = moderate
+            .store
+            .events_after(Uuid::parse_str(&session.id)?, None)
+            .await?
+            .into_iter()
+            .find(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["kind"] == "mode_addendum_rollback"
+                    && event.payload_json["status"] == "approved"
+            })
+            .context("durable approved mode addendum rollback event")?;
+        ensure!(
+            mode_rollback_applied.payload_json["activation"]["active"].is_null(),
+            "mode addendum rollback did not restore the base catalog"
+        );
+        ensure!(
+            !moderate
+                .persona
+                .build_system_prompt(&serious_mode, "base", "", "close this gate")
+                .system_prompt
+                .contains("tail-marker"),
+            "mode addendum remained composed after rollback"
+        );
         capture_resource(
             recorder,
             &moderate_client,
@@ -383,6 +447,8 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
             "skillResource": skill_uri,
             "timeoutStatus": timed_out["status"],
             "moderateApplyEnabled": proposal["applyEnabled"],
+            "modeAddendumDigest": active_digest,
+            "modeAddendumRollback": mode_rollback_applied.payload_json,
             "replayStatuses": statuses,
             "duplicateResolution": "conflict",
             "forgedTarget": "rejected",
@@ -1516,7 +1582,8 @@ impl RecordingServer {
         }])
         .context("configuring recording-server project link")?;
         let persona = tm_server::ModesConfig::default()
-            .with_managed_skills_path(artifact_root.join("managed-skills"));
+            .with_managed_skills_path(artifact_root.join("managed-skills"))
+            .with_managed_mode_addenda_path(artifact_root.join("managed-mode-addenda"));
         let state = AppState::new(
             Arc::clone(&store),
             memory,

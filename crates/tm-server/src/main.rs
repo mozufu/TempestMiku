@@ -82,6 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| artifact_root.join("managed-skills"));
     persona = persona.with_managed_skills_path(managed_skills_path);
+    let managed_mode_addenda_path = std::env::var_os("TM_MANAGED_MODE_ADDENDA_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| artifact_root.join("managed-mode-addenda"));
+    persona = persona.with_managed_mode_addenda_path(managed_mode_addenda_path);
     let roster = Arc::new(MailboxRegistry::new());
     let approval_broker = Arc::new(ApprovalBroker::default());
     let push_config = push_config_from_env()?;

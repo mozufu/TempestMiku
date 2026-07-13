@@ -266,6 +266,9 @@ pub(crate) fn sanitize_evolution_review_proposal_persistence(
 ) -> Result<NewEvolutionReviewProposal> {
     validate_persistence_identifier("review proposal target", proposal.target.id())?;
     validate_persistence_identifier("review proposal base digest", &proposal.base_digest)?;
+    if let Some(digest) = &proposal.base_active_digest {
+        validate_persistence_identifier("review proposal base active digest", digest)?;
+    }
     validate_persistence_identifier("review proposal content digest", &proposal.content_digest)?;
     if proposal.base_version == 0 {
         return Err(ServerError::InvalidRequest(
@@ -425,6 +428,8 @@ pub struct EvolutionReviewProposalRecord {
     pub target: ReviewProposalTarget,
     pub base_version: u64,
     pub base_digest: String,
+    #[serde(default)]
+    pub base_active_digest: Option<String>,
     pub changes: Vec<ReviewAddendumChange>,
     pub content_digest: String,
     pub status: ReviewProposalStatus,
@@ -441,8 +446,10 @@ pub struct NewEvolutionReviewProposal {
     pub target: ReviewProposalTarget,
     pub base_version: u64,
     pub base_digest: String,
+    pub base_active_digest: Option<String>,
     pub changes: Vec<ReviewAddendumChange>,
     pub content_digest: String,
+    pub apply_contract: ReviewApplyContract,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

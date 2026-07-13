@@ -150,14 +150,24 @@ persona/mode assets, bounds the complete change set to 8 KiB and 16 changes, per
 `memory://review-proposals/<id>` link. Full before/after metadata remains behind
 `resources.read:memory`.
 
-Every Moderate proposal creates a durable manual approval with `applyEnabled: false`; no auto-approve
-branch exists. Approve, deny, timeout, and cancellation update only the durable proposal status and
-append the normal approval/effect audit chain. Immediately before an approved status transition, the
-effect rechecks the current tier, typed target, proposal digest, and live base version/digest. A tier
-downgrade, forged payload, or changed base fails closed. `ReviewApplyContract::Disabled` is persisted
-with every record, and neither the endpoint nor the effect dispatcher contains a persona/mode file
-write or reload operation. Flutter/Web renders the same server-owned approval and `write_proposal`
-lifecycle, opens the resource link, and lets server timeout events own default-deny semantics.
+Every Moderate proposal creates a durable manual approval; no auto-approve branch exists. Persona
+proposals keep `applyEnabled: false` and approval changes only durable review state. P7.2a mode
+proposals use `ReviewApplyContract::VersionedModeAddendum` when the managed addendum root is
+configured. Immediately before either outcome, the effect rechecks the current tier, typed target,
+proposal digest, live base profile digest, and active addendum digest. A tier downgrade, forged
+payload, changed base, or stale pointer fails closed. Flutter/Web renders the same server-owned
+approval and `write_proposal` lifecycle, opens the resource link, and lets server timeout events own
+default-deny semantics.
+
+P7.2a applies only typed `description` and `routing_guidance` changes. The approved version is written
+beneath the configured managed-mode-addendum root as immutable digest-addressed metadata, then a
+per-mode `active.json` pointer is atomically replaced under a cross-process lock. The next prompt
+composition reads the active version and adds an **Approved mode addendum** section. The base
+`ModeProfile` remains byte-for-byte authoritative for capabilities, voice cap, default scope,
+active skills, label, and route triggers; `SOUL.md` and the hand-authored `modes.json` are never
+mutated. Rollback is a separate durable manual approval and may activate an older immutable version
+or restore the unmodified base catalog. Deny, timeout, stale base/pointer, malformed sections,
+symlinks, and retries cannot change the active pointer.
 
 **P4 candidate path:** post-session dreaming can distill a reusable
 workflow into a `SkillProposalRecord` with name, description, trigger/use criteria, `SKILL.md`-style
@@ -194,9 +204,9 @@ Rollback is a separate durable manual approval created by
 digest and a target digest already present in the same proposal-backed immutable version set, then
 atomically swaps the pointer after the same tier/provenance re-check. The authenticated client gateway
 and native Deno resource registry expose `skill://`, active entries, version metadata, and immutable
-version bodies from that catalog; native reads require `resources.read:skill`. The `skills.*` namespace,
-MCP import/reload, arbitrary filesystem writes, persona/mode apply, and aggressive evolution remain
-disabled.
+version bodies from that catalog; native reads require `resources.read:skill`. The `skills.*`
+namespace, MCP import/reload, arbitrary filesystem writes, persona apply, direct mode
+file/capability changes, and aggressive evolution remain disabled.
 
 ## 26.5 Crate layout
 
@@ -210,8 +220,9 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
 - `tm-server` (§27) — **tier enforcement** at the config / registry boundary; the review surface
   (`write_proposal` events §27.1), typed review persistence, base/digest revalidation, and the audit
   trail (§12).
-- `tm-modes` — typed persona/mode addendum targets plus the managed-skill filesystem/catalog boundary;
-  no persona/mode write authority.
+- `tm-modes` — typed persona/mode addendum targets, managed-skill catalog, and the P7.2a immutable
+  guidance-only mode-addendum catalog; no persona, capability, voice, or hand-authored mode-file
+  write authority.
 - config — `self_evolution.tier` (+ the `write_approval` knobs, §26.2).
 
 ## 26.6 Failure modes & degradation

@@ -131,6 +131,15 @@ where
         "skill_rollback" => {
             apply_skill_rollback_effect(approval, &lease.effect, self_evolution_tier, persona).await
         }
+        "mode_addendum_rollback" => {
+            apply_mode_addendum_rollback_effect(
+                approval,
+                &lease.effect,
+                self_evolution_tier,
+                persona,
+            )
+            .await
+        }
         "evolution_review" => {
             apply_evolution_review_effect(
                 store,
@@ -161,6 +170,103 @@ where
     // after this point leaves one replayable event and an applied effect; it must not requeue the
     // already-finalized mutation.
     sink.publish_persisted(event).await
+}
+
+async fn apply_mode_addendum_rollback_effect(
+    approval: &ApprovalRequestRecord,
+    effect: &ApprovalEffectRecord,
+    self_evolution_tier: SelfEvolutionTier,
+    persona: &tm_modes::ModesConfig,
+) -> Result<Value> {
+    let rollback = effect
+        .payload_json
+        .get("rollback")
+        .cloned()
+        .ok_or_else(|| {
+            ServerError::Store("mode addendum rollback effect missing rollback".to_string())
+        })?;
+    let mode_id = rollback
+        .get("modeId")
+        .and_then(Value::as_str)
+        .map(tm_modes::ModeId::new)
+        .ok_or_else(|| {
+            ServerError::Store("mode addendum rollback effect missing modeId".to_string())
+        })?;
+    let expected_active_digest = rollback
+        .get("expectedActiveDigest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ServerError::Store(
+                "mode addendum rollback effect missing expectedActiveDigest".to_string(),
+            )
+        })?;
+    let target_digest = rollback.get("targetDigest").and_then(Value::as_str);
+    let evolution_target_id = rollback
+        .get("evolutionTargetId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ServerError::Store(
+                "mode addendum rollback effect missing evolutionTargetId".to_string(),
+            )
+        })?;
+    let status = approval_terminal_status(&approval.status)?;
+    let activation = if approval.status == "approved" {
+        let digest = crate::evolution::evolution_content_digest(&rollback)?;
+        crate::evolution::verify_approved_review_effect(
+            self_evolution_tier,
+            &effect.payload_json,
+            tm_host::EvolutionTargetClass::ModeProposal,
+            evolution_target_id,
+            &digest,
+        )?;
+        let managed = persona
+            .managed_mode_addendum(&mode_id)
+            .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+        let active = managed.active.ok_or_else(|| {
+            crate::evolution::policy_error(
+                tm_host::EvolutionPolicyReason::StaleApproval,
+                format!("managed mode addendum {mode_id} is no longer active"),
+            )
+        })?;
+        if active.content_digest != expected_active_digest {
+            return Err(crate::evolution::policy_error(
+                tm_host::EvolutionPolicyReason::StaleApproval,
+                format!(
+                    "managed mode addendum {mode_id} active version changed from {expected_active_digest} to {}",
+                    active.content_digest
+                ),
+            ));
+        }
+        if let Some(target_digest) = target_digest
+            && !managed
+                .versions
+                .iter()
+                .any(|version| version.content_digest == target_digest)
+        {
+            return Err(ServerError::NotFound(format!(
+                "managed mode addendum {mode_id} version {target_digest}"
+            )));
+        }
+        Some(
+            persona
+                .rollback_managed_mode_addendum(&mode_id, expected_active_digest, target_digest)
+                .map_err(|error| {
+                    crate::evolution::policy_error(
+                        tm_host::EvolutionPolicyReason::StaleApproval,
+                        error.to_string(),
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    Ok(
+        crate::api::sessions::evolution_review::mode_addendum_rollback_payload(
+            &rollback,
+            status,
+            activation.as_ref(),
+        ),
+    )
 }
 
 async fn fail_approval_effect<S>(
@@ -394,6 +500,7 @@ where
         .ok_or_else(|| ServerError::Store("review effect missing proposalId".to_string()))?;
     let status = approval_review_status(&approval.status)?;
     let proposal = store.evolution_review_proposal(proposal_id).await?;
+    let mut activation = None;
     if approval.status == "approved" {
         let digest = tm_host::EvolutionDigest::new(proposal.content_digest.clone())
             .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
@@ -408,7 +515,13 @@ where
             persona,
             &proposal.target,
         )?;
-        if current != (proposal.base_version, proposal.base_digest.clone()) {
+        if current
+            != (
+                proposal.base_version,
+                proposal.base_digest.clone(),
+                proposal.base_active_digest.clone(),
+            )
+        {
             return Err(crate::evolution::policy_error(
                 tm_host::EvolutionPolicyReason::StaleApproval,
                 format!("review proposal {proposal_id} base changed after approval"),
@@ -426,11 +539,50 @@ where
                 format!("review proposal {proposal_id} digest changed"),
             ));
         }
+        match (&proposal.apply_contract, &proposal.target) {
+            (
+                tm_modes::ReviewApplyContract::VersionedModeAddendum,
+                tm_modes::ReviewProposalTarget::Mode { mode_id },
+            ) => {
+                activation = Some(
+                    persona
+                        .install_managed_mode_addendum(tm_modes::ManagedModeAddendumInstall {
+                            mode_id: mode_id.clone(),
+                            content_digest: proposal.content_digest.clone(),
+                            base_version: proposal.base_version,
+                            base_digest: proposal.base_digest.clone(),
+                            source_proposal_id: proposal.id.to_string(),
+                            expected_active_digest: proposal.base_active_digest.clone(),
+                            changes: proposal.changes.clone(),
+                        })
+                        .map_err(|error| {
+                            crate::evolution::policy_error(
+                                tm_host::EvolutionPolicyReason::StaleApproval,
+                                error.to_string(),
+                            )
+                        })?,
+                );
+            }
+            (tm_modes::ReviewApplyContract::Disabled, _) => {}
+            _ => {
+                return Err(crate::evolution::policy_error(
+                    tm_host::EvolutionPolicyReason::InvalidPayload,
+                    format!(
+                        "review proposal {proposal_id} apply contract does not match its target"
+                    ),
+                ));
+            }
+        }
     }
     let proposal = store
         .update_evolution_review_proposal_status(proposal_id, status)
         .await?;
-    Ok(crate::api::sessions::evolution_review::evolution_review_proposal_payload(&proposal))
+    let mut payload =
+        crate::api::sessions::evolution_review::evolution_review_proposal_payload(&proposal);
+    if let Some(activation) = activation {
+        payload["activation"] = serde_json::to_value(activation)?;
+    }
+    Ok(payload)
 }
 
 fn approval_memory_status(status: &str) -> Result<MemoryWriteStatus> {

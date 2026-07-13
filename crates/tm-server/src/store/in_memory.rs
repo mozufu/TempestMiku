@@ -9,7 +9,7 @@ use tm_memory::{
     DreamLease, DreamQueueRecord, DreamStatus, MemorySummaryRecord, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
 };
-use tm_modes::{ReviewApplyContract, ReviewProposalStatus};
+use tm_modes::ReviewProposalStatus;
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
@@ -1402,7 +1402,11 @@ impl Store for InMemoryStore {
             .ok_or_else(|| stale_approval_effect_lease(lease))?;
         if !matches!(
             inner.approval_effects[index].effect_type.as_str(),
-            "memory_write" | "skill_write" | "skill_rollback" | "evolution_review"
+            "memory_write"
+                | "skill_write"
+                | "skill_rollback"
+                | "mode_addendum_rollback"
+                | "evolution_review"
         ) {
             return Err(ServerError::InvalidRequest(
                 "only durable proposal effects may complete with a write_proposal event"
@@ -1580,8 +1584,10 @@ impl Store for InMemoryStore {
                 && existing.target == proposal.target
                 && existing.base_version == proposal.base_version
                 && existing.base_digest == proposal.base_digest
+                && existing.base_active_digest == proposal.base_active_digest
                 && existing.changes == proposal.changes
                 && existing.content_digest == proposal.content_digest
+                && existing.apply_contract == proposal.apply_contract
             {
                 return Ok(existing.clone());
             }
@@ -1597,10 +1603,11 @@ impl Store for InMemoryStore {
             target: proposal.target,
             base_version: proposal.base_version,
             base_digest: proposal.base_digest,
+            base_active_digest: proposal.base_active_digest,
             changes: proposal.changes,
             content_digest: proposal.content_digest,
             status: ReviewProposalStatus::Pending,
-            apply_contract: ReviewApplyContract::Disabled,
+            apply_contract: proposal.apply_contract,
             created_at: now,
             updated_at: now,
         };

@@ -58,6 +58,24 @@ impl ModesConfig {
             }
         }
 
+        if self.managed_mode_addenda_path().is_some() {
+            match self.active_managed_mode_addendum(mode) {
+                Ok(Some(addendum)) => {
+                    let guidance = addendum
+                        .changes
+                        .iter()
+                        .map(|change| format!("{}: {}", change.after.label, change.after.summary))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    push_section(&mut prompt, "Approved mode addendum", &guidance);
+                }
+                Ok(None) => {}
+                Err(error) => warnings.push(format!(
+                    "managed mode addendum {mode} is unavailable: {error}"
+                )),
+            }
+        }
+
         if !capability_notes.trim().is_empty() {
             push_section(&mut prompt, "Runtime capabilities", capability_notes);
         }

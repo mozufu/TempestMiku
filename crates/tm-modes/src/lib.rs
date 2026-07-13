@@ -1,6 +1,7 @@
 mod assets;
 mod evolution;
 mod managed;
+mod mode_addendum;
 mod prompt;
 mod resource;
 mod skills;
@@ -15,6 +16,10 @@ pub use evolution::{
 pub use managed::{
     ManagedSkillActivation, ManagedSkillError, ManagedSkillInstall, ManagedSkillState,
     ManagedSkillVersion,
+};
+pub use mode_addendum::{
+    ManagedModeAddendumActivation, ManagedModeAddendumError, ManagedModeAddendumInstall,
+    ManagedModeAddendumState, ManagedModeAddendumVersion, mode_addendum_content_digest,
 };
 pub use prompt::ComposedPrompt;
 pub use resource::SkillResourceHandler;

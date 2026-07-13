@@ -2,15 +2,15 @@
 
 Last aligned: **2026-07-13**.
 
-Active milestone: **none — P7.1 managed skill lifecycle is closed**.
+Active milestone: **none — P7.2a managed mode addenda is closed**.
 
 `ROADMAP.md` remains the canonical milestone order. P0-P5 are complete for the documented
 single-owner deployment. P6 pairing, release hardening, provider-neutral push registration/outbox,
 and authenticated Android notification actions have landed; production remote delivery is blocked
 on provider availability and is not part of the active implementation queue.
 
-This file records the closed P7.1 checklist and the explicitly deferred queue. Keep it aligned with
-core docs §07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. P7.1 closure is backed
+This file records the closed P7.1/P7.2a checklists and the explicitly deferred queue. Keep it aligned
+with core docs §07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. Closure is backed
 by deterministic tests plus replayable public-surface evidence, not roadmap prose alone.
 
 ## Current Baseline
@@ -226,9 +226,29 @@ Verification commands:
 - [x] Strict Rust workspace gates, gated Postgres coverage, Flutter/Web smoke, and documentation/SDK
       drift checks pass before closeout.
 
-## Explicitly Deferred Beyond P7.1
+## P7.2a Managed Mode Addenda
 
-- Applying moderate persona/mode proposals.
+- [x] Only Moderate `mode` proposals with `description` / `routing_guidance` sections expose
+      `applyEnabled: true`; persona proposals remain review-only.
+- [x] Approved proposals install immutable digest-addressed versions under a separately configured
+      managed-mode-addendum root and atomically replace only the per-mode active pointer.
+- [x] Apply rechecks tier, typed target, proposal digest, live base profile digest, and expected active
+      pointer immediately before mutation; stale or forged effects fail closed.
+- [x] The next prompt composition includes the approved guidance while the base `ModeProfile` remains
+      unchanged for label, capabilities, voice cap, scope, skills, capability class, and route data.
+- [x] Rollback uses a separate durable manual approval and can activate an older immutable version or
+      restore the unmodified base catalog.
+- [x] Deny, timeout, stale base/pointer, invalid sections, symlinks, duplicate resolution, and retry
+      paths cannot mutate or widen authority.
+- [x] `TM_MANAGED_MODE_ADDENDA_PATH` defaults beneath the artifact root and must be shared by API and
+      worker roles, matching the managed-skill deployment contract.
+- [x] Focused `tm-modes` / `tm-server` tests, Flutter parsing/rendering smoke, and
+      `tm-e2e record evolution-policy` prove apply, replay, composition, invariance, and rollback.
+
+## Explicitly Deferred Beyond P7.2a
+
+- Applying moderate persona proposals or changing mode capabilities, voice caps, scopes, skills,
+  route triggers, `SOUL.md`, or hand-authored `modes.json`.
 - Any aggressive-tier execution or autonomous identity/config/source-code rewrite.
 - `tm-mcp`, MCP import/reload gates, and a new external tool surface.
 - `tm-trace` extraction unless audit implementation proves a second concrete consumer.

@@ -15,7 +15,7 @@ use tm_memory::{
     DreamLease, DreamQueueRecord, DreamStatus, MemorySummaryRecord, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
 };
-use tm_modes::{ReviewApplyContract, ReviewProposalStatus, ReviewProposalTarget};
+use tm_modes::{ReviewProposalStatus, ReviewProposalTarget};
 use tokio_postgres::{Config as PostgresConfig, NoTls, Row, error::SqlState};
 use uuid::Uuid;
 
@@ -1978,7 +1978,7 @@ impl Store for PostgresStore {
                     select id, session_id
                       from approval_effects
                      where id = $1
-                       and effect_type in ('memory_write', 'skill_write', 'skill_rollback', 'evolution_review')
+                       and effect_type in ('memory_write', 'skill_write', 'skill_rollback', 'mode_addendum_rollback', 'evolution_review')
                        and status = 'claimed'
                        and lease_owner = $2
                        and lease_epoch = $3
@@ -2253,10 +2253,11 @@ impl Store for PostgresStore {
             target: proposal.target,
             base_version: proposal.base_version,
             base_digest: proposal.base_digest,
+            base_active_digest: proposal.base_active_digest,
             changes: proposal.changes,
             content_digest: proposal.content_digest,
             status: ReviewProposalStatus::Pending,
-            apply_contract: ReviewApplyContract::Disabled,
+            apply_contract: proposal.apply_contract,
             created_at: now,
             updated_at: now,
         };

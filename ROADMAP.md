@@ -110,6 +110,7 @@ each milestone is done only when its acceptance checks pass.
 | 8 | **DONE — P5 drive + research workspace production hardening** | 5–9d | Added `DriveMetadataStore`, Postgres entries/proposals/organizer/corrections/version/link/tombstone state, CAS moves/apply, startup canonical-root revalidation, and the documented no-database historical metadata exception. | Deterministic, gated, split-process, and physical-client verification cover persistence, revocation, hydration, concurrent application, and restart-safe access. |
 | 9 | **P6 PUSH FOUNDATION LANDED — provider deferred** | 4–7d | Secure QR/device authority and release gates now feed encrypted provider-neutral registrations, a leased/deduplicated approval delivery outbox, fake-provider tests, private lock-screen notifications, authenticated Approve once / Deny actions, and stale-action resync. Production delivery is explicitly deferred while Firebase capacity is exhausted; no Firebase SDK, project configuration, or server credential should be added. | Existing authenticated Android canary and package gates pass; deterministic fake-provider and debug killed-process probes cover the new foundation. Remote provider delivery while the app is killed is not yet accepted. |
 | 10 | **DONE — P7.0 safety foundation + P7.1 managed skills** | 6–12d | P7.0 landed typed tiers/targets, least-authority effects, audit history, bounded replay, and Moderate review-only addenda. P7.1 adds approval-backed immutable managed skill versions, cross-process locked atomic activation/rollback, trigger-aware reload, and capability-gated `skill://` reads without allowing bundled/hand-authored replacement. Persona/mode apply, aggressive writes, MCP, and egress remain disabled. | Strict Rust/workspace, gated Postgres, Flutter/Web, and drift gates pass. Focused tests plus final `evolution-policy` evidence prove install, second-version activation, post-session approval recovery, rollback, reload, collision/tamper denial, and public resource reads. |
+| 11 | **DONE — P7.2a managed mode addenda** | 2–4d | Moderate mode proposals install immutable description/routing-guidance versions behind manual approval, atomically activate/rollback under a cross-process lock, and compose on the next prompt without mutating `SOUL.md`, `modes.json`, capabilities, voice caps, scopes, skills, or route triggers. Persona apply remains disabled. | Focused crate/server tests and `tm-e2e record evolution-policy` prove apply, deny/timeout, stale-base denial, replay, next-turn composition, capability invariance, and rollback to the base catalog. |
 
 ### Immediate next task queue
 
@@ -122,10 +123,11 @@ each milestone is done only when its acceptance checks pass.
    artifacts, and HTTP-routed manual approvals. The network-free
    `tm-e2e record native-coding` gate now proves linked-repo edit/test/spill behavior,
    approve/deny/timeout effects, and durable turn-aware SSE replay through the public API.
-3. **Keep P7.1 closed** — immutable installation, cross-process locked atomic activation/rollback,
-   trigger-aware reload, and capability-gated `skill://` reads have passed the complete closeout
-   matrix. Keep persona/mode apply, aggressive writes, `tm-mcp`, `tm-trace`, live egress, and optional
-   cloud sync deferred until a new roadmap slice is explicitly selected.
+3. **Keep P7.2a closed** — managed skills and guidance-only mode addenda have passed immutable
+   installation, atomic activation/rollback, reload/composition, replay, and authority-invariance
+   gates. Keep persona apply, direct mode-file/capability changes, aggressive writes, `tm-mcp`,
+   `tm-trace`, live egress, and optional cloud sync deferred until a new roadmap slice is explicitly
+   selected.
 
 ### Deferred SDK namespace placement
 

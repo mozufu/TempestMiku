@@ -356,7 +356,7 @@ void main() {
     expect(shouldRememberEventId('drive_put', const {}), isTrue);
   });
 
-  test('parses typed evolution review proposals without apply authority', () {
+  test('parses server-owned evolution review apply authority', () {
     final proposal = EvolutionReviewProposal.fromEvent(const {
       'kind': 'evolution_review',
       'proposalId': 'proposal-1',
@@ -364,13 +364,13 @@ void main() {
       'status': 'approved',
       'preview': 'Review verification guidance.',
       'uri': 'memory://review-proposals/proposal-1',
-      'applyEnabled': false,
+      'applyEnabled': true,
     });
     expect(proposal, isNotNull);
     expect(proposal!.targetKind, 'mode');
     expect(proposal.targetId, 'serious_engineer');
     expect(proposal.status, 'approved');
-    expect(proposal.applyEnabled, isFalse);
+    expect(proposal.applyEnabled, isTrue);
     expect(proposal.resourceUri, startsWith('memory://review-proposals/'));
   });
 
@@ -395,7 +395,7 @@ void main() {
           'status': 'pending',
           'preview': 'Prefer replayable verification evidence.',
           'uri': 'memory://review-proposals/proposal-review',
-          'applyEnabled': false,
+          'applyEnabled': true,
         },
       ),
     );
@@ -409,7 +409,7 @@ void main() {
         'proposalId': 'proposal-review',
         'preview': 'Prefer replayable verification evidence.',
         'uri': 'memory://review-proposals/proposal-review',
-        'applyEnabled': false,
+        'applyEnabled': true,
       },
     );
     client.emitEvent(
@@ -426,12 +426,12 @@ void main() {
             'proposalId': 'proposal-review',
             'preview': 'Prefer replayable verification evidence.',
             'uri': 'memory://review-proposals/proposal-review',
-            'applyEnabled': false,
+            'applyEnabled': true,
           },
           'options': [
             {
               'optionId': 'allow',
-              'name': 'Accept for review',
+              'name': 'Apply mode addendum',
               'kind': 'allow_once',
             },
             {
@@ -447,7 +447,7 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('mode addendum · serious_engineer · pending'), findsWidgets);
-    expect(find.textContaining('Review only · apply disabled'), findsOneWidget);
+    expect(find.textContaining('Apply enabled'), findsOneWidget);
     final card = find.byKey(
       const ValueKey('approval:review mode addendum serious_engineer'),
     );
@@ -456,10 +456,10 @@ void main() {
     await tester.tap(card);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
-    expect(find.textContaining('applyEnabled: false'), findsOneWidget);
-    expect(find.text('Accept for review'), findsOneWidget);
-    await tester.ensureVisible(find.text('Accept for review'));
-    await tester.tap(find.text('Accept for review'));
+    expect(find.textContaining('applyEnabled: true'), findsOneWidget);
+    expect(find.text('Apply mode addendum'), findsOneWidget);
+    await tester.ensureVisible(find.text('Apply mode addendum'));
+    await tester.tap(find.text('Apply mode addendum'));
     await tester.pump();
     expect(client.resolvedApprovals, contains('approval-review:approve'));
   });

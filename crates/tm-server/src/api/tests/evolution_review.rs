@@ -13,6 +13,21 @@ fn moderate_state() -> AppState<InMemoryStore, StoreMemoryProvider<InMemoryStore
     .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate)
 }
 
+fn moderate_state_with_mode_addenda(
+    root: &std::path::Path,
+) -> AppState<InMemoryStore, StoreMemoryProvider<InMemoryStore>, EchoChatRunner> {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+    AppState::new(
+        store,
+        memory,
+        Arc::new(EchoChatRunner),
+        ModesConfig::default().with_managed_mode_addenda_path(root),
+        AuthConfig::NoAuth,
+    )
+    .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate)
+}
+
 fn mode_review_request(timeout_ms: u64) -> Value {
     json!({
         "target": { "kind": "mode", "modeId": "serious_engineer" },
@@ -131,6 +146,93 @@ async fn moderate_review_approval_updates_only_durable_proposal_and_replays() {
 }
 
 #[tokio::test]
+async fn approved_mode_addendum_composes_without_widening_authority_and_rolls_back() {
+    let root = tempfile::tempdir().unwrap();
+    let state = moderate_state_with_mode_addenda(root.path());
+    let store = Arc::clone(&state.store);
+    let persona = state.persona.clone();
+    let mode_id = tm_modes::ModeId::new("serious_engineer");
+    let base_profile = persona.load_assets().profile_or_unknown(&mode_id);
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+
+    let response = post_review_proposal(&app, session.id, mode_review_request(5_000)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    assert_eq!(response["applyEnabled"], json!(true));
+    let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
+    let approval_id = response["approvalId"].as_str().unwrap().parse().unwrap();
+    let pending = store.evolution_review_proposal(proposal_id).await.unwrap();
+    assert_eq!(
+        pending.apply_contract,
+        tm_modes::ReviewApplyContract::VersionedModeAddendum
+    );
+
+    resolve_test_approval(&app, session.id, approval_id, "approve").await;
+    let managed = persona.managed_mode_addendum(&mode_id).unwrap();
+    let active = managed.active.unwrap();
+    assert_eq!(active.content_digest, pending.content_digest);
+    let prompt = persona.build_system_prompt(&mode_id, "base", "", "close the gate");
+    assert!(
+        prompt
+            .system_prompt
+            .contains("Prefer explicit verification evidence")
+    );
+    assert_eq!(prompt.profile, base_profile);
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert!(events.iter().any(|event| {
+        event.event_type == "write_proposal"
+            && event.payload_json["proposalId"] == json!(proposal_id)
+            && event.payload_json["activation"]["active"]["contentDigest"]
+                == json!(pending.content_digest)
+    }));
+
+    let rollback = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/sessions/{}/evolution/modes/serious_engineer/rollback",
+                    session.id
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "expectedActiveDigest": pending.content_digest,
+                        "targetDigest": null,
+                        "timeoutMs": 5_000
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rollback.status(), StatusCode::OK);
+    let rollback = response_json(rollback).await;
+    let rollback_approval_id = rollback["approvalId"].as_str().unwrap().parse().unwrap();
+    resolve_test_approval(&app, session.id, rollback_approval_id, "approve").await;
+    assert!(
+        persona
+            .managed_mode_addendum(&mode_id)
+            .unwrap()
+            .active
+            .is_none()
+    );
+    assert!(
+        !persona
+            .build_system_prompt(&mode_id, "base", "", "close the gate")
+            .system_prompt
+            .contains("Approved mode addendum")
+    );
+    assert_eq!(
+        persona.load_assets().profile_or_unknown(&mode_id),
+        base_profile
+    );
+}
+
+#[tokio::test]
 async fn conservative_review_attempt_is_denied_before_proposal_or_approval() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
@@ -166,7 +268,8 @@ async fn moderate_review_deny_and_timeout_are_durable_no_apply_outcomes() {
         (Some("deny"), tm_modes::ReviewProposalStatus::Denied),
         (None, tm_modes::ReviewProposalStatus::TimedOut),
     ] {
-        let state = moderate_state();
+        let root = tempfile::tempdir().unwrap();
+        let state = moderate_state_with_mode_addenda(root.path());
         let store = Arc::clone(&state.store);
         let persona = state.persona.clone();
         let (app, _) = test_app_with_state(state);
@@ -218,13 +321,20 @@ async fn moderate_review_deny_and_timeout_are_durable_no_apply_outcomes() {
         assert_eq!(proposal.status, expected);
         assert_eq!(
             proposal.apply_contract,
-            tm_modes::ReviewApplyContract::Disabled
+            tm_modes::ReviewApplyContract::VersionedModeAddendum
+        );
+        assert!(
+            persona
+                .managed_mode_addendum(&tm_modes::ModeId::new("serious_engineer"))
+                .unwrap()
+                .active
+                .is_none()
         );
         let events = store.events_after(session.id, None).await.unwrap();
         assert!(events.iter().any(|event| {
             event.event_type == "write_proposal"
                 && event.payload_json["status"] == json!(expected.as_str())
-                && event.payload_json["applyEnabled"] == json!(false)
+                && event.payload_json["applyEnabled"] == json!(true)
         }));
         let expected_audit = match expected {
             tm_modes::ReviewProposalStatus::Denied => tm_host::EvolutionAuditStatus::Denied,
@@ -377,11 +487,13 @@ async fn gated_postgres_review_migrates_restarts_and_resolves_once() {
     };
     let store = Arc::new(PostgresStore::connect(&dsn).await.unwrap());
     store.configure_owner_subject("brian").await.unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let persona = ModesConfig::default().with_managed_mode_addenda_path(root.path());
     let state = AppState::new(
         Arc::clone(&store),
         Arc::new(StoreMemoryProvider::new(Arc::clone(&store))),
         Arc::new(EchoChatRunner),
-        ModesConfig::default(),
+        persona.clone(),
         AuthConfig::NoAuth,
     )
     .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate);
@@ -428,7 +540,17 @@ async fn gated_postgres_review_migrates_restarts_and_resolves_once() {
     assert_eq!(proposal.status, tm_modes::ReviewProposalStatus::Approved);
     assert_eq!(
         proposal.apply_contract,
-        tm_modes::ReviewApplyContract::Disabled
+        tm_modes::ReviewApplyContract::VersionedModeAddendum
+    );
+    let reloaded = ModesConfig::default().with_managed_mode_addenda_path(root.path());
+    assert_eq!(
+        reloaded
+            .managed_mode_addendum(&tm_modes::ModeId::new("serious_engineer"))
+            .unwrap()
+            .active
+            .unwrap()
+            .content_digest,
+        proposal.content_digest
     );
     let row_count: i64 = restarted
         .client()

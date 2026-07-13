@@ -199,6 +199,7 @@ async fn native_deno_backend_approval_route_approves_proc_run() {
         .unwrap();
     assert_eq!(resolved.payload_json["backend"], json!("native-deno"));
     assert_eq!(resolved.payload_json["optionId"], json!("allow"));
+    assert_eq!(resolved.turn_id, Some(turn_id));
     assert!(native_tool_result(&llm).contains("\"ok\":true"));
     assert!(
         store

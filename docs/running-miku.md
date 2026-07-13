@@ -389,6 +389,13 @@ nix develop --command cargo run -p tm-e2e -- record suite
 The UI part of `record suite` runs `npm exec playwright` from `clients/miku_web`. If
 `clients/miku_web/node_modules` is absent, install the Node dependencies in that directory first.
 
+For the offline native Deno coding-backend gate (linked-repo patch, targeted
+test, artifact spill, approval approve/deny/timeout, and durable turn replay):
+
+```sh
+nix develop --command cargo run -p tm-e2e -- record native-coding
+```
+
 For a credentialed live speaker run:
 
 ```sh

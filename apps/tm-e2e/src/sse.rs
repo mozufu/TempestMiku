@@ -4,6 +4,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq)]
 pub struct E2eEvent {
     pub id: Option<i64>,
+    pub turn_id: Option<String>,
     pub event_type: String,
     pub data: Value,
 }
@@ -56,14 +57,16 @@ pub fn parse_sse_block(block: &str) -> Result<Option<E2eEvent>> {
         envelope.get("createdAt").and_then(Value::as_str).is_some(),
         "session_event envelope is missing createdAt"
     );
+    let turn_id = envelope
+        .remove("turnId")
+        .context("session_event envelope is missing turnId")?;
     ensure!(
-        envelope
-            .get("turnId")
-            .is_some_and(|value| value.is_null() || value.is_string()),
+        turn_id.is_null() || turn_id.is_string(),
         "session_event envelope has invalid turnId"
     );
     Ok(Some(E2eEvent {
         id,
+        turn_id: turn_id.as_str().map(str::to_string),
         event_type,
         data: payload,
     }))

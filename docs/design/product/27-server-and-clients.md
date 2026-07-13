@@ -370,9 +370,12 @@ Flutter Web UI through Playwright, and writes a human-openable evidence bundle u
 
 Normal `cargo test` uses scripted API/actor coverage and an in-process `tm-server` fixture, so it stays
 network-free and does not require Flutter or Playwright. Live actor recordings require
-`TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native Deno engineering coverage remains in the
-focused server tests for `fs.*`, `code.*`, `proc.*`, artifacts, and approval approve/deny/timeout
-paths.
+`TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native Deno engineering keeps focused server tests
+for `fs.*`, `code.*`, `proc.*`, artifacts, and approval approve/deny/timeout paths, while
+`cargo run -p tm-e2e -- record native-coding` now composes those contracts through the public API in
+one offline evidence run. It patches a disposable linked crate, runs a targeted argv-vector test,
+resolves the resulting process-output spill through `artifact://`, proves denied/timed-out writes do
+not apply, and preserves the message turn id on every replayed approval/cell/final event.
 
 Client smoke is split by cost:
 

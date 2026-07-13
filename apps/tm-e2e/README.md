@@ -105,6 +105,7 @@ Useful variants:
 ```sh
 cargo run -p tm-e2e -- record api
 cargo run -p tm-e2e -- record ui --headed
+cargo run -p tm-e2e -- record native-coding
 TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api
 TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record native-actor
 ```
@@ -120,7 +121,7 @@ TM_E2E_SKIP_FLUTTER_BUILD=1 cargo run -p tm-e2e -- record suite
 
 Each evidence bundle includes:
 
-- `manifest.json` — schema v2 run metadata, git state, sanitized env, scenario
+- `manifest.json` — schema v3 run metadata, git state, sanitized env, scenario
   statuses, server config, and artifact paths.
 - `events.ndjson` — every SSE event observed by the Rust client path.
 - `http.ndjson` — public API requests/responses observed by the Rust client path.
@@ -173,6 +174,25 @@ TM_LLM_E2E_LIVE=1 cargo run -p tm-e2e -- record native-actor
 That command loads `.env`, performs a real OpenAI-compatible streaming preflight,
 uses the same native Deno actor route, and lets the final parent/child LLM turns
 come from the `.env` endpoint while keeping the executed JS deterministic.
+
+## Native Coding Acceptance
+
+`record native-coding` is the network-free public-API evidence gate for the
+native Deno Serious Engineer backend:
+
+```sh
+cargo run -p tm-e2e -- record native-coding
+```
+
+It creates a disposable linked Rust crate inside the evidence directory, keeps
+all model responses scripted, and drives three durable turns through HTTP/SSE.
+The approved turn uses real `code.search`, `code.edit`, and an argv-vector
+`proc.run("cargo", ...)`, then forces process output into `artifact://` and
+opens both the spill and patched `linked://` source through the resource
+gateway. The denied and timed-out turns attempt guarded overwrites and prove
+that neither effect is applied. Every replayed approval/cell/final event must
+retain the durable `turnId` returned by the message POST. OMP ACP is not started
+by this gate.
 
 ## Live Speaker Run
 

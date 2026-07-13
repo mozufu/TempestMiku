@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::E2eEvent;
 
-pub const EVIDENCE_SCHEMA_VERSION: u32 = 2;
+pub const EVIDENCE_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +51,7 @@ pub struct RecordedEvent {
     pub timestamp: String,
     pub session_id: String,
     pub event_id: Option<i64>,
+    pub turn_id: Option<String>,
     pub event_type: String,
     pub data: Value,
 }
@@ -220,6 +221,7 @@ impl EvidenceRecorder {
             timestamp: timestamp(),
             session_id: session_id.to_string(),
             event_id: event.id,
+            turn_id: event.turn_id.clone(),
             event_type: event.event_type.clone(),
             data: redact_json(&event.data),
         };
@@ -699,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn recorder_writes_schema_v2_bundle() {
+    fn recorder_writes_current_schema_bundle() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = EvidenceRecorder::create(temp.path(), "tm-e2e test").unwrap();
         let started = timestamp();

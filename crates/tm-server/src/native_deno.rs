@@ -383,6 +383,14 @@ impl CodingEventSink for SwappableCodingSink {
             })?;
         target.publish_persisted(event).await
     }
+
+    fn turn_id(&self) -> Option<Uuid> {
+        self.target
+            .lock()
+            .expect("coding sink proxy lock poisoned")
+            .as_ref()
+            .and_then(|target| target.turn_id())
+    }
 }
 
 struct CodingHostEventSink {

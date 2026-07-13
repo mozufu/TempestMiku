@@ -5,11 +5,12 @@ use serde_json::json;
 #[test]
 fn parses_json_sse_block() {
     let event = parse_sse_block(
-        "id: 7\nevent: session_event\ndata: {\"type\":\"final\",\"turnId\":null,\"payload\":{\"text\":\"done\"},\"createdAt\":\"2026-07-10T00:00:00Z\"}\n",
+        "id: 7\nevent: session_event\ndata: {\"type\":\"final\",\"turnId\":\"turn-7\",\"payload\":{\"text\":\"done\"},\"createdAt\":\"2026-07-10T00:00:00Z\"}\n",
     )
     .unwrap();
     let event = event.unwrap();
     assert_eq!(event.id, Some(7));
+    assert_eq!(event.turn_id.as_deref(), Some("turn-7"));
     assert_eq!(event.event_type, "final");
     assert_eq!(event.data["text"], json!("done"));
 }
@@ -24,21 +25,25 @@ fn builds_conversation_round_from_sse_events() {
     let events = vec![
         E2eEvent {
             id: Some(3),
+            turn_id: Some("turn-1".to_string()),
             event_type: "text".to_string(),
             data: json!({ "delta": "hello " }),
         },
         E2eEvent {
             id: Some(4),
+            turn_id: Some("turn-1".to_string()),
             event_type: "text".to_string(),
             data: json!({ "delta": "artifact://0" }),
         },
         E2eEvent {
             id: Some(5),
+            turn_id: Some("turn-1".to_string()),
             event_type: "artifact".to_string(),
             data: json!({ "artifact": { "uri": "artifact://0" } }),
         },
         E2eEvent {
             id: Some(6),
+            turn_id: Some("turn-1".to_string()),
             event_type: "final".to_string(),
             data: json!({ "text": "hello artifact://0" }),
         },

@@ -119,7 +119,9 @@ each milestone is done only when its acceptance checks pass.
    explicitly selects an alternative such as UnifiedPush.
 2. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
    native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
-   artifacts, and HTTP-routed manual approvals.
+   artifacts, and HTTP-routed manual approvals. The network-free
+   `tm-e2e record native-coding` gate now proves linked-repo edit/test/spill behavior,
+   approve/deny/timeout effects, and durable turn-aware SSE replay through the public API.
 3. **Defer MCP, trace, live external research, cloud drive sync, and self-evolution surfaces until
    their roadmap stages** — `tm-mcp`, `tm-trace`, live egress, optional cloud sync, and P7 hardening
    should layer on the same server/resource surface.

@@ -74,6 +74,9 @@ the existing host registry, resource gateway, approval broker, memory store, eve
       coverage, cron jobs/runs, `cron://` resources, and replayable proactivity are in place.
 - [x] `tm-host` already owns linked-folder `FsPolicy`, `fs.*`, `code.*`, `proc.*`, and `linked://`
       resource behavior.
+- [x] `tm-e2e record native-coding` composes the native Deno linked-repo edit/test/artifact path,
+      HTTP approval approve/deny/timeout behavior, and durable turn-aware replay into one offline
+      public-API evidence bundle; OMP remains outside that dogfood path.
 - [x] `tm-server` already exposes session-scoped resource resolve/list/preview endpoints and
       registers current resource schemes.
 - [x] `drive://` now registers through `tm-drive` when a drive store is configured and still fails

@@ -17,7 +17,7 @@ use tm_core::{
 use tm_e2e::{
     E2eConfig, E2eEvent, EVIDENCE_SCHEMA_VERSION, MikuClient, RecordOptions, ScriptedSpeaker,
     WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions, run_actor_smoke, run_drive_smoke,
-    run_record_api, run_workflow, write_workflow_record,
+    run_record_api, run_record_native_coding, run_workflow, write_workflow_record,
 };
 use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
 use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
@@ -405,6 +405,95 @@ async fn recorded_api_suite_writes_evidence_bundle() {
         cancelled_record["failure_reason"]["kind"],
         json!("cancelled")
     );
+}
+
+#[tokio::test]
+async fn recorded_native_coding_proves_public_api_edit_test_approval_and_replay() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_dir = temp.path().join("record-native-coding");
+
+    let manifest = run_record_native_coding(RecordOptions {
+        output_dir: Some(run_dir.clone()),
+        headed: false,
+        skip_flutter_build: true,
+    })
+    .await
+    .unwrap();
+
+    assert!(manifest.ok);
+    assert_eq!(manifest.schema_version, EVIDENCE_SCHEMA_VERSION);
+    assert_eq!(
+        manifest.server.as_ref().unwrap().coding_backend,
+        "native-deno-scripted-offline"
+    );
+    let scenario = manifest
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.name == "native-coding")
+        .unwrap();
+    assert!(scenario.ok);
+    assert_eq!(scenario.details["approved"]["status"], json!("approved"));
+    assert_eq!(scenario.details["denied"]["status"], json!("denied"));
+    assert_eq!(scenario.details["timedOut"]["status"], json!("timed_out"));
+    assert_eq!(scenario.details["scriptedLlmCalls"], json!(6));
+    for path in ["approved", "denied", "timedOut"] {
+        assert!(
+            scenario.details[path]["turnId"]
+                .as_str()
+                .is_some_and(|turn_id| !turn_id.is_empty())
+        );
+        let replay = scenario.details[path]["replayedEventTypes"]
+            .as_array()
+            .unwrap();
+        for event_type in [
+            "tool_call",
+            "cell_start",
+            "approval",
+            "approval_resolved",
+            "cell_result",
+            "final",
+        ] {
+            assert!(replay.iter().any(|kind| kind == event_type));
+        }
+    }
+
+    assert!(
+        manifest
+            .resources
+            .iter()
+            .any(|resource| resource.uri == "artifact://0")
+    );
+    assert!(
+        manifest
+            .resources
+            .iter()
+            .any(|resource| resource.uri == "linked://repo/src/lib.rs")
+    );
+    let spill = resolved_resource(&run_dir, &manifest, "artifact://0");
+    assert!(
+        spill["content"]
+            .as_str()
+            .unwrap()
+            .contains("native coding evidence output")
+    );
+    let linked = resolved_resource(&run_dir, &manifest, "linked://repo/src/lib.rs");
+    assert!(linked["content"].as_str().unwrap().contains("    2\n"));
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join("native-coding-repo/guard.txt")).unwrap(),
+        "unchanged\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join("native-coding-repo/timeout.txt")).unwrap(),
+        "unchanged\n"
+    );
+
+    let events = std::fs::read_to_string(run_dir.join("events.ndjson")).unwrap();
+    assert!(events.contains("\"turnId\":"));
+    assert!(events.contains("\"status\":\"approved\""));
+    assert!(events.contains("\"status\":\"denied\""));
+    assert!(events.contains("\"status\":\"timed_out\""));
+    let http = std::fs::read_to_string(run_dir.join("http.ndjson")).unwrap();
+    assert_eq!(http.matches("/approvals/").count(), 2);
 }
 
 fn resolved_resource(

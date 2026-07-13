@@ -1,6 +1,8 @@
 mod assets;
 mod evolution;
+mod managed;
 mod prompt;
+mod resource;
 mod skills;
 mod types;
 
@@ -10,7 +12,12 @@ pub use evolution::{
     ReviewAddendumChange, ReviewAddendumSection, ReviewApplyContract, ReviewMetadata,
     ReviewProposalStatus, ReviewProposalTarget,
 };
+pub use managed::{
+    ManagedSkillActivation, ManagedSkillError, ManagedSkillInstall, ManagedSkillState,
+    ManagedSkillVersion,
+};
 pub use prompt::ComposedPrompt;
+pub use resource::SkillResourceHandler;
 pub use skills::resolve_active_skills;
 pub use types::{Mode, ModeCatalog, ModeId, ModeProfile, ModeRoute, SkillActivation, SkillTrigger};
 

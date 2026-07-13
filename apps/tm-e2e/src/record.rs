@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     env, fs,
     path::{Path, PathBuf},
     sync::{
@@ -27,9 +27,11 @@ use tm_server::{
     AppState, ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig,
     ChatActorExecutor, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
     EchoChatRunner, HttpApprovalPolicy, InMemoryStore, ModeId, NativeApprovalMode,
-    NativeDenoBackend, RosterCodingEventSink, ServerError, StoreEvent, StoreMemoryProvider, app,
+    NativeDenoBackend, RosterCodingEventSink, ServerDreamWorker, ServerError, Store, StoreEvent,
+    StoreMemoryProvider, app,
 };
-use tokio::process::Command;
+use tokio::{process::Command, sync::broadcast};
+use uuid::Uuid;
 
 use crate::{
     E2eConfig, EvidenceManifest, EvidenceRecorder, LiveSpeaker, MikuClient, ScriptedSpeaker,
@@ -145,6 +147,90 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
             .await
             .expect_err("conservative moderate target must be denied");
         ensure!(denied.to_string().contains("evolution_insufficient_tier"));
+
+        let (first_skill_session, skill_name, first_skill_digest) = install_dream_skill(
+            &conservative,
+            &conservative_client,
+            "Workflow: when I ask for release notes, gather commits and draft concise notes.",
+        )
+        .await?;
+        let (second_skill_session, second_skill_name, second_skill_digest) = install_dream_skill(
+            &conservative,
+            &conservative_client,
+            "Workflow: when I ask for release notes, gather commits and include upgrade risks.",
+        )
+        .await?;
+        ensure!(
+            skill_name == second_skill_name,
+            "skill upgrade did not preserve normalized identity"
+        );
+        ensure!(
+            first_skill_digest != second_skill_digest,
+            "skill upgrade did not create an immutable second version"
+        );
+        let rollback = conservative_client
+            .propose_skill_rollback(
+                &second_skill_session,
+                &skill_name,
+                &second_skill_digest,
+                &first_skill_digest,
+            )
+            .await?;
+        let rollback_approval_id = rollback["approvalId"]
+            .as_str()
+            .context("skill rollback approval id")?;
+        let rollback_recovery = conservative_client
+            .session_messages(&second_skill_session)
+            .await?;
+        let rollback_approval = rollback_recovery["pendingEvents"]
+            .as_array()
+            .context("skill rollback pending events")?
+            .iter()
+            .find(|event| {
+                event["type"] == "approval" && event["data"]["backend"] == "skill-rollback"
+            })
+            .context("skill rollback recovery approval")?;
+        ensure!(
+            rollback_approval["data"]["approvalId"] == rollback_approval_id,
+            "skill rollback approval event did not match response"
+        );
+        conservative_client
+            .resolve_approval(&second_skill_session, rollback_approval_id, "approve")
+            .await?;
+        let rollback_applied = conservative
+            .store
+            .events_after(Uuid::parse_str(&second_skill_session)?, None)
+            .await?
+            .into_iter()
+            .find(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["kind"] == "skill_rollback"
+                    && event.payload_json["status"] == "approved"
+            })
+            .context("durable approved skill rollback event")?;
+        ensure!(
+            rollback_applied.payload_json["activation"]["active"]["contentDigest"]
+                == first_skill_digest,
+            "skill rollback did not activate the requested immutable version"
+        );
+        let skill_uri = format!("skill://{skill_name}");
+        capture_resource(
+            recorder,
+            &conservative_client,
+            &second_skill_session,
+            &skill_uri,
+        )
+        .await?;
+        ensure!(
+            conservative
+                .persona
+                .managed_skill(&skill_name)
+                .context("reloading managed skill state")?
+                .active
+                .content_digest
+                == first_skill_digest,
+            "managed skill active pointer did not survive catalog reload"
+        );
 
         capture_resource(
             recorder,
@@ -290,6 +376,11 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
             "moderateSessionId": session.id,
             "proposalId": proposal_id,
             "conservativeAllowed": allowed["status"],
+            "skillName": skill_name,
+            "skillInstallSessions": [first_skill_session, second_skill_session],
+            "skillVersionDigests": [first_skill_digest, second_skill_digest],
+            "skillRollback": rollback_applied.payload_json,
+            "skillResource": skill_uri,
             "timeoutStatus": timed_out["status"],
             "moderateApplyEnabled": proposal["applyEnabled"],
             "replayStatuses": statuses,
@@ -302,6 +393,63 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
     .await;
     record_scenario_result(recorder, "evolution-policy", started_at, &result);
     result.map(|_| ())
+}
+
+async fn install_dream_skill(
+    server: &RecordingServer,
+    client: &MikuClient,
+    message: &str,
+) -> Result<(String, String, String)> {
+    let session = client.create_session(None).await?;
+    let session_id = Uuid::parse_str(&session.id).context("parsing skill dream session id")?;
+    server.run_skill_dream(session_id, message).await?;
+    let recovery = client.session_messages(&session.id).await?;
+    let pending_events = recovery["pendingEvents"]
+        .as_array()
+        .context("skill dream pending events")?;
+    let approval = pending_events
+        .iter()
+        .find(|event| event["type"] == "approval" && event["data"]["backend"] == "skill")
+        .context("managed skill recovery approval")?;
+    let pending = pending_events
+        .iter()
+        .find(|event| {
+            event["type"] == "write_proposal"
+                && event["data"]["kind"] == "skill"
+                && event["data"]["status"] == "pending"
+        })
+        .context("pending managed skill proposal")?;
+    let name = pending["data"]["name"]
+        .as_str()
+        .context("managed skill proposal name")?
+        .to_string();
+    ensure!(
+        pending["data"]["installEnabled"] == true,
+        "reviewable skill proposal did not expose install authority"
+    );
+    let approval_id = approval["data"]["approvalId"]
+        .as_str()
+        .context("managed skill approval id")?;
+    client
+        .resolve_approval(&session.id, approval_id, "approve")
+        .await?;
+    let installed = server
+        .store
+        .events_after(session_id, None)
+        .await?
+        .into_iter()
+        .find(|event| {
+            event.event_type == "write_proposal"
+                && event.payload_json["kind"] == "skill"
+                && event.payload_json["status"] == "approved"
+                && event.payload_json.get("installation").is_some()
+        })
+        .context("durable installed skill event")?;
+    let digest = installed.payload_json["installation"]["active"]["contentDigest"]
+        .as_str()
+        .context("installed managed skill digest")?
+        .to_string();
+    Ok((session.id, name, digest))
 }
 
 pub async fn run_record_ui(options: RecordOptions) -> Result<EvidenceManifest> {
@@ -1338,6 +1486,10 @@ impl LlmClient for ScriptedThenLiveLlm {
 struct RecordingServer {
     base_url: String,
     artifact_root: PathBuf,
+    store: Arc<InMemoryStore>,
+    broker: Arc<ApprovalBroker>,
+    persona: tm_server::ModesConfig,
+    tier: tm_host::SelfEvolutionTier,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -1363,11 +1515,13 @@ impl RecordingServer {
             safe_args: Vec::new(),
         }])
         .context("configuring recording-server project link")?;
+        let persona = tm_server::ModesConfig::default()
+            .with_managed_skills_path(artifact_root.join("managed-skills"));
         let state = AppState::new(
-            store,
+            Arc::clone(&store),
             memory,
             chat,
-            tm_server::ModesConfig::default(),
+            persona.clone(),
             AuthConfig::NoAuth,
         )
         .with_auto_turn_dispatcher(true)
@@ -1378,7 +1532,7 @@ impl RecordingServer {
         .with_actor_roster(Arc::clone(&roster))
         .with_coding_backend(Arc::new(RecordingBackend {
             root: artifact_root.clone(),
-            broker,
+            broker: Arc::clone(&broker),
             roster,
         }));
         state.wire_lifecycle_sink();
@@ -1397,8 +1551,52 @@ impl RecordingServer {
         Ok(Self {
             base_url: format!("http://{addr}"),
             artifact_root,
+            store,
+            broker,
+            persona,
+            tier,
             handle,
         })
+    }
+
+    async fn run_skill_dream(&self, session_id: Uuid, message: &str) -> Result<()> {
+        self.store
+            .append_message(session_id, "user", message)
+            .await
+            .context("seeding skill dream message")?;
+        self.store
+            .end_session_and_enqueue_dream(session_id, "brian".to_string(), "global".to_string())
+            .await
+            .context("ending session for skill dream")?;
+        let senders = Arc::new(Mutex::new(BTreeMap::<
+            Uuid,
+            broadcast::Sender<tm_server::SessionEvent>,
+        >::new()));
+        let sender_for: tm_server::SenderFactory = Arc::new(move |session_id| {
+            let mut senders = senders.lock().expect("tm-e2e dream sender lock");
+            senders
+                .entry(session_id)
+                .or_insert_with(|| broadcast::channel(64).0)
+                .clone()
+        });
+        let report = ServerDreamWorker::new(
+            Arc::clone(&self.store),
+            Arc::clone(&self.broker),
+            sender_for,
+            tm_server::DreamWorkerConfig {
+                proposal_timeout: Duration::from_secs(5),
+                ..tm_server::DreamWorkerConfig::default()
+            },
+        )
+        .with_self_evolution_tier(self.tier)
+        .run_once_result()
+        .await
+        .context("running skill dream")?;
+        ensure!(
+            report.completed == 1,
+            "skill dream did not complete: {report:?}"
+        );
+        Ok(())
     }
 }
 

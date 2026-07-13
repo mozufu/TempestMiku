@@ -6,10 +6,9 @@
  * namespaces. P2 memory is exposed as memory:// resources behind
  * resources.read:memory, not as a memory.* namespace. P4 adds constrained
  * memory:// dream queues/records, summaries, skill-proposal previews, bounded
- * evolution audit history, and review-only persona/mode addendum proposals;
- * bundled skill markdown may still be labeled skill://... inside composed
- * prompts, but that label is not a resources.read/list/preview surface until
- * the P7 import/reload lifecycle registers a handler and grants.
+ * evolution audit history, and review-only persona/mode addendum proposals.
+ * P7.1 adds capability-gated skill:// reads for approved, immutable managed
+ * skill versions; the skills.* namespace remains closed.
  *
  * P3/P3-plus agents surface: `agents` is defined only in sessions holding the required
  * agents.* grant. In ungranted sessions it remains `undefined`. Use
@@ -64,7 +63,12 @@ type MimeType = string;
 type CapabilityName = string;
 type ArtifactUri = `artifact://${string}`;
 type BlobUri = `blob:sha256:${string}`;
-type SkillPromptLabel = `skill://${string}`;
+type SkillResourceUri =
+  | "skill://"
+  | "skill://root"
+  | `skill://${string}`
+  | `skill://${string}/versions`
+  | `skill://${string}/versions/${string}`;
 
 type MemoryResourceUri =
   | "memory://root"
@@ -94,6 +98,7 @@ type ResourceUri =
   | `agent://${string}`
   | `history://${string}`
   | MemoryResourceUri
+  | SkillResourceUri
   | `drive://${string}`
   | CronResourceUri
   | `workspace://session/${string}`
@@ -272,13 +277,14 @@ interface ResourcesNamespace {
    * Scheme-dispatched resource read. Current registered schemes include
    * artifact://, linked://, workspace://session, project://, the P2/P4
    * memory:// surface, the P3 agent:// / history:// handlers, P4 cron://
-   * job/run previews, and P5 drive:// documents when configured. Each scheme has its own grant such as
+   * job/run previews, P5 drive:// documents when configured, and P7.1 managed
+   * skill:// catalog/version reads. Each scheme has its own grant such as
    * resources.read:artifact, resources.read:linked, resources.read:memory,
    * resources.read:agent, resources.read:history, resources.read:cron,
-   * or resources.read:drive;
+   * resources.read:drive, or resources.read:skill;
    * missing grants and unknown schemes fail closed.
-   * skill://... is prompt-composition-only for now. Reads for unregistered
-   * schemes must fail closed until their owning milestones wire handlers and grants.
+   * The skills.* namespace remains undefined; install, upgrade, and rollback
+   * stay server-owned approval effects rather than model-callable methods.
    */
   read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>;
   /** resources.preview(uri: ResourceUri): Promise<ResourceContent> */

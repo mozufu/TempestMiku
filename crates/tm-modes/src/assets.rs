@@ -6,7 +6,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ModeCatalog, ModeId, ModeProfile};
+use crate::{
+    ManagedSkillActivation, ManagedSkillError, ManagedSkillInstall, ManagedSkillState, ModeCatalog,
+    ModeId, ModeProfile, SkillActivation, SkillTrigger,
+};
 
 const BUNDLED_MODES_SOURCE: &str = "bundled:tm-modes/default-modes";
 pub(crate) const BUNDLED_SOUL: &str = include_str!("../assets/SOUL.md");
@@ -78,13 +81,24 @@ impl ModeAssets {
 #[derive(Debug, Clone, Default)]
 pub struct ModesConfig {
     pub asset_path: Option<PathBuf>,
+    pub managed_skills_path: Option<PathBuf>,
 }
 
 impl ModesConfig {
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
         Self {
             asset_path: Some(path.into()),
+            managed_skills_path: None,
         }
+    }
+
+    pub fn with_managed_skills_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.managed_skills_path = Some(path.into());
+        self
+    }
+
+    pub fn managed_skills_path(&self) -> Option<&Path> {
+        self.managed_skills_path.as_deref()
     }
 
     pub fn load_status(&self) -> AssetStatus {
@@ -96,6 +110,85 @@ impl ModesConfig {
     }
 
     pub fn load_assets(&self) -> ModeAssets {
+        let mut assets = self.load_base_assets();
+        if let Some(root) = &self.managed_skills_path {
+            match crate::managed::states(root) {
+                Ok(states) => overlay_managed_skills(&mut assets, root, states),
+                Err(error) => assets.warnings.push(format!(
+                    "managed skill catalog {} is unavailable: {error}",
+                    root.display()
+                )),
+            }
+            refresh_asset_status(&mut assets);
+        }
+        assets
+    }
+
+    pub fn install_managed_skill(
+        &self,
+        install: ManagedSkillInstall,
+    ) -> Result<ManagedSkillActivation, ManagedSkillError> {
+        let base = self.load_base_assets();
+        if base.skills.contains_key(&install.name) {
+            return Err(ManagedSkillError::from_message(format!(
+                "managed skill {} collides with a bundled or hand-authored skill",
+                install.name
+            )));
+        }
+        crate::managed::install(
+            crate::managed::configured_root(&self.managed_skills_path)?,
+            install,
+        )
+    }
+
+    pub fn rollback_managed_skill(
+        &self,
+        name: &str,
+        expected_active_digest: &str,
+        target_digest: &str,
+    ) -> Result<ManagedSkillActivation, ManagedSkillError> {
+        crate::managed::rollback(
+            crate::managed::configured_root(&self.managed_skills_path)?,
+            name,
+            expected_active_digest,
+            target_digest,
+        )
+    }
+
+    pub fn managed_skill(&self, name: &str) -> Result<ManagedSkillState, ManagedSkillError> {
+        crate::managed::state(
+            crate::managed::configured_root(&self.managed_skills_path)?,
+            name,
+        )
+    }
+
+    pub fn managed_skills(&self) -> Result<Vec<ManagedSkillState>, ManagedSkillError> {
+        crate::managed::states(crate::managed::configured_root(&self.managed_skills_path)?)
+    }
+
+    pub fn managed_skill_body(
+        &self,
+        name: &str,
+    ) -> Result<(crate::ManagedSkillVersion, String), ManagedSkillError> {
+        crate::managed::active_body(
+            crate::managed::configured_root(&self.managed_skills_path)?,
+            name,
+        )
+    }
+
+    pub fn managed_skill_version_body(
+        &self,
+        name: &str,
+        digest: &str,
+    ) -> Result<(crate::ManagedSkillVersion, String), ManagedSkillError> {
+        crate::managed::version_body(
+            crate::managed::configured_root(&self.managed_skills_path)?,
+            name,
+            digest,
+        )
+    }
+
+    fn load_base_assets(&self) -> ModeAssets {
         let Some(root) = &self.asset_path else {
             return bundled_assets();
         };
@@ -149,6 +242,50 @@ impl ModesConfig {
             warnings,
         }
     }
+}
+
+fn overlay_managed_skills(assets: &mut ModeAssets, root: &Path, states: Vec<ManagedSkillState>) {
+    for state in states {
+        let name = state.active.name.clone();
+        if assets.skills.contains_key(&name) {
+            assets.warnings.push(format!(
+                "managed skill {name} collides with a bundled or hand-authored skill; ignoring managed version"
+            ));
+            continue;
+        }
+        let body = match crate::managed::active_body(root, &name) {
+            Ok((version, body)) if version == state.active => body,
+            Ok(_) => {
+                assets.warnings.push(format!(
+                    "managed skill {name} active manifest changed while loading; ignoring managed version"
+                ));
+                continue;
+            }
+            Err(error) => {
+                assets
+                    .warnings
+                    .push(format!("managed skill {name} is unavailable: {error}"));
+                continue;
+            }
+        };
+        assets.skills.insert(name.clone(), body);
+        if !assets.modes.skills.iter().any(|entry| entry.name == name) {
+            assets.modes.skills.push(SkillTrigger {
+                name,
+                activation: SkillActivation::Triggered,
+                triggers: state.active.triggers,
+            });
+        }
+    }
+}
+
+fn refresh_asset_status(assets: &mut ModeAssets) {
+    if assets.warnings.is_empty() {
+        return;
+    }
+    assets.status = AssetStatus::Degraded {
+        warning: assets.warnings.join("; "),
+    };
 }
 
 fn load_configured_modes(root: &Path, warnings: &mut Vec<String>) -> ModeCatalog {

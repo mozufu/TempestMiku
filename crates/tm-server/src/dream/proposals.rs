@@ -231,7 +231,7 @@ fn skill_write_approval_prompt(
     timeout: StdDuration,
 ) -> ApprovalPrompt {
     ApprovalPrompt {
-        action: format!("skill.propose {}", proposal.name),
+        action: format!("skill.install {}", proposal.name),
         scope: json!({
             "kind": "skill",
             "proposalId": proposal.id,
@@ -244,7 +244,7 @@ fn skill_write_approval_prompt(
         options: vec![
             ApprovalOption {
                 option_id: "allow".to_string(),
-                name: "Accept proposal".to_string(),
+                name: "Install skill".to_string(),
                 kind: "allow_once".to_string(),
             },
             ApprovalOption {
@@ -260,13 +260,17 @@ pub(crate) fn skill_proposal_payload(
     proposal: &SkillProposalRecord,
     status: SkillProposalStatus,
 ) -> Value {
+    let lifecycle = tm_memory::skill_proposal_lifecycle(proposal);
     json!({
         "kind": "skill",
         "proposalId": proposal.id,
         "status": status,
         "name": proposal.name,
         "preview": bounded_preview(&proposal.description, 512),
-        "contentDigest": skill_content_digest(proposal),
+        "contentDigest": lifecycle.content_digest,
+        "installEnabled": lifecycle.installable,
+        "catalogReload": lifecycle.catalog_reload,
+        "rollback": lifecycle.rollback,
         "sourceDreamId": proposal.source_dream_id,
         "sourceSessionId": proposal.source_session_id,
         "uri": skill_proposal_uri(proposal.id),

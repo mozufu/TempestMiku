@@ -125,7 +125,11 @@ where
             apply_memory_write_effect(store, approval, &lease.effect, self_evolution_tier).await
         }
         "skill_write" => {
-            apply_skill_write_effect(store, approval, &lease.effect, self_evolution_tier).await
+            apply_skill_write_effect(store, approval, &lease.effect, self_evolution_tier, persona)
+                .await
+        }
+        "skill_rollback" => {
+            apply_skill_rollback_effect(approval, &lease.effect, self_evolution_tier, persona).await
         }
         "evolution_review" => {
             apply_evolution_review_effect(
@@ -228,6 +232,7 @@ async fn apply_skill_write_effect<S>(
     approval: &ApprovalRequestRecord,
     effect: &ApprovalEffectRecord,
     self_evolution_tier: SelfEvolutionTier,
+    persona: &tm_modes::ModesConfig,
 ) -> Result<Value>
 where
     S: Store,
@@ -240,7 +245,7 @@ where
         .ok_or_else(|| ServerError::Store("skill effect missing proposalId".to_string()))?;
     let status = approval_skill_status(&approval.status)?;
     let proposal = store.skill_proposal(proposal_id).await?;
-    if approval.status == "approved" {
+    let installation = if approval.status == "approved" {
         let digest = crate::evolution::evolution_content_digest(&proposal)?;
         crate::evolution::verify_approved_evolution_effect(
             self_evolution_tier,
@@ -249,13 +254,126 @@ where
             &proposal_id.to_string(),
             &digest,
         )?;
-    }
+        let lifecycle = tm_memory::skill_proposal_lifecycle(&proposal);
+        if !lifecycle.installable {
+            return Err(crate::evolution::policy_error(
+                tm_host::EvolutionPolicyReason::InvalidPayload,
+                format!(
+                    "skill proposal {proposal_id} is not installable: {}",
+                    lifecycle.violations.join(", ")
+                ),
+            ));
+        }
+        let activation = persona
+            .install_managed_skill(tm_modes::ManagedSkillInstall {
+                name: lifecycle.normalized_name,
+                body: proposal.body.clone(),
+                content_digest: lifecycle.content_digest,
+                source_proposal_id: proposal.id.to_string(),
+                description: proposal.description.clone(),
+                triggers: vec![proposal.trigger.clone()],
+                use_criteria: proposal.use_criteria.clone(),
+            })
+            .map_err(|error| {
+                crate::evolution::policy_error(
+                    tm_host::EvolutionPolicyReason::InvalidPayload,
+                    error.to_string(),
+                )
+            })?;
+        Some(activation)
+    } else {
+        None
+    };
     let proposal = store
         .update_skill_proposal_status(proposal_id, status)
         .await?;
-    Ok(crate::dream::proposals::skill_proposal_payload(
-        &proposal, status,
-    ))
+    let mut payload = crate::dream::proposals::skill_proposal_payload(&proposal, status);
+    if let Some(installation) = installation {
+        payload["installation"] = serde_json::to_value(installation)?;
+    }
+    Ok(payload)
+}
+
+async fn apply_skill_rollback_effect(
+    approval: &ApprovalRequestRecord,
+    effect: &ApprovalEffectRecord,
+    self_evolution_tier: SelfEvolutionTier,
+    persona: &tm_modes::ModesConfig,
+) -> Result<Value> {
+    let rollback = effect
+        .payload_json
+        .get("rollback")
+        .cloned()
+        .ok_or_else(|| ServerError::Store("skill rollback effect missing rollback".to_string()))?;
+    let name = rollback
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ServerError::Store("skill rollback effect missing name".to_string()))?;
+    let expected_active_digest = rollback
+        .get("expectedActiveDigest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ServerError::Store("skill rollback effect missing expectedActiveDigest".to_string())
+        })?;
+    let target_digest = rollback
+        .get("targetDigest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ServerError::Store("skill rollback effect missing targetDigest".to_string())
+        })?;
+    let target_proposal_id = rollback
+        .get("targetProposalId")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| {
+            ServerError::Store("skill rollback effect missing targetProposalId".to_string())
+        })?;
+    let status = approval_terminal_status(&approval.status)?;
+    let activation = if approval.status == "approved" {
+        let digest = crate::evolution::evolution_content_digest(&rollback)?;
+        crate::evolution::verify_approved_evolution_effect(
+            self_evolution_tier,
+            &effect.payload_json,
+            tm_host::EvolutionTargetClass::SkillProposal,
+            &target_proposal_id.to_string(),
+            &digest,
+        )?;
+        let managed = persona
+            .managed_skill(name)
+            .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+        let target = managed
+            .versions
+            .iter()
+            .find(|version| version.content_digest == target_digest)
+            .ok_or_else(|| {
+                ServerError::NotFound(format!("managed skill {name} version {target_digest}"))
+            })?;
+        if target.source_proposal_id != target_proposal_id.to_string() {
+            return Err(crate::evolution::policy_error(
+                tm_host::EvolutionPolicyReason::InvalidPayload,
+                format!("managed skill {name} rollback proposal provenance changed"),
+            ));
+        }
+        Some(
+            persona
+                .rollback_managed_skill(name, expected_active_digest, target_digest)
+                .map_err(|error| {
+                    crate::evolution::policy_error(
+                        tm_host::EvolutionPolicyReason::StaleApproval,
+                        error.to_string(),
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    Ok(
+        crate::api::sessions::skill_lifecycle::skill_rollback_payload(
+            &rollback,
+            status,
+            activation.as_ref(),
+        ),
+    )
 }
 
 async fn apply_evolution_review_effect<S>(
@@ -321,6 +439,18 @@ fn approval_memory_status(status: &str) -> Result<MemoryWriteStatus> {
         "denied" => Ok(MemoryWriteStatus::Denied),
         "timed_out" => Ok(MemoryWriteStatus::TimedOut),
         "cancelled" => Ok(MemoryWriteStatus::Cancelled),
+        other => Err(ServerError::Store(format!(
+            "approval has non-terminal status {other}"
+        ))),
+    }
+}
+
+fn approval_terminal_status(status: &str) -> Result<&'static str> {
+    match status {
+        "approved" => Ok("approved"),
+        "denied" => Ok("denied"),
+        "timed_out" => Ok("timed_out"),
+        "cancelled" => Ok("cancelled"),
         other => Err(ServerError::Store(format!(
             "approval has non-terminal status {other}"
         ))),

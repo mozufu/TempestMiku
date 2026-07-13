@@ -107,13 +107,13 @@ pub enum SkillConflictPolicy {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillRollbackContract {
-    NoLiveMutation,
+    AtomicVersionPointer,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillCatalogReloadContract {
-    Disabled,
+    OnNextLoad,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -136,9 +136,9 @@ pub fn skill_proposal_lifecycle(proposal: &SkillProposalRecord) -> SkillProposal
     skill_lifecycle(
         &proposal.name,
         &proposal.body,
+        proposal.verification.passed,
         proposal.source_dream_id,
         proposal.source_session_id,
-        proposal,
     )
 }
 
@@ -146,18 +146,18 @@ pub fn new_skill_proposal_lifecycle(proposal: &NewSkillProposalRecord) -> SkillP
     skill_lifecycle(
         &proposal.name,
         &proposal.body,
+        proposal.verification.passed,
         proposal.source_dream_id,
         proposal.source_session_id,
-        proposal,
     )
 }
 
 fn skill_lifecycle(
     name: &str,
     body: &str,
+    verification_passed: bool,
     source_dream_id: Uuid,
     source_session_id: Uuid,
-    content: &impl Serialize,
 ) -> SkillProposalLifecycle {
     let normalized_name = normalize_skill_name(name);
     let mut violations = Vec::new();
@@ -181,22 +181,22 @@ fn skill_lifecycle(
     }
     validate_skill_references(body, &mut violations);
     validate_skill_authority(body, &mut violations);
+    if !verification_passed {
+        violations.push("verification_failed".to_string());
+    }
 
-    let mut value = serde_json::to_value(content).expect("skill proposal serializes");
-    crate::redact_json_value(&mut value);
-    let encoded = serde_json::to_vec(&value).expect("skill proposal JSON encodes");
     let reviewable = violations.is_empty();
     SkillProposalLifecycle {
-        version: 1,
+        version: 2,
         normalized_name,
-        content_digest: format!("sha256:{:x}", Sha256::digest(encoded)),
+        content_digest: format!("sha256:{:x}", Sha256::digest(body.as_bytes())),
         source_dream_id,
         source_session_id,
         conflict_policy: SkillConflictPolicy::RejectNameCollision,
-        rollback: SkillRollbackContract::NoLiveMutation,
-        catalog_reload: SkillCatalogReloadContract::Disabled,
+        rollback: SkillRollbackContract::AtomicVersionPointer,
+        catalog_reload: SkillCatalogReloadContract::OnNextLoad,
         reviewable,
-        installable: false,
+        installable: reviewable,
         violations,
     }
 }
@@ -289,16 +289,20 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn valid_skill_is_reviewable_but_never_installable_in_p7_0() {
+    fn valid_skill_is_installable_with_versioned_reload_contract() {
         let lifecycle = new_skill_proposal_lifecycle(&proposal(
             "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\n- Review.\n\n## Guardrails\n- Do not edit SOUL.md.\n"
                 .to_string(),
         ));
         assert!(lifecycle.reviewable);
-        assert!(!lifecycle.installable);
+        assert!(lifecycle.installable);
         assert_eq!(
             lifecycle.catalog_reload,
-            SkillCatalogReloadContract::Disabled
+            SkillCatalogReloadContract::OnNextLoad
+        );
+        assert_eq!(
+            lifecycle.rollback,
+            SkillRollbackContract::AtomicVersionPointer
         );
         assert!(lifecycle.content_digest.starts_with("sha256:"));
     }

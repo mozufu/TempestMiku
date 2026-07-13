@@ -576,3 +576,4 @@ mod memory;
 mod pairing;
 mod project_resources;
 mod router;
+mod skill_lifecycle;

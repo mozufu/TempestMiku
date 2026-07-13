@@ -836,7 +836,7 @@ async fn cron_resource_gateway_reads_jobs_and_run_history() {
 }
 
 #[tokio::test]
-async fn skill_resource_gateway_is_prompt_composition_only_until_p4() {
+async fn skill_resource_gateway_fails_closed_when_managed_catalog_is_unconfigured() {
     let (app, _) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
 

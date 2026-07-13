@@ -96,10 +96,11 @@ outputs out of both the model context and the mobile client render path.
 
 ## 9.3 Resource catalog
 
-Internal schemes (v1). The implemented P0-P5 session gateway currently registers `artifact://`,
+Internal schemes (v1). The implemented P0-P7.1 session gateway currently registers `artifact://`,
 `workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, `history://`, `cron://`,
-and `drive://` when the local-first drive store is configured. Other catalog entries are reserved
-designs and must fail closed until their backing subsystem registers a handler and grant.
+`drive://` when the local-first drive store is configured, and `skill://` when the managed catalog is
+configured. Other catalog entries are reserved designs and must fail closed until their backing
+subsystem registers a handler and grant.
 
 | scheme | resolves | backing subsystem | registered by |
 |---|---|---|---|
@@ -107,20 +108,20 @@ designs and must fail closed until their backing subsystem registers a handler a
 | `agent://<id>` | sub-agent output/record resource | agents §23 / §25 | `tm-agents` |
 | `history://<id>` | read-only sub-agent transcript | agents §23 | `tm-agents` |
 | `memory://…` | P2/P4 memory gateway: `root`, `user-model`, approved profile facts, scoped recall chunks, dream queue/record previews, summaries, and skill proposal previews (§22.9). Richer `MEMORY.md`, episodic query, and project memory remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
-| `skill://<name>` | **Reserved prompt label only in P2**: composed system prompts may label injected `SKILL.md` sections this way, but `resources.read/list/preview("skill://...")` is not registered and must fail closed until P4/P7 defines the read lifecycle. | skills §22 / §26 | prompt composition now; no resource handler until P4/P7 |
+| `skill://[<name>[/versions[/<digest>]]]` | P7.1 managed-skill catalog, active body, version metadata, and immutable digest-addressed body. Bundled/hand-authored skills are prompt assets and are not exposed through this managed catalog. | skills §22 / §26 | `tm-modes` handler + `tm-server` gateway |
 | `drive://<path>` | P5 user document by canonical path, with virtual directory views such as `drive://by-project/<project>` and `drive://by-type/<kind>` §24 | drive §24 | `tm-drive` |
 | `cron://[<id>]` | P4 scheduler job table: list jobs / a job's definition + run history §27.2 | scheduler §27 | `tm-server` session resource gateway |
 | `workspace://session/<path>` | current session sandbox workspace read/list/preview | sandbox workspace §07 / §08 | `tm-sandbox` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
 | `project://<id>/<view>` | aggregate project surface: status, open loops, decisions, linked folders, artifacts, agents | server project layer §27 / memory §22 / host §25 | `tm-server` |
 
-`skill://` is **not yet promoted** from prompt-composition provenance to a first-class resource
-scheme. The P2 persona layer injects active skill markdown directly into the system prompt and labels
-those sections with `skill://<name>` for source clarity. That label is not model-readable through the
-SDK or client gateway: `resources.read("skill://...")`, `resources.preview("skill://...")`, and
-`resources.list("skill://...")` must fail closed as unknown schemes. P4/P7 may promote it later, but
-only with a registered handler, scheme-specific grant, provenance, audit/replay, and safe
-import/version/reload rules.
+P7.1 promotes approved managed skills to a first-class resource scheme without opening a `skills.*`
+write namespace. `skill://` lists active managed entries; `skill://<name>` reads the active body;
+`skill://<name>/versions` returns version state; and
+`skill://<name>/versions/<sha256-hex>` reads an immutable version. The native Deno handler requires
+`resources.read:skill`; the authenticated session gateway applies the same parser and catalog source.
+An unconfigured catalog remains unregistered, selectors are rejected, and bundled/hand-authored
+skills cannot be shadowed by managed entries.
 
 ### Workspace, linked folders, and projects
 
@@ -179,8 +180,7 @@ contract** when enabled; until then they remain an open question (§15).
 ## 9.4 Failure modes & degradation
 
 - **Unknown scheme** → error listing the registered schemes.
-- **Reserved prompt-only label** such as `skill://...` → unknown scheme until the owning milestone
-  registers a handler and grants.
+- **Managed skill catalog unconfigured** → `skill://...` is absent from the registered scheme list.
 - **Capability denied** → **fail closed** (§08); the read never runs.
 - **Handler resolves nothing** (id / path missing) → not-found error listing available ids / paths
   (mirrors the artifact-store behavior, §25.5).

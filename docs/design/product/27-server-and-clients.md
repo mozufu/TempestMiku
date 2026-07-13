@@ -178,11 +178,13 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 - **Mobile remote control (P1/P4).** Phone/browser control uses the same server API as every client: SSE
   for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
-  `project://`, `memory://`, `history://`, P4 `cron://`, and configured P5 `drive://` links. The phone is only a view and controller;
+  `project://`, `memory://`, `history://`, P4 `cron://`, configured P5 `drive://`, and P7.1 managed
+  `skill://` links. The phone is only a view and controller;
   the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
   The P2/P4 memory gateway currently exposes `memory://root`, `memory://user-model`, exact approved
   profile fact / scoped recall record URIs, dream queue/record previews, dream summaries, and skill
-  proposal previews, P7.0 evolution audit history, and typed persona/mode review-proposal resources,
+  proposal previews, P7.0 evolution audit history, typed persona/mode review-proposal resources, and
+  P7.1 active/immutable managed-skill versions,
   with compact previews and fail-closed unknown paths (§22.9 / §26.4).
 - **Android target (P6 security slice).** The same Flutter app uses an in-app camera scanner
   (`mobile_scanner` 7.2.0, bundled ML Kit) for versioned one-time pairing QR data. No exported Android
@@ -210,6 +212,7 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   `POST /sessions/:id/scope`, `POST /sessions/:id/end`, `GET /sessions/:id/events`,
   `GET|POST /sessions/:id/approvals/:approval_id`, `POST /sessions/:id/memory/proposals`,
   `POST /sessions/:id/evolution/review-proposals`,
+  `POST /sessions/:id/evolution/skills/:name/rollback`,
   `POST /sessions/:id/promote`, `GET /modes`, mode lock / override endpoints, session-scoped
   resource endpoints (§09), protected `GET /ready`/`GET /metrics`, and minimal public `GET /health`.
   Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
@@ -231,11 +234,11 @@ provider registrations, approval expiry, and approval resolution all close the c
 notification lifecycle. Notification approval omits `optionId`, so the existing broker selects
 `allow_once` before any wider allow option.
 
-The session resource gateway supports resolve/list/preview for the live P0-P5 schemes:
+The session resource gateway supports resolve/list/preview for the live P0-P7.1 schemes:
 `artifact://`, `workspace://session/...`, `linked://...`, `project://...`, the P2 `memory://`
 surface plus P4 summary/skill-proposal previews (§22.9), the P3 `agent://` / `history://` actor
-resources (§23), P4 `cron://` job/run views, and P5 `drive://` documents/virtual dirs when a drive
-store is configured. `GET
+resources (§23), P4 `cron://` job/run views, P5 `drive://` documents/virtual dirs when a drive
+store is configured, and P7.1 `skill://` managed catalog/version views. `GET
 /sessions/:id/resources/preview` returns a bounded metadata envelope with empty `content`; clients
 resolve full content only on demand.
 
@@ -304,6 +307,11 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   Message POSTs do not block on approval; clients see pending `write_proposal` / `approval` events and
   resolve them through the same approval route. Skipped transient, sensitive, or raw-log content emits no
   memory approval event.
+- **Managed skill writes:** an approved, self-verified dream proposal installs one immutable
+  digest-addressed version and atomically activates it; a denied/timed-out/stale effect cannot mutate
+  the catalog. Rollback is a separate durable manual approval with expected-current and target digests.
+  Both remain resumable through the approval outbox, and disconnected clients recover their pending
+  events through `/sessions/:id/messages` `pendingEvents` after the terminal `session_end` fence.
 - **OMP ACP bridge (P0a):** ACP `session/request_permission` and elicitation prompts are translated
   into the same `approval` event + POST resolution path; unsupported or timed-out prompts deny by
   default. If the bridge process disappears, its outstanding non-resumable requests are cancelled;
@@ -319,7 +327,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 - `api` — authenticated inbound HTTP: device pairing/revocation, session create / durable turn send,
   turn status/scope, mode lock, approval resolve, session promote,
   session-scoped resource resolve/list/preview gateway for `artifact://`, `workspace://`, `linked://`,
-  `project://`, `memory://`, and the other registered schemes (§09), browser feeds; optional
+  `project://`, `memory://`, `skill://`, and the other registered schemes (§09), browser feeds; optional
   OpenAI-compatible endpoint (§27.5).
 - `store` — explicit in-memory development and Postgres production implementations: ordered
   checksummed migrations; sessions, turns, messages, append-only events, approvals/effects, dreams,
@@ -363,6 +371,9 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 through the same authenticated session API as the Web/PWA client. It creates sessions, sends durable turns,
 reads SSE with `Last-Event-ID`, resolves approvals, verifies memory resources, promotes project
 state, and reads resource views without adding a privileged debug endpoint or a second execution path.
+The `evolution-policy` recording also runs real post-session dreaming, recovers pending install and
+rollback approvals, activates two immutable versions, reads `skill://` through the public gateway,
+and proves catalog reload plus rollback.
 
 The preferred manual/dev gate is `cargo run -p tm-e2e -- record suite`. It starts an in-process
 `tm-server` fixture, records raw SSE and HTTP evidence, captures referenced resources, drives the real

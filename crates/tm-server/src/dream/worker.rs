@@ -30,7 +30,7 @@ use super::summary::{
 };
 use super::util::RedactedMessage;
 
-pub(super) type SenderFactory = Arc<dyn Fn(Uuid) -> broadcast::Sender<SessionEvent> + Send + Sync>;
+pub type SenderFactory = Arc<dyn Fn(Uuid) -> broadcast::Sender<SessionEvent> + Send + Sync>;
 
 pub struct ServerDreamWorker<S> {
     store: Arc<S>,

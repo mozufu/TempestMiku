@@ -1402,7 +1402,7 @@ impl Store for InMemoryStore {
             .ok_or_else(|| stale_approval_effect_lease(lease))?;
         if !matches!(
             inner.approval_effects[index].effect_type.as_str(),
-            "memory_write" | "skill_write" | "evolution_review"
+            "memory_write" | "skill_write" | "skill_rollback" | "evolution_review"
         ) {
             return Err(ServerError::InvalidRequest(
                 "only durable proposal effects may complete with a write_proposal event"

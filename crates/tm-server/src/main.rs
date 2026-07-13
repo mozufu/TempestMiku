@@ -72,12 +72,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         AuthConfig::NoAuth
     };
-    let persona = std::env::var_os("TM_MODES_PATH")
+    let mut persona = std::env::var_os("TM_MODES_PATH")
         .map(ModesConfig::from_path)
         .unwrap_or_default();
     let host_config = load_host_config()?;
     let linked_folders = host_config.linked_folders()?;
     let artifact_root = server_artifact_root(&host_config);
+    let managed_skills_path = std::env::var_os("TM_MANAGED_SKILLS_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| artifact_root.join("managed-skills"));
+    persona = persona.with_managed_skills_path(managed_skills_path);
     let roster = Arc::new(MailboxRegistry::new());
     let approval_broker = Arc::new(ApprovalBroker::default());
     let push_config = push_config_from_env()?;
@@ -94,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = build_runtime(
             &host_config,
             &linked_folders,
+            &persona,
             artifact_root.clone(),
             Some(drive_store.clone()),
             Arc::clone(&roster),
@@ -138,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let runtime = build_runtime(
             &host_config,
             &linked_folders,
+            &persona,
             artifact_root.clone(),
             Some(drive_store.clone()),
             Arc::clone(&roster),
@@ -209,6 +215,7 @@ struct NativeDenoBackendConfig {
 fn build_runtime(
     host_config: &P0HostConfig,
     linked_folders: &LinkedFolders,
+    persona: &ModesConfig,
     artifact_root: PathBuf,
     drive_store: Option<tm_drive::SharedDriveStore>,
     roster: Arc<MailboxRegistry>,
@@ -256,6 +263,11 @@ fn build_runtime(
         &mut sandbox_options.resource_registry,
         Arc::clone(&roster),
     );
+    sandbox_options
+        .resource_registry
+        .register(Arc::new(tm_modes::SkillResourceHandler::new(
+            persona.clone(),
+        )));
 
     // Inject executor AFTER sandbox_options has agents.* registered so child actor
     // sandboxes inherit the same host registry (including agents.* for recursive actors).

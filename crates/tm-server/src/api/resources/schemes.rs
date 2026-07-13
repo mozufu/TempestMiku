@@ -2,6 +2,182 @@ use super::dispatch::registered_resource_schemes;
 use super::util::{map_host_error, read_text_page};
 use super::*;
 
+pub(super) async fn read_skill_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    if selector.is_some() {
+        return Err(ServerError::InvalidRequest(
+            "skill resources do not support selectors".to_string(),
+        ));
+    }
+    let view = parse_skill_uri(uri)?;
+    let (kind, title, content) = match view {
+        SkillUri::Root => (
+            "skill_catalog",
+            Some("Managed skills".to_string()),
+            serde_json::to_string_pretty(
+                &state
+                    .persona
+                    .managed_skills()
+                    .map_err(managed_skill_resource_error)?,
+            )?,
+        ),
+        SkillUri::Active { name } => {
+            let (version, body) = state
+                .persona
+                .managed_skill_body(&name)
+                .map_err(managed_skill_resource_error)?;
+            (
+                "managed_skill",
+                Some(format!("{} ({})", version.name, version.content_digest)),
+                body,
+            )
+        }
+        SkillUri::Versions { name } => (
+            "skill_versions",
+            Some(format!("{name} versions")),
+            serde_json::to_string_pretty(
+                &state
+                    .persona
+                    .managed_skill(&name)
+                    .map_err(managed_skill_resource_error)?,
+            )?,
+        ),
+        SkillUri::Version { name, digest } => {
+            let (version, body) = state
+                .persona
+                .managed_skill_version_body(&name, &digest)
+                .map_err(managed_skill_resource_error)?;
+            (
+                "managed_skill_version",
+                Some(format!("{} ({})", version.name, version.content_digest)),
+                body,
+            )
+        }
+    };
+    Ok(ResourceContent {
+        uri: uri.to_string(),
+        kind: kind.to_string(),
+        mime: if kind.contains("catalog") || kind.contains("versions") {
+            "application/json".to_string()
+        } else {
+            "text/markdown; charset=utf-8".to_string()
+        },
+        title,
+        size_bytes: content.len(),
+        selector: None,
+        has_more: false,
+        preview: preview(&content, 1024),
+        content,
+    })
+}
+
+pub(super) async fn list_skill_resources<S, M, C>(
+    state: &AppState<S, M, C>,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    match parse_skill_uri(uri)? {
+        SkillUri::Root => Ok(state
+            .persona
+            .managed_skills()
+            .map_err(managed_skill_resource_error)?
+            .into_iter()
+            .map(|skill| ResourceEntry {
+                uri: format!("skill://{}", skill.active.name),
+                name: skill.active.name.clone(),
+                kind: "managed_skill".to_string(),
+                title: Some(skill.active.description),
+                size_bytes: None,
+                modified_at: None,
+            })
+            .collect()),
+        SkillUri::Active { name } | SkillUri::Versions { name } => Ok(state
+            .persona
+            .managed_skill(&name)
+            .map_err(managed_skill_resource_error)?
+            .versions
+            .into_iter()
+            .map(|version| ResourceEntry {
+                uri: format!(
+                    "skill://{}/versions/{}",
+                    version.name,
+                    version.content_digest.trim_start_matches("sha256:")
+                ),
+                name: version.content_digest.clone(),
+                kind: "managed_skill_version".to_string(),
+                title: Some(version.description),
+                size_bytes: None,
+                modified_at: None,
+            })
+            .collect()),
+        SkillUri::Version { .. } => Err(ServerError::Policy(
+            "skill version listing requires skill://<name>/versions".to_string(),
+        )),
+    }
+}
+
+enum SkillUri {
+    Root,
+    Active { name: String },
+    Versions { name: String },
+    Version { name: String, digest: String },
+}
+
+fn parse_skill_uri(uri: &str) -> Result<SkillUri> {
+    let path = uri
+        .strip_prefix("skill://")
+        .ok_or_else(|| ServerError::Policy(format!("unsupported skill uri {uri}")))?;
+    if path.is_empty() || path == "root" {
+        return Ok(SkillUri::Root);
+    }
+    let parts = path.split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [name] if valid_skill_resource_name(name) => Ok(SkillUri::Active {
+            name: (*name).to_string(),
+        }),
+        [name, "versions"] if valid_skill_resource_name(name) => Ok(SkillUri::Versions {
+            name: (*name).to_string(),
+        }),
+        [name, "versions", digest]
+            if valid_skill_resource_name(name)
+                && digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+        {
+            Ok(SkillUri::Version {
+                name: (*name).to_string(),
+                digest: format!("sha256:{digest}"),
+            })
+        }
+        _ => Err(ServerError::Policy(format!("unsupported skill uri {uri}"))),
+    }
+}
+
+fn valid_skill_resource_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn managed_skill_resource_error(error: tm_modes::ManagedSkillError) -> ServerError {
+    ServerError::NotFound(error.to_string())
+}
+
 pub(super) async fn read_cron_resource<S, M, C>(
     state: &AppState<S, M, C>,
     uri: &str,

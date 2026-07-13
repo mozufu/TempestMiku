@@ -45,13 +45,15 @@ flowchart LR
   LIB -->|retrieve + compose| EXP
 ```
 
-Everything self-evolution writes is a **human-readable file** (`memory://`, `skills/`) Brian can read,
-edit, or delete; everything is replayable (principle #6).
+Everything self-evolution writes is human-readable through `memory://` or `skill://`; managed skill
+versions are immutable and changed only by approval-backed activation/rollback. Everything remains
+auditable and replayable (principle #6).
 
 ## 26.1 What evolves
 
 - **Skills** — Voyager-style: §22 Phase-2 dreaming distills recurring workflows into `skills/`
-  playbooks (embedding-indexed; retrieved + composed via future `skills.*`, §07). A new skill is
+  playbooks (trigger-retrieved and prompt-composed from the P7.1 managed catalog; richer embedding
+  retrieval and `skills.*` remain future work, §07). A new skill is
   **self-verified** (Self-Refine critique + a dry-run / consistency check) **before** it is committed.
 - **User model** — the facts / profile store of Brian (§22) sharpens with each dream (Reflexion:
   reflections about his preferences and patterns are stored and recalled).
@@ -157,17 +159,16 @@ with every record, and neither the endpoint nor the effect dispatcher contains a
 write or reload operation. Flutter/Web renders the same server-owned approval and `write_proposal`
 lifecycle, opens the resource link, and lets server timeout events own default-deny semantics.
 
-**Implemented P4 conservative skill-proposal path:** post-session dreaming can distill a reusable
+**P4 candidate path:** post-session dreaming can distill a reusable
 workflow into a `SkillProposalRecord` with name, description, trigger/use criteria, `SKILL.md`-style
 body, evidence links, self-critique, verification checks, status, dedupe key, and source dream/session
 ids. The proposal emits `write_proposal` with `kind: "skill"` and uses the shared approval/default-deny
-path. Approval updates the proposal status only; rejection/timeout leaves it pending/denied/timed-out;
-neither path installs, imports, reloads, or mutates the live skill catalog. Low-value sessions do not
+path. Before P7.1 approval updated the proposal status only; rejection/timeout left it
+pending/denied/timed-out without mutating the live catalog. Low-value sessions do not
 create skill proposals, and candidates that fail self-verification emit a replayable
 `skill_proposal_rejected` dream progress event instead of failing the whole dream or surfacing an unsafe
 proposal. Completed dream re-runs reuse the existing queued dream/skill records and do not duplicate
-skill approvals. The constrained candidate resource is `memory://skill-proposals/<id>`; `skill://<name>`
-remains prompt-composition-only until P7.
+skill approvals. The constrained candidate resource remains `memory://skill-proposals/<id>`.
 
 P7.0 keeps that `SkillProposalRecord` as the only candidate format. `memory://skill-proposals` lists
 session proposals, and read/preview expose the capability-gated candidate plus a deterministic
@@ -175,9 +176,27 @@ lifecycle descriptor: normalized identity, version, redacted SHA-256 digest, dre
 provenance, reject-on-name-collision policy, no-live-mutation rollback contract, and disabled catalog
 reload. Validation bounds the body and references, requires the title/Trigger/Procedure/Guardrails
 shape, rejects traversal/absolute/schemed references and affirmative requests for prohibited
-authority, and still marks every P7.0 candidate `installable: false`. Approval can therefore review
-or reject the proposal and append audit history, but there is no install/import/reload dispatch and
+authority, and still marks every P7.0 candidate `installable: false`. Approval could therefore review
+or reject the proposal and append audit history, but P7.0 had no install/import/reload dispatch and
 no path from the conservative evolution target to `fs.write`, `code.edit`, or a hand-authored skill.
+
+P7.1 enables only the proven managed-skill subset of that dormant contract. An approved `skill_write`
+effect revalidates the current tier, typed target, proposal provenance, candidate digest, and successful
+self-verification before installing `<root>/<name>/versions/<sha256>/SKILL.md` plus its manifest. Version
+directories are immutable, names colliding with bundled or hand-authored skills are rejected, and an
+atomic `active.json` pointer selects the live version. `ModesConfig` reads that pointer on the next
+prompt composition and adds the stored triggers to the layered catalog; it does not mutate process-global
+state or broaden mode capabilities. Deny, timeout, tampered content, stale effects, invalid names/paths,
+symlinks, and retries leave the active pointer unchanged.
+
+Rollback is a separate durable manual approval created by
+`POST /sessions/:id/evolution/skills/:name/rollback`. Its effect requires both the expected current
+digest and a target digest already present in the same proposal-backed immutable version set, then
+atomically swaps the pointer after the same tier/provenance re-check. The authenticated client gateway
+and native Deno resource registry expose `skill://`, active entries, version metadata, and immutable
+version bodies from that catalog; native reads require `resources.read:skill`. The `skills.*` namespace,
+MCP import/reload, arbitrary filesystem writes, persona/mode apply, and aggressive evolution remain
+disabled.
 
 ## 26.5 Crate layout
 
@@ -185,18 +204,20 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
 
 - `tm-memory::dream` (§22.10) — *produces* candidates: extract / reflect / summarize / distill skill;
   the Self-Refine self-critique pass; redaction before any disk write.
-- Future `tm-host` skills registry (`skills.*`, §07) — the **Voyager skill library**: store /
-  embedding-index / retrieve / compose.
+- `tm-modes` managed catalog and `skill://` resource handler (§07) — immutable versions, atomic active
+  pointers, trigger retrieval, and prompt composition. A future `skills.*` namespace or embedding
+  index needs a separate milestone.
 - `tm-server` (§27) — **tier enforcement** at the config / registry boundary; the review surface
   (`write_proposal` events §27.1), typed review persistence, base/digest revalidation, and the audit
   trail (§12).
-- `tm-modes` — typed persona/mode addendum targets and sections only; no write/reload authority.
+- `tm-modes` — typed persona/mode addendum targets plus the managed-skill filesystem/catalog boundary;
+  no persona/mode write authority.
 - config — `self_evolution.tier` (+ the `write_approval` knobs, §26.2).
 
 ## 26.6 Failure modes & degradation
 
-- **Low-value skill distilled** — the Self-Refine critique + self-verify gate it; if one slips through
-  it's a readable file Brian deletes, and retrieval ranking demotes never-used skills.
+- **Low-value skill distilled** — Self-Refine + self-verification gate it; if an approved version still
+  underperforms, Brian uses the approval-backed rollback to another immutable version.
 - **Skill-library bloat** — embedding-indexed retrieval surfaces only relevant skills; dreaming
   dedups / consolidates them (§22.5).
 - **Profile drift / wrong fact** — bi-temporal supersede (§22, Zep lineage); Brian edits `memory://`.

@@ -1,9 +1,9 @@
 use super::schemes::{
     compact_resource_preview, list_agent_resources, list_cron_resources, list_drive_resources,
-    list_linked_resources, list_memory_resources, list_workspace_resources,
+    list_linked_resources, list_memory_resources, list_skill_resources, list_workspace_resources,
     preview_memory_resource, read_agent_resource, read_cron_resource, read_drive_resource,
-    read_history_resource, read_linked_resource, read_memory_resource, read_workspace_resource,
-    resource_scheme,
+    read_history_resource, read_linked_resource, read_memory_resource, read_skill_resource,
+    read_workspace_resource, resource_scheme,
 };
 use super::util::map_artifact_error;
 use super::*;
@@ -38,6 +38,9 @@ where
             super::util::read_project_resource(state, session_id, uri, selector).await
         }
         Some("memory") => read_memory_resource(state, session_id, uri, selector).await,
+        Some("skill") if state.persona.managed_skills_path().is_some() => {
+            read_skill_resource(state, uri, selector).await
+        }
         Some("agent") => read_agent_resource(state, uri, selector).await,
         Some("history") => read_history_resource(state, uri, selector).await,
         Some("cron") => read_cron_resource(state, uri).await,
@@ -118,6 +121,9 @@ where
         }
         Some("project") => super::util::list_project_resources(state, session_id, uri).await,
         Some("memory") => list_memory_resources(state, session_id, uri).await,
+        Some("skill") if state.persona.managed_skills_path().is_some() => {
+            list_skill_resources(state, uri).await
+        }
         Some("agent") => list_agent_resources(state, uri).await,
         Some("history") => Err(ServerError::Policy(
             "history:// listing not supported — read a specific history://<id>".to_string(),
@@ -147,6 +153,9 @@ pub(super) fn registered_resource_schemes<S, M, C>(state: &AppState<S, M, C>) ->
     ];
     if state.drive_store.is_some() {
         schemes.push("drive");
+    }
+    if state.persona.managed_skills_path().is_some() {
+        schemes.push("skill");
     }
     schemes
 }

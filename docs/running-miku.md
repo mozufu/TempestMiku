@@ -90,6 +90,8 @@ TM_OWNER_SUBJECT=brian
 TM_PUBLIC_BASE_URL=https://miku.example.test # production external origin only
 TM_HOST_CONFIG=.tempestmiku/config.json
 TM_CONFIG=.tempestmiku/config.json
+TM_MODES_PATH=/absolute/path/to/persona-assets # optional hand-authored SOUL/modes/skills
+TM_MANAGED_SKILLS_PATH=/shared/path/to/managed-skills # optional; defaults under artifact root
 TM_OMP_ACP_ENABLED=0
 TM_PUSH_PROVIDER=disabled # production providers are not shipped yet
 ```
@@ -99,6 +101,12 @@ Drive blobs still use the configured artifact root, but entries, attributes/tags
 version counters, corrections, and dynamic link tombstones do not survive a restart. This historical
 `InMemoryDriveStore` path remains the normal local-development exception; do not use it for a durable
 deployment.
+
+Approved P7.1 skill proposals are stored as immutable digest-addressed versions beneath
+`TM_MANAGED_SKILLS_PATH`; when unset, the server uses `<artifact-root>/managed-skills`. API and worker
+processes in a split deployment must share the same managed-skill root just as they share the artifact
+root. Activation and rollback atomically replace only the per-skill active pointer. Bundled or
+`TM_MODES_PATH` hand-authored skills cannot be shadowed by managed versions.
 
 `api` serves HTTP only, `worker` dispatches durable turns and runs approval effects, dreams, and cron,
 and `all` runs both in one process. `worker` and `all` require Postgres. A split deployment runs one

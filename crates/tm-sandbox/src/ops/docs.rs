@@ -103,7 +103,7 @@ pub(super) fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
             "resources",
             "Read a registered resource URI",
             "resources.read(uri: ResourceUri, selector?: ResourceSelector): Promise<ResourceContent>",
-            "Read a URI through the scheme-dispatched resource registry. Current handlers cover artifact:// in every Deno session and can cover linked:// plus the P2 memory:// surface when the host registers those handlers. Scheme-specific grants such as resources.read:artifact, resources.read:linked, and resources.read:memory still apply. skill:// labels are prompt-composition-only until the P4/P7 skill lifecycle registers a handler, so reading them fails closed as an unknown scheme.",
+            "Read a URI through the scheme-dispatched resource registry. Current handlers cover artifact:// in every Deno session and can cover linked://, the P2 memory:// surface, and the P7.1 managed skill:// catalog when the host registers those handlers. Scheme-specific grants such as resources.read:artifact, resources.read:linked, resources.read:memory, and resources.read:skill still apply. Missing grants and unregistered schemes fail closed.",
             json!({
                 "type": "object",
                 "required": ["uri"],
@@ -132,6 +132,10 @@ pub(super) fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
                 GrantDoc {
                     kind: "memory".to_string(),
                     description: "Read access to the P2 memory:// resource gateway when a memory handler is registered and resources.read:memory is granted.".to_string(),
+                },
+                GrantDoc {
+                    kind: "skill".to_string(),
+                    description: "Read access to approved managed skill:// catalog entries and immutable versions when a skill handler is registered and resources.read:skill is granted.".to_string(),
                 },
             ],
         ),
@@ -169,6 +173,10 @@ pub(super) fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
                     kind: "memory".to_string(),
                     description: "Preview access to memory:// resources when resources.read:memory is granted.".to_string(),
                 },
+                GrantDoc {
+                    kind: "skill".to_string(),
+                    description: "Preview access to managed skill:// resources when resources.read:skill is granted.".to_string(),
+                },
             ],
         ),
         core_doc(
@@ -203,6 +211,10 @@ pub(super) fn core_tool_docs() -> BTreeMap<String, ToolDocs> {
                 GrantDoc {
                     kind: "memory".to_string(),
                     description: "List memory:// entries when resources.read:memory is granted.".to_string(),
+                },
+                GrantDoc {
+                    kind: "skill".to_string(),
+                    description: "List managed skill:// entries and immutable versions when resources.read:skill is granted.".to_string(),
                 },
             ],
         ),

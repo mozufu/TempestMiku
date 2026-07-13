@@ -103,8 +103,8 @@ pub use sessions::{
     CreateSessionRequest, CreateSessionResponse, EndSessionRequest, EndSessionResponse,
     EvolutionReviewProposalResponse, ListSessionsResponse, MemoryWriteProposalResponse,
     PostMessageRequest, PostMessageResponse, ProposeEvolutionReviewRequest,
-    ProposeMemoryWriteRequest, SessionMessagesResponse, SetSessionScopeRequest,
-    SetSessionScopeResponse,
+    ProposeMemoryWriteRequest, ProposeSkillRollbackRequest, SessionMessagesResponse,
+    SetSessionScopeRequest, SetSessionScopeResponse, SkillRollbackResponse,
 };
 
 pub struct AppState<S, M, C> {
@@ -443,6 +443,10 @@ where
         .route(
             "/sessions/:id/evolution/review-proposals",
             post(sessions::propose_evolution_review::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/evolution/skills/:name/rollback",
+            post(sessions::propose_skill_rollback::<S, M, C>),
         )
         .route("/sessions/:id/mode", get(modes::get_mode::<S, M, C>))
         .route(

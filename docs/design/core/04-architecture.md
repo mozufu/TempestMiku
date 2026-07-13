@@ -28,8 +28,8 @@ Components:
 - **Artifact store** — content-addressed storage for large outputs; hands back `artifact://` refs.
 - **Resource resolver registry** — one scheme-dispatched `read(uri)` over registered handlers
   (currently `artifact://` / `workspace://session` / `linked://` / `project://` / `memory://` /
-  `agent://` / `history://` / `cron://` and configured `drive://`; `skill://` reads remain reserved
-  until their owning milestone registers a handler and grants); §9.2.
+  `agent://` / `history://` / `cron://`, configured `drive://`, and P7.1 managed `skill://` versions;
+  every optional handler still requires its scheme grant); §9.2.
 - **Secret broker** — deferred P7 surface for resolving opaque handles only at the host boundary.
 - **Transcript / tracing** — current structured events/artifacts provide audit evidence; a dedicated
   `tm-trace` replay crate remains deferred.

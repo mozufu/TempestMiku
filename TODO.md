@@ -2,23 +2,23 @@
 
 Last aligned: **2026-07-13**.
 
-Active milestone: **P7.0 self-evolution safety foundation**.
+Active milestone: **none — P7.1 managed skill lifecycle is closed**.
 
 `ROADMAP.md` remains the canonical milestone order. P0-P5 are complete for the documented
 single-owner deployment. P6 pairing, release hardening, provider-neutral push registration/outbox,
 and authenticated Android notification actions have landed; production remote delivery is blocked
 on provider availability and is not part of the active implementation queue.
 
-This file is the executable checklist for the next narrow milestone. Keep it aligned with core docs
-§07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. Do not mark P7.0 complete from
-roadmap prose alone: closure requires deterministic tests plus replayable public-surface evidence.
+This file records the closed P7.1 checklist and the explicitly deferred queue. Keep it aligned with
+core docs §07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. P7.1 closure is backed
+by deterministic tests plus replayable public-surface evidence, not roadmap prose alone.
 
 ## Current Baseline
 
 - [x] P4 dreaming produces durable, deduplicated `SkillProposalRecord` candidates with evidence,
       self-critique, verification checks, and source dream/session provenance.
-- [x] Skill proposals use the shared approval/default-deny path; resolutions change proposal status
-      but do not install or reload live skills.
+- [x] P7.0 made skill proposals reviewable and auditable without live mutation; P7.1 now reuses that
+      same approval/default-deny effect path for managed installation.
 - [x] `write_proposal` and dream progress events persist in the replayable session event log.
 - [x] Memory/profile writes, drive mutations, approvals, effects, and worker claims already have
       durable ownership and replay foundations.
@@ -39,7 +39,7 @@ While blocked:
   that cannot pass the physical killed-process canary.
 - Keep production push disabled; fake-provider and debug probes remain the deterministic regression
   path.
-- Do not treat blocked P6 work as a prerequisite for P7.0 policy and audit work.
+- Do not treat blocked P6 work as a prerequisite for P7 skill lifecycle work.
 
 ## P7.0 North Star
 
@@ -202,9 +202,32 @@ Verification commands:
     cd clients/miku_web && npm test
     git diff --check
 
-## Explicitly Deferred Beyond P7.0
+## P7.1 Managed Skill Lifecycle
 
-- Actual skill installation, version activation, hot reload, and rollback.
+- [x] Approved, verified `SkillProposalRecord` candidates install as immutable digest-addressed
+      versions under the configured managed-skill root.
+- [x] Bundled and hand-authored skill names cannot be replaced by managed versions; malformed names,
+      bodies, digests, manifests, paths, and symlinks fail closed.
+- [x] Activation uses an atomic pointer and `ModesConfig` loads the active version on the next prompt
+      composition without process-global mutable state.
+- [x] Trigger metadata is carried into the layered skill catalog so an installed skill is reachable
+      only for matching turns.
+- [x] `skill://`, `skill://<name>`, and version resources expose only installed managed skills and
+      immutable bodies through both the authenticated resource gateway and the capability-gated
+      native Deno registry; unconfigured catalogs remain an unknown resource scheme.
+- [x] Rollback requires a durable manual approval, expected-current digest, target-version
+      provenance, tier re-check, and atomic pointer swap.
+- [x] Deny, timeout, stale pointer, hand-authored collision, tampered body, and retry paths cannot
+      widen authority or mutate the active version.
+- [x] Post-session approvals recover through `/sessions/:id/messages` `pendingEvents`; `session_end`
+      remains the SSE terminal fence.
+- [x] `tm-e2e record evolution-policy` proves two installs, immutable versioning, approval-backed
+      rollback, public `skill://` reads, catalog reload, and durable lifecycle events.
+- [x] Strict Rust workspace gates, gated Postgres coverage, Flutter/Web smoke, and documentation/SDK
+      drift checks pass before closeout.
+
+## Explicitly Deferred Beyond P7.1
+
 - Applying moderate persona/mode proposals.
 - Any aggressive-tier execution or autonomous identity/config/source-code rewrite.
 - `tm-mcp`, MCP import/reload gates, and a new external tool surface.
@@ -219,7 +242,8 @@ Verification commands:
 - `tm-server`: config validation, tier/effect enforcement, durable audit/proposal state, approvals,
   transactions, replay events, migrations, and public resource routes.
 - `tm-host`: capability registry and target dispatch boundary where host authority is exercised.
-- `tm-modes`: typed persona/mode proposal targets only; no file mutation in P7.0.
+- `tm-modes`: typed persona/mode proposal targets plus the managed immutable skill catalog; it never
+  mutates bundled or hand-authored assets.
 - `tm-sandbox`: checked-in SDK/docs exposure and denial coverage; no extra model-visible tool.
 - Flutter/Web clients: render server-owned proposal/approval/resource contracts only.
 - `tm-e2e`: public-API evidence for policy, approval, restart, idempotency, and replay behavior.

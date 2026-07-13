@@ -290,9 +290,9 @@ server grants these reads
 through `resources.read:memory`, and unknown memory paths or missing grants are denied. The JS/TS SDK
 types these as resource URIs; the global `memory` namespace remains `undefined` until an explicit
 `memory.*` API ships. Broader resources such as `…/MEMORY.md`, `…/episodic?q=…`, and
-`…/projects/<name>/…` remain later `tm-memory` work. Skills are prompt-composed under
-`skill://<name>` labels today, but those labels are still not registered resource URIs; live
-`skills.*` import/version/reload and first-class `skill://` reads remain P7 work (§9.3).
+`…/projects/<name>/…` remain later `tm-memory` work. P7.1-approved managed skills are composed on the
+next load and readable through capability-gated `skill://` active/version resources; the model-visible
+`skills.*` import/write namespace remains closed (§9.3 / §26.4).
 
 ## 22.10 Crate layout (`tm-memory`, §28)
 
@@ -309,8 +309,8 @@ types these as resource URIs; the global `memory` namespace remains `undefined` 
 - `dream` — embed, extract (facts + relations), importance, reflect, summarize, OMP consolidation, redaction; lease +
   heartbeat to avoid double-runs.
 - `embed` — embeddings role client + local fallback.
-- `resources` — registers the implemented `memory://` handler into the §9.2 resolver registry; a
-  future P4/P7 skill lifecycle may add a separate `skill://` handler with its own grants.
+- `resources` — registers the implemented `memory://` handler into the §9.2 resolver registry;
+  `tm-modes` owns the separate P7.1 managed `skill://` handler and grant.
 
 Dreaming/extraction use cheaper model roles (§27.3).
 

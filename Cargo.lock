@@ -4077,8 +4077,15 @@ dependencies = [
 name = "tm-modes"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tm-artifacts",
+ "tm-host",
+ "tokio",
 ]
 
 [[package]]

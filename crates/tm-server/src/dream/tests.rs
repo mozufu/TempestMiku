@@ -614,6 +614,27 @@ async fn resolve_and_apply_durable_approval(
     approval_id: Uuid,
     request: ResolveApprovalRequest,
 ) {
+    resolve_and_apply_durable_approval_with_persona(
+        store,
+        broker,
+        sender_for,
+        session_id,
+        approval_id,
+        request,
+        &tm_modes::ModesConfig::default(),
+    )
+    .await;
+}
+
+async fn resolve_and_apply_durable_approval_with_persona(
+    store: &Arc<InMemoryStore>,
+    broker: &Arc<ApprovalBroker>,
+    sender_for: &SenderFactory,
+    session_id: Uuid,
+    approval_id: Uuid,
+    request: ResolveApprovalRequest,
+    persona: &tm_modes::ModesConfig,
+) {
     let sink: Arc<dyn crate::CodingEventSink> = Arc::new(StoreCodingEventSink::new(
         session_id,
         Arc::clone(store),
@@ -642,7 +663,7 @@ async fn resolve_and_apply_durable_approval(
         &approval,
         &lease,
         tm_host::SelfEvolutionTier::Conservative,
-        &tm_modes::ModesConfig::default(),
+        persona,
         sink,
     )
     .await
@@ -2164,7 +2185,7 @@ async fn dream_worker_distress_only_session_writes_summary_without_durable_propo
 }
 
 #[tokio::test]
-async fn skill_proposal_approval_can_approve_or_reject_without_live_reload() {
+async fn skill_proposal_approval_installs_or_rejects_without_mutating_hand_authored_skills() {
     for (decision, option_id, expected_status) in [
         (
             ApprovalResolveDecision::Approve,
@@ -2177,6 +2198,9 @@ async fn skill_proposal_approval_can_approve_or_reject_without_live_reload() {
             SkillProposalStatus::Denied,
         ),
     ] {
+        let managed_root = tempfile::tempdir().unwrap();
+        let persona =
+            tm_modes::ModesConfig::default().with_managed_skills_path(managed_root.path());
         let store = Arc::new(InMemoryStore::default());
         let broker = Arc::new(ApprovalBroker::default());
         let session = store
@@ -2235,7 +2259,7 @@ async fn skill_proposal_approval_can_approve_or_reject_without_live_reload() {
                 .unwrap()
                 .parse::<Uuid>()
                 .unwrap();
-            resolve_and_apply_durable_approval(
+            resolve_and_apply_durable_approval_with_persona(
                 &store,
                 &broker,
                 &sender_for,
@@ -2245,6 +2269,7 @@ async fn skill_proposal_approval_can_approve_or_reject_without_live_reload() {
                     decision,
                     option_id: Some(option_id.to_string()),
                 },
+                &persona,
             )
             .await;
         }
@@ -2255,17 +2280,22 @@ async fn skill_proposal_approval_can_approve_or_reject_without_live_reload() {
         assert_eq!(proposal.status, expected_status);
         let lifecycle = tm_memory::skill_proposal_lifecycle(&proposal);
         assert!(lifecycle.reviewable);
-        assert!(!lifecycle.installable);
+        assert!(lifecycle.installable);
         assert_eq!(
             lifecycle.catalog_reload,
-            tm_memory::SkillCatalogReloadContract::Disabled
+            tm_memory::SkillCatalogReloadContract::OnNextLoad
+        );
+        assert_eq!(
+            persona.load_assets().skills.contains_key(&proposal.name),
+            expected_status == SkillProposalStatus::Approved,
+            "only approved dream skill proposals enter the managed catalog"
         );
         assert!(
             !ModesConfig::default()
                 .load_assets()
                 .skills
                 .contains_key(&proposal.name),
-            "approved/rejected dream skill proposals must not mutate the live skill catalog"
+            "managed installation must not mutate bundled or hand-authored assets"
         );
         let audits = store.evolution_audits(session.id).await.unwrap();
         assert!(audits.iter().any(|record| {

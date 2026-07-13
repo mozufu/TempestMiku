@@ -16,10 +16,8 @@ First-pass globals:
   the op layer stays small.
 - `resources.read/preview/list(...)` — uniform, scheme-dispatched resource resolver (§9.2),
   including the live `artifact://`, `workspace://session`, `linked://`, `project://`, `memory://`,
-  `agent://`, `history://`, P4 session-gateway `cron://`, and P5 `drive://` handlers when their
-  grants/config are present. `skill://...` labels are prompt-composition provenance only in the
-  current runtime; reads for unregistered schemes must fail closed until the owning milestone
-  registers a handler and grants.
+  `agent://`, `history://`, P4 session-gateway `cron://`, P5 `drive://`, and P7.1 managed `skill://`
+  handlers when their grants/config are present. Unregistered schemes and missing grants fail closed.
 - `artifacts.put/get/slice/list(...)` — session artifact store; large outputs return `artifact://`
   handles.
 - `fs.read/write/ls/find(...)` — workspace / linked-folder filesystem access through grants.
@@ -58,8 +56,9 @@ Reserved first-pass globals:
   `resources.read(...)` and the `resources.read:memory` grant. `agents` starts as `undefined` too,
   then the P3 sandbox prelude replaces it with `AgentsNamespace` only when the session has an
   `agents.*` grant. If a namespace exists but a method is incomplete, that method throws
-  `NotImplementedError`. Likewise, `skill://...` is not a readable `ResourceUri` today even though
-  composed prompts may use it as a section label for injected skill markdown.
+  `NotImplementedError`. The `skills` namespace remains closed even though approved managed skills
+  are readable through `skill://...` and `resources.read:skill`; installation and rollback are
+  server-owned approval effects, not model-callable methods.
 
 Never exposed:
 
@@ -82,10 +81,9 @@ of truth.
  * namespaces. P2 memory is exposed as memory:// resources behind
  * resources.read:memory, not as a memory.* namespace. P7.0 adds bounded
  * evolution audit and review-only proposal resources without adding an
- * evolution namespace or a second model-visible tool. Bundled skill
- * markdown may be labeled skill://... inside composed prompts, but that
- * label is not a resources.read/list/preview surface until the P7 skill
- * import/reload lifecycle work registers a handler and grants.
+ * evolution namespace or a second model-visible tool. P7.1 adds
+ * capability-gated skill:// reads for approved immutable managed versions;
+ * the skills.* namespace remains closed.
  *
  * P3/P3-plus agents surface: `agents` is defined only in sessions holding the
  * required agents.* grant. In ungranted sessions it remains `undefined`.
@@ -125,7 +123,12 @@ interface JsonArray extends Array<JsonValue> {}
 type MimeType = string;
 type CapabilityName = string;
 type ArtifactUri = `artifact://${string}`;
-type SkillPromptLabel = `skill://${string}`;
+type SkillResourceUri =
+  | "skill://"
+  | "skill://root"
+  | `skill://${string}`
+  | `skill://${string}/versions`
+  | `skill://${string}/versions/${string}`;
 
 type MemoryResourceUri =
   | "memory://root"
@@ -140,6 +143,7 @@ type ResourceUri =
   | `agent://${string}`
   | `history://${string}`
   | MemoryResourceUri
+  | SkillResourceUri
   | `drive://${string}`
   | `cron://${string}`
   | `workspace://session/${string}`
@@ -574,9 +578,10 @@ imply `tools.call(...)` routing.
 - P7.0 review candidates use the same capability-gated resource path at
   `memory://review-proposals/<id>` and `memory://evolution-audits`; there is no `evolution.*`
   namespace, file-patch API, persona/mode apply call, or additional chat-native tool.
-- P2 skill markdown is prompt-composed under `skill://...` labels only. `skill://...` is not a
-  resource URI yet; `resources.read/preview/list("skill://...")` fails closed as an unknown scheme
-  until P4/P7 ships the skill resource lifecycle.
+- P7.1 approved managed skills are prompt-composed and readable through `skill://...` with
+  `resources.read:skill`. Root, active, version-list, and immutable-version views share the same
+  managed catalog; selectors are rejected. The `skills` namespace remains `undefined` and cannot
+  install, activate, or roll back versions.
 
 ### 7.4 Deferred namespace placement
 
@@ -587,7 +592,7 @@ approval, and audit boundaries. The root roadmap is canonical (§28), but the SD
 |---|---|---|
 | `memory.*` | P2/P4 split | P2 exposes memory reads as `memory://` resources through `resources.read:memory`; the `memory` global remains `undefined`. A future explicit `memory.*` namespace may expose minimum profile/user recall and state-capture calls, while P4 owns full scoped memory, pgvector/FTS, and dream-queue writes. |
 | `agents.*` | P3/P3+ | P3 exposes `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg` with `tm-agents`, actor lifecycle, mailbox/roster, supervision defaults, and `agent://` resource handling. P3-plus adds live bounded-inbox `agents.send`, `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, `agents.cancel`, and `agents.pipeline` with digest-reference stage wiring, plus child approval routing through the live HTTP broker, plain-prose enforcement, current live-wait DAG checks, active restart strategies, wall-clock budgets, per-child `agents.parallel` task budgets, subtree cancellation, status lifecycle events, and parent-event provenance links. |
-| `skills.*` / `skill://` reads | P4/P7 split | P2 may compose bundled skill markdown under `skill://...` prompt labels only. `skills` remains `undefined`, and `resources.read/preview/list("skill://...")` must fail closed until P4/P7 defines approval-gated proposals plus safe import/version/reload semantics, provenance, audit/replay, and MCP import gates. |
+| `skills.*` / `skill://` reads | P4/P7 split | P4 emits approval-gated candidates. P7.1 ships immutable managed versions, atomic activation/rollback, provenance/audit, and capability-gated `skill://` read/list/preview. `skills` remains `undefined`; MCP import/reload gates are still deferred. |
 | `drive.*` | P5 | Add with `tm-drive`, project memory scopes, virtual dirs, transducers, link/unlink policy, and drive organizer flows. |
 | `http.*` hardening | P5 or P7 | Keep current `http.get` as a default-deny deterministic allowlisted helper with no open egress; add byte/request caps, redirect policy, audit logging, and production allowlists only when research or hardening needs live egress. |
 | `secrets.use` | P7 | Requires opaque egress-scoped handles from a secret broker; secret values must never materialize in JS heap, artifacts, or model context. |

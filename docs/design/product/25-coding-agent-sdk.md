@@ -74,7 +74,7 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 | eval (persistent kernel) | the `execute` loop itself | already the core (§05) |
 | task / job / irc | `agents.*` | §23 |
 | recall / retain / reflect | `memory.*` | §22 |
-| skills | reserved `skills.*`; current `skill://...` labels are prompt-composition-only | §07, §26 |
+| skills | `skills.*` remains reserved; approved managed versions are read-only through capability-gated `skill://...` resources | §07, §26 |
 | `artifact://` | session artifacts via `tm-artifacts` | §25.3 |
 | `agent://` / `history://` | actor resources via `tm-agents`, with large payloads stored out of context | §23 / §25.3 |
 

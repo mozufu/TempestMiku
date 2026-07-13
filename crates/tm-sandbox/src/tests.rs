@@ -1205,8 +1205,8 @@ async fn deno_artifacts_resolve_through_resource_registry() {
         "docs/sdk/tm-runtime.d.ts should declare the P2 memory:// resource surface"
     );
     assert!(
-        sdk_types.contains("type SkillPromptLabel = `skill://${string}`;"),
-        "docs/sdk/tm-runtime.d.ts should keep skill:// as a prompt-composition label"
+        sdk_types.contains("type SkillResourceUri ="),
+        "docs/sdk/tm-runtime.d.ts should declare the P7.1 skill:// resource surface"
     );
     let resource_uri_decl = sdk_types
         .split("type ResourceUri =")
@@ -1216,8 +1216,8 @@ async fn deno_artifacts_resolve_through_resource_registry() {
         .next()
         .unwrap();
     assert!(
-        !resource_uri_decl.contains("skill://"),
-        "skill:// is prompt-composition-only until P4/P7 and must not be part of ResourceUri"
+        resource_uri_decl.contains("SkillResourceUri"),
+        "P7.1 skill:// reads should be part of ResourceUri"
     );
     let resource_description = result["resourceDescription"].as_str().unwrap();
     for needle in [
@@ -1226,15 +1226,15 @@ async fn deno_artifacts_resolve_through_resource_registry() {
         "memory://",
         "resources.read:memory",
         "skill://",
-        "prompt-composition-only",
-        "unknown scheme",
+        "resources.read:skill",
+        "unregistered schemes",
     ] {
         assert!(
             resource_description.contains(needle),
             "resources.read docs should mention {needle}: {resource_description}"
         );
     }
-    for grant_kind in ["artifact", "linked-folder", "memory"] {
+    for grant_kind in ["artifact", "linked-folder", "memory", "skill"] {
         assert!(
             result["resourceGrantKinds"]
                 .as_array()

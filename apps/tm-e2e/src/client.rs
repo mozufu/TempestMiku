@@ -151,6 +151,24 @@ impl MikuClient {
         .await
     }
 
+    pub async fn propose_skill_rollback(
+        &self,
+        session_id: &str,
+        name: &str,
+        expected_active_digest: &str,
+        target_digest: &str,
+    ) -> Result<Value> {
+        self.post_json(
+            &format!("/sessions/{session_id}/evolution/skills/{name}/rollback"),
+            json!({
+                "expectedActiveDigest": expected_active_digest,
+                "targetDigest": target_digest,
+                "timeoutMs": 5_000,
+            }),
+        )
+        .await
+    }
+
     pub async fn promote_session(
         &self,
         session_id: &str,

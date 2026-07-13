@@ -36,7 +36,7 @@ pub use coding_backend::{
     DetailedApprovalOutcome, DurableApprovalSpec, ResolveApprovalRequest, StoreCodingEventSink,
 };
 pub use dream::{
-    DreamModelRoles, DreamWorkerConfig, DreamWorkerDaemon, DreamWorkerDaemonHandle,
+    DreamModelRoles, DreamWorkerConfig, DreamWorkerDaemon, DreamWorkerDaemonHandle, SenderFactory,
     ServerDreamWorker,
 };
 pub use error::{Result, ServerError};

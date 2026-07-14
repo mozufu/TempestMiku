@@ -3367,6 +3367,7 @@ async fn gated_postgres_runs_versioned_auth_migrations_and_redeems_once() {
         "pairing_codes",
         "evolution_audits",
         "evolution_review_proposals",
+        "push_deliveries",
     ] {
         let name = format!("public.{table}");
         let exists: bool = store
@@ -3565,7 +3566,7 @@ async fn gated_postgres_push_outbox_delivers_request_and_resolution_once() {
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].1.kind, PushMessageKind::ApprovalRequested);
     assert_eq!(deliveries[0].1.session_id, session.id);
-    assert_eq!(deliveries[0].1.approval_id, approval_id);
+    assert_eq!(deliveries[0].1.approval_id, Some(approval_id));
 
     store
         .resolve_approval_request_with_event(
@@ -3591,6 +3592,31 @@ async fn gated_postgres_push_outbox_delivers_request_and_resolution_once() {
     let deliveries = provider.deliveries();
     assert_eq!(deliveries.len(), 2);
     assert_eq!(deliveries[1].1.kind, PushMessageKind::ApprovalResolved);
+
+    let final_event = store
+        .append_event(
+            session.id,
+            "final",
+            json!({"text": "private assistant reply"}),
+        )
+        .await
+        .unwrap();
+    let (first_worker, second_worker) = tokio::join!(
+        service.tick(Uuid::new_v4()),
+        other_service.tick(Uuid::new_v4())
+    );
+    assert_eq!(first_worker.unwrap() + second_worker.unwrap(), 1);
+    let deliveries = provider.deliveries();
+    assert_eq!(deliveries.len(), 3);
+    assert_eq!(deliveries[2].1.kind, PushMessageKind::SessionReady);
+    assert_eq!(deliveries[2].1.session_id, session.id);
+    assert_eq!(deliveries[2].1.event_seq, Some(final_event.seq));
+    assert_eq!(deliveries[2].1.approval_id, None);
+    assert!(
+        !serde_json::to_string(&deliveries[2].1)
+            .unwrap()
+            .contains("private assistant reply")
+    );
     assert_eq!(service.runtime_metrics().await.unwrap().queue_depth, 0);
 }
 
@@ -3663,7 +3689,7 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
         )
         .await
         .unwrap();
-    assert_eq!(migrations.len(), 12);
+    assert_eq!(migrations.len(), 13);
     assert!(migrations.iter().enumerate().all(|(index, row)| {
         row.get::<_, i64>("version") == index as i64 + 1
             && row.get::<_, String>("checksum").len() == 64

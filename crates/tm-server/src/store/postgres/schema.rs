@@ -71,6 +71,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "evolution_review_proposals",
         sql: include_str!("../../../migrations/0012_evolution_review_proposals.sql"),
     },
+    Migration {
+        version: 13,
+        name: "actionable_notifications",
+        sql: include_str!("../../../migrations/0013_actionable_notifications.sql"),
+    },
 ];
 
 impl PostgresStore {

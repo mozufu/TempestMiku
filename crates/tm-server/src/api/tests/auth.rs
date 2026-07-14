@@ -216,7 +216,7 @@ async fn readiness_reports_only_the_effective_self_evolution_tier() {
 
 #[tokio::test]
 async fn one_time_pairing_issues_device_bearer_and_cookie_then_revokes_them() {
-    let (app, _) = test_app(
+    let (app, store) = test_app(
         ModesConfig::default(),
         AuthConfig::Device(DeviceAuthConfig {
             cookie_name: "tm_device".to_string(),
@@ -316,6 +316,54 @@ async fn one_time_pairing_issues_device_bearer_and_cookie_then_revokes_them() {
     assert_eq!(bearer_session.status(), StatusCode::OK);
     let bearer_session = response_json(bearer_session).await;
     let session_id = bearer_session["id"].as_str().unwrap().to_string();
+    let notification_body = serde_json::to_vec(&json!({
+        "clientMessageId": "notification-00000000-0000-4000-8000-000000000001",
+        "content": "reply from notification",
+    }))
+    .unwrap();
+    let first_reply = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(notification_body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_reply.status(), StatusCode::ACCEPTED);
+    let first_reply = response_json(first_reply).await;
+    let duplicate_reply = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(notification_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate_reply.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        response_json(duplicate_reply).await["turnId"],
+        first_reply["turnId"]
+    );
+    assert_eq!(
+        store
+            .session_messages(session_id.parse().unwrap())
+            .await
+            .unwrap()
+            .iter()
+            .filter(|message| message.role == "user")
+            .count(),
+        1,
+    );
     let cookie_modes = app
         .clone()
         .oneshot(
@@ -510,6 +558,22 @@ async fn one_time_pairing_issues_device_bearer_and_cookie_then_revokes_them() {
         .await
         .unwrap();
     assert_eq!(revoked.status(), StatusCode::OK);
+    let revoked_reply = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"clientMessageId":"notification-revoked","content":"must not enqueue"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoked_reply.status(), StatusCode::FORBIDDEN);
     let denied = app
         .oneshot(
             Request::builder()

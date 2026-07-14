@@ -9,7 +9,6 @@ import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.data.PushEndpoint
 import org.unifiedpush.android.connector.data.PushMessage
 import java.nio.charset.StandardCharsets
-import java.util.UUID
 
 internal object UnifiedPushEvents {
     private var sink: EventChannel.EventSink? = null
@@ -69,17 +68,17 @@ class TempestMikuPushService : PushService() {
         } catch (_: Exception) {
             return
         }
-        if (payload.optInt("version") != 1) return
-        val sessionId = validUuid(payload.optString("sessionId")) ?: return
-        val approvalId = validUuid(payload.optString("approvalId")) ?: return
-        when (payload.optString("kind")) {
-            "approval_requested" -> ApprovalNotifications.show(
+        val route = NotificationIntentData.route(payload) ?: return
+        when (route.kind) {
+            NotificationRouteKind.APPROVAL_REQUESTED -> ApprovalNotifications.show(
                 this,
-                sessionId,
-                approvalId,
+                route.sessionId,
+                route.approvalId ?: return,
                 "",
             )
-            "approval_resolved" -> ApprovalNotifications.cancel(this, approvalId)
+            NotificationRouteKind.APPROVAL_RESOLVED ->
+                ApprovalNotifications.cancel(this, route.approvalId ?: return)
+            NotificationRouteKind.SESSION_READY -> SessionNotifications.show(this, route)
         }
     }
 
@@ -89,11 +88,5 @@ class TempestMikuPushService : PushService() {
 
     override fun onUnregistered(instance: String) {
         UnifiedPushEvents.emit(mapOf("type" to "unregistered"))
-    }
-
-    private fun validUuid(value: String): String? = try {
-        UUID.fromString(value).toString()
-    } catch (_: IllegalArgumentException) {
-        null
     }
 }

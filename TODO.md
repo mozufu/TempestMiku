@@ -16,34 +16,34 @@ durable turn path exactly once; native code never runs a model, sandbox, or seco
 
 ## P6.4 Contract
 
-- [ ] Define versioned notification routing data for the exact session or approval without placing
+- [x] Define versioned notification routing data for the exact session or approval without placing
       message text, secrets, bearer credentials, or other sensitive content in the push payload.
-- [ ] Deep-link notification taps to the routed session/approval after device authentication where
+- [x] Deep-link notification taps to the routed session/approval after device authentication where
       required, with a safe fallback when the target no longer exists or authority was revoked.
-- [ ] Add Android inline reply for eligible session notifications. Accept only non-empty sanitized
+- [x] Add Android inline reply for eligible session notifications. Accept only non-empty sanitized
       text within an explicit UTF-16/code-point and encoded-byte bound.
-- [ ] Treat pressing the notification Send action as the owner's explicit send confirmation; do not
+- [x] Treat pressing the notification Send action as the owner's explicit send confirmation; do not
       reopen Flutter for a second confirmation.
-- [ ] Submit through the existing authenticated durable message API with a stable client message id
+- [x] Submit through the existing authenticated durable message API with a stable client message id
       and session id. Native code must not execute the agent loop or invent another turn contract.
-- [ ] Persist only the minimum bounded retry state needed across process death; clear it after a
+- [x] Persist only the minimum bounded retry state needed across process death; clear it after a
       terminal response, revocation, permanent failure, or expiry.
-- [ ] Preserve Approve once / Deny behavior, Android 12+ device authentication, generic lock-screen
+- [x] Preserve Approve once / Deny behavior, Android 12+ device authentication, generic lock-screen
       copy, resolution cancellation, leased push delivery, and default-deny semantics.
-- [ ] Surface bounded success/failure feedback without exposing reply text on the lock screen or
+- [x] Surface bounded success/failure feedback without exposing reply text on the lock screen or
       silently falling back to a different session.
 
 ## Deterministic Verification
 
-- [ ] Pure Kotlin tests cover route decoding, text sanitization/bounds, stable id generation,
+- [x] Pure Kotlin tests cover route decoding, text sanitization/bounds, stable id generation,
       duplicate delivery, retry, expiry, revoked auth, missing session, and permanent failure.
-- [ ] Flutter tests cover deep-link restoration and replay without creating a second user message or
+- [x] Flutter tests cover deep-link restoration and replay without creating a second user message or
       showing a stale composer/preview.
-- [ ] Server/API tests prove duplicate client message ids are idempotent and revoked device tokens
+- [x] Server/API tests prove duplicate client message ids are idempotent and revoked device tokens
       cannot enqueue a turn.
-- [ ] Flutter analyze, the full Flutter suite, focused Android unit tests, and affected Rust/Web gates
+- [x] Flutter analyze, the full Flutter suite, focused Android unit tests, and affected Rust/Web gates
       pass.
-- [ ] Merged-manifest and APK inspection prove only the intended receiver/service/actions are
+- [x] Merged-manifest and APK inspection prove only the intended receiver/service/actions are
       exported and the release ABI/signing contracts remain intact.
 
 ## Physical And Live Closeout

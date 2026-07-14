@@ -16,8 +16,16 @@ MikuNotificationService createNotificationService() =>
     _AndroidNotificationService();
 
 class _AndroidNotificationService
-    implements MikuNotificationService, UnifiedPushNotificationService {
+    implements
+        MikuNotificationService,
+        UnifiedPushNotificationService,
+        ActionableNotificationService {
   bool _initialized = false;
+  late final Stream<Map<Object?, Object?>> _actionEvents =
+      _notificationActions
+          .receiveBroadcastStream()
+          .map((raw) => (raw as Map).cast<Object?, Object?>())
+          .asBroadcastStream();
 
   @override
   bool get isSupported => Platform.isAndroid;
@@ -25,10 +33,8 @@ class _AndroidNotificationService
   @override
   Stream<ApprovalNotificationAction> get actions {
     if (!isSupported) return const Stream.empty();
-    return _notificationActions
-        .receiveBroadcastStream()
-        .map((raw) {
-          final value = (raw as Map).cast<Object?, Object?>();
+    return _actionEvents
+        .map((value) {
           return ApprovalNotificationAction(
             sessionId: value['sessionId']?.toString() ?? '',
             approvalId: value['approvalId']?.toString() ?? '',
@@ -42,6 +48,42 @@ class _AndroidNotificationService
               action.approvalId.isNotEmpty &&
               (action.decision == 'approve' || action.decision == 'deny'),
         );
+  }
+
+  @override
+  Stream<NotificationRouteAction> get routes {
+    if (!isSupported) return const Stream.empty();
+    return _actionEvents
+        .where((value) => value['type'] == 'route')
+        .map(
+          (value) => NotificationRouteAction(
+            sessionId: value['sessionId']?.toString() ?? '',
+            kind: value['routeKind']?.toString() ?? '',
+            approvalId:
+                (value['approvalId']?.toString() ?? '').isEmpty
+                    ? null
+                    : value['approvalId']?.toString(),
+          ),
+        )
+        .where(
+          (route) =>
+              route.sessionId.isNotEmpty &&
+              (route.kind == 'session_ready' ||
+                  route.kind == 'approval_requested'),
+        );
+  }
+
+  @override
+  Future<void> configureReplyAuthority({
+    String? serverBaseUrl,
+    String? deviceToken,
+  }) async {
+    if (!isSupported) return;
+    await initialize();
+    await _notifications.invokeMethod<void>('configureInlineReply', {
+      if (serverBaseUrl != null) 'serverBaseUrl': serverBaseUrl,
+      if (deviceToken != null) 'deviceToken': deviceToken,
+    });
   }
 
   @override

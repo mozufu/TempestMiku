@@ -49,6 +49,32 @@ class RecordingNotificationService implements MikuNotificationService {
   }
 }
 
+class ActionableRecordingNotificationService
+    extends RecordingNotificationService
+    implements ActionableNotificationService {
+  final routeController = StreamController<NotificationRouteAction>.broadcast(
+    sync: true,
+  );
+  NotificationReplyAuthority? configuredAuthority;
+
+  @override
+  Stream<NotificationRouteAction> get routes => routeController.stream;
+
+  @override
+  Future<void> configureReplyAuthority({
+    String? serverBaseUrl,
+    String? deviceToken,
+  }) async {
+    configuredAuthority =
+        serverBaseUrl == null || deviceToken == null
+            ? null
+            : NotificationReplyAuthority(
+              serverBaseUrl: serverBaseUrl,
+              deviceToken: deviceToken,
+            );
+  }
+}
+
 Future<void> _openSettings(WidgetTester tester) async {
   await tester.tap(find.byTooltip('Settings').first);
   await tester.pump();
@@ -854,6 +880,50 @@ void main() {
         notifications.cancelledApprovals,
         contains('approval-notification-action'),
       );
+    },
+  );
+
+  testWidgets(
+    'notification route restores the exact session without replaying a message',
+    (WidgetTester tester) async {
+      final client = ScriptedMikuClient();
+      final target = await client.createSession();
+      client.seedPendingApproval(
+        target.id,
+        approvalId: 'approval-route-target',
+        action: 'proc.run cargo test',
+      );
+      await client.createSession();
+      final notifications = ActionableRecordingNotificationService();
+      addTearDown(notifications.actionController.close);
+      addTearDown(notifications.routeController.close);
+
+      await tester.pumpWidget(
+        MikuApp(client: client, notifications: notifications),
+      );
+      await tester.pump();
+      for (var i = 0; i < 20 && client.driveFeedRequests == 0; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      notifications.routeController.add(
+        NotificationRouteAction(sessionId: target.id, kind: 'session_ready'),
+      );
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        if (find
+            .text('Pending approval · proc.run cargo test')
+            .evaluate()
+            .isNotEmpty) {
+          break;
+        }
+      }
+
+      expect(
+        find.text('Pending approval · proc.run cargo test'),
+        findsOneWidget,
+      );
+      expect(client.sentClientMessageIds, isEmpty);
     },
   );
 

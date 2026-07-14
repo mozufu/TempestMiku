@@ -19,8 +19,8 @@ import org.unifiedpush.android.connector.UnifiedPush
 
 private const val ACTION_APPROVAL_DECISION =
     "org.mozufu.tempestmiku.APPROVAL_NOTIFICATION_DECISION"
-private const val EXTRA_SESSION_ID = "sessionId"
-private const val EXTRA_APPROVAL_ID = "approvalId"
+internal const val EXTRA_SESSION_ID = "sessionId"
+internal const val EXTRA_APPROVAL_ID = "approvalId"
 private const val EXTRA_DECISION = "decision"
 private const val URI_GRANT_FLAGS =
     Intent.FLAG_GRANT_READ_URI_PERMISSION or
@@ -54,7 +54,20 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "initialize" -> {
                     ApprovalNotifications.ensureChannel(this)
+                    SessionNotifications.ensureChannel(this)
                     result.success(null)
+                }
+                "configureInlineReply" -> {
+                    val serverBaseUrl = call.argument<String>("serverBaseUrl")
+                    val deviceToken = call.argument<String>("deviceToken")
+                    if (serverBaseUrl == null || deviceToken == null) {
+                        InlineReplySecretStore.clearAuthority(this)
+                        result.success(null)
+                    } else if (InlineReplySecretStore.saveAuthority(this, serverBaseUrl, deviceToken)) {
+                        result.success(null)
+                    } else {
+                        result.error("invalid_reply_authority", "reply authority was rejected", null)
+                    }
                 }
                 "requestPermission" -> requestNotificationPermission(result)
                 "showApproval" -> {
@@ -187,6 +200,25 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun handleNotificationIntent(intent: Intent?) {
+        if (intent?.action == ACTION_OPEN_NOTIFICATION_ROUTE) {
+            val route = NotificationIntentData.route(intent)
+            val sessionId = route?.sessionId ?: intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+            val approvalId = route?.approvalId ?: intent.getStringExtra(EXTRA_APPROVAL_ID)
+            val routeKind = route?.kind?.wireName ?: intent.getStringExtra(EXTRA_ROUTE_KIND).orEmpty()
+            if (sessionId.isNotEmpty() && routeKind in setOf("session_ready", "approval_requested")) {
+                emitNotificationAction(
+                    mapOf(
+                        "type" to "route",
+                        "sessionId" to sessionId,
+                        "routeKind" to routeKind,
+                        if (approvalId != null) "approvalId" to approvalId else "approvalId" to "",
+                    ),
+                    "route:$routeKind:$sessionId:${approvalId.orEmpty()}",
+                )
+            }
+            clearNotificationIntent(intent)
+            return
+        }
         if (intent?.action != ACTION_APPROVAL_DECISION) return
         val sessionId = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
         val approvalId = intent.getStringExtra(EXTRA_APPROVAL_ID).orEmpty()
@@ -200,19 +232,35 @@ class MainActivity : FlutterActivity() {
             "decision" to decision,
             "requiresConfirmation" to (Build.VERSION.SDK_INT < Build.VERSION_CODES.S),
         )
+        emitNotificationAction(payload, "decision:$approvalId:$decision")
+        clearNotificationIntent(intent)
+    }
+
+    private fun emitNotificationAction(payload: Map<String, Any>, dedupeKey: String) {
+        val withKey = payload + ("dedupeKey" to dedupeKey)
         val sink = actionSink
         if (sink == null) {
-            pendingActions.removeAll { queued ->
-                queued["approvalId"] == approvalId
-            }
-            pendingActions.add(payload)
+            pendingActions.removeAll { queued -> queued["dedupeKey"] == dedupeKey }
+            pendingActions.add(withKey)
         } else {
-            sink.success(payload)
+            sink.success(withKey)
         }
+    }
+
+    private fun clearNotificationIntent(intent: Intent) {
         intent.action = Intent.ACTION_MAIN
-        intent.removeExtra(EXTRA_SESSION_ID)
-        intent.removeExtra(EXTRA_APPROVAL_ID)
-        intent.removeExtra(EXTRA_DECISION)
+        for (extra in listOf(
+            EXTRA_SESSION_ID,
+            EXTRA_APPROVAL_ID,
+            EXTRA_DECISION,
+            EXTRA_ROUTE_VERSION,
+            EXTRA_DELIVERY_ID,
+            EXTRA_ROUTE_KIND,
+            EXTRA_EVENT_SEQ,
+            EXTRA_EXPIRES_AT,
+        )) {
+            intent.removeExtra(extra)
+        }
     }
 
     private fun handleTextImportIntent(intent: Intent?) {
@@ -274,7 +322,11 @@ internal object ApprovalNotifications {
     fun show(context: Context, sessionId: String, approvalId: String, action: String) {
         ensureChannel(context)
         val openApp = Intent(context, MainActivity::class.java).apply {
+            this.action = ACTION_OPEN_NOTIFICATION_ROUTE
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_SESSION_ID, sessionId)
+            putExtra(EXTRA_APPROVAL_ID, approvalId)
+            putExtra(EXTRA_ROUTE_KIND, "approval_requested")
         }
         val contentIntent = PendingIntent.getActivity(
             context,

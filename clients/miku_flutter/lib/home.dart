@@ -32,11 +32,14 @@ class _MikuHomePageState extends State<MikuHomePage>
   Future<void>? _sessionFuture;
   StreamSubscription<MikuEvent>? _sub;
   StreamSubscription<ApprovalNotificationAction>? _notificationActionSub;
+  StreamSubscription<NotificationRouteAction>? _notificationRouteSub;
   StreamSubscription<UnifiedPushEvent>? _unifiedPushSub;
   StreamSubscription<SharedContent>? _shareImportSub;
   final List<ApprovalNotificationAction> _pendingNotificationActions = [];
+  final List<NotificationRouteAction> _pendingNotificationRoutes = [];
   final List<SharedContent> _pendingShareImports = [];
   bool _processingNotificationActions = false;
+  bool _processingNotificationRoutes = false;
   bool _processingShareImports = false;
   bool _sessionBootComplete = false;
   String? _sessionId;
@@ -82,6 +85,12 @@ class _MikuHomePageState extends State<MikuHomePage>
     _notificationActionSub = widget.notifications.actions.listen(
       _enqueueNotificationAction,
     );
+    final actionableNotifications = _actionableNotifications;
+    if (actionableNotifications != null) {
+      _notificationRouteSub = actionableNotifications.routes.listen(
+        _enqueueNotificationRoute,
+      );
+    }
     final pushNotifications = _unifiedPushNotifications;
     if (pushNotifications != null) {
       _unifiedPushSub = pushNotifications.pushEvents.listen(
@@ -105,6 +114,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     _scrollCtrl.dispose();
     _sub?.cancel();
     _notificationActionSub?.cancel();
+    _notificationRouteSub?.cancel();
     _unifiedPushSub?.cancel();
     _shareImportSub?.cancel();
     _dotAnim.dispose();
@@ -132,6 +142,14 @@ class _MikuHomePageState extends State<MikuHomePage>
   UnifiedPushNotificationService? get _unifiedPushNotifications =>
       widget.notifications is UnifiedPushNotificationService
           ? widget.notifications as UnifiedPushNotificationService
+          : null;
+  ActionableNotificationService? get _actionableNotifications =>
+      widget.notifications is ActionableNotificationService
+          ? widget.notifications as ActionableNotificationService
+          : null;
+  NotificationReplyAuthorityClient? get _notificationReplyAuthorityClient =>
+      widget.client is NotificationReplyAuthorityClient
+          ? widget.client as NotificationReplyAuthorityClient
           : null;
   bool get _sessionEnded => _status == 'ended';
 
@@ -184,6 +202,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     await _ensureSession();
     _sessionBootComplete = true;
     await _drainNotificationActions();
+    await _drainNotificationRoutes();
     await _drainShareImports();
   }
 
@@ -295,6 +314,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     UnifiedPushNotificationService notifications,
   ) async {
     try {
+      await _syncInlineReplyAuthority();
       final client = _pushRegistrationClient;
       if (client == null || !await client.hasDeviceCredential()) return;
       final registration = await notifications.registerUnifiedPush();
@@ -308,6 +328,17 @@ class _MikuHomePageState extends State<MikuHomePage>
     } catch (_) {
       // Push is optional and must not turn successful pairing into a failed login.
     }
+  }
+
+  Future<void> _syncInlineReplyAuthority() async {
+    final notifications = _actionableNotifications;
+    if (notifications == null) return;
+    final authority =
+        await _notificationReplyAuthorityClient?.notificationReplyAuthority();
+    await notifications.configureReplyAuthority(
+      serverBaseUrl: authority?.serverBaseUrl,
+      deviceToken: authority?.deviceToken,
+    );
   }
 
   Future<void> _handleUnifiedPushEvent(UnifiedPushEvent event) async {
@@ -594,6 +625,37 @@ class _MikuHomePageState extends State<MikuHomePage>
     );
     _pendingNotificationActions.add(action);
     unawaited(_drainNotificationActions());
+  }
+
+  void _enqueueNotificationRoute(NotificationRouteAction route) {
+    _pendingNotificationRoutes.removeWhere(
+      (queued) =>
+          queued.sessionId == route.sessionId &&
+          queued.kind == route.kind &&
+          queued.approvalId == route.approvalId,
+    );
+    _pendingNotificationRoutes.add(route);
+    unawaited(_drainNotificationRoutes());
+  }
+
+  Future<void> _drainNotificationRoutes() async {
+    if (_processingNotificationRoutes || !_sessionBootComplete) return;
+    _processingNotificationRoutes = true;
+    try {
+      while (mounted && _pendingNotificationRoutes.isNotEmpty) {
+        final route = _pendingNotificationRoutes.removeAt(0);
+        try {
+          await _loadModes();
+          await _syncNotificationSession(route.sessionId);
+        } catch (_) {
+          if (mounted) {
+            _showSnack('This notification target is no longer available.');
+          }
+        }
+      }
+    } finally {
+      _processingNotificationRoutes = false;
+    }
   }
 
   Future<void> _drainNotificationActions() async {
@@ -1963,6 +2025,11 @@ class _MikuHomePageState extends State<MikuHomePage>
       await client.logout();
     } catch (error) {
       logoutError = error;
+    }
+    try {
+      await _syncInlineReplyAuthority();
+    } catch (_) {
+      // The server credential is already gone; native reply authority is cleared again on boot.
     }
     if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
     _inputCtrl.clear();

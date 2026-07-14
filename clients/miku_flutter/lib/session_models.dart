@@ -852,6 +852,20 @@ abstract class PushRegistrationClient {
   Future<void> unregisterPush();
 }
 
+class NotificationReplyAuthority {
+  const NotificationReplyAuthority({
+    required this.serverBaseUrl,
+    required this.deviceToken,
+  });
+
+  final String serverBaseUrl;
+  final String deviceToken;
+}
+
+abstract class NotificationReplyAuthorityClient {
+  Future<NotificationReplyAuthority?> notificationReplyAuthority();
+}
+
 Map<String, Object?>? _mapValue(Object? value) {
   if (value is Map<String, Object?>) return value;
   if (value is Map) return value.cast<String, Object?>();

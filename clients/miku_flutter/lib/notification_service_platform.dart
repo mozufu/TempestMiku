@@ -12,6 +12,18 @@ class ApprovalNotificationAction {
   final bool requiresConfirmation;
 }
 
+class NotificationRouteAction {
+  const NotificationRouteAction({
+    required this.sessionId,
+    required this.kind,
+    this.approvalId,
+  });
+
+  final String sessionId;
+  final String kind;
+  final String? approvalId;
+}
+
 class UnifiedPushRegistration {
   const UnifiedPushRegistration({
     required this.endpoint,
@@ -39,6 +51,15 @@ abstract class UnifiedPushNotificationService {
   Future<UnifiedPushRegistration?> registerUnifiedPush();
 
   Future<void> unregisterUnifiedPush();
+}
+
+abstract class ActionableNotificationService {
+  Stream<NotificationRouteAction> get routes;
+
+  Future<void> configureReplyAuthority({
+    String? serverBaseUrl,
+    String? deviceToken,
+  });
 }
 
 abstract class MikuNotificationService {

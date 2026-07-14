@@ -152,6 +152,7 @@ pub struct PushRuntimeMetrics {
 pub enum PushMessageKind {
     ApprovalRequested,
     ApprovalResolved,
+    SessionReady,
 }
 
 impl PushMessageKind {
@@ -159,6 +160,7 @@ impl PushMessageKind {
         match value {
             "approval_requested" => Ok(Self::ApprovalRequested),
             "approval_resolved" => Ok(Self::ApprovalResolved),
+            "session_ready" => Ok(Self::SessionReady),
             other => Err(ServerError::Store(format!(
                 "unknown push message kind {other}"
             ))),
@@ -173,7 +175,10 @@ pub struct PushMessage {
     pub delivery_id: Uuid,
     pub kind: PushMessageKind,
     pub session_id: Uuid,
-    pub approval_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_seq: Option<i64>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -525,8 +530,7 @@ impl PushService {
                 }
                 PushProviderOutcome::TransientFailure => {
                     if lease.attempts >= MAX_DELIVERY_ATTEMPTS
-                        || (lease.message.kind == PushMessageKind::ApprovalRequested
-                            && Utc::now() >= lease.message.expires_at)
+                        || Utc::now() >= lease.message.expires_at
                     {
                         self.store.fail_delivery(&lease, error, Utc::now()).await?;
                     } else {
@@ -633,7 +637,7 @@ impl PushStore for PostgresPushStore {
                  where device_id = $1
                  returning device_id, provider, created_at, updated_at, disabled_at
              ), failed as (
-                update approval_push_deliveries
+                update push_deliveries
                    set status = 'failed', failed_at = $2, updated_at = $2,
                        locked_at = null, lease_owner = null, last_error = coalesce($3, 'registration disabled')
                  where device_id = $1 and status in ('pending', 'claimed')
@@ -646,7 +650,7 @@ impl PushStore for PostgresPushStore {
     async fn materialize_deliveries(&self, now: DateTime<Utc>, limit: i64) -> Result<usize> {
         self.client
             .execute(
-                "update approval_push_deliveries delivery
+                "update push_deliveries delivery
                 set status = 'failed', failed_at = $1, updated_at = $1,
                     locked_at = null, lease_owner = null,
                     last_error = 'device or registration is inactive'
@@ -663,7 +667,8 @@ impl PushStore for PostgresPushStore {
             .map_err(store_error)?;
         let rows = self.client.query(
             "with candidates as (
-                select approval.id as approval_id, registration.device_id
+                select approval.id as approval_id, approval.session_id, approval.expires_at,
+                       registration.device_id
                   from approval_requests approval
                   join device_push_registrations registration on registration.disabled_at is null
                   join auth_devices device on device.id = registration.device_id and device.revoked_at is null
@@ -671,7 +676,7 @@ impl PushStore for PostgresPushStore {
                    and approval.request_event_seq is not null
                    and approval.expires_at > $1
                    and not exists (
-                       select 1 from approval_push_deliveries existing
+                       select 1 from push_deliveries existing
                         where existing.approval_id = approval.id
                           and existing.device_id = registration.device_id
                           and existing.kind = 'approval_requested'
@@ -679,21 +684,22 @@ impl PushStore for PostgresPushStore {
                  order by approval.created_at, registration.device_id
                  limit $2
              )
-             insert into approval_push_deliveries
-                (id, approval_id, device_id, kind, status, attempts, available_at,
+             insert into push_deliveries
+                (id, approval_id, device_id, kind, session_id, event_seq, expires_at,
+                 status, attempts, available_at,
                  locked_at, lease_owner, lease_epoch, delivered_at, failed_at,
                  last_error, created_at, updated_at)
-             select gen_random_uuid(), approval_id, device_id, 'approval_requested', 'pending', 0,
-                    $1, null, null, 0, null, null, null, $1, $1
+             select gen_random_uuid(), approval_id, device_id, 'approval_requested', session_id,
+                    null, expires_at, 'pending', 0, $1, null, null, 0, null, null, null, $1, $1
                from candidates
-             on conflict (approval_id, device_id, kind) do nothing
+             on conflict (approval_id, device_id, kind) where approval_id is not null do nothing
              returning id",
             &[&now, &limit],
         ).await.map_err(store_error)?;
         let resolved = self.client.query(
             "with candidates as (
                 select requested.approval_id, requested.device_id
-                  from approval_push_deliveries requested
+                  from push_deliveries requested
                   join approval_requests approval on approval.id = requested.approval_id
                   join device_push_registrations registration
                     on registration.device_id = requested.device_id and registration.disabled_at is null
@@ -702,7 +708,7 @@ impl PushStore for PostgresPushStore {
                    and requested.status = 'delivered'
                    and approval.status <> 'pending'
                    and not exists (
-                       select 1 from approval_push_deliveries existing
+                       select 1 from push_deliveries existing
                         where existing.approval_id = requested.approval_id
                           and existing.device_id = requested.device_id
                           and existing.kind = 'approval_resolved'
@@ -710,18 +716,55 @@ impl PushStore for PostgresPushStore {
                  order by approval.resolved_at, requested.device_id
                  limit $2
              )
-             insert into approval_push_deliveries
-                (id, approval_id, device_id, kind, status, attempts, available_at,
+             insert into push_deliveries
+                (id, approval_id, device_id, kind, session_id, event_seq, expires_at,
+                 status, attempts, available_at,
                  locked_at, lease_owner, lease_epoch, delivered_at, failed_at,
                  last_error, created_at, updated_at)
-             select gen_random_uuid(), approval_id, device_id, 'approval_resolved', 'pending', 0,
+             select gen_random_uuid(), approval_id, device_id, 'approval_resolved',
+                    approval.session_id, null, approval.expires_at, 'pending', 0,
                     $1, null, null, 0, null, null, null, $1, $1
                from candidates
-             on conflict (approval_id, device_id, kind) do nothing
+               join approval_requests approval on approval.id = candidates.approval_id
+             on conflict (approval_id, device_id, kind) where approval_id is not null do nothing
              returning id",
             &[&now, &limit],
         ).await.map_err(store_error)?;
-        Ok(rows.len() + resolved.len())
+        let session_ready = self.client.query(
+            "with candidates as (
+                select event.session_id, event.seq as event_seq, registration.device_id,
+                       event.created_at + interval '1 hour' as expires_at
+                  from session_events event
+                  join sessions session on session.id = event.session_id and session.status <> 'ended'
+                  join device_push_registrations registration
+                    on registration.disabled_at is null and registration.created_at <= event.created_at
+                  join auth_devices device
+                    on device.id = registration.device_id and device.revoked_at is null
+                 where event.event_type = 'final'
+                   and event.created_at + interval '1 hour' > $1
+                   and not exists (
+                       select 1 from push_deliveries existing
+                        where existing.session_id = event.session_id
+                          and existing.event_seq = event.seq
+                          and existing.device_id = registration.device_id
+                          and existing.kind = 'session_ready'
+                   )
+                 order by event.created_at, registration.device_id
+                 limit $2
+             )
+             insert into push_deliveries
+                (id, approval_id, device_id, kind, session_id, event_seq, expires_at,
+                 status, attempts, available_at, locked_at, lease_owner, lease_epoch,
+                 delivered_at, failed_at, last_error, created_at, updated_at)
+             select gen_random_uuid(), null, device_id, 'session_ready', session_id, event_seq,
+                    expires_at, 'pending', 0, $1, null, null, 0, null, null, null, $1, $1
+               from candidates
+             on conflict (session_id, event_seq, device_id, kind) where event_seq is not null
+             do nothing
+             returning id",
+            &[&now, &limit],
+        ).await.map_err(store_error)?;
+        Ok(rows.len() + resolved.len() + session_ready.len())
     }
 
     async fn claim_next_delivery(
@@ -736,27 +779,26 @@ impl PushStore for PostgresPushStore {
             .query_opt(
                 "with selected as (
                 select delivery.id
-                  from approval_push_deliveries delivery
+                  from push_deliveries delivery
                  where (delivery.status = 'pending' and delivery.available_at <= $2)
                     or (delivery.status = 'claimed' and delivery.locked_at <= $3)
                  order by delivery.available_at, delivery.created_at
                  for update skip locked limit 1
              )
-             update approval_push_deliveries delivery
+             update push_deliveries delivery
                 set status = 'claimed', attempts = delivery.attempts + 1,
                     locked_at = $2, lease_owner = $1, lease_epoch = delivery.lease_epoch + 1,
                     updated_at = $2, failed_at = null, last_error = null
-               from selected, approval_requests approval, device_push_registrations registration,
-                    auth_devices device
+               from selected, device_push_registrations registration, auth_devices device
               where delivery.id = selected.id
-                and approval.id = delivery.approval_id
                 and registration.device_id = delivery.device_id
                 and registration.disabled_at is null
                 and device.id = delivery.device_id
                 and device.revoked_at is null
              returning delivery.id, delivery.device_id, delivery.kind, delivery.attempts,
-                       delivery.lease_owner, delivery.lease_epoch, approval.session_id,
-                       approval.id as approval_id, approval.expires_at, registration.provider,
+                       delivery.lease_owner, delivery.lease_epoch, delivery.session_id,
+                       delivery.approval_id, delivery.event_seq, delivery.expires_at,
+                       registration.provider,
                        registration.secret_ciphertext, registration.secret_nonce,
                        registration.secret_version",
                 &[&owner_id, &now, &stale_before],
@@ -770,7 +812,7 @@ impl PushStore for PostgresPushStore {
         let changed = self
             .client
             .execute(
-                "update approval_push_deliveries
+                "update push_deliveries
                 set status = 'delivered', delivered_at = $4, updated_at = $4,
                     locked_at = null, lease_owner = null
               where id = $1 and status = 'claimed' and lease_owner = $2 and lease_epoch = $3",
@@ -796,7 +838,7 @@ impl PushStore for PostgresPushStore {
         let changed = self
             .client
             .execute(
-                "update approval_push_deliveries
+                "update push_deliveries
                 set status = 'pending', available_at = $4, updated_at = $5,
                     locked_at = null, lease_owner = null, failed_at = $5, last_error = $6
               where id = $1 and status = 'claimed' and lease_owner = $2 and lease_epoch = $3",
@@ -823,7 +865,7 @@ impl PushStore for PostgresPushStore {
         let changed = self
             .client
             .execute(
-                "update approval_push_deliveries
+                "update push_deliveries
                 set status = 'failed', failed_at = $4, updated_at = $4,
                     locked_at = null, lease_owner = null, last_error = $5
               where id = $1 and status = 'claimed' and lease_owner = $2 and lease_epoch = $3",
@@ -851,7 +893,7 @@ impl PushStore for PostgresPushStore {
             .client
             .execute(
                 "with failed as (
-                update approval_push_deliveries
+                update push_deliveries
                    set status = 'failed', failed_at = $4, updated_at = $4,
                        locked_at = null, lease_owner = null, last_error = $5
                  where id = $1 and status = 'claimed' and lease_owner = $2 and lease_epoch = $3
@@ -877,13 +919,13 @@ impl PushStore for PostgresPushStore {
             .client
             .query_one(
                 "select
-                (select count(*)::bigint from approval_push_deliveries
+                (select count(*)::bigint from push_deliveries
                   where status in ('pending', 'claimed')) as queue_depth,
-                (select min(created_at) from approval_push_deliveries
+                (select min(created_at) from push_deliveries
                   where status in ('pending', 'claimed')) as oldest,
                 (select coalesce(sum(greatest(attempts - 1, 0)), 0)::bigint
-                   from approval_push_deliveries) as retries,
-                (select count(*)::bigint from approval_push_deliveries
+                   from push_deliveries) as retries,
+                (select count(*)::bigint from push_deliveries
                   where status = 'failed') as failed,
                 (select count(*)::bigint from device_push_registrations
                   where disabled_at is not null) as disabled",
@@ -933,6 +975,7 @@ fn row_to_delivery(row: tokio_postgres::Row) -> Result<PushDeliveryLease> {
             kind: PushMessageKind::parse(row.get("kind"))?,
             session_id: row.get("session_id"),
             approval_id: row.get("approval_id"),
+            event_seq: row.get("event_seq"),
             expires_at: row.get("expires_at"),
         },
         device_id: row.get("device_id"),
@@ -1242,7 +1285,8 @@ mod tests {
                 delivery_id: Uuid::new_v4(),
                 kind: PushMessageKind::ApprovalRequested,
                 session_id: Uuid::new_v4(),
-                approval_id: Uuid::new_v4(),
+                approval_id: Some(Uuid::new_v4()),
+                event_seq: None,
                 expires_at: Utc::now() + chrono::Duration::minutes(5),
             },
             device_id,
@@ -1286,7 +1330,8 @@ mod tests {
             delivery_id: Uuid::new_v4(),
             kind: PushMessageKind::ApprovalRequested,
             session_id: Uuid::new_v4(),
-            approval_id: Uuid::new_v4(),
+            approval_id: Some(Uuid::new_v4()),
+            event_seq: None,
             expires_at: Utc::now(),
         };
         let value = serde_json::to_value(message).unwrap();
@@ -1294,6 +1339,20 @@ mod tests {
         for forbidden in ["action", "scope", "token", "transcript", "credential"] {
             assert!(!value.to_string().contains(forbidden));
         }
+
+        let session_message = PushMessage {
+            version: 1,
+            delivery_id: Uuid::new_v4(),
+            kind: PushMessageKind::SessionReady,
+            session_id: Uuid::new_v4(),
+            approval_id: None,
+            event_seq: Some(42),
+            expires_at: Utc::now(),
+        };
+        let value = serde_json::to_value(session_message).unwrap();
+        assert_eq!(value["kind"], "session_ready");
+        assert_eq!(value["eventSeq"], 42);
+        assert!(value.get("approvalId").is_none());
     }
 
     #[test]
@@ -1347,7 +1406,8 @@ mod tests {
             delivery_id: Uuid::new_v4(),
             kind: PushMessageKind::ApprovalRequested,
             session_id: Uuid::new_v4(),
-            approval_id: Uuid::new_v4(),
+            approval_id: Some(Uuid::new_v4()),
+            event_seq: None,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
         };
         let registration = serde_json::json!({
@@ -1366,7 +1426,7 @@ mod tests {
         );
         assert_eq!(headers["urgency"], "high");
         assert!(!body.is_empty());
-        let approval_id = message.approval_id.to_string();
+        let approval_id = message.approval_id.expect("approval route id").to_string();
         assert!(
             !body
                 .windows(approval_id.len())
@@ -1386,7 +1446,8 @@ mod tests {
             delivery_id: Uuid::new_v4(),
             kind: PushMessageKind::ApprovalRequested,
             session_id: Uuid::new_v4(),
-            approval_id: Uuid::new_v4(),
+            approval_id: Some(Uuid::new_v4()),
+            event_seq: None,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
         };
         let registration = serde_json::json!({

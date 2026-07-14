@@ -38,11 +38,15 @@ if (releaseRequested) {
 
 android {
     namespace = "org.mozufu.tempestmiku"
+    buildFeatures {
+        buildConfig = true
+    }
     // flutter_secure_storage 10.x and mobile_scanner's CameraX graph require API 36 headers.
     compileSdk = 36
     ndkVersion = "26.1.10909125"
 
     compileOptions {
+        coreLibraryDesugaringEnabled true
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
@@ -88,6 +92,8 @@ flutter {
 
 dependencies {
     implementation "org.unifiedpush.android:connector:3.3.3"
+    implementation "androidx.work:work-runtime:2.10.3"
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.5"
     testImplementation "junit:junit:4.13.2"
 }
 

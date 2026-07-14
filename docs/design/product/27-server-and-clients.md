@@ -238,11 +238,19 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   It never returns replacement text to the source app or sends on receipt. Local deterministic gates
   pass, and the signed Android 15 physical canary on 2026-07-14 proved system resolver discovery,
   cancel without sending, distinct current/new-session durable turns, warm delivery, and cold-start
-  recovery without preview replay or duplicate user messages. There is still **no on-device
-  sandbox**, added authority, or second execution path. The approved P6 closeout continues with
-  P6.4 exact-context notification deep links and owner-confirmed inline reply through the same
-  authenticated idempotent message API; pressing Send in the notification is the explicit send
-  confirmation, and native code never runs an agent loop. P6.5 then adds one bounded quick-capture
+  recovery without preview replay or duplicate user messages. P6.4 now generalizes the leased
+  Postgres push outbox with a `session_ready` route materialized only from fresh final events for an
+  active registered device. The encrypted payload carries versioned delivery/session/event ids and
+  expiry, never reply or transcript text. Taps restore exactly that session or approval. Eligible
+  session notifications expose Android inline reply; pressing Send is the explicit confirmation.
+  Native code sanitizes and bounds the text, encrypts the minimum WorkManager retry envelope with an
+  Android Keystore key, and posts one stable client message id through the existing origin-bound
+  device credential and durable message API. Revocation, expiry, missing sessions, permanent
+  failures, and bounded transient retry fail visibly without selecting another session, exposing
+  reply text on the lock screen, or running a model. The deterministic Kotlin, Flutter, server API,
+  and gated Postgres tests pass; signed Android 15 foreground/background/killed-process closeout is
+  still required before P6.4 is marked done. There is still **no on-device sandbox**, added model
+  authority, or second execution path. After that physical closeout, P6.5 adds one bounded quick-capture
   intent reused by a launcher shortcut and Quick Settings tile, with a widget only if it adds no new
   send path. P6.6 records bounded audio and uses a replaceable self-hosted Whisper-compatible service
   on lumo; the editable transcript still requires explicit current/new-session send. Each slice must

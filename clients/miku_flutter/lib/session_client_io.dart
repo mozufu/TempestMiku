@@ -91,7 +91,11 @@ class MemoryDeviceTokenStore implements DeviceTokenStore {
 }
 
 class NativeMikuSessionClient
-    implements MikuSessionClient, ServerTargetClient, PushRegistrationClient {
+    implements
+        MikuSessionClient,
+        ServerTargetClient,
+        PushRegistrationClient,
+        NotificationReplyAuthorityClient {
   NativeMikuSessionClient({DeviceTokenStore? tokenStore})
     : _tokenStore = tokenStore ?? SecureDeviceTokenStore();
 
@@ -204,6 +208,17 @@ class NativeMikuSessionClient
     } catch (_) {
       return false;
     }
+  }
+
+  @override
+  Future<NotificationReplyAuthority?> notificationReplyAuthority() async {
+    final baseUrl = await serverBaseUrl();
+    final token = await _deviceToken(requestBaseUrl: baseUrl);
+    if (token == null) return null;
+    return NotificationReplyAuthority(
+      serverBaseUrl: baseUrl,
+      deviceToken: token,
+    );
   }
 
   @override

@@ -33,9 +33,11 @@
   The audit hardening gate is closed for the documented single-owner deployment.
 - Android now has in-app QR pairing, secure token storage, HTTPS-only release networking, backup
   exclusion, release-signing enforcement, encrypted provider-neutral push registration/outbox, and
-  authenticated notification actions. A production push provider, remote killed-process canary, and
-  broader OS integrations remain P6 work. Also deferred: `tm-mcp`, `tm-trace`, pgvector/graph/LLM-backed memory expansion, cloud
-  drive sync, live egress, and self-evolution.
+  authenticated notification actions. Production UnifiedPush/ntfy delivery and the remote
+  killed-process canary are closed. The P6.2 Android text/share-target implementation and physical
+  current/new-session canary are closed; broader OS integrations remain P6 work. Also deferred:
+  `tm-mcp`, `tm-trace`, pgvector/graph/LLM-backed memory expansion, cloud drive sync, live egress,
+  and aggressive self-evolution.
 
 ## Read before changing code
 
@@ -63,8 +65,8 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Select and integrate the production P6 push provider behind the landed provider-neutral contract,
-   then prove request/resolution delivery while the app is killed on a physical device.
+1. Select the next bounded P6 Android OS-integration slice. Preserve the closed pairing, release,
+   push, and `text/plain` share-target contracts; keep automatic sends and authority changes out.
 2. Keep the native/OMP coding backend boundary boring: OMP ACP remains replaceable, while native Deno remains the dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed manual approvals.
 3. Keep `tm-mcp`, `tm-trace`, fuller memory, cloud drive sync, live egress, and P7 self-evolution
    deferred to their roadmap stages.

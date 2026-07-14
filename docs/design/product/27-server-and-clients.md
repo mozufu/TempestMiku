@@ -203,7 +203,15 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   RFC 8291 `aes128gcm` routing payloads to the self-hosted ntfy distributor. The connector's native
   service renders/cancels notifications while Flutter is killed. The signed Android 15 physical
   canary proved remote request delivery and timeout-resolution cancellation through the live lumo
-  provider on 2026-07-14. There is still **no on-device sandbox** or second execution path.
+  provider on 2026-07-14. P6.2 adds an exported `ACTION_SEND` target for `text/plain` only: native
+  parsing removes control characters, caps body/subject sizes, and forwards at most one cold-start
+  payload to Flutter. The client presents an editable review sheet and requires an explicit current-
+  or new-session choice before calling the same authenticated durable message API. It accepts no
+  files, URI grants, HTML, pairing payloads, or automatic sends. The signed Android 15 physical
+  canary on 2026-07-14 proved system Sharesheet discovery, URL preview/edit/cancel without sending,
+  one durable import into the current session, one into a newly created session, and cold-start
+  recovery without preview replay or duplicate sends. There is still **no on-device sandbox**,
+  added authority, or second execution path.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 

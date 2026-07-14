@@ -3,10 +3,16 @@ part of 'main.dart';
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 class MikuApp extends StatelessWidget {
-  const MikuApp({super.key, required this.client, this.notifications});
+  const MikuApp({
+    super.key,
+    required this.client,
+    this.notifications,
+    this.shareImports,
+  });
 
   final MikuSessionClient client;
   final MikuNotificationService? notifications;
+  final MikuShareImportService? shareImports;
   static const _fontFallbacks = [
     'MikuCjkUi',
     '.SF Pro Text',
@@ -42,6 +48,7 @@ class MikuApp extends StatelessWidget {
       home: MikuHomePage(
         client: client,
         notifications: notifications ?? createNotificationService(),
+        shareImports: shareImports ?? createShareImportService(),
       ),
     );
   }

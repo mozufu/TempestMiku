@@ -88,6 +88,7 @@ flutter {
 
 dependencies {
     implementation "org.unifiedpush.android:connector:3.3.3"
+    testImplementation "junit:junit:4.13.2"
 }
 
 configurations.all {

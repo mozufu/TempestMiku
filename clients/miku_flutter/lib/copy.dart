@@ -64,6 +64,21 @@ class _UiCopy {
   String get send => pick('Send', '送出');
   String get typeMessage => pick('Type a message', '輸入訊息');
   String get sendMessage => pick('Send message', '送出訊息');
+  String get shareWithMiku => pick('Share with Miku', '分享給 Miku');
+  String get shareReviewHelper =>
+      pick('Review and edit before anything is sent.', '送出前先確認並編輯內容。');
+  String get shareTruncated => pick(
+    'This share exceeded the safe import limit and was shortened.',
+    '分享內容超過安全匯入上限，已截短。',
+  );
+  String get sharedContent => pick('Shared content', '分享內容');
+  String get sharedFromAndroid => pick('Shared from Android', '來自 Android 分享');
+  String get sendTo => pick('Send to', '傳送到');
+  String get currentChat => pick('Current chat', '目前對話');
+  String get newChat => pick('New chat', '新對話');
+  String get sendToMiku => pick('Send to Miku', '傳給 Miku');
+  String shareSendFailed(Object error) =>
+      pick('Could not send shared content: $error', '無法送出分享內容：$error');
 
   String round(int index) => pick('Round $index', '回合 $index');
   String get openAgentActivity => pick('Open agent activity', '開啟 agent 活動');

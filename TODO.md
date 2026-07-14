@@ -2,13 +2,14 @@
 
 Last aligned: **2026-07-14**.
 
-Active milestone: **P6.1 UnifiedPush production delivery — complete; next P6 OS integration unselected**.
+Active milestone: **P6 Android OS integrations — P6.2 share target closed**.
 
 `ROADMAP.md` remains the canonical milestone order. P0-P5 are complete for the documented
 single-owner deployment. P6 pairing, release hardening, provider-neutral push registration/outbox,
 and authenticated Android notification actions have landed. The production UnifiedPush/ntfy path is
 implemented, deployed on lumo, and proven by the physical killed-process request/resolution canary.
-Broader P6 OS integrations remain separate follow-up work.
+The bounded, review-before-send Android `text/plain` share target is also implemented and physically
+proven; the next P6 OS-integration slice remains to be selected.
 
 This file records the closed P7.1/P7.2a checklists and the explicitly deferred queue. Keep it aligned
 with core docs §07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. Closure is backed
@@ -55,6 +56,39 @@ Closed-canary invariants:
 - Do not add Firebase SDKs, Firebase project configuration, or server credentials.
 - Keep the provider disabled by default; fake-provider and encrypted local-provider tests remain the
   deterministic regression path.
+
+## P6.2 Android Share Target
+
+- [x] Export only an Android `ACTION_SEND` / `text/plain` target; reject unknown actions, MIME types,
+      and empty content before it reaches Flutter.
+- [x] Strip control characters, bound shared text to 16,384 characters and the optional subject to
+      240 characters, carry an explicit truncation flag, and retain at most one pre-listener
+      cold-start payload.
+- [x] Bridge cold-start and singleTop intents through a client-only event channel without adding a
+      Web behavior, server endpoint, capability, or second message loop.
+- [x] Require an editable confirmation sheet. Never send on intent receipt; let the owner cancel or
+      explicitly choose the current chat or a new chat.
+- [x] Reuse `MikuSessionClient.sendMessage` for both destinations. New-chat imports create the
+      session, persist the message, then load/attach so the durable turn remains recoverable across
+      client lifecycle races.
+- [x] Pure Kotlin parser tests cover accepted text, rejected action/type/empty input, sanitization,
+      and bounds. Flutter tests cover event parsing, no-auto-send, editing, current-chat send, and
+      new-chat routing.
+- [x] Flutter analyze and all 44 Flutter tests pass; the focused Android app Kotlin test task passes;
+      an arm64 debug APK builds successfully.
+- [x] Build and verify a signed arm64 release APK with the established release identity, then install
+      it in place over wireless ADB while preserving the paired app data and signer.
+- [x] On a physical Android 15 device, expose TempestMiku in the system `text/plain` Sharesheet,
+      import a URL into the editable preview, and prove cancellation does not send. Send distinct
+      reviewed shares once to the current chat and once to a new chat; after force-stop/cold-start,
+      both durable turns remain in their intended sessions with no preview replay or duplicate send.
+
+P6.2 invariants:
+
+- Do not accept files, images, HTML, arbitrary URI grants, pairing data, or non-`text/plain` MIME
+  types in this slice.
+- Do not auto-send shared content or bypass the normal authenticated session client.
+- Shared content is untrusted user input; importing it grants no host capability or approval.
 
 ## P7.0 North Star
 

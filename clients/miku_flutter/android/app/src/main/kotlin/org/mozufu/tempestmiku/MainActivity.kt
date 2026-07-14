@@ -22,6 +22,11 @@ private const val ACTION_APPROVAL_DECISION =
 private const val EXTRA_SESSION_ID = "sessionId"
 private const val EXTRA_APPROVAL_ID = "approvalId"
 private const val EXTRA_DECISION = "decision"
+private const val URI_GRANT_FLAGS =
+    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
 
 class MainActivity : FlutterActivity() {
     companion object {
@@ -30,11 +35,15 @@ class MainActivity : FlutterActivity() {
             "org.mozufu.tempestmiku/notification-actions"
         private const val UNIFIED_PUSH_CHANNEL =
             "org.mozufu.tempestmiku/unified-push-events"
+        private const val SHARE_IMPORT_CHANNEL =
+            "org.mozufu.tempestmiku/share-imports"
         private const val REQUEST_NOTIFICATIONS = 701
     }
 
     private var permissionResult: MethodChannel.Result? = null
     private var actionSink: EventChannel.EventSink? = null
+    private var shareImportSink: EventChannel.EventSink? = null
+    private var pendingShareImport: Map<String, Any>? = null
     private val pendingActions = mutableListOf<Map<String, Any>>()
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
@@ -121,13 +130,29 @@ class MainActivity : FlutterActivity() {
                     }
                 },
             )
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_IMPORT_CHANNEL)
+            .setStreamHandler(
+                object : EventChannel.StreamHandler {
+                    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                        shareImportSink = events
+                        pendingShareImport?.let(events::success)
+                        pendingShareImport = null
+                    }
+
+                    override fun onCancel(arguments: Any?) {
+                        shareImportSink = null
+                    }
+                },
+            )
         handleNotificationIntent(intent)
+        handleShareIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleNotificationIntent(intent)
+        handleShareIntent(intent)
     }
 
     override fun onRequestPermissionsResult(
@@ -188,6 +213,39 @@ class MainActivity : FlutterActivity() {
         intent.removeExtra(EXTRA_SESSION_ID)
         intent.removeExtra(EXTRA_APPROVAL_ID)
         intent.removeExtra(EXTRA_DECISION)
+    }
+
+    private fun handleShareIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        val clipContainsUri = intent.clipData?.let { clip ->
+            (0 until clip.itemCount).any { index -> clip.getItemAt(index).uri != null }
+        } ?: false
+        val hasUriPayload =
+            intent.flags and URI_GRANT_FLAGS != 0 ||
+                intent.hasExtra(Intent.EXTRA_STREAM) ||
+                clipContainsUri
+        val parsed = ShareIntentParser.parse(
+            action = intent.action,
+            mimeType = intent.type,
+            text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT),
+            subject = intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT),
+            hasUriPayload = hasUriPayload,
+        )
+        if (parsed != null) {
+            val payload = parsed.toEvent()
+            val sink = shareImportSink
+            if (sink == null) {
+                pendingShareImport = payload
+            } else {
+                sink.success(payload)
+            }
+        }
+        intent.action = Intent.ACTION_MAIN
+        intent.removeExtra(Intent.EXTRA_TEXT)
+        intent.removeExtra(Intent.EXTRA_SUBJECT)
+        intent.removeExtra(Intent.EXTRA_STREAM)
+        intent.clipData = null
+        intent.flags = intent.flags and URI_GRANT_FLAGS.inv()
     }
 
 }

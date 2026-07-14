@@ -7,6 +7,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'ratex_formula.dart';
 import 'notification_service.dart';
+import 'share_import_service.dart';
 import 'session_client.dart';
 import 'session_models.dart';
 
@@ -28,6 +29,7 @@ part 'sheet_history.dart';
 part 'sheet_approval_overflow.dart';
 part 'sheet_drive.dart';
 part 'sheet_resource.dart';
+part 'sheet_share_import.dart';
 part 'pairing_scanner.dart';
 
 void main() {
@@ -36,6 +38,7 @@ void main() {
     MikuApp(
       client: createDefaultClient(),
       notifications: createNotificationService(),
+      shareImports: createShareImportService(),
     ),
   );
 }

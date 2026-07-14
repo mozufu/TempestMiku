@@ -5,10 +5,12 @@ class MikuHomePage extends StatefulWidget {
     super.key,
     required this.client,
     required this.notifications,
+    required this.shareImports,
   });
 
   final MikuSessionClient client;
   final MikuNotificationService notifications;
+  final MikuShareImportService shareImports;
 
   @override
   State<MikuHomePage> createState() => _MikuHomePageState();
@@ -29,8 +31,11 @@ class _MikuHomePageState extends State<MikuHomePage>
   StreamSubscription<MikuEvent>? _sub;
   StreamSubscription<ApprovalNotificationAction>? _notificationActionSub;
   StreamSubscription<UnifiedPushEvent>? _unifiedPushSub;
+  StreamSubscription<SharedContent>? _shareImportSub;
   final List<ApprovalNotificationAction> _pendingNotificationActions = [];
+  final List<SharedContent> _pendingShareImports = [];
   bool _processingNotificationActions = false;
+  bool _processingShareImports = false;
   bool _sessionBootComplete = false;
   String? _sessionId;
   String? _lastEventId;
@@ -67,6 +72,12 @@ class _MikuHomePageState extends State<MikuHomePage>
       );
       unawaited(_initializeUnifiedPush(pushNotifications));
     }
+    if (widget.shareImports.isSupported) {
+      _shareImportSub = widget.shareImports.imports.listen(
+        _enqueueShareImport,
+        onError: (_) {},
+      );
+    }
     unawaited(_boot());
   }
 
@@ -78,6 +89,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     _sub?.cancel();
     _notificationActionSub?.cancel();
     _unifiedPushSub?.cancel();
+    _shareImportSub?.cancel();
     _dotAnim.dispose();
     super.dispose();
   }
@@ -109,6 +121,55 @@ class _MikuHomePageState extends State<MikuHomePage>
     await _ensureSession();
     _sessionBootComplete = true;
     await _drainNotificationActions();
+    await _drainShareImports();
+  }
+
+  void _enqueueShareImport(SharedContent content) {
+    _pendingShareImports.add(content);
+    if (_sessionBootComplete) unawaited(_drainShareImports());
+  }
+
+  Future<void> _drainShareImports() async {
+    if (_processingShareImports || !_sessionBootComplete) return;
+    _processingShareImports = true;
+    try {
+      while (_pendingShareImports.isNotEmpty && mounted) {
+        final content = _pendingShareImports.removeAt(0);
+        await _reviewShareImport(content);
+      }
+    } finally {
+      _processingShareImports = false;
+    }
+  }
+
+  Future<void> _reviewShareImport(SharedContent content) async {
+    if (!mounted) return;
+    final decision = await showModalBottomSheet<_ShareImportDecision>(
+      context: context,
+      backgroundColor: _tok.surface,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder:
+          (sheetContext) => _ShareImportSheet(
+            content: content,
+            currentSessionAvailable: _sessionId != null && !_sessionEnded,
+            tok: _tok,
+            copy: _copy,
+          ),
+    );
+    if (decision == null || !mounted) return;
+    if (decision.destination == _ShareDestination.newSession) {
+      await _startNewSession(initialMessage: decision.text);
+      return;
+    }
+    try {
+      await _sendText(decision.text);
+    } catch (err) {
+      _showSnack(_copy.shareSendFailed(err));
+    }
   }
 
   Future<bool> _applyPairingLink(String rawLink) async {
@@ -818,7 +879,9 @@ class _MikuHomePageState extends State<MikuHomePage>
                 '${review.targetKind} addendum · ${review.targetId} · ${review.status}',
             detail: _joinedDetail([
               review.preview,
-              review.applyEnabled ? 'Apply enabled' : 'Review only · apply disabled',
+              review.applyEnabled
+                  ? 'Apply enabled'
+                  : 'Review only · apply disabled',
             ]),
             state: switch (review.status) {
               'approved' => _ActivityState.done,
@@ -956,7 +1019,14 @@ class _MikuHomePageState extends State<MikuHomePage>
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty || _sessionEnded) return;
+    _inputCtrl.clear();
+    await _sendText(text);
+  }
+
+  Future<void> _sendText(String text) async {
     await _ensureSession();
+    final sessionId = _sessionId;
+    if (sessionId == null || _sessionEnded) return;
     setState(() {
       _rounds.add(
         _ConversationRound(index: _rounds.length + 1, userText: text),
@@ -964,8 +1034,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       _status = 'streaming';
       _canSend = false;
     });
-    _inputCtrl.clear();
-    await widget.client.sendMessage(_sessionId!, text);
+    await widget.client.sendMessage(sessionId, text);
     _scrollToBottom();
   }
 
@@ -1198,17 +1267,32 @@ class _MikuHomePageState extends State<MikuHomePage>
     }
   }
 
-  Future<void> _startNewSession() async {
+  Future<bool> _startNewSession({String? initialMessage}) async {
     if (mounted) setState(() => _status = 'connecting');
     try {
       final session = await widget.client.createSession();
-      await _attachSession(session);
+      LoadedSession? loaded;
+      if (initialMessage != null) {
+        await widget.client.sendMessage(session.id, initialMessage);
+        try {
+          loaded = await widget.client.loadSession(session.id);
+        } catch (_) {
+          loaded = null;
+        }
+      }
+      await _attachSession(
+        loaded?.session ?? session,
+        messages: loaded?.messages ?? const [],
+        pendingEvents: loaded?.pendingEvents ?? const [],
+      );
+      return true;
     } catch (err) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() => _status = 'offline');
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('New session failed: $err')));
+      return false;
     }
   }
 

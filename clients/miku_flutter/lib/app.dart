@@ -2,54 +2,68 @@ part of 'main.dart';
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
-class MikuApp extends StatelessWidget {
+class MikuApp extends StatefulWidget {
   const MikuApp({
     super.key,
     required this.client,
     this.notifications,
     this.shareImports,
+    this.themeController,
   });
 
   final MikuSessionClient client;
   final MikuNotificationService? notifications;
   final MikuShareImportService? shareImports;
-  static const _fontFallbacks = [
-    'MikuCjkUi',
-    '.SF Pro Text',
-    'Segoe UI',
-    'Roboto',
-    'PingFang TC',
-    'PingFang SC',
-    'Noto Sans CJK TC',
-    'Noto Sans CJK SC',
-    'Noto Sans TC',
-    'Noto Sans SC',
-    'Microsoft JhengHei',
-    'Microsoft YaHei',
-    'Arial',
-    'sans-serif',
-  ];
+  final MikuThemeController? themeController;
+
+  @override
+  State<MikuApp> createState() => _MikuAppState();
+}
+
+class _MikuAppState extends State<MikuApp> {
+  late final MikuThemeController _themeController =
+      widget.themeController ?? MikuThemeController();
+  late final bool _ownsThemeController = widget.themeController == null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_ownsThemeController) unawaited(_themeController.load());
+  }
+
+  @override
+  void dispose() {
+    if (_ownsThemeController) _themeController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'TempestMiku',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        fontFamily: _fontFallbacks.first,
-        fontFamilyFallback: _fontFallbacks.skip(1).toList(),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: _Tok.dark.accent,
-          brightness: Brightness.dark,
-        ),
-        splashFactory: InkSparkle.splashFactory,
-      ),
-      home: MikuHomePage(
-        client: client,
-        notifications: notifications ?? createNotificationService(),
-        shareImports: shareImports ?? createShareImportService(),
-      ),
+    return AnimatedBuilder(
+      animation: _themeController,
+      builder: (context, _) {
+        return MaterialApp(
+          title: 'Tempest Miku',
+          debugShowCheckedModeBanner: false,
+          theme: MikuTheme.light,
+          darkTheme: MikuTheme.dark,
+          themeMode: _themeController.mode,
+          // Legacy feature surfaces still use the compatibility token layer;
+          // switch atomically until every surface consumes interpolated tokens.
+          themeAnimationDuration: Duration.zero,
+          builder: (context, child) {
+            return MikuThemeScope(
+              controller: _themeController,
+              child: child ?? const SizedBox.shrink(),
+            );
+          },
+          home: MikuHomePage(
+            client: widget.client,
+            notifications: widget.notifications ?? createNotificationService(),
+            shareImports: widget.shareImports ?? createShareImportService(),
+          ),
+        );
+      },
     );
   }
 }

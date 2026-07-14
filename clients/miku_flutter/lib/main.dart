@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ratex_formula.dart';
 import 'notification_service.dart';
@@ -12,9 +13,12 @@ import 'session_client.dart';
 import 'session_models.dart';
 
 part 'theme.dart';
+part 'theme_preferences.dart';
+part 'brand.dart';
 part 'copy.dart';
 part 'modes.dart';
 part 'app.dart';
+part 'adaptive_shell.dart';
 part 'home.dart';
 part 'app_models.dart';
 part 'home_event_parsing.dart';

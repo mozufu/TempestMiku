@@ -1,5 +1,23 @@
 part of 'main.dart';
 
+/// A readable, selectable Markdown surface for Miku-authored content.
+///
+/// HTTP(S) links are deliberately copy-only. Opening a link remains an
+/// explicit action owned by the surrounding client instead of a side effect of
+/// rendering untrusted model output.
+class MikuMarkdownBody extends StatelessWidget {
+  const MikuMarkdownBody({super.key, required this.text, this.accent});
+
+  final String text;
+  final Color? accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final tok = MikuTokens.of(context);
+    return _MarkdownMessage(tok: tok, accent: accent ?? tok.accent, text: text);
+  }
+}
+
 class _MarkdownMessage extends StatelessWidget {
   const _MarkdownMessage({
     required this.tok,
@@ -7,21 +25,24 @@ class _MarkdownMessage extends StatelessWidget {
     required this.text,
   });
 
-  final _Tok tok;
+  final MikuTokens tok;
   final Color accent;
   final String text;
 
   @override
   Widget build(BuildContext context) {
     final blocks = _parseMarkdown(text);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var i = 0; i < blocks.length; i++) ...[
-          _MarkdownBlockView(tok: tok, accent: accent, block: blocks[i]),
-          if (i != blocks.length - 1) SizedBox(height: blocks[i].spacingAfter),
+    return SelectionArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < blocks.length; i++) ...[
+            _MarkdownBlockView(tok: tok, accent: accent, block: blocks[i]),
+            if (i != blocks.length - 1)
+              SizedBox(height: blocks[i].spacingAfter),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
@@ -33,7 +54,7 @@ class _MarkdownBlockView extends StatelessWidget {
     required this.block,
   });
 
-  final _Tok tok;
+  final MikuTokens tok;
   final Color accent;
   final _MarkdownBlock block;
 
@@ -50,33 +71,42 @@ class _MarkdownBlockView extends StatelessWidget {
         };
         return Text.rich(
           TextSpan(
-            children: _inlineSpans(block.text, tok, accent,
-                baseStyle: TextStyle(
-                  color: tok.text,
-                  fontSize: size,
-                  fontWeight: FontWeight.w900,
-                  height: 1.34,
-                )),
+            children: _inlineSpans(
+              block.text,
+              tok,
+              accent,
+              baseStyle: TextStyle(
+                color: tok.text,
+                fontSize: size,
+                fontWeight: FontWeight.w900,
+                height: 1.34,
+              ),
+            ),
           ),
         );
       case _MarkdownBlockKind.paragraph:
         return Text.rich(
           TextSpan(
-            children: _inlineSpans(block.text, tok, accent,
-                baseStyle: TextStyle(
-                  color: tok.text,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  height: 1.62,
-                )),
+            children: _inlineSpans(
+              block.text,
+              tok,
+              accent,
+              baseStyle: TextStyle(
+                color: tok.text,
+                fontSize: 14,
+                fontWeight: FontWeight.w400,
+                height: 1.62,
+              ),
+            ),
           ),
         );
       case _MarkdownBlockKind.bullet:
       case _MarkdownBlockKind.ordered:
       case _MarkdownBlockKind.checkbox:
-        final marker = block.kind == _MarkdownBlockKind.ordered
-            ? '${block.index}.'
-            : block.kind == _MarkdownBlockKind.checkbox
+        final marker =
+            block.kind == _MarkdownBlockKind.ordered
+                ? '${block.index}.'
+                : block.kind == _MarkdownBlockKind.checkbox
                 ? (block.checked ? '☑' : '☐')
                 : '•';
         return Padding(
@@ -89,9 +119,10 @@ class _MarkdownBlockView extends StatelessWidget {
                 child: Text(
                   marker,
                   style: TextStyle(
-                    color: block.kind == _MarkdownBlockKind.checkbox
-                        ? accent
-                        : tok.muted,
+                    color:
+                        block.kind == _MarkdownBlockKind.checkbox
+                            ? accent
+                            : tok.muted,
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
                     height: 1.5,
@@ -101,13 +132,17 @@ class _MarkdownBlockView extends StatelessWidget {
               Expanded(
                 child: Text.rich(
                   TextSpan(
-                    children: _inlineSpans(block.text, tok, accent,
-                        baseStyle: TextStyle(
-                          color: tok.text,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w400,
-                          height: 1.5,
-                        )),
+                    children: _inlineSpans(
+                      block.text,
+                      tok,
+                      accent,
+                      baseStyle: TextStyle(
+                        color: tok.text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                        height: 1.5,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -120,43 +155,89 @@ class _MarkdownBlockView extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
           decoration: BoxDecoration(
             color: tok.surface.withValues(alpha: 0.72),
-            border: Border(
-              left: BorderSide(color: accent, width: 3),
-            ),
+            border: Border(left: BorderSide(color: accent, width: 3)),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Text.rich(
             TextSpan(
-              children: _inlineSpans(block.text, tok, accent,
-                  baseStyle: TextStyle(
-                    color: tok.muted,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w600,
-                    height: 1.55,
-                    fontStyle: FontStyle.italic,
-                  )),
+              children: _inlineSpans(
+                block.text,
+                tok,
+                accent,
+                baseStyle: TextStyle(
+                  color: tok.muted,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.55,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
             ),
           ),
         );
       case _MarkdownBlockKind.code:
         return Container(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
           decoration: BoxDecoration(
             color: tok.bg.withValues(alpha: 0.78),
             border: Border.all(color: tok.border),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Text(
-            block.text,
-            style: TextStyle(
-              color: tok.text,
-              fontSize: 12.5,
-              height: 1.46,
-              fontFamily: 'monospace',
-            ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        block.info.isEmpty ? 'Code' : block.info,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: tok.muted,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.25,
+                        ),
+                      ),
+                    ),
+                  ),
+                  _MarkdownCopyButton(
+                    key: ValueKey(('markdown-code-copy', block.text)),
+                    value: block.text,
+                    semanticLabel: 'Copy code',
+                    tooltip: 'Copy code',
+                    copiedMessage: 'Code copied',
+                    color: tok.muted,
+                  ),
+                ],
+              ),
+              Divider(height: 1, color: tok.border),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(11, 10, 11, 12),
+                child: _MarkdownHorizontalScroll(
+                  semanticsLabel: 'Horizontally scrollable code block',
+                  child: Text(
+                    block.text,
+                    softWrap: false,
+                    style: TextStyle(
+                      color: tok.text,
+                      fontSize: 12.5,
+                      height: 1.46,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
+      case _MarkdownBlockKind.table:
+        return _MarkdownTableView(tok: tok, accent: accent, block: block);
       case _MarkdownBlockKind.math:
         return Container(
           width: double.infinity,
@@ -179,13 +260,207 @@ class _MarkdownBlockView extends StatelessWidget {
           ),
         );
       case _MarkdownBlockKind.rule:
-        return Container(
-          height: 1,
-          color: tok.border.withValues(alpha: 0.72),
-        );
+        return Container(height: 1, color: tok.border.withValues(alpha: 0.72));
       case _MarkdownBlockKind.gap:
         return const SizedBox.shrink();
     }
+  }
+}
+
+class _MarkdownCopyButton extends StatelessWidget {
+  const _MarkdownCopyButton({
+    super.key,
+    required this.value,
+    required this.semanticLabel,
+    required this.tooltip,
+    required this.copiedMessage,
+    required this.color,
+    this.icon = Icons.content_copy_outlined,
+  });
+
+  final String value;
+  final String semanticLabel;
+  final String tooltip;
+  final String copiedMessage;
+  final Color color;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      excludeSemantics: true,
+      child: IconButton(
+        tooltip: tooltip,
+        onPressed: () async {
+          await Clipboard.setData(ClipboardData(text: value));
+          if (!context.mounted) return;
+          final messenger = ScaffoldMessenger.maybeOf(context);
+          messenger?.hideCurrentSnackBar();
+          messenger?.showSnackBar(
+            SnackBar(
+              content: Text(copiedMessage),
+              duration: const Duration(seconds: 1),
+            ),
+          );
+        },
+        constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+        padding: const EdgeInsets.all(12),
+        iconSize: 18,
+        color: color,
+        icon: Icon(icon),
+      ),
+    );
+  }
+}
+
+class _MarkdownHorizontalScroll extends StatefulWidget {
+  const _MarkdownHorizontalScroll({
+    required this.semanticsLabel,
+    required this.child,
+  });
+
+  final String semanticsLabel;
+  final Widget child;
+
+  @override
+  State<_MarkdownHorizontalScroll> createState() =>
+      _MarkdownHorizontalScrollState();
+}
+
+class _MarkdownHorizontalScrollState extends State<_MarkdownHorizontalScroll> {
+  late final ScrollController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: widget.semanticsLabel,
+      child: Scrollbar(
+        controller: _controller,
+        child: SingleChildScrollView(
+          controller: _controller,
+          scrollDirection: Axis.horizontal,
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+class _MarkdownTableView extends StatelessWidget {
+  const _MarkdownTableView({
+    required this.tok,
+    required this.accent,
+    required this.block,
+  });
+
+  final MikuTokens tok;
+  final Color accent;
+  final _MarkdownBlock block;
+
+  @override
+  Widget build(BuildContext context) {
+    if (block.tableRows.isEmpty) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        border: Border.all(color: tok.border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(7),
+        child: _MarkdownHorizontalScroll(
+          semanticsLabel: 'Horizontally scrollable table',
+          child: Table(
+            defaultColumnWidth: const IntrinsicColumnWidth(),
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            border: TableBorder.symmetric(
+              inside: BorderSide(color: tok.border),
+            ),
+            children: [
+              for (
+                var rowIndex = 0;
+                rowIndex < block.tableRows.length;
+                rowIndex++
+              )
+                TableRow(
+                  decoration:
+                      rowIndex == 0
+                          ? BoxDecoration(
+                            color: tok.surface.withValues(alpha: 0.88),
+                          )
+                          : null,
+                  children: [
+                    for (
+                      var columnIndex = 0;
+                      columnIndex < block.tableRows[rowIndex].length;
+                      columnIndex++
+                    )
+                      _MarkdownTableCell(
+                        tok: tok,
+                        accent: accent,
+                        text: block.tableRows[rowIndex][columnIndex],
+                        alignment: block.tableAlignments[columnIndex],
+                        isHeader: rowIndex == 0,
+                      ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MarkdownTableCell extends StatelessWidget {
+  const _MarkdownTableCell({
+    required this.tok,
+    required this.accent,
+    required this.text,
+    required this.alignment,
+    required this.isHeader,
+  });
+
+  final MikuTokens tok;
+  final Color accent;
+  final String text;
+  final _MarkdownTableAlignment alignment;
+  final bool isHeader;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      color: tok.text,
+      fontSize: 13,
+      fontWeight: isHeader ? FontWeight.w800 : FontWeight.w400,
+      height: 1.45,
+    );
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Text.rich(
+        TextSpan(children: _inlineSpans(text, tok, accent, baseStyle: style)),
+        textAlign: switch (alignment) {
+          _MarkdownTableAlignment.left => TextAlign.left,
+          _MarkdownTableAlignment.center => TextAlign.center,
+          _MarkdownTableAlignment.right => TextAlign.right,
+        },
+      ),
+    );
+    return isHeader ? Semantics(header: true, child: content) : content;
   }
 }
 
@@ -197,27 +472,36 @@ enum _MarkdownBlockKind {
   checkbox,
   quote,
   code,
+  table,
   math,
   rule,
   gap,
 }
 
+enum _MarkdownTableAlignment { left, center, right }
+
 class _MarkdownBlock {
   const _MarkdownBlock({
     required this.kind,
     this.text = '',
+    this.info = '',
     this.level = 0,
     this.index = 0,
     this.indent = 0,
     this.checked = false,
+    this.tableRows = const [],
+    this.tableAlignments = const [],
   });
 
   final _MarkdownBlockKind kind;
   final String text;
+  final String info;
   final int level;
   final int index;
   final int indent;
   final bool checked;
+  final List<List<String>> tableRows;
+  final List<_MarkdownTableAlignment> tableAlignments;
 
   double get spacingAfter {
     return switch (kind) {
@@ -225,6 +509,7 @@ class _MarkdownBlock {
       _MarkdownBlockKind.rule => 12,
       _MarkdownBlockKind.gap => 8,
       _MarkdownBlockKind.code => 10,
+      _MarkdownBlockKind.table => 10,
       _MarkdownBlockKind.math => 10,
       _MarkdownBlockKind.quote => 9,
       _ => 6,
@@ -239,40 +524,45 @@ List<_MarkdownBlock> _parseMarkdown(String source) {
   final code = <String>[];
   final mathBlock = <String>[];
   var inCode = false;
+  var codeInfo = '';
   String? mathStart;
   String? mathEnd;
 
   void flushParagraph() {
     if (paragraph.isEmpty) return;
-    blocks.add(_MarkdownBlock(
-      kind: _MarkdownBlockKind.paragraph,
-      text: paragraph.join(' '),
-    ));
+    blocks.add(
+      _MarkdownBlock(
+        kind: _MarkdownBlockKind.paragraph,
+        text: paragraph.join(' '),
+      ),
+    );
     paragraph.clear();
   }
 
   void flushCode() {
-    blocks.add(_MarkdownBlock(
-      kind: _MarkdownBlockKind.code,
-      text: code.join('\n').trimRight(),
-    ));
+    blocks.add(
+      _MarkdownBlock(
+        kind: _MarkdownBlockKind.code,
+        text: code.join('\n').trimRight(),
+        info: codeInfo,
+      ),
+    );
     code.clear();
+    codeInfo = '';
   }
 
   void flushMath() {
     final latex = _normalizeLatex(mathBlock.join('\n'));
     if (latex.isNotEmpty) {
-      blocks.add(_MarkdownBlock(
-        kind: _MarkdownBlockKind.math,
-        text: latex,
-      ));
+      blocks.add(_MarkdownBlock(kind: _MarkdownBlockKind.math, text: latex));
     }
     mathBlock.clear();
     mathStart = null;
     mathEnd = null;
   }
 
-  for (final raw in lines) {
+  for (var lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    final raw = lines[lineIndex];
     final line = raw.trimRight();
     final trimmed = line.trim();
     final activeMathEnd = mathEnd;
@@ -293,6 +583,7 @@ List<_MarkdownBlock> _parseMarkdown(String source) {
         flushCode();
       } else {
         flushParagraph();
+        codeInfo = trimmed.substring(3).trim();
       }
       inCode = !inCode;
       continue;
@@ -319,6 +610,13 @@ List<_MarkdownBlock> _parseMarkdown(String source) {
       }
       continue;
     }
+    final table = _parseMarkdownTableAt(lines, lineIndex);
+    if (table != null) {
+      flushParagraph();
+      blocks.add(table.block);
+      lineIndex = table.lastLineIndex;
+      continue;
+    }
     if (trimmed.isEmpty) {
       flushParagraph();
       if (blocks.isNotEmpty && blocks.last.kind != _MarkdownBlockKind.gap) {
@@ -329,11 +627,13 @@ List<_MarkdownBlock> _parseMarkdown(String source) {
     final heading = RegExp(r'^(#{1,4})\s+(.+)$').firstMatch(trimmed);
     if (heading != null) {
       flushParagraph();
-      blocks.add(_MarkdownBlock(
-        kind: _MarkdownBlockKind.heading,
-        level: heading.group(1)!.length,
-        text: heading.group(2)!.trim(),
-      ));
+      blocks.add(
+        _MarkdownBlock(
+          kind: _MarkdownBlockKind.heading,
+          level: heading.group(1)!.length,
+          text: heading.group(2)!.trim(),
+        ),
+      );
       continue;
     }
     if (RegExp(r'^[-*_]{3,}$').hasMatch(trimmed)) {
@@ -343,53 +643,60 @@ List<_MarkdownBlock> _parseMarkdown(String source) {
     }
     if (trimmed.startsWith('>')) {
       flushParagraph();
-      blocks.add(_MarkdownBlock(
-        kind: _MarkdownBlockKind.quote,
-        text: trimmed.replaceFirst(RegExp(r'^>\s?'), ''),
-      ));
+      blocks.add(
+        _MarkdownBlock(
+          kind: _MarkdownBlockKind.quote,
+          text: trimmed.replaceFirst(RegExp(r'^>\s?'), ''),
+        ),
+      );
       continue;
     }
-    final checkbox =
-        RegExp(r'^(\s*)[-*]\s+\[([ xX])\]\s+(.+)$').firstMatch(line);
+    final checkbox = RegExp(
+      r'^(\s*)[-*]\s+\[([ xX])\]\s+(.+)$',
+    ).firstMatch(line);
     if (checkbox != null) {
       flushParagraph();
-      blocks.add(_MarkdownBlock(
-        kind: _MarkdownBlockKind.checkbox,
-        indent: checkbox.group(1)!.length ~/ 2,
-        checked: checkbox.group(2)!.trim().isNotEmpty,
-        text: checkbox.group(3)!.trim(),
-      ));
+      blocks.add(
+        _MarkdownBlock(
+          kind: _MarkdownBlockKind.checkbox,
+          indent: checkbox.group(1)!.length ~/ 2,
+          checked: checkbox.group(2)!.trim().isNotEmpty,
+          text: checkbox.group(3)!.trim(),
+        ),
+      );
       continue;
     }
     final bullet = RegExp(r'^(\s*)[-*]\s+(.+)$').firstMatch(line);
     if (bullet != null) {
       flushParagraph();
-      blocks.add(_MarkdownBlock(
-        kind: _MarkdownBlockKind.bullet,
-        indent: bullet.group(1)!.length ~/ 2,
-        text: bullet.group(2)!.trim(),
-      ));
+      blocks.add(
+        _MarkdownBlock(
+          kind: _MarkdownBlockKind.bullet,
+          indent: bullet.group(1)!.length ~/ 2,
+          text: bullet.group(2)!.trim(),
+        ),
+      );
       continue;
     }
     final ordered = RegExp(r'^(\s*)(\d+)[.)]\s+(.+)$').firstMatch(line);
     if (ordered != null) {
       flushParagraph();
-      blocks.add(_MarkdownBlock(
-        kind: _MarkdownBlockKind.ordered,
-        indent: ordered.group(1)!.length ~/ 2,
-        index: int.tryParse(ordered.group(2)!) ?? 1,
-        text: ordered.group(3)!.trim(),
-      ));
+      blocks.add(
+        _MarkdownBlock(
+          kind: _MarkdownBlockKind.ordered,
+          indent: ordered.group(1)!.length ~/ 2,
+          index: int.tryParse(ordered.group(2)!) ?? 1,
+          text: ordered.group(3)!.trim(),
+        ),
+      );
       continue;
     }
     paragraph.add(trimmed);
   }
   if (inCode) flushCode();
   if (mathEnd != null) {
-    final unclosed = [
-      if (mathStart != null) mathStart!,
-      ...mathBlock,
-    ].join(' ').trim();
+    final unclosed =
+        [if (mathStart != null) mathStart!, ...mathBlock].join(' ').trim();
     if (unclosed.isNotEmpty) paragraph.add(unclosed);
     mathBlock.clear();
     mathStart = null;
@@ -404,9 +711,98 @@ List<_MarkdownBlock> _parseMarkdown(String source) {
   return blocks;
 }
 
+class _ParsedMarkdownTable {
+  const _ParsedMarkdownTable({
+    required this.block,
+    required this.lastLineIndex,
+  });
+
+  final _MarkdownBlock block;
+  final int lastLineIndex;
+}
+
+_ParsedMarkdownTable? _parseMarkdownTableAt(
+  List<String> lines,
+  int startIndex,
+) {
+  if (startIndex + 1 >= lines.length || !lines[startIndex].contains('|')) {
+    return null;
+  }
+  final headers = _splitMarkdownTableRow(lines[startIndex]);
+  final delimiters = _splitMarkdownTableRow(lines[startIndex + 1]);
+  if (headers.length < 2 || headers.length != delimiters.length) return null;
+  final delimiterPattern = RegExp(r'^:?-{3,}:?$');
+  if (!delimiters.every(delimiterPattern.hasMatch)) return null;
+
+  final alignments = delimiters
+      .map((delimiter) {
+        if (delimiter.startsWith(':') && delimiter.endsWith(':')) {
+          return _MarkdownTableAlignment.center;
+        }
+        if (delimiter.endsWith(':')) return _MarkdownTableAlignment.right;
+        return _MarkdownTableAlignment.left;
+      })
+      .toList(growable: false);
+  final rows = <List<String>>[headers];
+  var cursor = startIndex + 2;
+  while (cursor < lines.length) {
+    final line = lines[cursor];
+    if (line.trim().isEmpty || !line.contains('|')) break;
+    final cells = _splitMarkdownTableRow(line);
+    if (cells.length < 2) break;
+    rows.add(
+      List<String>.generate(
+        headers.length,
+        (index) => index < cells.length ? cells[index] : '',
+        growable: false,
+      ),
+    );
+    cursor++;
+  }
+  return _ParsedMarkdownTable(
+    block: _MarkdownBlock(
+      kind: _MarkdownBlockKind.table,
+      tableRows: rows,
+      tableAlignments: alignments,
+    ),
+    lastLineIndex: cursor - 1,
+  );
+}
+
+List<String> _splitMarkdownTableRow(String line) {
+  var content = line.trim();
+  if (content.startsWith('|')) content = content.substring(1);
+  if (content.endsWith('|') && !content.endsWith(r'\|')) {
+    content = content.substring(0, content.length - 1);
+  }
+
+  final cells = <String>[];
+  final cell = StringBuffer();
+  var inCode = false;
+  for (var index = 0; index < content.length; index++) {
+    final character = content[index];
+    if (character == '\\' &&
+        index + 1 < content.length &&
+        content[index + 1] == '|') {
+      cell.write('|');
+      index++;
+      continue;
+    }
+    if (character == '`') inCode = !inCode;
+    if (character == '|' && !inCode) {
+      cells.add(cell.toString().trim());
+      cell.clear();
+      continue;
+    }
+    cell.write(character);
+  }
+  cells.add(cell.toString().trim());
+  return cells;
+}
+
 List<InlineSpan> _inlineSpans(
   String text,
-  _Tok tok,
+  MikuTokens tok,
   Color accent, {
   required TextStyle baseStyle,
 }) {
@@ -428,36 +824,71 @@ List<InlineSpan> _inlineSpans(
       continue;
     }
     flushPlain();
-    if (token.kind == _InlineTokenKind.bold) {
-      spans.add(TextSpan(
-        text: token.content,
-        style: baseStyle.copyWith(fontWeight: FontWeight.w900),
-      ));
-    } else if (token.kind == _InlineTokenKind.code) {
-      spans.add(TextSpan(
-        text: token.content,
-        style: baseStyle.copyWith(
-          color: accent,
-          fontFamily: 'monospace',
-          fontWeight: FontWeight.w700,
-          backgroundColor: tok.surface.withValues(alpha: 0.85),
-        ),
-      ));
-    } else {
-      spans.add(WidgetSpan(
-        alignment: PlaceholderAlignment.middle,
-        baseline: TextBaseline.alphabetic,
-        child: RaTeXFormula(
-          latex: _normalizeLatex(token.content),
-          fontSize: (baseStyle.fontSize ?? 14) + 1,
-          color: tok.text,
-          display: false,
-          fallbackStyle: baseStyle.copyWith(
-            fontFamily: 'monospace',
-            fontWeight: FontWeight.w600,
+    if (token.kind == _InlineTokenKind.link) {
+      final target = token.target!;
+      spans.add(
+        TextSpan(
+          text: token.content,
+          semanticsLabel: '${token.content}, HTTP link to $target',
+          style: baseStyle.copyWith(
+            color: accent,
+            fontWeight: FontWeight.w700,
+            decoration: TextDecoration.underline,
+            decorationColor: accent,
+            decorationThickness: 1.5,
           ),
         ),
-      ));
+      );
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: _MarkdownCopyButton(
+            key: ValueKey(('markdown-link-copy', target, index)),
+            value: target,
+            semanticLabel: 'Copy link $target',
+            tooltip: 'Copy link',
+            copiedMessage: 'Link copied',
+            color: accent,
+            icon: Icons.link,
+          ),
+        ),
+      );
+    } else if (token.kind == _InlineTokenKind.bold) {
+      spans.add(
+        TextSpan(
+          text: token.content,
+          style: baseStyle.copyWith(fontWeight: FontWeight.w900),
+        ),
+      );
+    } else if (token.kind == _InlineTokenKind.code) {
+      spans.add(
+        TextSpan(
+          text: token.content,
+          style: baseStyle.copyWith(
+            color: accent,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w700,
+            backgroundColor: tok.surface.withValues(alpha: 0.85),
+          ),
+        ),
+      );
+    } else {
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          baseline: TextBaseline.alphabetic,
+          child: RaTeXFormula(
+            latex: _normalizeLatex(token.content),
+            fontSize: (baseStyle.fontSize ?? 14) + 1,
+            color: tok.text,
+            display: false,
+            fallbackStyle: baseStyle.copyWith(
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
     }
     index = token.end;
   }
@@ -492,9 +923,10 @@ String _normalizeLatex(String latex) {
     final start = pair[0];
     final end = pair[1];
     if (normalized.startsWith(start) && normalized.endsWith(end)) {
-      normalized = normalized
-          .substring(start.length, normalized.length - end.length)
-          .trim();
+      normalized =
+          normalized
+              .substring(start.length, normalized.length - end.length)
+              .trim();
       break;
     }
   }
@@ -504,21 +936,25 @@ String _normalizeLatex(String latex) {
   );
 }
 
-enum _InlineTokenKind { bold, code, math }
+enum _InlineTokenKind { bold, code, math, link }
 
 class _InlineToken {
   const _InlineToken({
     required this.kind,
     required this.content,
     required this.end,
+    this.target,
   });
 
   final _InlineTokenKind kind;
   final String content;
   final int end;
+  final String? target;
 }
 
 _InlineToken? _inlineTokenAt(String text, int index) {
+  final link = _inlineLinkTokenAt(text, index);
+  if (link != null) return link;
   if (text.startsWith('**', index)) {
     final end = text.indexOf('**', index + 2);
     if (end > index + 2) {
@@ -552,6 +988,73 @@ _InlineToken? _inlineTokenAt(String text, int index) {
   final math = _inlineMathTokenAt(text, index);
   if (math != null) return math;
   return null;
+}
+
+_InlineToken? _inlineLinkTokenAt(String text, int index) {
+  final remaining = text.substring(index);
+  final markdownLink = RegExp(
+    r'^\[([^\]\n]+)\]\((https?://[^\s)]+)\)',
+    caseSensitive: false,
+  ).firstMatch(remaining);
+  if (markdownLink != null && _isHttpUrl(markdownLink.group(2)!)) {
+    return _InlineToken(
+      kind: _InlineTokenKind.link,
+      content: markdownLink.group(1)!,
+      target: markdownLink.group(2)!,
+      end: index + markdownLink.end,
+    );
+  }
+
+  final autolink = RegExp(
+    r'^<(https?://[^\s<>]+)>',
+    caseSensitive: false,
+  ).firstMatch(remaining);
+  if (autolink != null && _isHttpUrl(autolink.group(1)!)) {
+    return _InlineToken(
+      kind: _InlineTokenKind.link,
+      content: autolink.group(1)!,
+      target: autolink.group(1)!,
+      end: index + autolink.end,
+    );
+  }
+
+  if (index > 0 && RegExp(r'[A-Za-z0-9_]').hasMatch(text[index - 1])) {
+    return null;
+  }
+  final bareLink = RegExp(
+    r'^https?://[^\s<>()]+',
+    caseSensitive: false,
+  ).firstMatch(remaining);
+  if (bareLink == null) return null;
+  var target = bareLink.group(0)!;
+  while (target.isNotEmpty &&
+      const [
+        '.',
+        ',',
+        ';',
+        ':',
+        '!',
+        '?',
+        ']',
+        '}',
+      ].contains(target[target.length - 1])) {
+    target = target.substring(0, target.length - 1);
+  }
+  if (!_isHttpUrl(target)) return null;
+  return _InlineToken(
+    kind: _InlineTokenKind.link,
+    content: target,
+    target: target,
+    end: index + target.length,
+  );
+}
+
+bool _isHttpUrl(String value) {
+  final uri = Uri.tryParse(value);
+  return uri != null &&
+      (uri.scheme.toLowerCase() == 'http' ||
+          uri.scheme.toLowerCase() == 'https') &&
+      uri.host.isNotEmpty;
 }
 
 _InlineToken? _inlineMathTokenAt(String text, int index) {

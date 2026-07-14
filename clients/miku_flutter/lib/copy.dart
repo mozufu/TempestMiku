@@ -64,6 +64,8 @@ class _UiCopy {
   String get send => pick('Send', '送出');
   String get typeMessage => pick('Type a message', '輸入訊息');
   String get sendMessage => pick('Send message', '送出訊息');
+  String sendFailed(Object error) =>
+      pick('Message not sent: $error', '訊息未送出：$error');
   String get shareWithMiku => pick('Share with Miku', '分享給 Miku');
   String get shareReviewHelper =>
       pick('Review and edit before anything is sent.', '送出前先確認並編輯內容。');
@@ -138,8 +140,6 @@ class _UiCopy {
   String messages(int count) => pick('$count messages', '$count 則訊息');
   String get recent => pick('recent', '最近');
   String get loadingSessions => pick('Loading sessions...', '載入 sessions...');
-  String historyLoadFailed(Object error) =>
-      pick('Could not load: $error', '讀取失敗：$error');
   String get noSessions => pick('No sessions yet', '還沒有歷史 session');
 
   String get approvalNeeded => pick('Approval needed', '需要你核可');

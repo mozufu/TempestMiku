@@ -8,6 +8,8 @@ class _SessionHistorySheet extends StatefulWidget {
     required this.loadSessions,
     required this.onSelect,
     required this.onNewSession,
+    this.embedded = false,
+    this.refreshToken,
   });
 
   final _Tok tok;
@@ -16,6 +18,8 @@ class _SessionHistorySheet extends StatefulWidget {
   final Future<List<SessionSummary>> Function() loadSessions;
   final void Function(String sessionId) onSelect;
   final VoidCallback onNewSession;
+  final bool embedded;
+  final Object? refreshToken;
 
   @override
   State<_SessionHistorySheet> createState() => _SessionHistorySheetState();
@@ -30,6 +34,14 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
     _future = widget.loadSessions();
   }
 
+  @override
+  void didUpdateWidget(covariant _SessionHistorySheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.refreshToken != oldWidget.refreshToken) {
+      _future = widget.loadSessions();
+    }
+  }
+
   void _refresh() {
     setState(() => _future = widget.loadSessions());
   }
@@ -39,19 +51,24 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
     final tok = widget.tok;
     final copy = widget.copy;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(15, 9, 15, 18),
+      padding:
+          widget.embedded
+              ? const EdgeInsets.fromLTRB(20, 20, 20, 24)
+              : const EdgeInsets.fromLTRB(15, 9, 15, 18),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisSize: widget.embedded ? MainAxisSize.max : MainAxisSize.min,
         children: [
-          Container(
-            width: 38,
-            height: 5,
-            decoration: BoxDecoration(
-              color: tok.border,
-              borderRadius: BorderRadius.circular(999),
+          if (!widget.embedded) ...[
+            Container(
+              width: 38,
+              height: 5,
+              decoration: BoxDecoration(
+                color: tok.border,
+                borderRadius: BorderRadius.circular(999),
+              ),
             ),
-          ),
-          const SizedBox(height: 14),
+            const SizedBox(height: 14),
+          ],
           Row(
             children: [
               Expanded(
@@ -93,14 +110,16 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                 semanticLabel: copy.createNewSession,
                 onTap: widget.onNewSession,
               ),
-              const SizedBox(width: 8),
-              _TokIconBtn(
-                tok: tok,
-                icon: Icons.close,
-                tooltip: copy.close,
-                semanticLabel: copy.closeSessions,
-                onTap: () => Navigator.pop(context),
-              ),
+              if (!widget.embedded) ...[
+                const SizedBox(width: 8),
+                _TokIconBtn(
+                  tok: tok,
+                  icon: Icons.close,
+                  tooltip: copy.close,
+                  semanticLabel: copy.closeSessions,
+                  onTap: () => Navigator.pop(context),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 13),
@@ -119,7 +138,9 @@ class _SessionHistorySheetState extends State<_SessionHistorySheet> {
                   return _HistoryStateLine(
                     tok: tok,
                     icon: Icons.error_outline,
-                    text: copy.historyLoadFailed(snapshot.error!),
+                    text: copy.pick('Could not load sessions.', '無法載入歷史對話。'),
+                    actionLabel: copy.pick('Retry', '重試'),
+                    onAction: _refresh,
                   );
                 }
                 final sessions = snapshot.data ?? const [];
@@ -303,12 +324,16 @@ class _HistoryChip extends StatelessWidget {
         children: [
           Icon(icon, color: tok.muted, size: 12),
           const SizedBox(width: 4),
-          Text(
-            text,
-            style: TextStyle(
-              color: tok.muted,
-              fontSize: 10.5,
-              fontWeight: FontWeight.w700,
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: tok.muted,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -322,11 +347,15 @@ class _HistoryStateLine extends StatelessWidget {
     required this.tok,
     required this.icon,
     required this.text,
+    this.actionLabel,
+    this.onAction,
   });
 
   final _Tok tok;
   final IconData icon;
   final String text;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -352,6 +381,14 @@ class _HistoryStateLine extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
+          if (onAction != null && actionLabel != null) ...[
+            const SizedBox(height: 10),
+            TextButton.icon(
+              onPressed: onAction,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: Text(actionLabel!),
+            ),
+          ],
         ],
       ),
     );

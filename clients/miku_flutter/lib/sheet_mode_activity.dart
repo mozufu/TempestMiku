@@ -90,9 +90,10 @@ class _ModeSheet extends StatelessWidget {
                     color:
                         locked ? currentAccent.withValues(alpha: 0.1) : tok.bg,
                     border: Border.all(
-                      color: locked
-                          ? currentAccent.withValues(alpha: 0.62)
-                          : tok.border,
+                      color:
+                          locked
+                              ? currentAccent.withValues(alpha: 0.62)
+                              : tok.border,
                     ),
                     borderRadius: BorderRadius.circular(13),
                   ),
@@ -366,7 +367,9 @@ class _AgentActivitySheet extends StatelessWidget {
                 if (i != activities.length - 1) ...[
                   const SizedBox(height: 9),
                   Container(
-                      height: 0.5, color: tok.border.withValues(alpha: 0.7)),
+                    height: 0.5,
+                    color: tok.border.withValues(alpha: 0.7),
+                  ),
                   const SizedBox(height: 9),
                 ],
               ],

@@ -80,11 +80,19 @@ void main() {
       'Example title\n\nhttps://example.test',
     );
     expect((await client.listSessions()).single.messageCount, 0);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('shareImportSend')))
+          .onPressed,
+      isNull,
+    );
 
     await tester.enterText(
       find.byKey(const ValueKey('shareImportEditor')),
       'Please summarize https://example.test',
     );
+    await tester.tap(find.text('Current chat'));
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('shareImportSend')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 450));
@@ -96,7 +104,10 @@ void main() {
 
     expect(find.text('Please summarize https://example.test'), findsOneWidget);
     expect(
-      find.text('Miku heard: Please summarize https://example.test'),
+      find.textContaining(
+        'Miku heard: Please summarize https://example.test',
+        findRichText: true,
+      ),
       findsOneWidget,
     );
     expect((await client.listSessions()).single.messageCount, 2);

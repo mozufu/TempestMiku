@@ -49,7 +49,58 @@ class RecordingNotificationService implements MikuNotificationService {
   }
 }
 
+Future<void> _openSettings(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('Settings').first);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+}
+
+Future<void> _selectDestination(WidgetTester tester, String label) async {
+  final navigation =
+      find.byType(NavigationBar).evaluate().isNotEmpty
+          ? find.byType(NavigationBar)
+          : find.byType(NavigationRail);
+  final destination = find.descendant(
+    of: navigation,
+    matching: find.text(label),
+  );
+  expect(destination, findsOneWidget);
+  await tester.tap(destination);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
+}
+
+Future<void> _scrollChatUntilVisible(WidgetTester tester, Finder target) async {
+  await tester.scrollUntilVisible(
+    target,
+    260,
+    scrollable: find.byType(Scrollable).first,
+    maxScrolls: 20,
+  );
+  await tester.pump();
+}
+
+Future<void> _openActivitySheet(WidgetTester tester, {int round = 1}) async {
+  final card = find.byKey(ValueKey('agent-activity:$round'));
+  await _scrollChatUntilVisible(tester, card);
+  await tester.tap(card);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+}
+
+Future<void> _popRoute(WidgetTester tester) async {
+  await tester.binding.handlePopRoute();
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+}
+
+Future<void> _closeActivitySheet(WidgetTester tester) async {
+  await _popRoute(tester);
+}
+
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   test('approval notification policy only alerts outside the visible app', () {
     expect(shouldNotifyApproval(AppLifecycleState.resumed), isFalse);
     expect(shouldNotifyApproval(AppLifecycleState.inactive), isTrue);
@@ -446,11 +497,18 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.textContaining('mode addendum · serious_engineer · pending'), findsWidgets);
+    await _openActivitySheet(tester);
+    expect(
+      find.textContaining('mode addendum · serious_engineer · pending'),
+      findsWidgets,
+    );
     expect(find.textContaining('Apply enabled'), findsOneWidget);
+    await _closeActivitySheet(tester);
+
     final card = find.byKey(
       const ValueKey('approval:review mode addendum serious_engineer'),
     );
+    await _scrollChatUntilVisible(tester, card);
     expect(card, findsOneWidget);
     await tester.ensureVisible(card);
     await tester.tap(card);
@@ -482,6 +540,36 @@ void main() {
     expect(find.text('TempestMiku'), findsNothing);
     expect(find.text('Miku is here'), findsOneWidget);
     expect(find.text('Miku 在這裡'), findsNothing);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(NavigationRail), findsNothing);
+    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Sessions'), findsOneWidget);
+    expect(find.text('Drive'), findsOneWidget);
+    expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
+    expect(find.text('Personal'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop shell exposes sessions, chat, and context panes', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.text('Sessions'), findsNWidgets(2));
+    expect(find.text('Context'), findsOneWidget);
+    expect(find.text('Project status'), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -501,7 +589,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.byTooltip('Ended'), findsOneWidget);
+    expect(find.text('Ended'), findsWidgets);
     final composer = tester.widget<TextField>(find.byType(TextField));
     expect(composer.enabled, isFalse);
     expect(find.byTooltip('Session ended'), findsOneWidget);
@@ -511,12 +599,22 @@ void main() {
   testWidgets('primary chat controls expose selected-language semantics', (
     WidgetTester tester,
   ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
     await tester.pumpWidget(MikuApp(client: ScriptedMikuClient()));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.bySemanticsLabel('Open sessions'), findsOneWidget);
-    expect(find.bySemanticsLabel('Open more actions'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Sessions'), findsOneWidget);
+    expect(find.text('Drive'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsOneWidget);
     expect(find.bySemanticsLabel('Send message'), findsOneWidget);
 
     await tester.enterText(find.byType(EditableText), 'code artifact://0');
@@ -527,6 +625,143 @@ void main() {
 
     expect(find.byKey(const ValueKey('resource:artifact://0')), findsOneWidget);
   });
+
+  testWidgets(
+    'failed send preserves draft and reuses its client message id on retry',
+    (WidgetTester tester) async {
+      final client = _FailOnceMikuClient();
+      await tester.pumpWidget(MikuApp(client: client));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      const draft = 'retry this exact message';
+      await tester.enterText(find.byType(EditableText), draft);
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.textContaining('Message not sent:'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Semantics && widget.properties.liveRegion == true,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        draft,
+      );
+      expect(client.attemptedClientMessageIds, hasLength(1));
+
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(client.attemptedClientMessageIds, hasLength(2));
+      expect(
+        client.attemptedClientMessageIds[1],
+        client.attemptedClientMessageIds[0],
+      );
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        isEmpty,
+      );
+      expect(find.textContaining('Message not sent:'), findsNothing);
+      expect(find.text('Miku heard: $draft'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'late send completion from session A cannot clear or mutate session B',
+    (WidgetTester tester) async {
+      final client = _ControlledSendMikuClient();
+      await tester.pumpWidget(MikuApp(client: client));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.enterText(find.byType(EditableText), 'slow message from A');
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(client.slowSendStarted, isTrue);
+
+      await _selectDestination(tester, 'Sessions');
+      await tester.tap(find.bySemanticsLabel('Create new session'));
+      await tester.pump();
+      for (var i = 0; i < 20 && client.eventResumeIds.length < 2; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(client.eventResumeIds, hasLength(2));
+      expect(find.text('Miku is here'), findsOneWidget);
+
+      const sessionBDraft = 'draft that belongs to B';
+      await tester.enterText(find.byType(EditableText), sessionBDraft);
+      await tester.pump();
+
+      client.completeSlowSend();
+      for (var i = 0; i < 20 && !client.slowSendCompleted; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(client.slowSendCompleted, isTrue);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        sessionBDraft,
+      );
+      expect(find.text('slow message from A'), findsNothing);
+      expect(
+        find.textContaining('Miku heard: slow message from A'),
+        findsNothing,
+      );
+
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Miku heard: $sessionBDraft'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'slow initial connect cannot overwrite an explicit newer session',
+    (WidgetTester tester) async {
+      final client = _SlowInitialConnectMikuClient();
+      await tester.pumpWidget(MikuApp(client: client));
+      await tester.pump();
+      for (var i = 0; i < 20 && !client.initialConnectRequested; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(client.initialConnectRequested, isTrue);
+
+      await _selectDestination(tester, 'Sessions');
+      await tester.tap(find.bySemanticsLabel('Create new session'));
+      await tester.pump();
+      for (var i = 0; i < 20 && client.eventResumeIds.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(client.explicitCreateRequests, 1);
+      expect(client.eventResumeIds, hasLength(1));
+
+      const newerSessionMessage = 'this belongs to the newer session';
+      await tester.enterText(find.byType(EditableText), newerSessionMessage);
+      await tester.pump();
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('Miku heard: $newerSessionMessage'), findsOneWidget);
+
+      await client.completeInitialConnect();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(client.eventResumeIds, hasLength(1));
+      expect(find.text(newerSessionMessage), findsOneWidget);
+      expect(find.text('Miku heard: $newerSessionMessage'), findsOneWidget);
+      expect(find.text('Miku is here'), findsNothing);
+      expect(await client.listSessions(), hasLength(2));
+    },
+  );
 
   testWidgets(
     'background approvals notify and resolved approvals clear alerts',
@@ -645,11 +880,7 @@ void main() {
       ),
     );
     await tester.pump();
-    for (
-      var i = 0;
-      i < 10 && notifications.cancelledApprovals.isEmpty;
-      i++
-    ) {
+    for (var i = 0; i < 10 && notifications.cancelledApprovals.isEmpty; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
     await tester.pump();
@@ -665,49 +896,57 @@ void main() {
     );
   });
 
-  testWidgets('legacy Android notification action requires in-app confirmation', (
-    WidgetTester tester,
-  ) async {
-    final client = ScriptedMikuClient();
-    final session = await client.createSession();
-    client.seedPendingApproval(
-      session.id,
-      approvalId: 'approval-legacy-confirm',
-      action: 'drive.put inbox/report.md',
-      backend: 'drive',
-    );
-    final notifications = RecordingNotificationService();
-    addTearDown(notifications.actionController.close);
-
-    await tester.pumpWidget(
-      MikuApp(client: client, notifications: notifications),
-    );
-    await tester.pump();
-    for (var i = 0; i < 20 && client.driveFeedRequests == 0; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-    notifications.actionController.add(
-      ApprovalNotificationAction(
-        sessionId: session.id,
+  testWidgets(
+    'legacy Android notification action requires in-app confirmation',
+    (WidgetTester tester) async {
+      final client = ScriptedMikuClient();
+      final session = await client.createSession();
+      client.seedPendingApproval(
+        session.id,
         approvalId: 'approval-legacy-confirm',
-        decision: 'deny',
-        requiresConfirmation: true,
-      ),
-    );
-    await tester.pump();
-    for (var i = 0; i < 10 && find.byType(AlertDialog).evaluate().isEmpty; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
+        action: 'drive.put inbox/report.md',
+        backend: 'drive',
+      );
+      final notifications = RecordingNotificationService();
+      addTearDown(notifications.actionController.close);
 
-    expect(client.resolvedApprovals, isEmpty);
-    expect(find.text('drive.put inbox/report.md'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, 'Deny'));
-    await tester.pump();
-    for (var i = 0; i < 10 && client.resolvedApprovals.isEmpty; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-    expect(client.resolvedApprovals, contains('approval-legacy-confirm:deny'));
-  });
+      await tester.pumpWidget(
+        MikuApp(client: client, notifications: notifications),
+      );
+      await tester.pump();
+      for (var i = 0; i < 20 && client.driveFeedRequests == 0; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      notifications.actionController.add(
+        ApprovalNotificationAction(
+          sessionId: session.id,
+          approvalId: 'approval-legacy-confirm',
+          decision: 'deny',
+          requiresConfirmation: true,
+        ),
+      );
+      await tester.pump();
+      for (
+        var i = 0;
+        i < 10 && find.byType(AlertDialog).evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(client.resolvedApprovals, isEmpty);
+      expect(find.text('drive.put inbox/report.md'), findsWidgets);
+      await tester.tap(find.widgetWithText(FilledButton, 'Deny'));
+      await tester.pump();
+      for (var i = 0; i < 10 && client.resolvedApprovals.isEmpty; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(
+        client.resolvedApprovals,
+        contains('approval-legacy-confirm:deny'),
+      );
+    },
+  );
 
   testWidgets('shows and resolves pending drive filing approval', (
     WidgetTester tester,
@@ -746,16 +985,13 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.bySemanticsLabel('Open drive feed'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _selectDestination(tester, 'Drive');
     expect(find.text('Pending drive approvals'), findsOneWidget);
     expect(find.text('drive.put inbox/approval-drop.md'), findsOneWidget);
     expect(find.text('drive.put inbox/blocked-drop.md'), findsOneWidget);
-    await tester.tap(find.bySemanticsLabel('Close drive feed'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _selectDestination(tester, 'Chat');
 
+    await _scrollChatUntilVisible(tester, approvalCard);
     await tester.ensureVisible(approvalCard);
     await tester.tap(approvalCard);
     await tester.pump();
@@ -776,6 +1012,8 @@ void main() {
     await tester.tap(denyCard);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
+    await tester.ensureVisible(find.text('Deny'));
+    await tester.pump();
     await tester.tap(find.text('Deny'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
@@ -807,6 +1045,8 @@ void main() {
       findsWidgets,
     );
 
+    await _openActivitySheet(tester);
+    expect(find.text('Drive organizer completed'), findsWidgets);
     final activityResource = find.byKey(
       const ValueKey(
         'activity-resource:drive://projects/tempestmiku/research/p5-drive-workspace.md',
@@ -822,13 +1062,10 @@ void main() {
     expect(find.text('Scripted drive note'), findsOneWidget);
     expect(find.textContaining('# Scripted drive note'), findsOneWidget);
 
-    await tester.tap(find.byType(ModalBarrier).last);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _popRoute(tester);
+    await _closeActivitySheet(tester);
 
-    await tester.tap(find.bySemanticsLabel('Open drive feed'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _selectDestination(tester, 'Drive');
 
     expect(client.driveFeedRequests, greaterThan(0));
     expect(find.text('Drive'), findsWidgets);
@@ -888,6 +1125,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    await _openActivitySheet(tester);
     final resultResource = find.byKey(
       const ValueKey(
         'activity-resource:drive://projects/tempestmiku/research/p5-drive-workspace.md',
@@ -935,6 +1173,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    await _openActivitySheet(tester);
     final activityResource = find.byKey(
       const ValueKey(
         'activity-resource:drive://projects/tempestmiku/research/p5-drive-workspace.md',
@@ -966,8 +1205,11 @@ void main() {
     expect(find.text('Miku is here'), findsOneWidget);
     expect(find.text('Miku 在這裡'), findsNothing);
 
-    await tester.tap(find.text('EN'));
+    await _openSettings(tester);
+    expect(find.text('Appearance and advanced actions'), findsOneWidget);
+    await tester.tap(find.text('Language'));
     await tester.pump();
+    await _popRoute(tester);
 
     expect(find.text('Miku 在這裡'), findsOneWidget);
     expect(find.text('Miku is here'), findsNothing);
@@ -993,8 +1235,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(find.text('TempestMiku'), findsWidgets);
-      expect(find.text('Personal'), findsOneWidget);
+      expect(find.text('Tempest Miku'), findsOneWidget);
+      expect(find.text('Personal'), findsNothing);
       expect(find.text('個人助理'), findsNothing);
       expect(find.text('燒烤'), findsNothing);
       expect(find.text('著陸'), findsNothing);
@@ -1011,7 +1253,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.textContaining('認真工程師'), findsNothing);
-      expect(find.text('Serious'), findsOneWidget);
+      expect(find.text('Serious'), findsNothing);
       expect(find.text('燒烤'), findsNothing);
       expect(find.text('著陸'), findsNothing);
       expect(find.text('交棒'), findsNothing);
@@ -1034,16 +1276,16 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
 
-      await tester.tap(find.byIcon(Icons.more_horiz));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+      await _openSettings(tester);
+      await tester.ensureVisible(find.text('Promote Session'));
       await tester.tap(find.text('Promote Session'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
-      await tester.tap(find.byIcon(Icons.more_horiz));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+      await _openSettings(tester);
+      await tester.ensureVisible(
+        find.text('project://tempestmiku · 2 promoted'),
+      );
 
       expect(find.text('project://tempestmiku · 2 promoted'), findsOneWidget);
       expect(find.text('Continue from latest session result'), findsOneWidget);
@@ -1069,8 +1311,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('Round 1'), findsOneWidget);
-    expect(find.text('Round 2'), findsOneWidget);
+    expect(find.text('Round 1'), findsNothing);
+    expect(find.text('Round 2'), findsNothing);
     expect(find.text('first status check'), findsOneWidget);
     expect(find.text('second status check'), findsOneWidget);
     expect(find.text('Miku heard: first status check'), findsOneWidget);
@@ -1091,17 +1333,18 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
-      await tester.tap(find.byIcon(Icons.history));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
-      expect(find.text('Sessions'), findsOneWidget);
+      await _selectDestination(tester, 'Sessions');
+      expect(find.text('Sessions'), findsWidgets);
       expect(find.text('Miku heard: first history check'), findsWidgets);
 
-      await tester.tap(find.byIcon(Icons.add).last);
+      await tester.tap(find.bySemanticsLabel('Create new session'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 100));
       expect(await client.listSessions(), hasLength(2));
+      for (var i = 0; i < 20 && client.eventResumeIds.length < 2; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(client.eventResumeIds, hasLength(2));
       expect(find.text('Miku heard: first history check'), findsNothing);
 
       await tester.enterText(find.byType(EditableText), 'second history check');
@@ -1111,9 +1354,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       expect(find.text('second history check'), findsOneWidget);
 
-      await tester.tap(find.byIcon(Icons.history));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
+      await _selectDestination(tester, 'Sessions');
       expect(find.text('Miku heard: first history check'), findsWidgets);
       expect(find.text('Miku heard: second history check'), findsWidgets);
 
@@ -1129,6 +1370,13 @@ void main() {
   testWidgets('shows selector from mode dropdown and exposes lock', (
     WidgetTester tester,
   ) async {
+    tester.view.physicalSize = const Size(800, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
     final client = ScriptedMikuClient();
     await tester.pumpWidget(MikuApp(client: client));
     await tester.pump();
@@ -1136,10 +1384,13 @@ void main() {
 
     expect(find.text('個人助理'), findsNothing);
     expect(find.text('Personal locked'), findsNothing);
-    expect(find.text('Personal'), findsOneWidget);
+    expect(find.text('Personal'), findsNothing);
 
-    await tester.tap(find.text('Personal'));
+    await _openSettings(tester);
+    await tester.ensureVisible(find.text('Mode settings'));
+    await tester.tap(find.text('Mode settings'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('Mode / Lock'), findsOneWidget);
@@ -1151,20 +1402,33 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(client.overriddenModes, contains('serious_engineer'));
-    expect(find.text('Serious'), findsOneWidget);
+    expect(find.text('Serious'), findsNothing);
     expect(find.text('認真工程師'), findsNothing);
 
-    await tester.tap(find.text('Serious'));
+    await _openSettings(tester);
+    await tester.ensureVisible(find.text('Mode settings'));
+    await tester.tap(find.text('Mode settings'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 350));
 
+    await tester.ensureVisible(find.text('Lock Serious'));
+    await tester.pump();
     expect(find.text('Lock Serious'), findsOneWidget);
     await tester.tap(find.text('Lock Serious'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(client.lockedModes, contains('serious_engineer'));
-    expect(find.text('Serious locked'), findsOneWidget);
+    await _openSettings(tester);
+    await tester.ensureVisible(find.text('Mode settings'));
+    await tester.tap(find.text('Mode settings'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.ensureVisible(find.text('Unlock Serious'));
+    await tester.pump();
+    expect(find.text('Unlock Serious'), findsOneWidget);
   });
 
   testWidgets('renders and resolves memory write proposals', (
@@ -1249,12 +1513,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
-    await tester.ensureVisible(activityCard);
-    await tester.pump();
-    await tester.tap(activityCard);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _openActivitySheet(tester);
 
     final toolCall = find.text('呼叫工具 execute').last;
     final cellStart = find.text('執行程式').last;
@@ -1290,9 +1549,7 @@ void main() {
     expect(find.text('Scripted resource'), findsOneWidget);
     expect(find.text('Preview for artifact://0'), findsOneWidget);
 
-    await tester.tap(find.byType(ModalBarrier).last);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _popRoute(tester);
 
     await tester.ensureVisible(historyLink.last);
     await tester.pump();
@@ -1302,17 +1559,12 @@ void main() {
     expect(find.text('Scripted resource'), findsOneWidget);
     expect(find.text('Preview for history://Worker0'), findsOneWidget);
 
-    await tester.tap(find.byType(ModalBarrier).last);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _popRoute(tester);
 
-    await tester.tapAt(const Offset(20, 20));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _closeActivitySheet(tester);
 
-    await tester.tap(find.byIcon(Icons.more_horiz));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _openSettings(tester);
+    await tester.ensureVisible(find.text('Promote Session'));
     await tester.tap(find.text('Promote Session'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
@@ -1326,9 +1578,8 @@ void main() {
       'history://Worker0',
     ]);
 
-    await tester.tap(find.byIcon(Icons.more_horiz));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _openSettings(tester);
+    await tester.ensureVisible(find.text('project://tempestmiku · 3 promoted'));
 
     expect(find.text('project://tempestmiku · 3 promoted'), findsOneWidget);
   });
@@ -1350,29 +1601,24 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('呼叫工具 execute'), findsWidgets);
-    expect(find.text('執行程式'), findsWidgets);
-    expect(find.text('完成 Worker0'), findsWidgets);
+    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
+    await _scrollChatUntilVisible(tester, activityCard);
+    expect(activityCard, findsOneWidget);
+    expect(find.text('Agents · 0 running / 1 stopped'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsNothing);
 
     client.completePausedTurn();
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    await _scrollChatUntilVisible(tester, activityCard);
     expect(find.text('Agents · 0 running / 1 stopped'), findsOneWidget);
-    expect(find.text('呼叫工具 execute'), findsWidgets);
-    expect(find.text('執行程式'), findsWidgets);
-    expect(find.text('完成 Worker0'), findsOneWidget);
     expect(
       find.textContaining('Actor Worker0 completed', skipOffstage: false),
       findsOneWidget,
     );
 
-    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
-    await tester.ensureVisible(activityCard);
-    await tester.pump();
-    await tester.tap(activityCard);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _openActivitySheet(tester);
 
     expect(find.text('Prompt / Activity'), findsOneWidget);
     expect(find.text('呼叫工具 execute'), findsWidgets);
@@ -1405,6 +1651,12 @@ void main() {
     expect(find.text(r'e^{i\pi}+1=0'), findsOneWidget);
     expect(find.textContaining(r'\\['), findsNothing);
     expect(find.text('Thinking'), findsOneWidget);
+    final thinking = find.text('Thinking');
+    await _scrollChatUntilVisible(tester, thinking);
+    await tester.tap(
+      find.ancestor(of: thinking, matching: find.byType(InkWell)).first,
+    );
+    await tester.pump();
     expect(
       find.textContaining(
         'Compare scheduler invariants',
@@ -1429,18 +1681,15 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('Handoff'), findsOneWidget);
+    expect(find.text('Handoff'), findsNothing);
+    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
+    await _scrollChatUntilVisible(tester, activityCard);
     expect(find.text('Agents · 0 running / 1 stopped'), findsOneWidget);
     expect(find.text('worker agent · Worker0'), findsOneWidget);
     expect(find.text('stopped'), findsOneWidget);
-    expect(find.text('呼叫工具 execute'), findsOneWidget);
+    expect(find.text('呼叫工具 execute'), findsNothing);
 
-    final activityCard = find.byKey(const ValueKey('agent-activity:1'));
-    await tester.ensureVisible(activityCard);
-    await tester.pump();
-    await tester.tap(activityCard);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _openActivitySheet(tester);
 
     expect(find.text('Agents · Round 1'), findsOneWidget);
     expect(find.text('Prompt / Activity'), findsOneWidget);
@@ -1450,9 +1699,7 @@ void main() {
     expect(find.text('完成 Worker0'), findsWidgets);
     expect(find.text('程式結果'), findsWidgets);
 
-    await tester.tap(find.byIcon(Icons.close).last);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _closeActivitySheet(tester);
 
     final actorReply = find.textContaining(
       'Actor Worker0 completed',
@@ -1484,12 +1731,7 @@ void main() {
     final approvalCard = find.byKey(
       const ValueKey('approval:proc.run cargo clean'),
     );
-    await tester.scrollUntilVisible(
-      approvalCard,
-      220,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pump();
+    await _scrollChatUntilVisible(tester, approvalCard);
     expect(approvalCard, findsOneWidget);
     await tester.ensureVisible(approvalCard);
     await tester.pump();
@@ -1513,6 +1755,80 @@ void main() {
 
     expect(client.eventResumeIds.last, remembered);
   });
+}
+
+class _FailOnceMikuClient extends ScriptedMikuClient {
+  final List<String> attemptedClientMessageIds = [];
+  var _failed = false;
+
+  @override
+  Future<void> sendMessage(
+    String sessionId,
+    String content, {
+    required String clientMessageId,
+  }) async {
+    attemptedClientMessageIds.add(clientMessageId);
+    if (!_failed) {
+      _failed = true;
+      throw StateError('simulated send failure');
+    }
+    await super.sendMessage(
+      sessionId,
+      content,
+      clientMessageId: clientMessageId,
+    );
+  }
+}
+
+class _ControlledSendMikuClient extends ScriptedMikuClient {
+  final Completer<void> _slowSendGate = Completer<void>();
+  var slowSendStarted = false;
+  var slowSendCompleted = false;
+
+  void completeSlowSend() {
+    if (!_slowSendGate.isCompleted) _slowSendGate.complete();
+  }
+
+  @override
+  Future<void> sendMessage(
+    String sessionId,
+    String content, {
+    required String clientMessageId,
+  }) async {
+    if (content == 'slow message from A') {
+      slowSendStarted = true;
+      await _slowSendGate.future;
+    }
+    await super.sendMessage(
+      sessionId,
+      content,
+      clientMessageId: clientMessageId,
+    );
+    if (content == 'slow message from A') slowSendCompleted = true;
+  }
+}
+
+class _SlowInitialConnectMikuClient extends ScriptedMikuClient {
+  final Completer<MikuSession> _initialSession = Completer<MikuSession>();
+  var initialConnectRequested = false;
+  var explicitCreateRequests = 0;
+
+  @override
+  Future<MikuSession> createOrReuseSession() {
+    initialConnectRequested = true;
+    return _initialSession.future;
+  }
+
+  @override
+  Future<MikuSession> createSession() {
+    explicitCreateRequests += 1;
+    return super.createSession();
+  }
+
+  Future<void> completeInitialConnect() async {
+    if (_initialSession.isCompleted) return;
+    _initialSession.complete(await super.createSession());
+  }
 }
 
 class _FailingDeleteTokenStore implements io_client.DeviceTokenStore {

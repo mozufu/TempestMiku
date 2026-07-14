@@ -38,249 +38,13 @@ class _TokIconBtn extends StatelessWidget {
             borderRadius: BorderRadius.circular(10),
             focusColor: tok.focus.withValues(alpha: 0.2),
             child: Container(
-              width: 40,
-              height: 40,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
                 border: Border.all(color: tok.border),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(14),
               ),
-              child: Icon(icon, color: tok.muted, size: 17),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ModeDropMenuButton extends StatelessWidget {
-  const _ModeDropMenuButton({
-    required this.tok,
-    required this.copy,
-    required this.mode,
-    required this.accent,
-    required this.locked,
-    required this.onTap,
-    this.compact = false,
-  });
-
-  final _Tok tok;
-  final _UiCopy copy;
-  final _Mode mode;
-  final Color accent;
-  final bool locked;
-  final VoidCallback onTap;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final borderColor = locked ? accent.withValues(alpha: 0.58) : tok.border;
-    final bg = locked
-        ? accent.withValues(alpha: 0.12)
-        : tok.surface.withValues(alpha: 0.6);
-    final label = copy.modeChipLabel(mode, locked);
-    return Tooltip(
-      message: locked ? copy.modeLocked : copy.switchMode,
-      child: Semantics(
-        button: true,
-        label: locked ? copy.currentModeLocked(mode) : copy.currentMode(mode),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(999),
-            focusColor: tok.focus.withValues(alpha: 0.18),
-            child: Container(
-              height: 40,
-              constraints: BoxConstraints(
-                minWidth: compact ? 62 : 72,
-                maxWidth: compact ? 90 : 128,
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: bg,
-                border: Border.all(color: borderColor),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    locked ? Icons.lock : mode.icon,
-                    color: locked ? accent : tok.muted,
-                    size: 14,
-                  ),
-                  const SizedBox(width: 5),
-                  Flexible(
-                    child: Text(
-                      label,
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: locked ? accent : tok.muted,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  Icon(Icons.arrow_drop_down, color: tok.muted, size: 16),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ConnectionBadge extends StatefulWidget {
-  const _ConnectionBadge({
-    required this.status,
-    required this.tok,
-    required this.copy,
-    this.compact = false,
-  });
-
-  final String status;
-  final _Tok tok;
-  final _UiCopy copy;
-  final bool compact;
-
-  @override
-  State<_ConnectionBadge> createState() => _ConnectionBadgeState();
-}
-
-class _ConnectionBadgeState extends State<_ConnectionBadge>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse;
-
-  @override
-  void initState() {
-    super.initState();
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2200),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tok = widget.tok;
-    final isLive = widget.status == 'connected' ||
-        widget.status == 'streaming' ||
-        widget.status == 'complete';
-    final dotColor = isLive ? tok.success : tok.warning;
-    final label = widget.copy.statusLabel(widget.status);
-    final reduceMotion = _reducedMotion(context);
-
-    Widget dot() {
-      return AnimatedBuilder(
-        animation: _pulse,
-        builder: (_, __) {
-          final t = _pulse.value * math.pi * 2;
-          final opacity =
-              reduceMotion ? 1.0 : (math.sin(t) * 0.34 + 0.66).clamp(0.32, 1.0);
-          return Opacity(
-            opacity: isLive ? opacity : 0.55,
-            child: Container(
-              width: 7,
-              height: 7,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: dotColor,
-              ),
-            ),
-          );
-        },
-      );
-    }
-
-    return Tooltip(
-      message: label,
-      child: Semantics(
-        label: widget.copy.connectionStatus(label),
-        child: Container(
-          width: widget.compact ? 40 : null,
-          height: widget.compact ? 40 : null,
-          padding: widget.compact
-              ? EdgeInsets.zero
-              : const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            border: Border.all(color: tok.border),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: widget.compact
-              ? Center(child: dot())
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    dot(),
-                    const SizedBox(width: 6),
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: tok.muted,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-        ),
-      ),
-    );
-  }
-}
-
-class _LanguageToggle extends StatelessWidget {
-  const _LanguageToggle({
-    required this.tok,
-    required this.copy,
-    required this.onTap,
-  });
-
-  final _Tok tok;
-  final _UiCopy copy;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: copy.languageTooltip,
-      child: Semantics(
-        button: true,
-        label: copy.languageSemantic,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(10),
-            focusColor: tok.focus.withValues(alpha: 0.2),
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                border: Border.all(color: tok.border),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Center(
-                child: Text(
-                  copy.code,
-                  style: TextStyle(
-                    color: tok.muted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
+              child: Icon(icon, color: tok.muted, size: 20),
             ),
           ),
         ),
@@ -292,13 +56,11 @@ class _LanguageToggle extends StatelessWidget {
 class _EmptyState extends StatelessWidget {
   const _EmptyState({
     required this.tok,
-    required this.accent,
     required this.status,
     required this.copy,
   });
 
   final _Tok tok;
-  final Color accent;
   final String status;
   final _UiCopy copy;
 
@@ -312,23 +74,16 @@ class _EmptyState extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: accent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(Icons.smart_toy, color: _textOn(accent), size: 22),
-              ),
-              const SizedBox(height: 14),
+              const MikuBrandBadge(size: 64),
+              const SizedBox(height: 18),
               Text(
                 copy.emptyTitle,
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: tok.text,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.45,
                 ),
               ),
               const SizedBox(height: 6),
@@ -349,41 +104,6 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _RoundLabel extends StatelessWidget {
-  const _RoundLabel({
-    required this.tok,
-    required this.copy,
-    required this.index,
-  });
-
-  final _Tok tok;
-  final _UiCopy copy;
-  final int index;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          copy.round(index),
-          style: TextStyle(
-            color: tok.muted,
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Container(
-            height: 0.5,
-            color: tok.border.withValues(alpha: 0.7),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _UserBubble extends StatelessWidget {
   const _UserBubble({
     required this.tok,
@@ -400,22 +120,22 @@ class _UserBubble extends StatelessWidget {
     return Align(
       alignment: Alignment.centerRight,
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 280),
-        padding: const EdgeInsets.fromLTRB(13, 10, 13, 10),
+        constraints: const BoxConstraints(maxWidth: 560),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         decoration: BoxDecoration(
           color: accent,
           borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(15),
-            topRight: Radius.circular(15),
-            bottomLeft: Radius.circular(15),
-            bottomRight: Radius.circular(5),
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
+            bottomLeft: Radius.circular(20),
+            bottomRight: Radius.circular(7),
           ),
         ),
         child: Text(
           text,
           style: TextStyle(
             color: _textOn(accent),
-            fontSize: 14,
+            fontSize: 15,
             fontWeight: FontWeight.w500,
             height: 1.5,
           ),
@@ -446,18 +166,22 @@ class _MikuBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final iconColor = _textOn(accent);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          width: 30,
-          height: 30,
+          width: 34,
+          height: 34,
+          padding: const EdgeInsets.all(7),
           decoration: BoxDecoration(
-            color: accent,
-            borderRadius: BorderRadius.circular(9),
+            color: tok.text,
+            borderRadius: BorderRadius.circular(11),
+            boxShadow: [BoxShadow(color: tok.glow, blurRadius: 12)],
           ),
-          child: Icon(Icons.smart_toy, color: iconColor, size: 17),
+          child: const MikuStormCatMark(
+            color: Color(0xFF39C5BB),
+            boltColor: Color(0xFFFF7B70),
+          ),
         ),
         const SizedBox(width: 9),
         Expanded(
@@ -470,8 +194,8 @@ class _MikuBubble extends StatelessWidget {
                     'Miku',
                     style: TextStyle(
                       color: tok.text,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w900,
                       letterSpacing: -0.3,
                     ),
                   ),
@@ -482,76 +206,77 @@ class _MikuBubble extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 5),
-              _MarkdownMessage(
-                tok: tok,
-                accent: accent,
-                text: text,
-              ),
+              _MarkdownMessage(tok: tok, accent: accent, text: text),
               if (resources.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: resources
-                      .map(
-                        (uri) => Semantics(
-                          button: true,
-                          label: copy.openResource(uri),
-                          child: Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              key: ValueKey('resource:$uri'),
-                              onTap: () => onOpenResource(uri),
-                              borderRadius: BorderRadius.circular(9),
-                              focusColor: tok.focus.withValues(alpha: 0.18),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 7,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: tok.surface,
-                                  border: Border.all(color: tok.border),
+                  children:
+                      resources
+                          .map(
+                            (uri) => Semantics(
+                              button: true,
+                              label: copy.openResource(uri),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  key: ValueKey('resource:$uri'),
+                                  onTap: () => onOpenResource(uri),
                                   borderRadius: BorderRadius.circular(9),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.insert_drive_file_outlined,
-                                      size: 13,
-                                      color: accent,
+                                  focusColor: tok.focus.withValues(alpha: 0.18),
+                                  child: Container(
+                                    constraints: const BoxConstraints(
+                                      minHeight: 44,
                                     ),
-                                    const SizedBox(width: 6),
-                                    ConstrainedBox(
-                                      constraints:
-                                          const BoxConstraints(maxWidth: 260),
-                                      child: Text(
-                                        uri,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 9,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: tok.surface,
+                                      border: Border.all(color: tok.border),
+                                      borderRadius: BorderRadius.circular(9),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.insert_drive_file_outlined,
+                                          size: 13,
                                           color: accent,
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w700,
-                                          fontFamily: 'monospace',
                                         ),
-                                      ),
+                                        const SizedBox(width: 6),
+                                        ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                            maxWidth: 260,
+                                          ),
+                                          child: Text(
+                                            uri,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: accent,
+                                              fontSize: 11.5,
+                                              fontWeight: FontWeight.w700,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Icon(
+                                          Icons.open_in_new,
+                                          size: 11,
+                                          color: tok.muted,
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 4),
-                                    Icon(
-                                      Icons.open_in_new,
-                                      size: 11,
-                                      color: tok.muted,
-                                    ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                      )
-                      .toList(),
+                          )
+                          .toList(),
                 ),
               ],
             ],

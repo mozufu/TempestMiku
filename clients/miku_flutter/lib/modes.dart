@@ -26,12 +26,14 @@ class _Mode {
     return _Mode(
       id: profile.id,
       label: profile.label.isEmpty ? profile.id : profile.label,
-      short:
-          _shortModeLabel(profile.label.isEmpty ? profile.id : profile.label),
+      short: _shortModeLabel(
+        profile.label.isEmpty ? profile.id : profile.label,
+      ),
       temp: temp,
-      tip: profile.description.isEmpty
-          ? '${profile.capabilityClass} · ${profile.voiceCap}'
-          : profile.description,
+      tip:
+          profile.description.isEmpty
+              ? '${profile.capabilityClass} · ${profile.voiceCap}'
+              : profile.description,
       voiceCap: profile.voiceCap,
       capabilityClass: profile.capabilityClass,
       activeSkills: profile.activeSkills,

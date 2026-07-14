@@ -260,8 +260,11 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   @override
-  Future<void> sendMessage(String sessionId, String content) async {
-    final clientMessageId = newClientMessageId();
+  Future<void> sendMessage(
+    String sessionId,
+    String content, {
+    required String clientMessageId,
+  }) async {
     await sendIdempotentMessageWithRetry(
       clientMessageId: clientMessageId,
       isAmbiguousFailure: (error) => error is _AmbiguousWebTransportFailure,

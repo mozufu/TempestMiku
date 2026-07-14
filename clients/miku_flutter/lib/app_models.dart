@@ -22,9 +22,10 @@ class _ConversationRound {
   bool activityExpanded = false;
   bool reasoningExpanded = false;
 
-  String get assistantText => assistantFinalText.isNotEmpty
-      ? assistantFinalText
-      : assistantStreamedText;
+  String get assistantText =>
+      assistantFinalText.isNotEmpty
+          ? assistantFinalText
+          : assistantStreamedText;
 
   bool get isComplete => assistantFinalText.isNotEmpty && !isStreaming;
   bool get hasReasoning => reasoningText.trim().isNotEmpty;

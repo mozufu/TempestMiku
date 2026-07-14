@@ -12,6 +12,7 @@ class _DriveFeedSheet extends StatefulWidget {
     required this.loadFeed,
     required this.onOpenResource,
     required this.onOpenApproval,
+    this.embedded = false,
   });
 
   final _Tok tok;
@@ -24,6 +25,7 @@ class _DriveFeedSheet extends StatefulWidget {
   final Future<DriveFeed> Function() loadFeed;
   final void Function(String uri) onOpenResource;
   final void Function(ApprovalPrompt approval) onOpenApproval;
+  final bool embedded;
 
   @override
   State<_DriveFeedSheet> createState() => _DriveFeedSheetState();
@@ -33,6 +35,7 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
   DriveFeed? _feed;
   Object? _error;
   bool _loading = false;
+  int _refreshGeneration = 0;
 
   @override
   void initState() {
@@ -43,7 +46,26 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
     unawaited(_refresh(silent: widget.initialFeed != null));
   }
 
+  @override
+  void didUpdateWidget(covariant _DriveFeedSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialFeed == oldWidget.initialFeed &&
+        widget.initialError == oldWidget.initialError) {
+      return;
+    }
+    _refreshGeneration += 1;
+    _feed = widget.initialFeed;
+    _error = widget.initialError.isEmpty ? null : widget.initialError;
+    if (widget.initialFeed == null && !_loading) {
+      _loading = true;
+      unawaited(_refresh(silent: true));
+    } else if (widget.initialFeed != null) {
+      _loading = false;
+    }
+  }
+
   Future<void> _refresh({bool silent = false}) async {
+    final generation = ++_refreshGeneration;
     if (!silent && mounted) {
       setState(() {
         _loading = true;
@@ -52,14 +74,14 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
     }
     try {
       final feed = await widget.loadFeed();
-      if (!mounted) return;
+      if (!mounted || generation != _refreshGeneration) return;
       setState(() {
         _feed = feed;
         _loading = false;
         _error = null;
       });
     } catch (err) {
-      if (!mounted) return;
+      if (!mounted || generation != _refreshGeneration) return;
       setState(() {
         _loading = false;
         _error = err;
@@ -72,25 +94,31 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
     final tok = widget.tok;
     final copy = widget.copy;
     final feed = _feed;
-    final hasPendingDriveApprovals = widget.approvals.isNotEmpty ||
+    final hasPendingDriveApprovals =
+        widget.approvals.isNotEmpty ||
         (feed?.pendingApprovals.isNotEmpty ?? false);
     final showEmptyFeed =
         feed == null || (feed.isEmpty && !hasPendingDriveApprovals);
     final displayFeed = feed ?? DriveFeed.empty;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(15, 9, 15, 18),
+      padding:
+          widget.embedded
+              ? const EdgeInsets.fromLTRB(20, 20, 20, 24)
+              : const EdgeInsets.fromLTRB(15, 9, 15, 18),
       children: [
-        Center(
-          child: Container(
-            width: 38,
-            height: 5,
-            decoration: BoxDecoration(
-              color: tok.border,
-              borderRadius: BorderRadius.circular(999),
+        if (!widget.embedded) ...[
+          Center(
+            child: Container(
+              width: 38,
+              height: 5,
+              decoration: BoxDecoration(
+                color: tok.border,
+                borderRadius: BorderRadius.circular(999),
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 14),
+          const SizedBox(height: 14),
+        ],
         Row(
           children: [
             Container(
@@ -140,14 +168,16 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
               semanticLabel: copy.refreshDrive,
               onTap: _loading ? null : () => _refresh(),
             ),
-            const SizedBox(width: 8),
-            _TokIconBtn(
-              tok: tok,
-              icon: Icons.close,
-              tooltip: copy.close,
-              semanticLabel: copy.closeDriveFeed,
-              onTap: () => Navigator.pop(context),
-            ),
+            if (!widget.embedded) ...[
+              const SizedBox(width: 8),
+              _TokIconBtn(
+                tok: tok,
+                icon: Icons.close,
+                tooltip: copy.close,
+                semanticLabel: copy.closeDriveFeed,
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 13),
@@ -185,34 +215,32 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
                     onTap: () => widget.onOpenApproval(approval),
                   ),
                 for (final approval in displayFeed.pendingApprovals)
-                  _DrivePendingApprovalRow(
-                    tok: tok,
-                    approval: approval,
-                  ),
+                  _DrivePendingApprovalRow(tok: tok, approval: approval),
               ],
             ),
           _DriveSection(
             tok: tok,
             title: copy.recentDocuments,
             detail: copy.driveDocs(displayFeed.recent.length),
-            children: displayFeed.recent.isEmpty
-                ? [
-                    _DriveEmptyLine(
-                      tok: tok,
-                      icon: Icons.folder_open_outlined,
-                      text: copy.noDriveFeed,
-                    ),
-                  ]
-                : [
-                    for (final item in displayFeed.recent)
-                      _DriveFeedDocRow(
+            children:
+                displayFeed.recent.isEmpty
+                    ? [
+                      _DriveEmptyLine(
                         tok: tok,
-                        copy: copy,
-                        accent: widget.accent,
-                        item: item,
-                        onOpen: () => widget.onOpenResource(item.uri),
+                        icon: Icons.folder_open_outlined,
+                        text: copy.noDriveFeed,
                       ),
-                  ],
+                    ]
+                    : [
+                      for (final item in displayFeed.recent)
+                        _DriveFeedDocRow(
+                          tok: tok,
+                          copy: copy,
+                          accent: widget.accent,
+                          item: item,
+                          onOpen: () => widget.onOpenResource(item.uri),
+                        ),
+                    ],
           ),
           _DriveSection(
             tok: tok,
@@ -245,9 +273,10 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
                     copy: copy,
                     accent: widget.accent,
                     proposal: proposal,
-                    onOpen: proposal.sourceUri == null
-                        ? null
-                        : () => widget.onOpenResource(proposal.sourceUri!),
+                    onOpen:
+                        proposal.sourceUri == null
+                            ? null
+                            : () => widget.onOpenResource(proposal.sourceUri!),
                   ),
               ],
             ),
@@ -681,10 +710,7 @@ class _DriveApprovalRow extends StatelessWidget {
 }
 
 class _DrivePendingApprovalRow extends StatelessWidget {
-  const _DrivePendingApprovalRow({
-    required this.tok,
-    required this.approval,
-  });
+  const _DrivePendingApprovalRow({required this.tok, required this.approval});
 
   final _Tok tok;
   final DrivePendingApproval approval;

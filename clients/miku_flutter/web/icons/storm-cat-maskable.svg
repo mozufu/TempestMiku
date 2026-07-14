@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Tempest Miku storm-cat maskable mark">
+  <defs>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientTransform="translate(256 224) rotate(90) scale(360)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#173F43"/>
+      <stop offset="1" stop-color="#071D20"/>
+    </radialGradient>
+    <linearGradient id="cat" x1="153" y1="141" x2="359" y2="386" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#73DDD3"/>
+      <stop offset="1" stop-color="#39C5BB"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <path d="m119 229 30-109 84 63c15-5 29-7 43-7s28 2 43 7l84-63 30 109c19 24 26 50 26 80 0 81-62 127-183 127S93 390 93 309c0-30 7-56 26-80Z" fill="url(#cat)"/>
+  <path d="m291 202-71 105h55l-22 89 98-121h-54l34-73h-40Z" fill="#FF7B70"/>
+</svg>

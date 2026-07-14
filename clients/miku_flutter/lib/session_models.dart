@@ -479,7 +479,8 @@ class ApprovalPrompt {
   }
 
   bool get isEvolutionReview =>
-      backend == 'evolution-review' || _stringValue(scope['kind']) == 'evolution_review';
+      backend == 'evolution-review' ||
+      _stringValue(scope['kind']) == 'evolution_review';
 }
 
 class ApprovalOption {
@@ -783,7 +784,15 @@ abstract class MikuSessionClient {
 
   void rememberLastEventId(String sessionId, String lastEventId);
 
-  Future<void> sendMessage(String sessionId, String content);
+  /// Sends one durable user message.
+  ///
+  /// Callers own [clientMessageId] and must reuse it when retrying an
+  /// ambiguously failed send so the server can deduplicate the turn.
+  Future<void> sendMessage(
+    String sessionId,
+    String content, {
+    required String clientMessageId,
+  });
 
   Future<void> resolveApproval(
     String sessionId,

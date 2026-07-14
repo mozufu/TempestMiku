@@ -66,66 +66,68 @@ class _ActivityRow extends StatelessWidget {
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
-                  children: item.resourceUris
-                      .map(
-                        (uri) => Semantics(
-                          button: true,
-                          label: copy.openActivityResource(uri),
-                          child: Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              key: ValueKey('activity-resource:$uri'),
-                              onTap: () => onOpenResource(uri),
-                              borderRadius: BorderRadius.circular(8),
-                              focusColor: tok.focus.withValues(alpha: 0.18),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: tok.surface,
-                                  border: Border.all(color: tok.border),
+                  children:
+                      item.resourceUris
+                          .map(
+                            (uri) => Semantics(
+                              button: true,
+                              label: copy.openActivityResource(uri),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  key: ValueKey('activity-resource:$uri'),
+                                  onTap: () => onOpenResource(uri),
                                   borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.insert_drive_file_outlined,
-                                      size: 12,
-                                      color: accent,
+                                  focusColor: tok.focus.withValues(alpha: 0.18),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 6,
                                     ),
-                                    const SizedBox(width: 5),
-                                    ConstrainedBox(
-                                      constraints:
-                                          const BoxConstraints(maxWidth: 230),
-                                      child: Text(
-                                        uri,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
+                                    decoration: BoxDecoration(
+                                      color: tok.surface,
+                                      border: Border.all(color: tok.border),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.insert_drive_file_outlined,
+                                          size: 12,
                                           color: accent,
-                                          fontSize: 10.8,
-                                          fontWeight: FontWeight.w800,
-                                          fontFamily: 'monospace',
                                         ),
-                                      ),
+                                        const SizedBox(width: 5),
+                                        ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                            maxWidth: 230,
+                                          ),
+                                          child: Text(
+                                            uri,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: accent,
+                                              fontSize: 10.8,
+                                              fontWeight: FontWeight.w800,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Icon(
+                                          Icons.open_in_new,
+                                          size: 10,
+                                          color: tok.muted,
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 4),
-                                    Icon(
-                                      Icons.open_in_new,
-                                      size: 10,
-                                      color: tok.muted,
-                                    ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                      )
-                      .toList(),
+                          )
+                          .toList(),
                 ),
               ],
             ],
@@ -136,11 +138,11 @@ class _ActivityRow extends StatelessWidget {
   }
 
   Color _stateColor(_ActivityState state) => switch (state) {
-        _ActivityState.running => accent,
-        _ActivityState.done => tok.success,
-        _ActivityState.failed => tok.danger,
-        _ActivityState.info => tok.muted,
-      };
+    _ActivityState.running => accent,
+    _ActivityState.done => tok.success,
+    _ActivityState.failed => tok.danger,
+    _ActivityState.info => tok.muted,
+  };
 }
 
 String _trimActivityDetail(String detail) {
@@ -467,7 +469,7 @@ class _ProposalActionButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(10),
             focusColor: tok.focus.withValues(alpha: 0.18),
             child: Container(
-              height: 38,
+              constraints: const BoxConstraints(minHeight: 48),
               padding: const EdgeInsets.symmetric(horizontal: 10),
               decoration: BoxDecoration(
                 color: bg,
@@ -478,7 +480,7 @@ class _ProposalActionButton extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(icon, color: fg, size: 15),
+                    Icon(icon, color: fg, size: 18),
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(

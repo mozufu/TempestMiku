@@ -25,7 +25,9 @@ class ScriptedMikuClient implements MikuSessionClient {
   final List<String> overriddenModes = [];
   final List<List<String>> promotedResources = [];
   final List<String?> promotedSummaries = [];
+  final List<String> sentClientMessageIds = [];
   int driveFeedRequests = 0;
+  final Set<String> _acceptedMessageKeys = {};
   final Map<String, String> _pausedFinalTexts = {};
   int unlockCount = 0;
   int _nextId = 0;
@@ -220,9 +222,15 @@ class ScriptedMikuClient implements MikuSessionClient {
   }
 
   @override
-  Future<void> sendMessage(String sessionId, String content) async {
+  Future<void> sendMessage(
+    String sessionId,
+    String content, {
+    required String clientMessageId,
+  }) async {
+    sentClientMessageIds.add(clientMessageId);
     final controller = _controllers[sessionId];
     if (controller == null) return;
+    if (!_acceptedMessageKeys.add('$sessionId\u{0}$clientMessageId')) return;
     _appendMessage(sessionId, 'user', content);
     final lower = content.toLowerCase();
     if (lower.contains('actor') || lower.contains('handoff')) {

@@ -18,6 +18,8 @@ class MikuHomePage extends StatefulWidget {
 
 class _MikuHomePageState extends State<MikuHomePage>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  static const _languagePreferenceKey = 'tempest_miku.ui.language.v1';
+
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final List<ApprovalPrompt> _approvals = [];
@@ -44,10 +46,23 @@ class _MikuHomePageState extends State<MikuHomePage>
   String _status = 'idle';
   String _projectStatus = '';
   String _driveError = '';
-  bool _isDark = true;
   bool _driveLoading = false;
   bool _modeLocked = false;
   bool _canSend = false;
+  bool _isSending = false;
+  bool _disconnecting = false;
+  bool _needsPairing = false;
+  bool _followLatest = true;
+  bool _showJumpToLatest = false;
+  bool _scrollFrameScheduled = false;
+  String _sendError = '';
+  String? _pendingMessageId;
+  String? _pendingMessageText;
+  _ConversationRound? _pendingOptimisticRound;
+  int _sessionHistoryRevision = 0;
+  int _sessionNavigationEpoch = 0;
+  int _sendEpoch = 0;
+  _AppDestination _destination = _AppDestination.chat;
   _UiLanguage _language = _UiLanguage.en;
   AppLifecycleState _appLifecycle = AppLifecycleState.resumed;
 
@@ -61,6 +76,8 @@ class _MikuHomePageState extends State<MikuHomePage>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
+    _scrollCtrl.addListener(_handleThreadScroll);
+    unawaited(_loadUiPreferences());
     unawaited(widget.notifications.initialize());
     _notificationActionSub = widget.notifications.actions.listen(
       _enqueueNotificationAction,
@@ -100,7 +117,8 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   _Mode get _mode => _findMode(_modeId, _modes);
-  _Tok get _tok => _isDark ? _Tok.dark : _Tok.light;
+  _Tok get _tok =>
+      Theme.of(context).brightness == Brightness.dark ? _Tok.dark : _Tok.light;
   Color get _accent => _tok.accentSoft;
   _UiCopy get _copy => _UiCopy(_language);
   ServerTargetClient? get _serverTargetClient =>
@@ -116,6 +134,51 @@ class _MikuHomePageState extends State<MikuHomePage>
           ? widget.notifications as UnifiedPushNotificationService
           : null;
   bool get _sessionEnded => _status == 'ended';
+
+  void _handleThreadScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final distance =
+        _scrollCtrl.position.maxScrollExtent - _scrollCtrl.position.pixels;
+    final shouldFollow = distance < 96;
+    final shouldShow = !shouldFollow && distance > 160;
+    if (shouldFollow == _followLatest && shouldShow == _showJumpToLatest) {
+      return;
+    }
+    setState(() {
+      _followLatest = shouldFollow;
+      _showJumpToLatest = shouldShow;
+    });
+  }
+
+  Future<void> _loadUiPreferences() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final language = switch (preferences.getString(_languagePreferenceKey)) {
+        'zh' => _UiLanguage.zh,
+        _ => _UiLanguage.en,
+      };
+      if (mounted && language != _language) {
+        setState(() => _language = language);
+      }
+    } catch (_) {
+      // The UI remains fully usable when local preference storage is absent.
+    }
+  }
+
+  Future<void> _toggleLanguage() async {
+    final language =
+        _language == _UiLanguage.en ? _UiLanguage.zh : _UiLanguage.en;
+    setState(() => _language = language);
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(
+        _languagePreferenceKey,
+        language == _UiLanguage.zh ? 'zh' : 'en',
+      );
+    } catch (_) {
+      // Keep the in-memory selection even when persistence is unavailable.
+    }
+  }
 
   Future<void> _boot() async {
     await _ensureSession();
@@ -146,6 +209,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     if (!mounted) return;
     final decision = await showModalBottomSheet<_ShareImportDecision>(
       context: context,
+      showDragHandle: true,
       backgroundColor: _tok.surface,
       isScrollControlled: true,
       useSafeArea: true,
@@ -274,48 +338,96 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   // ── Session ────────────────────────────────────────────────────────────────
 
-  Future<void> _ensureSession() async {
-    if (_sessionId != null) return;
-    return _sessionFuture ??= _connectSession();
+  int _nextSessionNavigationEpoch() {
+    _sendEpoch += 1;
+    return ++_sessionNavigationEpoch;
   }
 
-  Future<void> _connectSession() async {
-    if (mounted) setState(() => _status = 'connecting');
+  Future<void> _ensureSession() async {
+    if (_sessionId != null) return;
+    final pending = _sessionFuture;
+    if (pending != null) return pending;
+    final navigationEpoch = _nextSessionNavigationEpoch();
+    final future = _connectSession(navigationEpoch);
+    _sessionFuture = future;
+    return future;
+  }
+
+  Future<void> _connectSession(int navigationEpoch) async {
+    if (mounted && navigationEpoch == _sessionNavigationEpoch) {
+      setState(() {
+        _status = 'connecting';
+        _needsPairing = false;
+        _isSending = false;
+        _canSend = false;
+      });
+    }
     try {
-      await _loadModes();
+      await _loadModes(navigationEpoch: navigationEpoch);
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
       final s = await widget.client.createOrReuseSession();
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
       LoadedSession? loaded;
       try {
         loaded = await widget.client.loadSession(s.id);
       } catch (_) {
         loaded = null;
       }
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
       await _attachSession(
         loaded?.session ?? s,
         messages: loaded?.messages ?? const [],
         pendingEvents: loaded?.pendingEvents ?? const [],
+        navigationEpoch: navigationEpoch,
       );
     } catch (err) {
-      _sessionFuture = null;
-      if (!mounted) return;
-      setState(() => _status = 'offline');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not connect to tm-server: $err')),
-      );
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
+      final pairingRequired = _isPairingRequiredError(err);
+      setState(() {
+        _status = 'offline';
+        _needsPairing = pairingRequired;
+      });
+      if (!pairingRequired) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not connect to tm-server: $err')),
+        );
+      }
+    } finally {
+      if (navigationEpoch == _sessionNavigationEpoch) {
+        _sessionFuture = null;
+      }
     }
+  }
+
+  bool _isPairingRequiredError(Object error) {
+    if (_serverTargetClient == null) return false;
+    final message = error.toString().toLowerCase();
+    return message.contains('not securely paired') ||
+        message.contains('unauthorized') ||
+        message.contains('status 401') ||
+        message.contains('http 401');
   }
 
   Future<void> _attachSession(
     MikuSession session, {
     List<SessionMessage> messages = const [],
     List<MikuEvent> pendingEvents = const [],
+    required int navigationEpoch,
   }) async {
+    if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
     final previousSub = _sub;
     _sub = null;
-    if (!mounted) return;
+    final previousSessionId = _sessionId;
+    if (previousSub != null) unawaited(previousSub.cancel());
+    final changingSession =
+        previousSessionId != null && previousSessionId != session.id;
+    if (changingSession) {
+      _inputCtrl.clear();
+    }
     setState(() {
       _mergeSessionMode(session);
       _sessionId = session.id;
+      _sessionHistoryRevision += 1;
       _lastEventId = session.lastEventId;
       _modeId = session.mode.isEmpty ? _defaultModeId : session.mode;
       _modeLocked = session.locked;
@@ -325,6 +437,13 @@ class _MikuHomePageState extends State<MikuHomePage>
       _driveFeed = null;
       _driveError = '';
       _driveLoading = false;
+      if (changingSession) {
+        _isSending = false;
+        _pendingMessageId = null;
+        _pendingMessageText = null;
+        _pendingOptimisticRound = null;
+        _sendError = '';
+      }
       _rounds
         ..clear()
         ..addAll(_roundsFromMessages(messages));
@@ -334,16 +453,17 @@ class _MikuHomePageState extends State<MikuHomePage>
       if (session.status == 'ended') {
         _status = 'ended';
         _canSend = false;
+      } else {
+        _canSend = _inputCtrl.text.trim().isNotEmpty;
       }
     });
-    await previousSub?.cancel();
     if (session.status != 'ended') {
       _sub = widget.client
           .events(session.id, lastEventId: _lastEventId)
           .listen(
-            _onEvent,
+            (event) => _onEvent(session.id, event),
             onError: (_) {
-              if (mounted && !_sessionEnded) {
+              if (mounted && _sessionId == session.id && !_sessionEnded) {
                 setState(() => _status = 'reconnecting');
               }
             },
@@ -351,13 +471,21 @@ class _MikuHomePageState extends State<MikuHomePage>
     }
     await _loadProject();
     await _loadDriveFeed(silent: true);
-    if (mounted) setState(() {});
-    _scrollToBottom();
+    if (mounted &&
+        navigationEpoch == _sessionNavigationEpoch &&
+        _sessionId == session.id) {
+      setState(() {});
+      _scrollToBottom(force: true);
+    }
   }
 
-  Future<void> _loadModes() async {
+  Future<void> _loadModes({int? navigationEpoch}) async {
     final catalog = await widget.client.modeCatalog();
-    if (!mounted) return;
+    if (!mounted ||
+        (navigationEpoch != null &&
+            navigationEpoch != _sessionNavigationEpoch)) {
+      return;
+    }
     setState(() {
       _defaultModeId = catalog.defaultMode;
       _modes
@@ -422,9 +550,15 @@ class _MikuHomePageState extends State<MikuHomePage>
     return rounds;
   }
 
-  void _onEvent(MikuEvent e) {
+  void _onEvent(String sessionId, MikuEvent e) {
+    if (_sessionId != sessionId) return;
     _rememberEventCursor(e);
-    setState(() => _applyEvent(e));
+    setState(() {
+      _applyEvent(e);
+      if (e.type == 'final' || e.type == 'session_end') {
+        _sessionHistoryRevision += 1;
+      }
+    });
     if (_shouldRefreshDriveFeed(e)) {
       unawaited(_loadDriveFeed(silent: true));
     }
@@ -563,12 +697,20 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   Future<void> _syncNotificationSession(String sessionId) async {
+    if (_disconnecting) return;
+    final shouldNavigate = _sessionId != sessionId;
+    final navigationEpoch =
+        shouldNavigate
+            ? _nextSessionNavigationEpoch()
+            : _sessionNavigationEpoch;
     final loaded = await widget.client.loadSession(sessionId);
-    if (_sessionId != sessionId) {
+    if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
+    if (shouldNavigate) {
       await _attachSession(
         loaded.session,
         messages: loaded.messages,
         pendingEvents: loaded.pendingEvents,
+        navigationEpoch: navigationEpoch,
       );
       return;
     }
@@ -609,7 +751,7 @@ class _MikuHomePageState extends State<MikuHomePage>
           final round = _ensureAssistantRound();
           round.reasoningText += delta;
           round.isStreaming = true;
-          round.reasoningExpanded = true;
+          round.reasoningExpanded = false;
           _status = 'streaming';
         }
       case 'text':
@@ -627,7 +769,7 @@ class _MikuHomePageState extends State<MikuHomePage>
         round.assistantStreamedText = '';
         round.isStreaming = false;
         _status = 'connected';
-        _loadProject();
+        unawaited(_loadProject());
       case 'session_end':
         if (_rounds.isNotEmpty) {
           _rounds.last.isStreaming = false;
@@ -959,7 +1101,7 @@ class _MikuHomePageState extends State<MikuHomePage>
       round.activities.removeRange(0, round.activities.length - 128);
     }
     round.isStreaming = true;
-    round.activityExpanded = true;
+    round.activityExpanded = false;
     _status = 'streaming';
   }
 
@@ -996,21 +1138,36 @@ class _MikuHomePageState extends State<MikuHomePage>
     _memoryProposals.add(proposal);
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool force = false, bool animate = false}) {
+    if (!force && !_followLatest) {
+      if (!_showJumpToLatest && mounted) {
+        setState(() => _showJumpToLatest = true);
+      }
+      return;
+    }
+    if (_scrollFrameScheduled) return;
+    _scrollFrameScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollFrameScheduled = false;
       if (_scrollCtrl.hasClients) {
         final media = MediaQuery.maybeOf(context);
         final reduceMotion =
             media?.disableAnimations == true ||
             media?.accessibleNavigation == true;
-        if (reduceMotion) {
-          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-        } else {
+        if (animate && !reduceMotion) {
           _scrollCtrl.animateTo(
             _scrollCtrl.position.maxScrollExtent,
             duration: const Duration(milliseconds: 240),
             curve: Curves.easeOut,
           );
+        } else {
+          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        }
+        if (mounted && (!_followLatest || _showJumpToLatest)) {
+          setState(() {
+            _followLatest = true;
+            _showJumpToLatest = false;
+          });
         }
       }
     });
@@ -1018,24 +1175,118 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
-    if (text.isEmpty || _sessionEnded) return;
-    _inputCtrl.clear();
-    await _sendText(text);
+    if (text.isEmpty || _sessionEnded || _isSending) return;
+    await _ensureSession();
+    if (!mounted) return;
+    final sessionId = _sessionId;
+    if (sessionId == null || _sessionEnded) {
+      setState(() {
+        _canSend = _inputCtrl.text.trim().isNotEmpty;
+        _sendError = _copy.sendFailed(StateError('Miku is not connected yet.'));
+      });
+      return;
+    }
+    final messageId =
+        _pendingMessageText == text && _pendingMessageId != null
+            ? _pendingMessageId!
+            : newClientMessageId();
+    final sendEpoch = ++_sendEpoch;
+    setState(() {
+      _isSending = true;
+      _canSend = false;
+      _sendError = '';
+      _pendingMessageId = messageId;
+      _pendingMessageText = text;
+    });
+    try {
+      await _sendText(
+        text,
+        clientMessageId: messageId,
+        targetSessionId: sessionId,
+        sendEpoch: sendEpoch,
+      );
+      if (!mounted || sendEpoch != _sendEpoch || _sessionId != sessionId) {
+        return;
+      }
+      _inputCtrl.clear();
+      setState(() {
+        _isSending = false;
+        _canSend = false;
+        _pendingMessageId = null;
+        _pendingMessageText = null;
+        _pendingOptimisticRound = null;
+      });
+    } catch (err) {
+      if (!mounted || sendEpoch != _sendEpoch || _sessionId != sessionId) {
+        return;
+      }
+      setState(() {
+        _isSending = false;
+        _canSend = _inputCtrl.text.trim().isNotEmpty;
+        _sendError = _copy.sendFailed(err);
+      });
+    }
   }
 
-  Future<void> _sendText(String text) async {
-    await _ensureSession();
-    final sessionId = _sessionId;
-    if (sessionId == null || _sessionEnded) return;
+  Future<void> _sendText(
+    String text, {
+    String? clientMessageId,
+    String? targetSessionId,
+    int? sendEpoch,
+  }) async {
+    if (targetSessionId == null) await _ensureSession();
+    final sessionId = targetSessionId ?? _sessionId;
+    if (sessionId == null) {
+      throw StateError('Miku is not connected yet.');
+    }
+    final operationEpoch = sendEpoch ?? ++_sendEpoch;
+    if (_sessionId != sessionId || operationEpoch != _sendEpoch) {
+      throw StateError('The active session changed before this send began.');
+    }
+    if (_sessionEnded) {
+      throw StateError('This session has ended.');
+    }
+    final statusBeforeSend = _status;
+    final retryRound =
+        clientMessageId != null &&
+                _pendingMessageId == clientMessageId &&
+                _pendingOptimisticRound != null
+            ? _pendingOptimisticRound
+            : null;
+    final round =
+        retryRound ??
+        _ConversationRound(index: _rounds.length + 1, userText: text);
     setState(() {
-      _rounds.add(
-        _ConversationRound(index: _rounds.length + 1, userText: text),
-      );
+      if (!_rounds.contains(round)) _rounds.add(round);
+      round.isStreaming = true;
+      if (clientMessageId != null) _pendingOptimisticRound = round;
       _status = 'streaming';
       _canSend = false;
     });
-    await widget.client.sendMessage(sessionId, text);
-    _scrollToBottom();
+    _scrollToBottom(force: true);
+    try {
+      await widget.client.sendMessage(
+        sessionId,
+        text,
+        clientMessageId: clientMessageId ?? newClientMessageId(),
+      );
+    } catch (_) {
+      if (!mounted || operationEpoch != _sendEpoch || _sessionId != sessionId) {
+        rethrow;
+      }
+      final hasServerEvidence =
+          round.assistantText.isNotEmpty ||
+          round.activities.isNotEmpty ||
+          round.hasReasoning;
+      setState(() {
+        round.isStreaming = false;
+        if (clientMessageId == null && !hasServerEvidence) {
+          _rounds.remove(round);
+        }
+        _status = statusBeforeSend;
+      });
+      rethrow;
+    }
   }
 
   Future<void> _resolve(
@@ -1079,14 +1330,18 @@ class _MikuHomePageState extends State<MikuHomePage>
   Future<void> _loadProject() async {
     final id = _sessionId;
     if (id == null) return;
-    final ov = await widget.client.projectOverview(id);
-    if (!mounted) return;
-    setState(() {
-      _projectStatus = ov.status;
-      _nextActions
-        ..clear()
-        ..addAll(ov.nextActions);
-    });
+    try {
+      final overview = await widget.client.projectOverview(id);
+      if (!mounted || _sessionId != id) return;
+      setState(() {
+        _projectStatus = overview.status;
+        _nextActions
+          ..clear()
+          ..addAll(overview.nextActions);
+      });
+    } catch (_) {
+      // Project context is optional and must never take a healthy chat offline.
+    }
   }
 
   Future<DriveFeed> _fetchDriveFeed() async {
@@ -1250,16 +1505,28 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   Future<void> _loadHistoricalSession(String sessionId) async {
-    if (mounted) setState(() => _status = 'connecting');
+    if (_disconnecting) return;
+    final navigationEpoch = _nextSessionNavigationEpoch();
+    _sessionFuture = null;
+    if (mounted) {
+      setState(() {
+        _status = 'connecting';
+        _isSending = false;
+        _canSend = false;
+        _sendError = '';
+      });
+    }
     try {
       final loaded = await widget.client.loadSession(sessionId);
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
       await _attachSession(
         loaded.session,
         messages: loaded.messages,
         pendingEvents: loaded.pendingEvents,
+        navigationEpoch: navigationEpoch,
       );
     } catch (err) {
-      if (!mounted) return;
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
       setState(() => _status = 'offline');
       ScaffoldMessenger.of(
         context,
@@ -1268,26 +1535,43 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   Future<bool> _startNewSession({String? initialMessage}) async {
-    if (mounted) setState(() => _status = 'connecting');
+    if (_disconnecting) return false;
+    final navigationEpoch = _nextSessionNavigationEpoch();
+    _sessionFuture = null;
+    if (mounted) {
+      setState(() {
+        _status = 'connecting';
+        _isSending = false;
+        _canSend = false;
+        _sendError = '';
+      });
+    }
     try {
       final session = await widget.client.createSession();
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return false;
       LoadedSession? loaded;
       if (initialMessage != null) {
-        await widget.client.sendMessage(session.id, initialMessage);
+        await widget.client.sendMessage(
+          session.id,
+          initialMessage,
+          clientMessageId: newClientMessageId(),
+        );
         try {
           loaded = await widget.client.loadSession(session.id);
         } catch (_) {
           loaded = null;
         }
       }
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return false;
       await _attachSession(
         loaded?.session ?? session,
         messages: loaded?.messages ?? const [],
         pendingEvents: loaded?.pendingEvents ?? const [],
+        navigationEpoch: navigationEpoch,
       );
       return true;
     } catch (err) {
-      if (!mounted) return false;
+      if (!mounted || navigationEpoch != _sessionNavigationEpoch) return false;
       setState(() => _status = 'offline');
       ScaffoldMessenger.of(
         context,
@@ -1297,38 +1581,6 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   // ── Bottom sheets ──────────────────────────────────────────────────────────
-
-  void _showHistorySheet() {
-    final tok = _tok;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: tok.surface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder:
-          (sheetContext) => ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(sheetContext).size.height * 0.86,
-            ),
-            child: _SessionHistorySheet(
-              tok: tok,
-              copy: _copy,
-              currentSessionId: _sessionId,
-              loadSessions: () => widget.client.listSessions(),
-              onSelect: (id) {
-                Navigator.pop(sheetContext);
-                unawaited(_loadHistoricalSession(id));
-              },
-              onNewSession: () {
-                Navigator.pop(sheetContext);
-                unawaited(_startNewSession());
-              },
-            ),
-          ),
-    );
-  }
 
   void _showModeSheet() {
     final tok = _tok;
@@ -1478,39 +1730,41 @@ class _MikuHomePageState extends State<MikuHomePage>
   void _showOverflowSheet() {
     final tok = _tok;
     final serverTargetClient = _serverTargetClient;
+    final themeController = MikuThemeScope.controllerOf(context);
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: tok.surface,
+      showDragHandle: true,
+      isScrollControlled: true,
+      useSafeArea: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder:
-          (_) => _OverflowSheet(
+          (sheetContext) => _OverflowSheet(
             tok: tok,
             copy: _copy,
             projectStatus: _projectStatus,
             nextActions: _nextActions,
-            isDark: _isDark,
+            themeMode: themeController.mode,
             onRefresh: () {
-              Navigator.pop(context);
-              _loadProject();
+              Navigator.pop(sheetContext);
+              unawaited(_loadProject());
             },
             onPromote: () {
-              Navigator.pop(context);
-              _promoteSession();
+              Navigator.pop(sheetContext);
+              unawaited(_promoteSession());
             },
             onDrive: () {
-              Navigator.pop(context);
+              Navigator.pop(sheetContext);
               Timer(const Duration(milliseconds: 320), () {
                 if (mounted) _showDriveSheet();
               });
             },
-            onThemeToggle: () {
-              Navigator.pop(context);
-              setState(() => _isDark = !_isDark);
-            },
+            onThemeModeChanged:
+                (mode) => unawaited(themeController.setMode(mode)),
+            onLanguageToggle: () => unawaited(_toggleLanguage()),
             onModeSettings: () {
-              Navigator.pop(context);
+              Navigator.pop(sheetContext);
               Timer(const Duration(milliseconds: 320), () {
                 if (mounted) _showModeSheet();
               });
@@ -1519,12 +1773,19 @@ class _MikuHomePageState extends State<MikuHomePage>
                 serverTargetClient == null
                     ? null
                     : () {
-                      Navigator.pop(context);
+                      Navigator.pop(sheetContext);
                       Timer(const Duration(milliseconds: 320), () {
                         if (mounted) {
                           _showServerTargetDialog(serverTargetClient);
                         }
                       });
+                    },
+            onDisconnect:
+                serverTargetClient == null
+                    ? null
+                    : () {
+                      Navigator.pop(sheetContext);
+                      unawaited(_disconnectFromServer(serverTargetClient));
                     },
           ),
     );
@@ -1581,15 +1842,24 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   Future<void> _reconnectAfterPair({String? successMessage}) async {
-    await _sub?.cancel();
+    final navigationEpoch = _nextSessionNavigationEpoch();
+    final previousSub = _sub;
     _sub = null;
+    if (previousSub != null) unawaited(previousSub.cancel());
     _sessionFuture = null;
+    _inputCtrl.clear();
     if (mounted) {
       setState(() {
         _sessionId = null;
         _lastEventId = null;
         _status = 'connecting';
         _canSend = false;
+        _isSending = false;
+        _disconnecting = false;
+        _sendError = '';
+        _pendingMessageId = null;
+        _pendingMessageText = null;
+        _pendingOptimisticRound = null;
         _approvals.clear();
         _memoryProposals.clear();
         _rounds.clear();
@@ -1599,9 +1869,130 @@ class _MikuHomePageState extends State<MikuHomePage>
         _driveError = '';
       });
     }
-    await _connectSession();
-    if (successMessage != null) {
+    final future = _connectSession(navigationEpoch);
+    _sessionFuture = future;
+    await future;
+    if (successMessage != null &&
+        mounted &&
+        navigationEpoch == _sessionNavigationEpoch) {
       _showSnack(successMessage);
+    }
+  }
+
+  void _selectDestination(_AppDestination destination) {
+    if (_destination == destination) return;
+    setState(() => _destination = destination);
+    if (destination == _AppDestination.drive) {
+      unawaited(_loadDriveFeed(silent: true));
+    }
+  }
+
+  void _startFreshChat() {
+    if (_disconnecting) return;
+    if (_destination != _AppDestination.chat) {
+      setState(() => _destination = _AppDestination.chat);
+    }
+    unawaited(_startNewSession());
+  }
+
+  void _retryConnection() {
+    final sessionId = _sessionId;
+    if (sessionId != null) {
+      unawaited(_loadHistoricalSession(sessionId));
+      return;
+    }
+    _sessionFuture = null;
+    unawaited(_ensureSession());
+  }
+
+  Future<void> _startPairingScan() async {
+    if (_serverTargetClient == null) return;
+    final rawLink = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const PairingScannerPage()),
+    );
+    if (rawLink != null && rawLink.trim().isNotEmpty) {
+      await _applyPairingLink(rawLink);
+    }
+  }
+
+  Future<void> _disconnectFromServer(ServerTargetClient client) async {
+    final approved = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            title: Text(_copy.pick('Disconnect from Miku?', '與 Miku 中斷連線？')),
+            content: Text(
+              _copy.pick(
+                'This removes the device credential. You will need to scan a new one-time QR before chatting again.',
+                '這會移除裝置憑證。再次聊天前，必須掃描新的一次性 QR。',
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: Text(_copy.cancel),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _tok.danger,
+                  foregroundColor: _textOn(_tok.danger),
+                ),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(_copy.pick('Disconnect', '中斷連線')),
+              ),
+            ],
+          ),
+    );
+    if (approved != true) return;
+    final navigationEpoch = _nextSessionNavigationEpoch();
+    _disconnecting = true;
+    _sessionFuture = null;
+    final previousSub = _sub;
+    _sub = null;
+    if (previousSub != null) unawaited(previousSub.cancel());
+    if (mounted) {
+      setState(() {
+        _status = 'connecting';
+        _canSend = false;
+        _isSending = false;
+        _sendError = '';
+      });
+    }
+    Object? logoutError;
+    try {
+      await client.logout();
+    } catch (error) {
+      logoutError = error;
+    }
+    if (!mounted || navigationEpoch != _sessionNavigationEpoch) return;
+    _inputCtrl.clear();
+    setState(() {
+      _needsPairing = true;
+      _sessionId = null;
+      _lastEventId = null;
+      _status = 'offline';
+      _canSend = false;
+      _isSending = false;
+      _disconnecting = false;
+      _sendError = '';
+      _pendingMessageId = null;
+      _pendingMessageText = null;
+      _pendingOptimisticRound = null;
+      _approvals.clear();
+      _memoryProposals.clear();
+      _rounds.clear();
+      _nextActions.clear();
+      _projectStatus = '';
+      _driveFeed = null;
+      _driveError = '';
+    });
+    if (logoutError != null) {
+      _showSnack(
+        _copy.pick(
+          'Local credential removed. The server could not confirm logout: $logoutError',
+          '本機憑證已移除，但 Server 無法確認登出：$logoutError',
+        ),
+      );
     }
   }
 
@@ -1610,175 +2001,340 @@ class _MikuHomePageState extends State<MikuHomePage>
   @override
   Widget build(BuildContext context) {
     final tok = _tok;
-    final mode = _mode;
     final accent = _accent;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: _isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+      value: isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
       child: Scaffold(
         backgroundColor: tok.bg,
-        body: SafeArea(
-          bottom: false,
-          child: Column(
-            children: [
-              _buildHeader(tok, mode, accent),
-              Expanded(child: _buildThread(tok, accent)),
-              _buildComposer(tok, accent),
-              SafeArea(
-                top: false,
-                child: SizedBox(
-                  height: 20,
-                  child: Center(
-                    child: Container(
-                      width: 128,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: tok.text.withValues(alpha: 0.3),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
+        body: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [tok.bg, tok.surface, tok.bg],
+              stops: const [0, 0.58, 1],
+            ),
+          ),
+          child: SafeArea(
+            child:
+                _needsPairing
+                    ? _PairingWelcome(
+                      tok: tok,
+                      copy: _copy,
+                      brand: const MikuBrandBadge(size: 92),
+                      onScan: _startPairingScan,
+                    )
+                    : LayoutBuilder(
+                      builder:
+                          (context, constraints) =>
+                              _buildAdaptiveShell(constraints, tok, accent),
                     ),
-                  ),
-                ),
-              ),
-            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildHeader(_Tok tok, _Mode mode, Color accent) {
-    final copy = _copy;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 430;
-        final title = compact ? 'Miku' : 'TempestMiku';
-        return Container(
-          decoration: BoxDecoration(
-            color: tok.bg,
-            border: Border(
-              bottom: BorderSide(
-                color: tok.border.withValues(alpha: 0.6),
-                width: 0.5,
-              ),
+  Widget _buildAdaptiveShell(
+    BoxConstraints constraints,
+    _Tok tok,
+    Color accent,
+  ) {
+    if (constraints.maxWidth < 600) {
+      return Column(
+        children: [
+          _buildTopBar(tok, compact: true, showBrand: true),
+          _buildConnectionBanner(tok),
+          Expanded(child: _buildPrimaryDestination(tok, accent)),
+          if (_destination == _AppDestination.chat) ...[
+            _ApprovalAttentionBar(
+              tok: tok,
+              copy: _copy,
+              approvals: _approvals,
+              onOpen: _showApprovalSheet,
+            ),
+            _buildComposer(tok, accent),
+          ],
+          _MikuBottomNavigation(
+            destination: _destination,
+            copy: _copy,
+            onSelected: _selectDestination,
+          ),
+        ],
+      );
+    }
+
+    final rail = _MikuNavigationRail(
+      destination: _destination,
+      copy: _copy,
+      onSelected: _selectDestination,
+      brand: const MikuBrandBadge(size: 46),
+      onSettings: _showOverflowSheet,
+    );
+
+    if (constraints.maxWidth < 1100 || _destination != _AppDestination.chat) {
+      return Row(
+        children: [
+          rail,
+          VerticalDivider(width: 1, color: tok.border),
+          Expanded(
+            child: Column(
+              children: [
+                _buildTopBar(tok, compact: false, showBrand: false),
+                _buildConnectionBanner(tok),
+                Expanded(child: _buildPrimaryDestination(tok, accent)),
+                if (_destination == _AppDestination.chat) ...[
+                  _ApprovalAttentionBar(
+                    tok: tok,
+                    copy: _copy,
+                    approvals: _approvals,
+                    onOpen: _showApprovalSheet,
+                  ),
+                  _buildComposer(tok, accent),
+                ],
+              ],
             ),
           ),
-          padding: EdgeInsets.fromLTRB(compact ? 14 : 16, 8, 14, 10),
-          child: Row(
+        ],
+      );
+    }
+
+    final sessionPaneWidth = constraints.maxWidth >= 1320 ? 280.0 : 220.0;
+    final contextPaneWidth = constraints.maxWidth >= 1320 ? 300.0 : 248.0;
+    return Row(
+      children: [
+        rail,
+        VerticalDivider(width: 1, color: tok.border),
+        SizedBox(
+          width: sessionPaneWidth,
+          child: ColoredBox(
+            color: tok.surface,
+            child: _buildSessionsSurface(tok),
+          ),
+        ),
+        VerticalDivider(width: 1, color: tok.border),
+        Expanded(
+          child: Column(
             children: [
-              Semantics(
-                label: 'TempestMiku',
-                image: true,
-                child: Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    color: accent,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: accent.withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    Icons.smart_toy,
-                    color: _textOn(accent),
-                    size: 19,
-                  ),
+              _buildTopBar(tok, compact: false, showBrand: false),
+              _buildConnectionBanner(tok),
+              Expanded(
+                child: _buildChatSurface(
+                  tok,
+                  accent,
+                  showPendingApprovals: false,
                 ),
               ),
-              SizedBox(width: compact ? 8 : 10),
-              Expanded(
-                child: Text(
-                  title,
+              _buildComposer(tok, accent),
+            ],
+          ),
+        ),
+        VerticalDivider(width: 1, color: tok.border),
+        SizedBox(
+          width: contextPaneWidth,
+          child: _MikuContextPanel(
+            tok: tok,
+            copy: _copy,
+            accent: accent,
+            projectStatus: _projectStatus,
+            nextActions: _nextActions,
+            approvals: _approvals,
+            onOpenApproval: _showApprovalSheet,
+            onPromote: _promoteSession,
+            onRefresh: _loadProject,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTopBar(
+    _Tok tok, {
+    required bool compact,
+    required bool showBrand,
+  }) {
+    final copy = _copy;
+    final online =
+        _status == 'connected' ||
+        _status == 'streaming' ||
+        _status == 'complete';
+    final statusColor =
+        online
+            ? tok.success
+            : _status == 'connecting'
+            ? tok.cool
+            : tok.warning;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 64),
+      padding: EdgeInsets.fromLTRB(compact ? 14 : 18, 8, 10, 8),
+      decoration: BoxDecoration(
+        color: tok.glass,
+        border: Border(bottom: BorderSide(color: tok.glassBorder)),
+      ),
+      child: Row(
+        children: [
+          if (showBrand) ...[
+            const MikuBrandBadge(size: 40),
+            const SizedBox(width: 11),
+          ],
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  compact ? 'Miku' : 'Tempest Miku',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: tok.text,
-                    fontSize: compact ? 15 : 15.5,
-                    fontWeight: FontWeight.w800,
+                    fontSize: compact ? 17 : 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.35,
                   ),
                 ),
-              ),
-              _ModeDropMenuButton(
-                tok: tok,
-                copy: copy,
-                mode: mode,
-                accent: accent,
-                locked: _modeLocked,
-                compact: compact,
-                onTap: _showModeSheet,
-              ),
-              SizedBox(width: compact ? 6 : 8),
-              _ConnectionBadge(
-                status: _status,
-                tok: tok,
-                copy: copy,
-                compact: compact,
-              ),
-              SizedBox(width: compact ? 6 : 8),
-              _LanguageToggle(
-                tok: tok,
-                copy: copy,
-                onTap: () {
-                  setState(() {
-                    _language =
-                        _language == _UiLanguage.en
-                            ? _UiLanguage.zh
-                            : _UiLanguage.en;
-                  });
-                },
-              ),
-              SizedBox(width: compact ? 6 : 8),
-              if (!compact) ...[
-                _TokIconBtn(
-                  tok: tok,
-                  icon: Icons.folder_outlined,
-                  tooltip: copy.driveFeed,
-                  semanticLabel: copy.openDriveFeed,
-                  onTap: _showDriveSheet,
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        copy.statusLabel(_status),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: tok.muted,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                SizedBox(width: compact ? 6 : 8),
               ],
-              _TokIconBtn(
-                tok: tok,
-                icon: Icons.history,
-                tooltip: copy.sessions,
-                semanticLabel: copy.openSessions,
-                onTap: _showHistorySheet,
-              ),
-              SizedBox(width: compact ? 6 : 8),
-              _TokIconBtn(
-                tok: tok,
-                icon: Icons.more_horiz,
-                tooltip: copy.more,
-                semanticLabel: copy.openMore,
-                onTap: _showOverflowSheet,
-              ),
-            ],
+            ),
           ),
-        );
-      },
+          IconButton(
+            tooltip: copy.newSession,
+            onPressed: _startFreshChat,
+            icon: const Icon(Icons.edit_square),
+          ),
+          IconButton(
+            tooltip: copy.pick('Settings', '設定'),
+            onPressed: _showOverflowSheet,
+            icon: const Icon(Icons.tune_rounded),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildThread(_Tok tok, Color accent) {
+  Widget _buildConnectionBanner(_Tok tok) {
+    return _ConnectionBanner(
+      tok: tok,
+      copy: _copy,
+      status: _status,
+      onRetry: _retryConnection,
+      onNewSession: _startFreshChat,
+    );
+  }
+
+  Widget _buildPrimaryDestination(_Tok tok, Color accent) {
+    return switch (_destination) {
+      _AppDestination.chat => _buildChatSurface(tok, accent),
+      _AppDestination.sessions => _buildSessionsSurface(tok),
+      _AppDestination.drive => _buildDriveSurface(tok, accent),
+    };
+  }
+
+  Widget _buildChatSurface(
+    _Tok tok,
+    Color accent, {
+    bool showPendingApprovals = true,
+  }) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: _buildThread(
+            tok,
+            accent,
+            showPendingApprovals: showPendingApprovals,
+          ),
+        ),
+        if (_showJumpToLatest)
+          Positioned(
+            right: 18,
+            bottom: 12,
+            child: Semantics(
+              button: true,
+              label: _copy.pick('Jump to latest message', '跳到最新訊息'),
+              child: FloatingActionButton.small(
+                heroTag: 'jump-to-latest',
+                onPressed: () => _scrollToBottom(force: true, animate: true),
+                child: const Icon(Icons.arrow_downward_rounded),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSessionsSurface(_Tok tok) {
+    return _SessionHistorySheet(
+      tok: tok,
+      copy: _copy,
+      currentSessionId: _sessionId,
+      loadSessions: widget.client.listSessions,
+      embedded: true,
+      refreshToken: _sessionHistoryRevision,
+      onSelect: (sessionId) {
+        setState(() => _destination = _AppDestination.chat);
+        unawaited(_loadHistoricalSession(sessionId));
+      },
+      onNewSession: _startFreshChat,
+    );
+  }
+
+  Widget _buildDriveSurface(_Tok tok, Color accent) {
+    return _DriveFeedSheet(
+      tok: tok,
+      copy: _copy,
+      accent: accent,
+      initialFeed: _driveFeed,
+      initialError: _driveError,
+      initialLoading: _driveLoading,
+      approvals: _driveApprovals,
+      loadFeed: _fetchDriveFeed,
+      onOpenResource: _openResource,
+      onOpenApproval: _showApprovalSheet,
+      embedded: true,
+    );
+  }
+
+  Widget _buildThread(
+    _Tok tok,
+    Color accent, {
+    bool showPendingApprovals = true,
+  }) {
     final copy = _copy;
     final items = <Widget>[];
 
     if (_rounds.isEmpty && _memoryProposals.isEmpty && _approvals.isEmpty) {
-      items.add(
-        _EmptyState(tok: tok, accent: accent, status: _status, copy: copy),
-      );
+      items.add(_EmptyState(tok: tok, status: _status, copy: copy));
       items.add(const SizedBox(height: 14));
     }
 
     for (final round in _rounds) {
-      items.add(_RoundLabel(tok: tok, copy: copy, index: round.index));
-      items.add(const SizedBox(height: 8));
       if (round.userText.isNotEmpty) {
         items.add(
           _UserBubble(tok: tok, text: round.userText, accent: tok.accentSoft),
@@ -1787,8 +2343,6 @@ class _MikuHomePageState extends State<MikuHomePage>
       }
 
       final assistantText = round.assistantText;
-      final isCompleteWithAnswer = round.isComplete && assistantText.isNotEmpty;
-
       void addActivityTrace() {
         if (round.activities.isEmpty) return;
         items.add(
@@ -1842,24 +2396,18 @@ class _MikuHomePageState extends State<MikuHomePage>
         );
       }
 
-      if (isCompleteWithAnswer) {
+      if (assistantText.isNotEmpty) {
         addAssistantAnswer();
         items.add(const SizedBox(height: 10));
-        addActivityTrace();
-        addReasoningTrace();
-      } else {
-        addActivityTrace();
-        addReasoningTrace();
-        if (assistantText.isNotEmpty) {
-          addAssistantAnswer();
-        } else if (round.isStreaming && round.activities.isEmpty) {
-          items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
-        }
+      } else if (round.isStreaming) {
+        items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
+        items.add(const SizedBox(height: 10));
       }
+      addActivityTrace();
+      addReasoningTrace();
       items.add(const SizedBox(height: 14));
     }
 
-    // Pending memory proposals
     for (final proposal in _memoryProposals) {
       final approval = _approvalForProposal(proposal);
       items.add(
@@ -1877,18 +2425,21 @@ class _MikuHomePageState extends State<MikuHomePage>
       items.add(const SizedBox(height: 10));
     }
 
-    // Pending approvals
-    for (final a in _approvals.where((a) => !_isRenderedAsMemoryProposal(a))) {
-      items.add(
-        _ApprovalCard(
-          tok: tok,
-          copy: copy,
-          approval: a,
-          accent: accent,
-          onTap: () => _showApprovalSheet(a),
-        ),
-      );
-      items.add(const SizedBox(height: 10));
+    if (showPendingApprovals) {
+      for (final approval in _approvals.where(
+        (item) => !_isRenderedAsMemoryProposal(item),
+      )) {
+        items.add(
+          _ApprovalCard(
+            tok: tok,
+            copy: copy,
+            approval: approval,
+            accent: accent,
+            onTap: () => _showApprovalSheet(approval),
+          ),
+        );
+        items.add(const SizedBox(height: 10));
+      }
     }
 
     return LayoutBuilder(
@@ -1897,10 +2448,11 @@ class _MikuHomePageState extends State<MikuHomePage>
           child: SizedBox(
             width: math.min(constraints.maxWidth, 720),
             height: constraints.maxHeight,
-            child: ListView(
+            child: ListView.builder(
               controller: _scrollCtrl,
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
-              children: items,
+              itemCount: items.length,
+              itemBuilder: (context, index) => items[index],
             ),
           ),
         );
@@ -1910,114 +2462,196 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Widget _buildComposer(_Tok tok, Color accent) {
     final copy = _copy;
-    final canSubmit = _canSend && !_sessionEnded;
+    final canSubmit = _canSend && !_sessionEnded && !_isSending;
     return LayoutBuilder(
       builder: (context, constraints) {
         return Container(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [tok.bg.withValues(alpha: 0), tok.bg],
-              stops: const [0, 0.22],
-            ),
+            color: tok.glass,
+            border: Border(top: BorderSide(color: tok.glassBorder)),
           ),
           child: Center(
             child: SizedBox(
               width: math.min(constraints.maxWidth, 720),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: tok.raised,
-                  border: Border.all(color: tok.border),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Semantics(
-                        label: copy.messageField,
-                        textField: true,
-                        child: TextField(
-                          controller: _inputCtrl,
-                          enabled: !_sessionEnded,
-                          style: TextStyle(color: tok.text, fontSize: 13.5),
-                          minLines: 1,
-                          maxLines: 6,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.send,
-                          decoration: InputDecoration(
-                            hintText:
-                                _sessionEnded
-                                    ? copy.sessionEndedHint
-                                    : copy.messageHint,
-                            hintStyle: TextStyle(
-                              color: tok.muted,
-                              fontSize: 13.5,
-                            ),
-                            border: InputBorder.none,
-                            contentPadding: const EdgeInsets.fromLTRB(
-                              14,
-                              10,
-                              8,
-                              10,
-                            ),
-                          ),
-                          onChanged: (value) {
-                            final canSend =
-                                !_sessionEnded && value.trim().isNotEmpty;
-                            if (canSend != _canSend) {
-                              setState(() => _canSend = canSend);
-                            }
-                          },
-                          onSubmitted: (_) => _send(),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_sendError.isNotEmpty) ...[
+                    Semantics(
+                      liveRegion: true,
+                      label: _sendError,
+                      child: Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 9,
                         ),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(5),
-                      child: Tooltip(
-                        message:
-                            _sessionEnded
-                                ? copy.sessionEnded
-                                : canSubmit
-                                ? copy.send
-                                : copy.typeMessage,
-                        child: Semantics(
-                          button: true,
-                          enabled: canSubmit,
-                          label: copy.sendMessage,
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 140),
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color:
-                                  canSubmit
-                                      ? accent
-                                      : tok.border.withValues(alpha: 0.55),
-                              borderRadius: BorderRadius.circular(11),
+                        decoration: BoxDecoration(
+                          color: tok.danger.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: tok.danger.withValues(alpha: 0.45),
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.error_outline_rounded,
+                              size: 19,
+                              color: tok.danger,
                             ),
-                            child: IconButton(
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                              onPressed: canSubmit ? _send : null,
-                              icon: Icon(
-                                Icons.send,
-                                color:
-                                    canSubmit
-                                        ? _textOn(accent)
-                                        : tok.muted.withValues(alpha: 0.72),
-                                size: 17,
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _sendError,
+                                style: TextStyle(
+                                  color: tok.text,
+                                  fontSize: 12.5,
+                                  height: 1.35,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                     ),
                   ],
-                ),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: tok.raised,
+                      border: Border.all(
+                        color:
+                            _sendError.isEmpty
+                                ? tok.border
+                                : tok.danger.withValues(alpha: 0.7),
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: tok.glow,
+                          blurRadius: 18,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _inputCtrl,
+                            enabled: !_sessionEnded,
+                            readOnly: _isSending,
+                            style: TextStyle(
+                              color: tok.text,
+                              fontSize: 15,
+                              height: 1.4,
+                            ),
+                            minLines: 1,
+                            maxLines: 6,
+                            keyboardType: TextInputType.multiline,
+                            textInputAction: TextInputAction.send,
+                            decoration: InputDecoration(
+                              hintText:
+                                  _sessionEnded
+                                      ? copy.sessionEndedHint
+                                      : copy.messageHint,
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              contentPadding: const EdgeInsets.fromLTRB(
+                                16,
+                                14,
+                                8,
+                                14,
+                              ),
+                            ),
+                            onChanged: (value) {
+                              final text = value.trim();
+                              final shouldSend =
+                                  !_sessionEnded && text.isNotEmpty;
+                              final changedPending =
+                                  _pendingMessageText != null &&
+                                  _pendingMessageText != text;
+                              if (shouldSend != _canSend ||
+                                  changedPending ||
+                                  _sendError.isNotEmpty) {
+                                setState(() {
+                                  _canSend = shouldSend;
+                                  if (changedPending) {
+                                    final optimisticRound =
+                                        _pendingOptimisticRound;
+                                    if (optimisticRound != null &&
+                                        optimisticRound.assistantText.isEmpty &&
+                                        optimisticRound.activities.isEmpty &&
+                                        !optimisticRound.hasReasoning) {
+                                      _rounds.remove(optimisticRound);
+                                    }
+                                    _pendingMessageId = null;
+                                    _pendingMessageText = null;
+                                    _pendingOptimisticRound = null;
+                                  }
+                                  _sendError = '';
+                                });
+                              }
+                            },
+                            onSubmitted: (_) {
+                              if (canSubmit) unawaited(_send());
+                            },
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Semantics(
+                            button: true,
+                            enabled: canSubmit,
+                            label: copy.sendMessage,
+                            child: Tooltip(
+                              message:
+                                  _sessionEnded
+                                      ? copy.sessionEnded
+                                      : canSubmit
+                                      ? copy.send
+                                      : copy.typeMessage,
+                              child: SizedBox.square(
+                                dimension: 48,
+                                child: IconButton.filled(
+                                  onPressed: canSubmit ? _send : null,
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: accent,
+                                    foregroundColor: _textOn(accent),
+                                    disabledBackgroundColor: tok.border
+                                        .withValues(alpha: 0.55),
+                                    disabledForegroundColor: tok.muted,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  icon:
+                                      _isSending
+                                          ? SizedBox.square(
+                                            dimension: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2.2,
+                                              color: _textOn(accent),
+                                            ),
+                                          )
+                                          : const Icon(Icons.send, size: 21),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

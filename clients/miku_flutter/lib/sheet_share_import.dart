@@ -28,16 +28,12 @@ class _ShareImportSheet extends StatefulWidget {
 
 class _ShareImportSheetState extends State<_ShareImportSheet> {
   late final TextEditingController _controller;
-  late _ShareDestination _destination;
+  _ShareDestination? _destination;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.content.text);
-    _destination =
-        widget.currentSessionAvailable
-            ? _ShareDestination.currentSession
-            : _ShareDestination.newSession;
   }
 
   @override
@@ -51,7 +47,7 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
     final tok = widget.tok;
     final copy = widget.copy;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    final canSend = _controller.text.trim().isNotEmpty;
+    final canSend = _controller.text.trim().isNotEmpty && _destination != null;
     return AnimatedPadding(
       duration: const Duration(milliseconds: 180),
       padding: EdgeInsets.only(bottom: keyboardInset),
@@ -184,7 +180,8 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                   label: Text(copy.newChat),
                 ),
               ],
-              selected: {_destination},
+              selected: {if (_destination != null) _destination!},
+              emptySelectionAllowed: true,
               showSelectedIcon: false,
               onSelectionChanged: (selection) {
                 setState(() => _destination = selection.first);
@@ -207,7 +204,7 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                             context,
                             _ShareImportDecision(
                               text: _controller.text.trim(),
-                              destination: _destination,
+                              destination: _destination!,
                             ),
                           )
                           : null,

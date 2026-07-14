@@ -35,12 +35,13 @@ class _RaTeXFormulaState extends State<RaTeXFormula> {
   void initState() {
     super.initState();
     ui_web.platformViewRegistry.registerViewFactory(_viewType, (int viewId) {
-      final element = html.Element.tag('miku-ratex-formula')
-        ..style.display = 'block'
-        ..style.width = '100%'
-        ..style.height = '100%'
-        ..style.overflowX = 'auto'
-        ..style.overflowY = 'hidden';
+      final element =
+          html.Element.tag('miku-ratex-formula')
+            ..style.display = 'block'
+            ..style.width = '100%'
+            ..style.height = '100%'
+            ..style.overflowX = 'auto'
+            ..style.overflowY = 'hidden';
       _element = element;
       _applyAttributes();
       return element;
@@ -69,9 +70,10 @@ class _RaTeXFormulaState extends State<RaTeXFormula> {
 
   @override
   Widget build(BuildContext context) {
-    final height = widget.display
-        ? _displayHeight(widget.latex, widget.fontSize)
-        : (widget.fontSize * 1.65).clamp(18.0, 32.0);
+    final height =
+        widget.display
+            ? _displayHeight(widget.latex, widget.fontSize)
+            : (widget.fontSize * 1.65).clamp(18.0, 32.0);
     return SizedBox(
       height: height.toDouble(),
       width: widget.display ? double.infinity : _inlineWidth(widget.latex),
@@ -91,12 +93,14 @@ double _inlineWidth(String latex) {
 }
 
 double _displayHeight(String latex, double fontSize) {
-  final hasTallOperator =
-      RegExp(r'\\(?:sum|prod|int)|\\frac|\\boxed').hasMatch(latex);
+  final hasTallOperator = RegExp(
+    r'\\(?:sum|prod|int)|\\frac|\\boxed',
+  ).hasMatch(latex);
   final hasLineBreak = latex.contains('\n') || latex.contains(r'\\');
-  final multiplier = hasLineBreak
-      ? 4.9
-      : hasTallOperator
+  final multiplier =
+      hasLineBreak
+          ? 4.9
+          : hasTallOperator
           ? 4.35
           : 3.65;
   return (fontSize * multiplier).clamp(64.0, 104.0).toDouble();

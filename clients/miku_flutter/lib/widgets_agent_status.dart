@@ -34,17 +34,16 @@ class _PulsingDotState extends State<_PulsingDot>
       return Container(
         width: 6,
         height: 6,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: widget.color,
-        ),
+        decoration: BoxDecoration(shape: BoxShape.circle, color: widget.color),
       );
     }
     return AnimatedBuilder(
       animation: _c,
       builder: (_, __) {
-        final opacity =
-            (math.sin(_c.value * math.pi * 2) * 0.34 + 0.66).clamp(0.32, 1.0);
+        final opacity = (math.sin(_c.value * math.pi * 2) * 0.34 + 0.66).clamp(
+          0.32,
+          1.0,
+        );
         return Opacity(
           opacity: opacity,
           child: Container(
@@ -79,50 +78,62 @@ class _TypingIndicator extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          width: 30,
-          height: 30,
+          width: 34,
+          height: 34,
+          padding: const EdgeInsets.all(7),
           decoration: BoxDecoration(
-            color: accent,
-            borderRadius: BorderRadius.circular(9),
+            color: tok.text,
+            borderRadius: BorderRadius.circular(11),
           ),
-          child: Icon(Icons.smart_toy, color: _textOn(accent), size: 17),
+          child: const MikuStormCatMark(
+            color: Color(0xFF39C5BB),
+            boltColor: Color(0xFFFF7B70),
+          ),
         ),
         const SizedBox(width: 9),
         Padding(
           padding: const EdgeInsets.only(top: 7),
           child: AnimatedBuilder(
             animation: anim,
-            builder: (_, __) => Row(
-              mainAxisSize: MainAxisSize.min,
-              children: List.generate(3, (i) {
-                final phase =
-                    reduceMotion ? 0.0 : (anim.value - i * 0.18) % 1.0;
-                final opacity = reduceMotion
-                    ? 0.85
-                    : (math.sin(phase * math.pi * 2) * 0.4 + 0.6)
-                        .clamp(0.25, 1.0);
-                final dy = reduceMotion
-                    ? 0.0
-                    : (math.sin(phase * math.pi * 2) * -2.0).clamp(-2.0, 0.0);
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  child: Transform.translate(
-                    offset: Offset(0, dy),
-                    child: Opacity(
-                      opacity: opacity,
-                      child: Container(
-                        width: 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: tok.muted,
+            builder:
+                (_, __) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List.generate(3, (i) {
+                    final phase =
+                        reduceMotion ? 0.0 : (anim.value - i * 0.18) % 1.0;
+                    final opacity =
+                        reduceMotion
+                            ? 0.85
+                            : (math.sin(phase * math.pi * 2) * 0.4 + 0.6).clamp(
+                              0.25,
+                              1.0,
+                            );
+                    final dy =
+                        reduceMotion
+                            ? 0.0
+                            : (math.sin(phase * math.pi * 2) * -2.0).clamp(
+                              -2.0,
+                              0.0,
+                            );
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: Transform.translate(
+                        offset: Offset(0, dy),
+                        child: Opacity(
+                          opacity: opacity,
+                          child: Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: tok.muted,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                );
-              }),
-            ),
+                    );
+                  }),
+                ),
           ),
         ),
       ],
@@ -183,8 +194,11 @@ class _AgentStatusBar extends StatelessWidget {
                   border: Border.all(color: tok.border),
                   borderRadius: BorderRadius.circular(9),
                 ),
-                child:
-                    Icon(Icons.account_tree_outlined, color: accent, size: 16),
+                child: Icon(
+                  Icons.account_tree_outlined,
+                  color: accent,
+                  size: 16,
+                ),
               ),
               const SizedBox(width: 9),
               Expanded(
@@ -192,8 +206,9 @@ class _AgentStatusBar extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
                   decoration: BoxDecoration(
                     color: tok.surface.withValues(alpha: 0.78),
-                    border:
-                        Border.all(color: tok.border.withValues(alpha: 0.82)),
+                    border: Border.all(
+                      color: tok.border.withValues(alpha: 0.82),
+                    ),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
@@ -364,11 +379,7 @@ class _ThinkingTraceState extends State<_ThinkingTrace> {
                   border: Border.all(color: tok.border),
                   borderRadius: BorderRadius.circular(9),
                 ),
-                child: Icon(
-                  Icons.psychology_outlined,
-                  color: accent,
-                  size: 16,
-                ),
+                child: Icon(Icons.psychology_outlined, color: accent, size: 16),
               ),
               const SizedBox(width: 9),
               Expanded(
@@ -376,8 +387,9 @@ class _ThinkingTraceState extends State<_ThinkingTrace> {
                   padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
                   decoration: BoxDecoration(
                     color: tok.surface.withValues(alpha: 0.78),
-                    border:
-                        Border.all(color: tok.border.withValues(alpha: 0.82)),
+                    border: Border.all(
+                      color: tok.border.withValues(alpha: 0.82),
+                    ),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Column(
@@ -385,8 +397,11 @@ class _ThinkingTraceState extends State<_ThinkingTrace> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.psychology_outlined,
-                              color: accent, size: 14),
+                          Icon(
+                            Icons.psychology_outlined,
+                            color: accent,
+                            size: 14,
+                          ),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
@@ -556,10 +571,7 @@ class _StatusGlyph extends StatelessWidget {
         return Container(
           width: 14,
           height: 14,
-          decoration: BoxDecoration(
-            color: accent,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
         );
       }
       return AnimatedBuilder(
@@ -572,10 +584,7 @@ class _StatusGlyph extends StatelessWidget {
             child: Container(
               width: 14,
               height: 14,
-              decoration: BoxDecoration(
-                color: accent,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
             ),
           );
         },

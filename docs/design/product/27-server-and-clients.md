@@ -169,12 +169,31 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
 
 ## 27.4 Clients
 
-- **Flutter client (single codebase).** P1 has shipped a **project-manager dogfooding** client on top of the
-  P0 coding loop, targeting Web/PWA first: message input, streamed token rendering, final response,
-  approval prompts, artifact/resource links, and project/open-loop views. Mode/skill-bundle state is
-  read from the runtime `GET /modes` catalog and observable through debug/advanced controls, not a
-  default badge in the normal chat surface. The web target is usable from a phone-sized browser
-  because remote control of the computer-hosted agent is a first-class workflow.
+- **Flutter client (single codebase).** P1 has shipped a **project-manager dogfooding** client on top of
+  the P0 coding loop for Web/PWA and Android: message input, streamed token rendering, final response,
+  approval prompts, artifact/resource links, and project/open-loop views. The normal product surface
+  uses Material 3 with restrained translucent/glass treatment on fixed navigation and status chrome;
+  content, dialogs, and long scrolling regions remain opaque enough for contrast and predictable
+  rendering. An abstract storm-cat mark is the constant Tempest Miku identity across the app and
+  launcher assets without turning the normal chat surface into debug or character-art chrome.
+  System, light, and dark theme modes are explicit choices, persist locally, and keep system mode as
+  the default. Mode/skill-bundle state is read from the runtime `GET /modes` catalog and remains in
+  advanced controls instead of returning as a default chat badge.
+- **Adaptive client shell.** Chat, Sessions, and Drive are stable top-level destinations. Compact
+  widths use bottom navigation, medium widths use a navigation rail, and expanded widths can keep
+  session navigation, the active chat, and its contextual approval/activity surface visible together.
+  Pairing is an explicit welcome state with a primary scan action rather than a connection error
+  hidden inside chat; disconnect clears the origin-bound client state and returns to that welcome
+  state. The same shell remains usable from a phone-sized browser because remote control of the
+  computer-hosted agent is a first-class workflow.
+- **Chat interaction contract.** A send attempt owns its `clientMessageId` in the UI before transport,
+  retains the edited draft when submission fails, and reuses that id for an explicit retry so a
+  transient network failure cannot create a second durable turn. The transcript keeps the assistant
+  answer before its activity and reasoning details during both streaming and final states, avoiding a
+  completion-time reorder. Markdown is selectable; fenced code and wide tables scroll horizontally,
+  code exposes a reachable copy action, and only HTTP(S) links are rendered as bounded, copyable
+  external references rather than gaining navigation or capability authority. New-message following
+  stops when the user scrolls away and exposes an explicit jump-to-latest action.
 - **Mobile remote control (P1/P4).** Phone/browser control uses the same server API as every client: SSE
   for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
@@ -205,8 +224,9 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   canary proved remote request delivery and timeout-resolution cancellation through the live lumo
   provider on 2026-07-14. P6.2 adds an exported `ACTION_SEND` target for `text/plain` only: native
   parsing removes control characters, caps body/subject sizes, and forwards at most one cold-start
-  payload to Flutter. The client presents an editable review sheet and requires an explicit current-
-  or new-session choice before calling the same authenticated durable message API. It accepts no
+  payload to Flutter. The client presents an editable review sheet with no preselected destination;
+  the user must explicitly choose the current or a new session before the send action is enabled and
+  the client calls the same authenticated durable message API. It accepts no
   files, URI grants, HTML, pairing payloads, or automatic sends. The signed Android 15 physical
   canary on 2026-07-14 proved system Sharesheet discovery, URL preview/edit/cancel without sending,
   one durable import into the current session, one into a newly created session, and cold-start

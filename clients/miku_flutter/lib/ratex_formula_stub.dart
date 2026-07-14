@@ -20,7 +20,8 @@ class RaTeXFormula extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       latex,
-      style: fallbackStyle ??
+      style:
+          fallbackStyle ??
           TextStyle(
             color: color,
             fontSize: fontSize,

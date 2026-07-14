@@ -2,8 +2,9 @@
 
 `tm` is designed so the model's 90% case — *read, transform, display* — is one pipeline and
 nothing else. The syntax is a deliberate subset of things models already write fluently
-(JSON literals, URI literals, pipelines, record patterns) with two new visible markers:
-`@` for host capability effects and `!` for approval-bearing effects.
+(JSON literals, URI literals, pipelines, record patterns) with one new visible marker: `@`
+for host capability effects. Approval is visible in live execution state, not encoded as
+punctuation in the capability name.
 
 ## 2.1 Hello, Miku
 
@@ -16,12 +17,21 @@ That's it. No `console.log`, no `Deno.core.ops.op_print`. `print` is a core prim
 ## 2.2 The shape of a cell
 
 A cell is a series of bindings and a final expression. The last expression is the result;
-`display` is the *intended* output (§5.4 result shaping). `tm` is **expression-oriented**:
+`display` emits an intended presentation (§6). `tm` is **expression-oriented**:
 there are no statements. `let x = e1; e2` is sugar for `let x = e1 in e2`, and a `do` block is
 a nested-`let` expression — sequential code is just expression nesting, not a second
 paradigm. Pipelines, `match`, `let`, `do`, and function bodies are all the same thing
 (expressions); the pipeline vs. sequence distinction is surface, not spine. This is the
 OCaml/Roc stance, and it is in the model's fluency basin.
+
+Cells run in a **persistent REPL**. Submitting a cell evaluates it immediately against the
+current committed environment; it does not install a reactive definition or deferred query.
+On success, new top-level bindings and the final value are committed for later cells. On
+failure or denial, partial bindings are discarded, while external effects that already
+completed retain their own durable/idempotent host semantics. Bindings persist for the life of
+the interpreter; a runtime reset starts a fresh environment and never blindly re-performs prior
+host effects to reconstruct it. Durable event replay restores the UI trace, not executable
+closures or isolate memory.
 
 ```
 let paths = ["src/a.ts", "src/b.ts", "src/c.ts"]
@@ -92,15 +102,17 @@ fun gather_todos(paths) : <_> List String =
 The `: <_> List String` is the **effect row + return type** with an inferred row. `tm`
 uses the host registry's canonical capability names as grant-bearing effect names, so the
 checker infers the capability row `<fs.read>` for `gather_todos` and a separate possible-error
-set from the capability docs (§3.1). Empty row (or omitted `<>` entirely) means pure —
-memoizable, replayable for free (§3.6). A concrete row such as `<fs.read, code.edit!>` is
-still valid for library-like examples, but ordinary model-authored code should prefer `<_>`
-and let the checker print the inferred row into the transcript.
+set from the capability docs (§3.1). An empty row (or omitted `<>` entirely) means no host
+authority; full replay/memoization purity additionally requires empty core error and presentation
+sets (§3.1, §6.5). A concrete row such as `<fs.read, code.edit>` is still valid for library-like
+examples, but ordinary model-authored code should prefer `<_>` and let the checker print the
+inferred row into the transcript.
 ```
 fun pure_sum(xs) : List Int = xs |> fold 0 (+)
 ```
 
-No effect row → the host may cache it; the transcript may skip re-running it on replay.
+No authority row and no core error/presentation effects → the host may cache it; the
+transcript may skip re-running it on replay.
 
 
 ## 2.5 The `@` — host boundary in the syntax
@@ -111,7 +123,7 @@ row before eval, and emits a provenance node in the transcript (§3.1).
 
 ```
 lines text                  -- pure prelude
-display rows                -- runtime output primitive
+display rows                -- core presentation effect
 @fs.read workspace:src/a.ts -- host capability: fs.read
 @mcp.github.search_issues {repo: "owner/repo", query: "is:open"}
 ```
@@ -132,30 +144,29 @@ addresses:
 
 If the same text is meant as ordinary data, quote it as a string.
 
-## 2.6 The `!` — approval at the call site and in the type
+## 2.6 Approval is an execution state, not punctuation
 
 ```
-fun save(patch) : <_> Unit = @code.edit! {patch}
+fun save(patch) : <_> Unit = @code.edit {patch}
 ```
 
-The checker infers `<code.edit!>` plus the possible error set. The `!` marks an effect whose
-handler **is resumable**: it may suspend for human approval and resume with the answer. The
-same `!` is required at the call site for approval-bearing capabilities, so review can see
-both boundaries locally: `@` means host capability, `!` means that capability may suspend.
-The host's approval policy decides whether it actually suspends (§3) — "may" is the policy's
-call; "is allowed to at all" is the type's call (a non-`!` effect's handler is statically
-forbidden from suspending, §1.3). The model does not write "if approved then… else…" — it
-writes the edit, and the language handles the wait. Missing or extra call-site `!` is a type
-error: `@code.edit {patch}` is missing the approval marker, while `@fs.read! path` claims
-suspension for a non-approval effect.
+The checker infers `<code.edit>` plus the possible error set. Registry metadata says that
+`code.edit` supports resumable approval and which approval class it belongs to; the effective
+host policy decides whether this particular call suspends. Capability identity and authority
+therefore remain stable when policy changes.
+
+The model does not write "if approved then… else…" — it writes the edit, and the language
+handles the wait. The runtime emits `effect_suspended` and `effect_resumed` events so review
+and UI see the actual boundary rather than an approximation in source. Denial performs an
+`error ApprovalDenied` effect as before.
 
 ```
 do
-  @code.edit! {patch}
+  @code.edit {patch}
   display "done"
 ```
 
-If the policy is `always`, execution suspends at `@code.edit!`, the host prompts the user, and
+If the policy is `always`, execution suspends at `@code.edit`, the host prompts the user, and
 `display "done"` runs only on approval. On denial, the handler performs an `error
 ApprovalDenied` effect and normal error-effect handling takes over (§4). **No callback was
 written.**
@@ -184,7 +195,7 @@ not a `try/catch` that might silently swallow.
 ## 2.8 `par` — concurrency is a word
 
 ```
-let [a, b, c] = par [ @fs.read workspace:a, @http.get https://example.test/b, help @fs.write! ]
+let [a, b, c] = par [ @fs.read workspace:a, @http.get https://example.test/b, help @fs.write ]
 ```
 
 `par` evaluates a tuple of effectful expressions concurrently and waits for all. Backed by
@@ -232,3 +243,7 @@ or `Map<K,V>`; type parameters on a `type` declaration are sum-type fields, not
 generic-function syntax. The language is meant to be small
 enough that the *entire grammar fits in the system prompt's SDK section* if we want — and
 certainly small enough that `tools.docs` can teach it.
+
+There are also no reactive bindings, query planner, or implicit re-evaluation rules. Pipeline
+and presentation syntax may read declaratively, but the REPL remains eager and effect order is
+explicit. The runtime may parallelize only where the program gives it structure such as `par`.

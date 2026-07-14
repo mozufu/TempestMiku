@@ -42,7 +42,8 @@ Design doc, split by section. Read in order or jump to a section:
 ## Experimental: the `tm` language
 
 > Status: **fun / experimental**, not a committed milestone. A design exploration of what an
-> agent-first language for `execute(code)` would look like — effectful, small, data-oriented.
+> agent-first language for `execute(code)` would look like — a persistent effectful REPL with
+> a structured execution trace and declarative presentation for the client UI.
 > Does not change §6.1 (TS on `deno_core` is the shipping sandbox language); `tm` would be a
-> third `Sandbox` backend that lifts capability gating, approval, and provenance into language
-> primitives. See [`tm/README.md`](tm/README.md).
+> third `Sandbox` backend that gives capability gating, approval suspension, provenance, replay,
+> and UI projection one observable execution model. See [`tm/README.md`](tm/README.md).

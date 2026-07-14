@@ -10,12 +10,18 @@ Every external interaction is an **algebraic effect** and every effect perform i
 also a language-level effect declaration:
 
 ```
-eff fs.read    : (path: Path) -> ResourceContent
-eff fs.write!  : (path: Path, data: Data) -> Unit
-eff http.get   : (url: Url) -> Bytes
-eff code.edit! : (patch: Patch) -> Unit
-eff proc.run!  : (cmd: String, args: List String) -> ProcResult
+eff fs.read   : (path: Path) -> ResourceContent
+eff fs.write  : (path: Path, data: Data) -> Unit
+eff http.get  : (url: Url) -> Bytes
+eff code.edit : (patch: Patch) -> Unit
+eff proc.run  : (cmd: String, args: List String) -> ProcResult
 ```
+
+The declaration identifies authority and value types. Separate registry metadata describes
+execution policy: approval class (`none`, `on-write`, `on-external`, `always`), whether the
+handler supports suspend/resume, safe argument/result previews, and human-facing UI
+labels. Those properties are discoverable through `tools.docs`, but are not part of the
+canonical capability name.
 
 `error` is also an effect, but it is a core control effect rather than a grant-bearing host
 capability:
@@ -36,13 +42,13 @@ checker from the host capability effects it performs:
 ```
 fun backup(src, dst) : <_> Unit =
   let data = @fs.read src
-  @fs.write! dst data
+  @fs.write dst data
 ```
 
 Here `<_>` means "infer the effect row"; the checker records the concrete capability row
-`<fs.read, fs.write!>` plus the possible error set in the typed cell and transcript. The
-grant-bearing effect names are exactly the host registry's canonical capability names,
-including `!` for approval-bearing effects.
+`<fs.read, fs.write>` plus the possible error set in the typed cell and transcript. The
+grant-bearing effect names are exactly the host registry's canonical capability names. A
+policy change can alter whether `fs.write` prompts without changing source or authority type.
 
 Three invariants from AGENTS.md / §3 fall out *for free, at type-check time, before any code
 runs*:
@@ -61,9 +67,10 @@ stronger than §7's runtime-policy approach.
 ### Provenance is the effect log
 
 Each `@` perform of an effect is a transcript node (§3.6 replay, §12 observability). Pure
-functions (empty effect row) are **trivially replayable / memoizable** — they cannot touch
-the host, so the host may skip them on replay and serve the cached value. The type tells the
-replay engine what is safe to skip; today it has to guess from op names.
+functions (empty authority row and no core error/presentation effects) are **trivially
+replayable / memoizable** — they cannot touch the host or emit user-visible output, so the host
+may skip them on replay and serve the cached value. The type tells the replay engine what is
+safe to skip; today it has to guess from op names.
 
 ### The host registry *is* the handler table
 
@@ -88,35 +95,39 @@ ecosystem is the **dispatch shape**; what it cannot import is below.
 
 ## 3.2 Approval as a resumable effect
 
-This is the aha from §1.3. Effects marked `!` are **approval-bearing**: their handler's
-interface *is* resumable — it may suspend execution, ask the host (which asks the user), and
-resume with the result. Effects without `!` have a synchronous-only handler interface and are
-statically forbidden from suspending. The `!` is therefore both a type-level contract on the
-handler and a required call-site marker for reviewability: `@code.edit!` may suspend;
-`@fs.read` may not. Whether a given `!` perform actually suspends is the approval policy's
-runtime choice (§3.3), but whether it *can* is the type's choice. Missing or extra call-site
-`!` is a type error.
+This is the aha from §1.3. A registry handler may support **resumable approval**: it can suspend
+the current cell, ask the host (which asks the user), and resume the saved continuation with
+the decision. The effective approval policy decides whether a particular perform suspends.
+
+Resumability is handler metadata, not call-site punctuation. `@` already marks the stable
+language boundary that matters for authority, type checking, provenance, and review.
+Encoding policy as `!` in `@code.edit!` or `<code.edit!>` would conflate capability identity
+with deployment/session policy and would misleadingly resemble a mutation marker. The source
+therefore uses the same `@capability` form for every host effect.
 
 ```
 do
   let before = @fs.read workspace:config.json
-  @code.edit! {patch: replace "v1" "v2"}
+  @code.edit {patch: replace "v1" "v2"}
   display "patched"
 ```
 
-Control flow under approval policy `always` for `code.edit!`:
+Control flow under approval policy `always` for `code.edit`:
 
 ```mermaid
 sequenceDiagram
   participant M as Model code
   participant I as tm isolate
   participant H as Host handler
+  participant E as Event sink / UI
   participant U as User
-  M->>I: @code.edit! {patch} performs code.edit!
+  M->>I: @code.edit {patch} performs code.edit
   I->>H: effect + continuation
+  I-->>E: effect_suspended
   H->>U: approval prompt (patch diff)
   U-->>H: approve
   H->>I: resume ()
+  I-->>E: effect_resumed
   I->>M: continue → display "patched"
 ```
 
@@ -130,8 +141,9 @@ Today (§7 + ApprovalPolicy) the model has to know: which calls might block, whi
 denied, how to handle denial, whether to retry. That knowledge is scattered across the system
 prompt, the SDK `.d.ts`, and the orchestrator. In `tm`:
 
-- `!` in the inferred/concrete row = "this can wait for a human." The model sees it at
-  authoring time.
+- `tools.docs` exposes approval/resumability metadata when the model needs to plan around it.
+- `effect_suspended` / `effect_resumed` record whether this invocation actually waited, and
+  drive the same inline approval UI used during live execution and replay.
 - Denial = the approval handler performs `error ApprovalDenied`; the model can catch it with
   an error handler (§4.5), or let it bubble to the cell result.
 - Retry = the model's choice, explicit, not a hidden runtime retry loop.
@@ -141,28 +153,29 @@ The approval boundary (AGENTS.md: "manual approvals" as a parity invariant) beco
 
 ## 3.3 The effect vocabulary maps to §7
 
-| §7 SDK namespace | `tm` effect | `!`? |
+| §7 SDK namespace | `tm` effect | Registry policy metadata |
 |---|---|---|
-| `print`, `display` | core primitive (not an effect — pure output to sink) | no |
-| `help`, `tools.search/docs/call` | `tools.docs` / `tools.search` / `tools.call` | no |
-| `@fs.read` / `@fs.ls` / `@fs.find` | `fs.read` / `fs.ls` / `fs.find` | no |
-| `@fs.write!` | `fs.write!` | **yes** |
-| `@code.search` | `code.search` | no |
-| `@code.edit!` | `code.edit!` | **yes** |
-| `@proc.run!` | `proc.run!` | **yes** (always, per §7) |
-| `@resources.read` / `@resources.preview` / `@resources.list` | `resources.read` / `resources.preview` / `resources.list` | no |
-| `@artifacts.put` / `@artifacts.get` / `@artifacts.slice` / `@artifacts.list` | `artifacts.put` / `artifacts.get` / `artifacts.slice` / `artifacts.list` | no |
+| `print` | capped diagnostic output | no grant or approval |
+| `display` | core presentation effect, never a host capability | no grant or approval |
+| `help`, `tools.search/docs/call` | `tools.docs` / `tools.search` / `tools.call` | no approval |
+| `@fs.read` / `@fs.ls` / `@fs.find` | `fs.read` / `fs.ls` / `fs.find` | normally none |
+| `@fs.write` | `fs.write` | `on-write`, resumable |
+| `@code.search` | `code.search` | normally none |
+| `@code.edit` | `code.edit` | `on-write`, resumable |
+| `@proc.run` | `proc.run` | `always`, resumable per §7 |
+| `@resources.read` / `@resources.preview` / `@resources.list` | `resources.read` / `resources.preview` / `resources.list` | none |
+| `@artifacts.put` / `@artifacts.get` / `@artifacts.slice` / `@artifacts.list` | `artifacts.put` / `artifacts.get` / `artifacts.slice` / `artifacts.list` | capability-specific, normally none |
 | `@http.*` (future) | `http.*` | policy-dependent |
-| `@secrets.*!` (future) | `secrets.resolve!` etc. — returns a handle, never a value (§3.5) | yes |
+| `@secrets.*` (future) | `secrets.resolve` etc. — returns a handle, never a value (§3.4) | resumable approval |
 | `@memory.*` / `@skills.*` / `@agents.*` / `@mcp.*` (future/imported) | their own effects | per-capability |
 
-The `!` is not arbitrary; it encodes §7's existing `approval` field (`none`/`on-write`/…). We
-are not inventing policy — we are giving the existing policy a place in the type and a visible
-call-site marker.
+Approval metadata is still the existing §7 policy, not a new authority mechanism. Keeping it
+in the registry ensures config validation, runtime enforcement, introspection, transcript, and
+UI all consume the same source of truth.
 
 ## 3.4 Secrets stay by-reference (§3.5)
 
-`@secrets.resolve! "OPENAI_KEY"` returns an opaque `SecretHandle`, never the bytes. The handle
+`@secrets.resolve "OPENAI_KEY"` returns an opaque `SecretHandle`, never the bytes. The handle
 is passed to `@http` / `@proc` calls; the host substitutes the real value at the boundary
 (§3.5). In `tm` this is just an effect whose result type is `SecretHandle`, and there is
 *no language operation* that dereferences a handle — so the invariant is enforced by the type
@@ -174,7 +187,7 @@ A resumable effect needs the isolate to capture its continuation. Two implementa
 (§5):
 
 1. **On deno_core / V8** — not natively supported; would require transpiling `tm` → a
-   state-machine TS where each `!`-perform becomes a `yield` to a generator the host drives.
+   state-machine TS where each resumable perform becomes a `yield` to a generator the host drives.
    Doable, but you lose the clean "V8 just runs it" story.
 2. **On a Rust AST interpreter** — continuation capture is literally "save the interpreter
    stack frames." This is where `tm` earns its keep: the interpreter is already in Rust, the

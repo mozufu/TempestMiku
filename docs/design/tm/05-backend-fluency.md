@@ -13,7 +13,10 @@ flowchart LR
   S --> T[tm interpreter -- this doc, experimental]
   D & P & T --> H[HostRegistry = effect handlers]
   H --> A[ApprovalPolicy]
-  H --> R[transcript / replay]
+  T --> E[structured execution events]
+  H --> E
+  E --> R[transcript / replay]
+  E --> U[client UI]
 ```
 
 The agent loop (§5) is unchanged. `execute(code)` still the one tool (§5.2). The only
@@ -80,18 +83,20 @@ The smallest credible slice, if/when the gate is cleared:
 - A `Sandbox` impl that runs `tm` cells and performs effects into the existing
   `HostRegistry` (no new registry).
 - `tools.docs` returning `tm` effect declarations instead of TS `.d.ts` when the session is a
-  `tm` session.
-- One E2E test: an approval-gated `@code.edit!` that suspends, gets approved, resumes, and the
-  transcript shows the effect node. **That test is the proof that the §3 bet landed.**
+  `tm` session, including registry-owned approval/resumability and presentation metadata.
+- One E2E test: an approval-gated `@code.edit` that emits a structured effect node, suspends,
+  gets approved, resumes, and drives the same ordered transcript/UI projection before and after
+  reconnect. **That test is the proof that the §3 and §6 bets landed.**
 
 ## 5.6 The fun
 
 The user said the most important thing is that this is **好玩**. The honest version of "fun"
 here: `tm` is a language where the thing the agent does most — *read, transform, show* — is
 one line, and the thing the host cares about most — *what did this code touch, what needs a
-human* — is readable off the type of that line. That is a satisfying shape. Whether it ships
-is a fluency benchmark; whether it is worth *designing* is, per the user, yes — because
-designing it clarifies which parts of §6/§7 are load-bearing and which are TS accident.
+human, what is running, and what value is being shown* — is available as typed authority plus
+the live execution trace. That is a satisfying shape. Whether it ships is a fluency benchmark;
+whether it is worth *designing* is, per the user, yes — because designing it clarifies which
+parts of §6/§7 are load-bearing and which are TS accident.
 
 If we build it and it loses the benchmark, the design doc still paid for itself: it is the
 cleanest articulation of what "agent-first" would mean if fluency were not a constraint.

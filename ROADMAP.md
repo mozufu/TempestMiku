@@ -14,7 +14,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 |---|---|
 | **M0 — streaming protocol skeleton** | Streaming-first OpenAI client (SSE) + the agent loop consuming deltas live + an `EventSink` (assistant tokens token-by-token) + a stub sandbox (echoes code). Validates the streaming message protocol end-to-end; tests drive a scripted stream with no network. |
 | **M1 — real REPL** | `deno_core` backend; ops for `display`, `http.get` (allowlisted), `artifacts`; result-shaping + artifact spill; system prompt. |
-| **M2 — disclosure + tools** | `tools.search/docs/call`; `tm-mcp` imports external MCP tools into the catalog; secrets-by-reference. |
+| **M2 — disclosure + tools** | `tools.search/docs/call`; the catalog/SDK translation contract for external tools. Production `tm-mcp` import ships only in P10 after P9 egress and secrets-by-reference. |
 | **M3 — production loop** | Approval gates, audit log, session pooling, deterministic replay. (Streaming landed in M0.) |
 | **M4 — backends & hardening** | `rquickjs` + Python-subprocess backends; Linux isolation (seccomp/cgroups/microVM); egress hardening. |
 
@@ -30,13 +30,16 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **P3+ — live actor mailbox** ✓ | Live MPSC resident delivery (`agents.send/wait/inbox/list/broadcast/cancel/pipeline`); active supervision (restart/subtree cancel); child approval routing through `ApprovalBroker`; DAG acyclicity + protocol invariants; Flutter smoke coverage | 5 | M2 | live siblings coordinate via `send`/`wait`; child cancel yields replayable `Cancelled` event; child approval requests reach the user; restart/timeout/subtree-failure decisions are replayable; Flutter attach/approve/reconnect pass |
 | **P4 — dreaming + proactivity** ✓ | consolidation + `skills/` generation (§22/§26); scheduler/cron (§27.2) | all | — | transactional session end, durable approvals/effects, fenced leases, enforced cron bounds, supervised roles, recovery tests, and final client verification pass |
 | **P5 — drive + research** ✓ | `drive.*` + auto-organizer (§24): transducers + virtual dirs; deep-research workspace (P3+P4+P5) | 4/5 | — | Postgres metadata/organizer/link persistence, CAS application, tombstones, startup link revalidation, and final restart/client verification pass |
-| **P6 — Android package + OS integrations (P6.1/P6.2/P6.3 closed; remaining slices pending)** | Ship the Android target of the existing Flutter client after the hardened server contracts pass | all | — | Android/Web share authenticated durable turns and SSE; secure pairing/release gates, encrypted provider-neutral registration, leased push outbox, private approval actions, production UnifiedPush/ntfy delivery, and bounded review-before-send Android Sharesheet/selected-text imports have deterministic and physical canary evidence |
-| **P7 — self-evolution tiers + hardening** | tiers (§26); isolation / egress hardening | all | M3–M4 | tier switch changes write-scope; conservative writes only memory+skills; audit trail |
+| **P6 — Android package + OS integrations (P6.1-P6.3 closed; P6.4 active)** | Finish the daily companion's Android entry points: actionable notifications, bounded quick capture, and self-hosted voice capture | all | — | Android/Web share authenticated durable turns and SSE; P6.4-P6.6 add exact-context reply, review-first capture, and editable self-hosted transcription without a second agent loop; signed Android 15 canaries close P6 |
+| **P7 — self-evolution tiers + hardening** | Typed, attenuated, reviewable evolution (§26); P7.2b eventually adds approval-backed persona addenda | all | M3–M4 | Auto mode may decide when to propose bounded persona guidance, but activation/rollback always require durable manual approval and never mutate identity, authority, or `SOUL.md` |
+| **P8 — fuller memory** | Self-hosted hybrid lexical/dense recall, scoped episodic/semantic stores, evidence-backed extraction, correction, and measured recall quality (§22) | all | — | Postgres FTS + pgvector recall degrades safely, preserves provenance and scope, never promotes unsupported inference to owner truth, and measurably improves replayable recall fixtures |
+| **P9 — production egress + secret broker** | Destination-scoped audited egress and opaque secret handles at the host boundary (§07/§08) | 4/5 | M4 | allowlists, DNS/IP/redirect policy, byte/request/time caps, revocation, denial, replay, and exfiltration tests pass before production egress can be enabled |
+| **P10 — MCP + live research** | Import selected MCP capabilities into lazy SDK/resource surfaces and run live research through P9 authority (§25) | 4/5 | M2 + P9 | one model-visible `execute(code)` tool remains; catalog reload, prompt-injection isolation, provenance, bounded results, approval-backed writes, and audit/replay gates pass |
 
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
 
-## Execution plan from current workspace (2026-07-10)
+## Execution plan from current workspace (2026-07-14)
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
 `tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
@@ -86,12 +89,10 @@ remains loopback-only behind an HTTPS reverse proxy or Tailscale Serve, and Post
 mandatory outside loopback and for embedded workers. This gate does not broaden the deployment
 target into multi-tenancy or arbitrary public-internet hosting.
 
-Also not production-complete: `tm-mcp`, `tm-trace`, fuller `tm-memory` mechanisms beyond the P4
-acceptance slice (pgvector dense retrieval, graph extraction, LLM-backed extraction, richer scoped
-`memory.*` APIs), first-class skill import/reload/write surfaces, remaining P6 OS integrations,
-optional
-drive cloud sync, generated SDK docs from the runtime registry, and production egress/secret
-hardening.
+Also not production-complete: P6.4-P6.6 Android integrations, P8 fuller memory, P7.2b persona
+addenda, P9 production egress/secret hardening, and P10 `tm-mcp`/live research. Optional cloud drive
+sync, `code.ast`/`code.lsp`, `tm-trace`, generated SDK docs, and additional sandbox backends are
+demand-triggered rather than part of the committed critical path.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
 each milestone is done only when its acceptance checks pass.
@@ -114,23 +115,28 @@ each milestone is done only when its acceptance checks pass.
 | 11 | **DONE — P7.2a managed mode addenda** | 2–4d | Moderate mode proposals install immutable description/routing-guidance versions behind manual approval, atomically activate/rollback under a cross-process lock, and compose on the next prompt without mutating `SOUL.md`, `modes.json`, capabilities, voice caps, scopes, skills, or route triggers. Persona apply remains disabled. | Focused crate/server tests and `tm-e2e record evolution-policy` prove apply, deny/timeout, stale-base denial, replay, next-turn composition, capability invariance, and rollback to the base catalog. |
 | 12 | **DONE — P6.2 ANDROID SHARE TARGET** | 1–2d | The exported Android `ACTION_SEND` target accepts only `text/plain`, sanitizes and bounds text/subject input, and forwards cold-start or singleTop intents through a platform event bridge. Flutter requires an editable confirmation sheet and explicit current/new-session selection before reusing the durable message path. | Pure Kotlin parser tests and Flutter parser/widget tests cover rejection, bounds, no-auto-send, editing, and both destinations. Flutter analyze/full tests, Kotlin parser tests, signed arm64 APK verification, and the physical Android 15 Sharesheet/current/new-session cold-start canary pass. |
 | 13 | **DONE — P6.3 ANDROID SELECTED-TEXT ACTION** | 1–2d | Add `ACTION_PROCESS_TEXT` / `text/plain` to the existing singleTop Android activity, accept only bounded `EXTRA_PROCESS_TEXT`, and reuse the P6.2 source-tagged event bridge plus editable current/new-session review flow. It never returns replacement text, consumes URI authority, or sends automatically. | Kotlin and Flutter tests, analyze, merged-manifest/APK inspection, and a Keychain-backed signed arm64 build pass. The in-place Android 15 canary proves OS resolver discovery, cancel without send, distinct current/new-session sends, warm delivery, and cold-start recovery without preview replay or duplicate user messages. |
+| 14 | **NEXT — P6.4 ACTIONABLE ANDROID NOTIFICATIONS** | 2–4d | Deep-link notifications to their exact session/approval context and accept a bounded inline reply only after the owner explicitly presses Send. Native code posts one idempotent message through the existing authenticated durable API; it never runs the agent loop. | Kotlin/Flutter/server tests plus signed Android 15 foreground/background/killed-process canaries prove exact routing, explicit send, retry/idempotency, cold-start recovery, revocation, expiry, missing-session handling, and no duplicate turn. |
+| 15 | **P6.5 QUICK CAPTURE** | 2–4d | Define one bounded capture intent, ship a launcher shortcut and Quick Settings tile, and add a widget only if it reuses the same editable composer path. No entry point sends, pairs, approves, or grants authority on receipt. | Parser/widget tests and a signed physical canary prove cancel/no-send, bounded prefill, warm/cold recovery, exact-once review state, and no added Android execution path. |
+| 16 | **P6.6 SELF-HOSTED VOICE CAPTURE + P6 CLOSEOUT** | 4–7d | Record bounded audio, transcribe through a replaceable self-hosted Whisper-compatible service on lumo, and require editable transcript plus explicit current/new-session send. Define duration, byte, format, retention, deletion, timeout, and retry policy. | Deterministic client/server/provider tests, live service restart/degradation evidence, signed APK inspection, and an Android 15 record/edit/cancel/current/new/cold-start canary pass; P6 is then closed. |
+| 17 | **P8 FULLER MEMORY** | 8–14d | Add self-hosted Postgres FTS + pgvector hybrid recall, local embeddings, scoped episodic/semantic stores, fusion/reranking, provenance/confidence/correction history, evidence-backed extraction, and context budgeting. | Replayable recall fixtures show relevance improvement and scope isolation; provider loss degrades safely; re-embedding is versioned; stale/unsupported facts are corrected or withheld; no external SaaS is required. |
+| 18 | **P7.2b APPROVAL-BACKED PERSONA ADDENDA** | 4–7d | Let Auto mode detect repeated preference/persona mismatch and create typed, deduplicated, cooldown-bound proposals. Manual approval activates immutable tone/address/interaction guidance; rollback restores a prior version or the hand-authored base. | Tests/evidence prove auto-propose but never auto-apply, bounded evidence, stable base checks, deny/timeout/stale/retry safety, next-turn composition, rollback, and invariance of identity, `SOUL.md`, safety, modes, and capabilities. |
+| 19 | **P9 PRODUCTION EGRESS + SECRET BROKER** | 6–10d | Add destination allowlists, DNS/IP/redirect policy, request/byte/time budgets, audit/revocation, exact grants, and opaque egress-scoped secret handles resolved only at the host boundary. | Denial, timeout, redirect, rebinding, exfiltration, replay, secret-redaction, restart, and audit gates pass with production egress disabled by default. |
+| 20 | **P10 MCP + LIVE RESEARCH** | 6–10d | Import selected MCP resources/prompts/tools into lazy SDK/resource surfaces behind P9 and build live research on that same boundary. Preserve `execute(code)` as the only model-visible tool. | Catalog/reload, bounded schema/result, prompt-injection isolation, provenance, approval-backed mutation, egress, audit, replay, and context-size gates pass. |
 
 ### Immediate next task queue
 
-1. **Next — select the next bounded P6 Android OS-integration slice** — P6.1 production push, P6.2
-   review-before-send Sharesheet import, and P6.3 selected-text import are closed with deterministic
-   and physical Android 15 evidence. Keep the deployed push contract, stable encryption key, signed
-   upgrade path, text-import authority bounds, and Firebase/FCM absence as regression invariants.
-2. **Keep the native/OMP coding backend boundary boring** — OMP ACP remains replaceable, while the
-   native Deno Serious Engineer backend is the dogfood path for `fs.*` / `code.*` / `proc.*`,
-   artifacts, and HTTP-routed manual approvals. The network-free
-   `tm-e2e record native-coding` gate now proves linked-repo edit/test/spill behavior,
-   approve/deny/timeout effects, and durable turn-aware SSE replay through the public API.
-3. **Keep P7.2a closed** — managed skills and guidance-only mode addenda have passed immutable
-   installation, atomic activation/rollback, reload/composition, replay, and authority-invariance
-   gates. Keep persona apply, direct mode-file/capability changes, aggressive writes, `tm-mcp`,
-   `tm-trace`, live egress, and optional cloud sync deferred until a new roadmap slice is explicitly
-   selected.
+1. **Implement P6.4 actionable notifications** — exact-context deep links and owner-confirmed inline
+   reply through the existing authenticated durable message API. Preserve push encryption, device
+   auth, idempotency, notification resolution, signed upgrades, and Firebase/FCM absence.
+2. **Finish and close P6 in order** — P6.5 adds review-first quick capture; P6.6 adds editable
+   self-hosted voice transcription. Do not widen either slice into a second client, server, model,
+   sandbox, or agent loop.
+3. **Deepen the companion before opening the platform** — P8 fuller memory precedes P7.2b persona
+   addenda. Auto mode may propose persona guidance, but only durable manual approval can activate or
+   roll it back.
+4. **Open external capabilities only through the safety spine** — P9 egress/secret hardening must
+   close before P10 MCP/live research. OMP remains replaceable and native Deno remains the coding
+   dogfood path.
 
 ### Deferred SDK namespace placement
 
@@ -138,26 +144,32 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 | Namespace / surface | Target milestone | Placement note |
 |---|---|---|
-| `memory.*` | **P2 shipped; P4 production-complete** | P2 exposes minimum profile/user recall and state capture. P4 owns transactional dream enqueue, supervised fenced workers, durable proposal effects, summaries, Postgres FTS, and skill/memory proposals; pgvector, graph recall, LLM-backed extraction, and richer scoped APIs remain later expansion. |
+| `memory.*` | **P2/P4 shipped; P8 expansion** | P2 exposes minimum profile/user recall and state capture. P4 owns transactional dream enqueue, supervised fenced workers, durable proposal effects, summaries, Postgres FTS, and skill/memory proposals. P8 adds self-hosted pgvector hybrid recall, richer scoped stores, evidence-backed extraction, correction, and recall-quality gates. |
 | `agents.*` | **P3 ✓ / P3+ ✓** | P3 MVP shipped: `agents.run/spawn/parallel/msg`, actor lifecycle, mailbox/roster, `agent://`+`history://` resources, SSE lifecycle events, Handoff mode. P3+ shipped bounded live inbox delivery plus `send`, `broadcast`, `wait`, `inbox`, `list`, `cancel`, and `pipeline` with digest-reference stage wiring, child approval routing, plain-prose enforcement, live-wait DAG acyclicity checks, active restart supervision, sibling-subtree cancellation policy, wall-clock budgets, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and actor smoke coverage. |
-| `skills.*` / `skill://` reads | **P4 / P7.1 shipped; later import work deferred** | P4 emits approval-gated skill proposals from dreaming. P7.1 ships immutable managed versions, atomic activation/rollback, trigger-aware reload, provenance/audit, and capability-gated `skill://` read/list/preview. `skills.*` and MCP import/reload gates remain deferred. |
+| `skills.*` / `skill://` reads | **P4/P7.1 shipped; P10 MCP import** | P4 emits approval-gated skill proposals from dreaming. P7.1 ships immutable managed versions, atomic activation/rollback, trigger-aware reload, provenance/audit, and capability-gated `skill://` read/list/preview. Any MCP-backed import/reload waits for P9 and ships only through the P10 catalog. |
 | `drive.*` | **P5 production-complete** | `tm-drive`, virtual dirs/search, transducers, approval-gated writes, `drive://`, project scopes, research fan-out, durable Postgres organizer/link/tombstone state, CAS, startup hydration, and final restart/client verification pass. |
-| `http.*` hardening | **P7** | P5 research stays local-first over `drive://` docs. Live external research remains deferred until byte/request caps, redirect policy, audit logging, production allowlists, and secret handling are proven. |
-| `secrets.use` | **P7** | Requires an opaque-handle secret broker, egress-scoped grants, and audit guarantees that never materialize secret values in JS heap, artifacts, or model context. |
-| `code.ast` / `code.lsp` | **P1.5/P2 tech slice** | Now unblocked by the native cutover proof, but keep it out of the critical companion baseline unless structured code edits have a concrete user. |
+| `http.*` hardening | **P9** | P5 research stays local-first over `drive://` docs. P9 adds production allowlists, DNS/IP/redirect policy, byte/request/time caps, audit, revocation, and secret integration before P10 live research. |
+| `secrets.use` | **P9** | P9 owns opaque egress-scoped handles and guarantees that secret values never materialize in JS heap, artifacts, logs, events, or model context. |
+| `code.ast` / `code.lsp` | **Demand-triggered** | Start only when native patch-based dogfooding demonstrates a concrete structured-edit or navigation gap. It is not on the committed companion critical path. |
 
-### Parallelization seams
+### Sequencing constraints
 
-- Generated SDK docs/type maintenance can proceed independently of P2 work, as long as it reads from
-  the existing host registry contract.
-- Native coding-backend hardening can proceed independently of the P2 companion baseline as long as
-  both preserve the same approval/resource boundaries.
-- After actor mailbox semantics are fixed, supervision and `agent://` resource handling can split.
+- Close P6.4 before adding quick-capture entry points; close P6.5 before introducing audio/provider
+  state in P6.6.
+- P8 provenance, correction, and recall-quality evidence precede Auto-mode persona proposals.
+- P9 egress and opaque-secret gates precede all P10 MCP/live-research production paths.
+- Cloud sync/CRDT, `code.ast`/`code.lsp`, `tm-trace`, and additional sandbox backends require a
+  concrete user or second consumer before entering the execution table.
 
 ### Do-not-start-yet list
 
-- Self-evolution writes before audit/replay and tier gates exist.
-- Live external research before egress hardening, byte caps, audit logging, and secret handling are real.
+- P6.5/P6.6 before the preceding Android slice closes with signed physical evidence.
+- P7.2b persona activation before P8 provenance/correction gates; Auto mode may propose but never
+  approve or activate.
+- MCP or live external research before P9 egress, byte/request caps, redirect policy, audit,
+  revocation, and opaque secret handling are real.
+- Aggressive autonomous identity/config/source/deployment rewrites, raw `SOUL.md` mutation, raw shell,
+  ambient authority, Firebase/FCM, or additional chat-native tools.
 
 ## Crate plan
 
@@ -169,9 +181,10 @@ P4 dream queue ownership lives in `tm-memory`; `fs.*` /
 in `tm-agents`; local-first drive storage, transducers, organizer proposals, links, and search feeds
 live in `tm-drive`.
 
-Planned product/support crates remain: full `tm-memory` (multi-mechanism recall + dreaming),
-`tm-mcp`, and `tm-trace`. Existing core crates (§10.1) keep their contracts; future
-work should extract product storage/orchestration only when the second concrete user exists.
+Planned product/support crates remain: P8 expansion within `tm-memory` and P10 `tm-mcp` after the P9
+host boundary. `tm-trace` is no longer assumed: extract it only when audit/replay has a second
+concrete consumer. Existing core crates (§10.1) keep their contracts; future work should extract
+product storage/orchestration only when the second concrete user exists.
 
 ## Deferred choices outside the audit
 

@@ -208,6 +208,16 @@ version bodies from that catalog; native reads require `resources.read:skill`. T
 namespace, MCP import/reload, arbitrary filesystem writes, persona apply, direct mode
 file/capability changes, and aggressive evolution remain disabled.
 
+**Approved P7.2b direction (after P8 fuller-memory evidence):** Auto mode may detect repeated owner
+preferences or a persona mismatch and create a typed persona-addendum proposal automatically. It may
+decide *when to propose*, never when to approve or activate. Candidates require bounded evidence,
+deduplication, cooldown, redacted previews, a stable base digest, and the same durable manual
+approval/default-deny path. An approved immutable version may affect only tone, address, and
+interaction-preference guidance on the next prompt; a separate manual approval rolls back to a prior
+version or the hand-authored base. `SOUL.md`, core Miku identity, safety rules, capabilities, voice
+caps, mode scopes, route triggers, source code, configuration, and deployment remain immutable. Auto
+approval, aggressive evolution, and direct persona-file writes are permanent non-goals.
+
 ## 26.5 Crate layout
 
 Self-evolution is **not a new crate** — it's a **policy layer** spanning existing ones:
@@ -220,9 +230,9 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
 - `tm-server` (§27) — **tier enforcement** at the config / registry boundary; the review surface
   (`write_proposal` events §27.1), typed review persistence, base/digest revalidation, and the audit
   trail (§12).
-- `tm-modes` — typed persona/mode addendum targets, managed-skill catalog, and the P7.2a immutable
-  guidance-only mode-addendum catalog; no persona, capability, voice, or hand-authored mode-file
-  write authority.
+- `tm-modes` — typed persona/mode addendum targets, managed-skill catalog, the P7.2a immutable
+  guidance-only mode-addendum catalog, and the future P7.2b immutable persona-addendum catalog; no
+  direct persona file, capability, voice-cap, or hand-authored mode-file write authority.
 - config — `self_evolution.tier` (+ the `write_approval` knobs, §26.2).
 
 ## 26.6 Failure modes & degradation

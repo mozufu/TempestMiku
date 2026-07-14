@@ -5,6 +5,9 @@
 - TempestMiku is a Rust rewrite of the running `hermes-agent` Tempest Miku deployment: self-hosted, single-user, characterful personal AI companion plus code-execution agent runtime.
 - Parity comes first. Shipped P0-P3 slices must keep preserving current behavior: Miku voice, mode router, memory recall/profile, and manual approvals.
 - This is not a generic coding agent. Product work must preserve the constant Miku identity and the serious-mode voice cap.
+- The long-range product direction is companion-first. Serious Engineer and project-manager modes
+  remain first-class conversational workflows grounded in real repos, tests, evidence, plans, and
+  open loops; they do not turn TempestMiku into a generic agent marketplace.
 
 ## Current workspace state
 
@@ -37,9 +40,10 @@
   killed-process canary are closed. The P6.2 Android text/share-target implementation and physical
   current/new-session canary are closed. P6.3 adds a bounded selected-text action through the same
   review path; its local gates and signed Android 15 cancel/current/new-session exact-once canary are
-  closed. Broader OS integrations remain P6 work. Also deferred:
-  `tm-mcp`, `tm-trace`, pgvector/graph/LLM-backed memory expansion, cloud drive sync, live egress,
-  and aggressive self-evolution.
+  closed. P6.4 actionable notifications are next, followed by P6.5 quick capture and P6.6
+  self-hosted voice capture/closeout. The approved later order is P8 fuller memory, P7.2b
+  approval-backed persona addenda, P9 egress/secrets, then P10 MCP/live research. `tm-trace`, cloud
+  sync, AST/LSP, and extra sandbox backends are demand-triggered; aggressive self-evolution is out.
 
 ## Read before changing code
 
@@ -67,16 +71,26 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Select the next bounded P6 Android OS-integration slice. Preserve the closed pairing, release,
-   push, Sharesheet, and selected-text contracts; keep automatic sends and authority changes out.
-2. Keep the native/OMP coding backend boundary boring: OMP ACP remains replaceable, while native Deno remains the dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed manual approvals.
-3. Keep `tm-mcp`, `tm-trace`, fuller memory, cloud drive sync, live egress, and P7 self-evolution
-   deferred to their roadmap stages.
+1. Implement P6.4 actionable notifications: exact-context deep links plus a bounded inline reply that
+   sends only after the owner presses Send, through the existing authenticated durable message API.
+   Native Android must not run a model, sandbox, or second agent loop.
+2. Then implement P6.5 review-first quick capture and P6.6 editable self-hosted voice transcription;
+   close P6 only after signed Android 15 physical evidence.
+3. Continue in the approved order: P8 fuller memory, P7.2b Auto-mode persona proposals with manual
+   activation/rollback, P9 egress/opaque secrets, then P10 MCP/live research.
+4. Keep the native/OMP boundary boring: OMP ACP remains replaceable, while native Deno remains the
+   dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed approvals.
 
 Do not start yet unless explicitly requested:
 
-- Self-evolution writes before audit/replay and tier gates exist.
-- MCP, trace, cloud drive sync, and live external research before their explicit roadmap stages.
+- P6.5/P6.6 before the preceding Android slice closes with deterministic and signed physical proof.
+- P7.2b before P8 provenance/correction gates. Auto mode may decide when to propose, but persona
+  activation and rollback always require durable manual approval.
+- MCP or live external research before P9 egress, redirect, budget, audit, revocation, and opaque
+  secret gates.
+- `tm-trace`, cloud sync/CRDT, AST/LSP, or extra sandbox backends without a concrete second consumer.
+- Aggressive autonomous identity/config/source/deployment rewrites, automatic persona activation,
+  raw `SOUL.md` mutation, Firebase/FCM, raw shell/ambient authority, or chat-native tool sprawl.
 
 ## Coding conventions
 

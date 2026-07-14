@@ -239,7 +239,16 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   pass, and the signed Android 15 physical canary on 2026-07-14 proved system resolver discovery,
   cancel without sending, distinct current/new-session durable turns, warm delivery, and cold-start
   recovery without preview replay or duplicate user messages. There is still **no on-device
-  sandbox**, added authority, or second execution path.
+  sandbox**, added authority, or second execution path. The approved P6 closeout continues with
+  P6.4 exact-context notification deep links and owner-confirmed inline reply through the same
+  authenticated idempotent message API; pressing Send in the notification is the explicit send
+  confirmation, and native code never runs an agent loop. P6.5 then adds one bounded quick-capture
+  intent reused by a launcher shortcut and Quick Settings tile, with a widget only if it adds no new
+  send path. P6.6 records bounded audio and uses a replaceable self-hosted Whisper-compatible service
+  on lumo; the editable transcript still requires explicit current/new-session send. Each slice must
+  preserve device auth, revocation, signed upgrades, cold-start exact-once behavior, and authority-free
+  imported content. P6 closes after P6.6 physical evidence rather than accumulating open-ended OS
+  integrations.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 

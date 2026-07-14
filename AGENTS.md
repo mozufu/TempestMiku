@@ -40,9 +40,10 @@
   killed-process canary are closed. The P6.2 Android text/share-target implementation and physical
   current/new-session canary are closed. P6.3 adds a bounded selected-text action through the same
   review path; its local gates and signed Android 15 cancel/current/new-session exact-once canary are
-  closed. P6.4 actionable notifications are implemented with local Kotlin/Flutter/server/Postgres
-  proof; signed Android 15 foreground/background/killed-process closeout is next, followed by P6.5
-  quick capture and P6.6 self-hosted voice capture/closeout. The approved later order is P8 fuller memory, P7.2b
+  closed. P6.4 actionable notifications are closed with local Kotlin/Flutter/server/Postgres proof
+  plus signed Android 15 foreground/background/killed-process, exact-once reply/retry, terminal
+  failure, and cold-start evidence. P6.5 quick capture is next, followed by P6.6 self-hosted voice
+  capture/closeout. The approved later order is P8 fuller memory, P7.2b
   approval-backed persona addenda, P9 egress/secrets, then P10 MCP/live research. `tm-trace`, cloud
   sync, AST/LSP, and extra sandbox backends are demand-triggered; aggressive self-evolution is out.
 
@@ -72,11 +73,11 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Close P6.4 actionable notifications on the signed Android 15 device: prove exact-context deep
-   links and bounded inline reply from foreground/background/killed states, including retry,
-   revocation, expiry, missing-session, and no-duplicate-turn cases. Native Android must not run a
-   model, sandbox, or second agent loop.
-2. Then implement P6.5 review-first quick capture and P6.6 editable self-hosted voice transcription;
+1. Implement P6.5 review-first quick capture through one bounded native capture intent reused by a
+   launcher shortcut and Quick Settings tile. Receipt must not send, pair, approve, or grant
+   authority; Flutter keeps the editable current/new-session confirmation, and native Android must
+   not run a model, sandbox, or second agent loop.
+2. Then implement P6.6 editable self-hosted voice transcription;
    close P6 only after signed Android 15 physical evidence.
 3. Continue in the approved order: P8 fuller memory, P7.2b Auto-mode persona proposals with manual
    activation/rollback, P9 egress/opaque secrets, then P10 MCP/live research.

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.RemoteInput
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.os.Build
 import org.json.JSONObject
 
@@ -95,7 +96,11 @@ internal object SessionNotifications {
         val remoteInput = RemoteInput.Builder(REPLY_KEY)
             .setLabel("Reply to Miku")
             .build()
-        val replyActionBuilder = Notification.Action.Builder(null, "Reply", replyPendingIntent)
+        val replyActionBuilder = Notification.Action.Builder(
+            Icon.createWithResource(context, R.mipmap.ic_launcher),
+            "Reply",
+            replyPendingIntent,
+        )
             .addRemoteInput(remoteInput)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             replyActionBuilder.setAllowGeneratedReplies(false)
@@ -114,10 +119,22 @@ internal object SessionNotifications {
             .setContentTitle("TempestMiku")
             .setContentText("New conversation activity.")
             .build()
+        val expandedStyle = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            Notification.MessagingStyle("You")
+                .addMessage(
+                    "Open the conversation or send a reply.",
+                    System.currentTimeMillis(),
+                    "Miku",
+                )
+        } else {
+            Notification.BigTextStyle()
+                .bigText("Open the conversation or send a reply.")
+        }
         val notification = builder
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Miku replied")
             .setContentText("Open the conversation or send a reply.")
+            .setStyle(expandedStyle)
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)

@@ -2,84 +2,78 @@
 
 Last aligned: **2026-07-14**.
 
-Active milestone: **P6.4 — actionable Android notifications**.
+Active milestone: **P6.5 — review-first Android quick capture**.
 
 `ROADMAP.md` is the milestone-order and completion-history source. The approved long-range route is
 captured in `plans/one-shot-future-roadmap.md`. This file contains only the active executable slice,
 its regression boundaries, and the queued order.
 
-## P6.4 Outcome
+## P6.5 Outcome
 
-An Android owner can open the exact notification context or explicitly send a bounded inline reply
-while Flutter is foregrounded, backgrounded, or killed. The reply enters the existing authenticated
-durable turn path exactly once; native code never runs a model, sandbox, or second agent loop.
+An Android owner can open one bounded quick-capture draft from a launcher shortcut or Quick Settings
+tile, edit it, and explicitly choose the current or a new session before sending. Receiving the
+native intent never sends, pairs, approves, grants authority, or runs a model.
 
-## P6.4 Contract
+## P6.5 Contract
 
-- [x] Define versioned notification routing data for the exact session or approval without placing
-      message text, secrets, bearer credentials, or other sensitive content in the push payload.
-- [x] Deep-link notification taps to the routed session/approval after device authentication where
-      required, with a safe fallback when the target no longer exists or authority was revoked.
-- [x] Add Android inline reply for eligible session notifications. Accept only non-empty sanitized
-      text within an explicit UTF-16/code-point and encoded-byte bound.
-- [x] Treat pressing the notification Send action as the owner's explicit send confirmation; do not
-      reopen Flutter for a second confirmation.
-- [x] Submit through the existing authenticated durable message API with a stable client message id
-      and session id. Native code must not execute the agent loop or invent another turn contract.
-- [x] Persist only the minimum bounded retry state needed across process death; clear it after a
-      terminal response, revocation, permanent failure, or expiry.
-- [x] Preserve Approve once / Deny behavior, Android 12+ device authentication, generic lock-screen
-      copy, resolution cancellation, leased push delivery, and default-deny semantics.
-- [x] Surface bounded success/failure feedback without exposing reply text on the lock screen or
-      silently falling back to a different session.
+- [ ] Define one versioned native quick-capture intent with no URI grants, attachments, external
+      origins, or ambient authority.
+- [ ] Accept only sanitized bounded text and keep at most one cold-start payload; empty input opens
+      an empty editable draft instead of sending.
+- [ ] Route warm and cold intents through the existing platform event bridge into one Flutter review
+      sheet with editable text and explicit current/new-session choices.
+- [ ] Add a launcher shortcut and Quick Settings tile that both reuse that single intent contract.
+- [ ] Keep widget support out unless it can reuse the same bounded intent and review sheet without a
+      new send path or background authority.
+- [ ] Reuse the authenticated durable message API, stable client ids, session creation, event replay,
+      and existing composer semantics only after the owner presses Send.
+- [ ] Preserve process-death recovery without duplicate previews, messages, sessions, or turns.
+- [ ] Keep native Android free of model, sandbox, agent-loop, pairing, approval, filesystem, and
+      arbitrary-network execution.
 
 ## Deterministic Verification
 
-- [x] Pure Kotlin tests cover route decoding, text sanitization/bounds, stable id generation,
-      duplicate delivery, retry, expiry, revoked auth, missing session, and permanent failure.
-- [x] Flutter tests cover deep-link restoration and replay without creating a second user message or
-      showing a stale composer/preview.
-- [x] Server/API tests prove duplicate client message ids are idempotent and revoked device tokens
-      cannot enqueue a turn.
-- [x] Flutter analyze, the full Flutter suite, focused Android unit tests, and affected Rust/Web gates
+- [ ] Pure Kotlin tests cover intent/action matching, sanitization and bounds, empty input, URI or
+      attachment rejection, and single pending cold-start delivery.
+- [ ] Flutter parser/widget tests cover editable review, cancel/no-send, current/new-session routing,
+      warm replacement, cold-start recovery, and no duplicate preview or send.
+- [ ] Flutter analyze, the full Flutter suite, focused Android unit tests, and affected Rust/Web gates
       pass.
-- [x] Merged-manifest and APK inspection prove only the intended receiver/service/actions are
-      exported and the release ABI/signing contracts remain intact.
+- [ ] Merged-manifest and APK inspection prove only the intended shortcut/tile components are
+      exported and that release ABI/signing, HTTPS-only networking, and backup exclusion remain
+      intact.
 
 ## Physical And Live Closeout
 
 - [ ] Build an arm64 release APK with the established signing certificate and install it in place on
       the paired Android 15 device without losing credentials or session state.
-- [ ] Prove notification taps restore the exact context from foreground, background, and killed
-      states.
-- [ ] Prove distinct inline replies each create one durable user message and one turn, including a
-      killed-process send followed by cold-start recovery.
-- [ ] Prove duplicate intent/delivery and transient retry do not duplicate the message or turn.
-- [ ] Prove expired/revoked credentials, deleted sessions, empty/oversized input, cancellation, and
-      permanent server failure send nothing and fail visibly.
+- [ ] Prove launcher-shortcut and Quick Settings entry from foreground, background, and killed states.
+- [ ] Prove empty/edit/cancel paths send nothing and distinct current/new-session confirmations each
+      create exactly one durable user message and turn.
+- [ ] Prove process death and repeated intent delivery do not replay a draft or duplicate the message,
+      session, or turn.
 - [ ] Record replayable evidence and align product §27, `ROADMAP.md`, `TODO.md`, and `AGENTS.md`
-      before marking P6.4 complete.
+      before marking P6.5 complete.
 
 ## Regression Invariants
 
 - Preserve pairing, secure storage, HTTPS-only release networking, backup exclusion, release signing,
-  stable production push encryption, UnifiedPush/ntfy, and Firebase/FCM absence.
-- Preserve review-before-send for Sharesheet and selected-text imports; notification Send is a
-  separate explicit owner action, not automatic intent receipt.
-- Keep imported/replied text untrusted and authority-free. It grants no capability, resource, URI,
-  pairing, approval, filesystem, or network authority.
+  stable production push encryption, UnifiedPush/ntfy, actionable notifications, and Firebase/FCM
+  absence.
+- Preserve review-before-send for Sharesheet and selected-text imports; quick capture joins that
+  explicit review model and does not weaken notification Send semantics.
+- Keep captured text untrusted and authority-free. It grants no capability, resource, URI, pairing,
+  approval, filesystem, or network authority.
 - Reuse the durable turn queue, event log, SSE replay, and server-owned session authority.
 - Keep OMP ACP replaceable and native Deno as the coding dogfood path.
 
-## Queued After P6.4
+## Queued After P6.5
 
-1. P6.5 quick capture: launcher shortcut, then Quick Settings; widget only through the same bounded
-   capture intent.
-2. P6.6 self-hosted voice capture and formal P6 closeout.
-3. P8 fuller memory with self-hosted Postgres FTS + pgvector hybrid recall.
-4. P7.2b Auto-mode persona proposals with durable manual activation and rollback.
-5. P9 production egress and opaque secret broker.
-6. P10 MCP catalog and live research through the P9 boundary.
+1. P6.6 self-hosted voice capture and formal P6 closeout.
+2. P8 fuller memory with self-hosted Postgres FTS + pgvector hybrid recall.
+3. P7.2b Auto-mode persona proposals with durable manual activation and rollback.
+4. P9 production egress and opaque secret broker.
+5. P10 MCP catalog and live research through the P9 boundary.
 
 ## Demand-Triggered Or Permanently Out
 

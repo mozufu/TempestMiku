@@ -257,6 +257,24 @@ row completed in one attempt without a provider error, and the Flutter activity 
 The canary release signer SHA-256 fingerprint is
 `503f865843464347cb2d2f90be3ab4dbf68bae690443bf8fd262e0dcc0b58ee1`.
 
+Session-ready pushes use a private `MessagingStyle` notification with an exact session route and a
+bounded **Reply** action. On HyperOS/MIUI, enable background autostart for both Tempest Miku and the
+ntfy UnifiedPush distributor and set their battery mode to unrestricted; provider acceptance alone
+does not prove that the distributor delivered immediately on the phone. The public lock-screen copy
+stays generic and has no reply action or transcript text.
+
+The P6.4 signed Android 15 canary ran on 2026-07-14 with the same release fingerprint above and an
+in-place `adb install -r`. `firstInstallTime` and the existing credential/transcript survived. Fresh
+foreground, background, and swiped-away-process notifications opened their exact sessions without
+adding a user message. Distinct inline replies and a double-tapped killed-process reply each produced
+one user message and one `session_turns` row with `notification-<delivery-id>` as the client id; a
+Wi-Fi-off reply stayed absent until connectivity returned, then materialized once. A forced cold
+start restored the killed-process reply and assistant response. Empty Send remained disabled, cancel
+and 1,001-code-point input sent nothing, and expired routes, revoked credentials, deleted sessions,
+and ended sessions each produced the expected visible terminal notification with zero matching
+messages. The temporarily revoked production device row was restored and a post-restore inline reply
+again produced exactly one message and turn.
+
 ```sh
 nix develop --command bash -lc \
   'cd clients/miku_flutter && flutter build apk --debug'

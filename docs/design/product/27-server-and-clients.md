@@ -243,14 +243,21 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   active registered device. The encrypted payload carries versioned delivery/session/event ids and
   expiry, never reply or transcript text. Taps restore exactly that session or approval. Eligible
   session notifications expose Android inline reply; pressing Send is the explicit confirmation.
-  Native code sanitizes and bounds the text, encrypts the minimum WorkManager retry envelope with an
+  The notification uses Android `MessagingStyle` plus a non-null action icon so HyperOS/MIUI renders
+  the expandable direct-reply surface instead of retaining an invisible action. Native code
+  sanitizes and bounds the text, encrypts the minimum WorkManager retry envelope with an
   Android Keystore key, and posts one stable client message id through the existing origin-bound
   device credential and durable message API. Revocation, expiry, missing sessions, permanent
   failures, and bounded transient retry fail visibly without selecting another session, exposing
   reply text on the lock screen, or running a model. The deterministic Kotlin, Flutter, server API,
-  and gated Postgres tests pass; signed Android 15 foreground/background/killed-process closeout is
-  still required before P6.4 is marked done. There is still **no on-device sandbox**, added model
-  authority, or second execution path. After that physical closeout, P6.5 adds one bounded quick-capture
+  and gated Postgres tests pass. The signed Android 15 canary on 2026-07-14 preserved the established
+  signer, credentials, and transcript during an in-place upgrade; proved exact-context taps from
+  foreground, background, and a swiped-away process; and proved distinct and double-tapped inline
+  replies, offline retry, and cold-start recovery create exactly one durable message and turn.
+  Empty input stayed disabled and cancel sent nothing; oversized input, expired routes, revoked
+  credentials, deleted sessions, and ended sessions all sent nothing and surfaced terminal
+  feedback. There is still **no on-device sandbox**,
+  added model authority, or second execution path. After that physical closeout, P6.5 adds one bounded quick-capture
   intent reused by a launcher shortcut and Quick Settings tile, with a widget only if it adds no new
   send path. P6.6 records bounded audio and uses a replaceable self-hosted Whisper-compatible service
   on lumo; the editable transcript still requires explicit current/new-session send. Each slice must

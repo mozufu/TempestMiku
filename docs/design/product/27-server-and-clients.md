@@ -230,8 +230,16 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   files, URI grants, HTML, pairing payloads, or automatic sends. The signed Android 15 physical
   canary on 2026-07-14 proved system Sharesheet discovery, URL preview/edit/cancel without sending,
   one durable import into the current session, one into a newly created session, and cold-start
-  recovery without preview replay or duplicate sends. There is still **no on-device sandbox**,
-  added authority, or second execution path.
+  recovery without preview replay or duplicate sends. P6.3 registers `ACTION_PROCESS_TEXT` /
+  `text/plain` on that same singleTop activity under the `Ask Miku` filter label. Native parsing reads
+  only `EXTRA_PROCESS_TEXT`, rejects URI-bearing or mismatched payloads, applies the same sanitization
+  and bounds, and tags the event as selected text. Flutter changes only the review copy; the editor,
+  explicit current/new-session choice, and authenticated durable send path remain shared with P6.2.
+  It never returns replacement text to the source app or sends on receipt. Local deterministic gates
+  pass, and the signed Android 15 physical canary on 2026-07-14 proved system resolver discovery,
+  cancel without sending, distinct current/new-session durable turns, warm delivery, and cold-start
+  recovery without preview replay or duplicate user messages. There is still **no on-device
+  sandbox**, added authority, or second execution path.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 

@@ -1,11 +1,14 @@
 const maxSharedTextLength = 16384;
 const maxSharedSubjectLength = 240;
 
+enum SharedContentSource { share, selection }
+
 class SharedContent {
   const SharedContent({
     required this.text,
     this.subject,
     this.truncated = false,
+    this.source = SharedContentSource.share,
   });
 
   factory SharedContent.fromEvent(Map<Object?, Object?> event) {
@@ -21,7 +24,13 @@ class SharedContent {
     if (body.isEmpty) {
       throw const FormatException('shared content is empty');
     }
-    final rawSubject = event['subject'];
+    final source = switch (event['source']) {
+      null || 'share' => SharedContentSource.share,
+      'selection' => SharedContentSource.selection,
+      _ => throw const FormatException('shared content has an invalid source'),
+    };
+    final rawSubject =
+        source == SharedContentSource.share ? event['subject'] : null;
     final sanitizedSubject =
         rawSubject is String ? _sanitizeSharedText(rawSubject) : '';
     final subject = _truncateWithoutSplittingSurrogate(
@@ -39,12 +48,14 @@ class SharedContent {
       text: _truncateWithoutSplittingSurrogate(combined, maxSharedTextLength),
       subject: subject.isEmpty ? null : subject,
       truncated: wasTruncated,
+      source: source,
     );
   }
 
   final String text;
   final String? subject;
   final bool truncated;
+  final SharedContentSource source;
 }
 
 bool _isHighSurrogate(int codeUnit) => codeUnit >= 0xd800 && codeUnit <= 0xdbff;

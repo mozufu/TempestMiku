@@ -67,6 +67,7 @@ class _UiCopy {
   String sendFailed(Object error) =>
       pick('Message not sent: $error', '訊息未送出：$error');
   String get shareWithMiku => pick('Share with Miku', '分享給 Miku');
+  String get askMikuAboutThis => pick('Ask Miku about this', '問問 Miku 這段內容');
   String get shareReviewHelper =>
       pick('Review and edit before anything is sent.', '送出前先確認並編輯內容。');
   String get shareTruncated => pick(
@@ -74,7 +75,10 @@ class _UiCopy {
     '分享內容超過安全匯入上限，已截短。',
   );
   String get sharedContent => pick('Shared content', '分享內容');
+  String get selectedText => pick('Selected text', '選取的文字');
   String get sharedFromAndroid => pick('Shared from Android', '來自 Android 分享');
+  String get selectedFromAndroid =>
+      pick('Selected in another Android app', '從其他 Android 應用程式選取');
   String get sendTo => pick('Send to', '傳送到');
   String get currentChat => pick('Current chat', '目前對話');
   String get newChat => pick('New chat', '新對話');

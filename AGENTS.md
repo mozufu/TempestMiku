@@ -35,7 +35,9 @@
   exclusion, release-signing enforcement, encrypted provider-neutral push registration/outbox, and
   authenticated notification actions. Production UnifiedPush/ntfy delivery and the remote
   killed-process canary are closed. The P6.2 Android text/share-target implementation and physical
-  current/new-session canary are closed; broader OS integrations remain P6 work. Also deferred:
+  current/new-session canary are closed. P6.3 adds a bounded selected-text action through the same
+  review path; its local gates and signed Android 15 cancel/current/new-session exact-once canary are
+  closed. Broader OS integrations remain P6 work. Also deferred:
   `tm-mcp`, `tm-trace`, pgvector/graph/LLM-backed memory expansion, cloud drive sync, live egress,
   and aggressive self-evolution.
 
@@ -66,7 +68,7 @@ Start with the narrowest docs for the task:
 Default next work:
 
 1. Select the next bounded P6 Android OS-integration slice. Preserve the closed pairing, release,
-   push, and `text/plain` share-target contracts; keep automatic sends and authority changes out.
+   push, Sharesheet, and selected-text contracts; keep automatic sends and authority changes out.
 2. Keep the native/OMP coding backend boundary boring: OMP ACP remains replaceable, while native Deno remains the dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed manual approvals.
 3. Keep `tm-mcp`, `tm-trace`, fuller memory, cloud drive sync, live egress, and P7 self-evolution
    deferred to their roadmap stages.

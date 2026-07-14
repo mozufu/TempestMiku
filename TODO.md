@@ -2,14 +2,15 @@
 
 Last aligned: **2026-07-14**.
 
-Active milestone: **P6 Android OS integrations — P6.2 share target closed**.
+Active milestone: **P6 Android OS integrations — P6.3 selected-text action closed**.
 
 `ROADMAP.md` remains the canonical milestone order. P0-P5 are complete for the documented
 single-owner deployment. P6 pairing, release hardening, provider-neutral push registration/outbox,
 and authenticated Android notification actions have landed. The production UnifiedPush/ntfy path is
 implemented, deployed on lumo, and proven by the physical killed-process request/resolution canary.
 The bounded, review-before-send Android `text/plain` share target is also implemented and physically
-proven; the next P6 OS-integration slice remains to be selected.
+proven. P6.3 extends that same review path to Android's selected-text menu without adding a new
+message loop or authority; its deterministic gates and signed Android 15 physical canary pass.
 
 This file records the closed P7.1/P7.2a checklists and the explicitly deferred queue. Keep it aligned
 with core docs §07, §08, §09, §10, §12 and product docs §21, §22, §26, §27, and §29. Closure is backed
@@ -89,6 +90,40 @@ P6.2 invariants:
   types in this slice.
 - Do not auto-send shared content or bypass the normal authenticated session client.
 - Shared content is untrusted user input; importing it grants no host capability or approval.
+
+## P6.3 Android Selected-Text Action
+
+- [x] Register an `ACTION_PROCESS_TEXT` / `text/plain` intent filter on the existing singleTop
+      `MainActivity`, labeled `Ask Miku`, without adding another Android activity or Flutter engine.
+- [x] Read selected input only from `EXTRA_PROCESS_TEXT`; keep `ACTION_SEND` bound to
+      `EXTRA_TEXT`/`EXTRA_SUBJECT`, and reject unknown actions, MIME types, empty content, URI grants,
+      streams, and URI-bearing clip data before Flutter sees the payload.
+- [x] Reuse the P6.2 control-character sanitization, 16,384-character bound, surrogate-safe
+      truncation, one-payload cold-start buffer, and consumed-intent cleanup.
+- [x] Carry a bounded `selection` source marker through the existing event channel so Flutter can
+      show selected-text copy while preserving the same editable review sheet, empty destination
+      selection, explicit current/new-chat choice, and durable send path.
+- [x] Pure Kotlin tests cover share/selection extra separation, rejection, sanitization, bounds, and
+      surrogate handling. Flutter parser/widget tests cover source validation, selected-text copy,
+      no-auto-send, cancellation, editing, and both durable destinations.
+- [x] Focused Kotlin and Flutter tests pass.
+- [x] Flutter analyze and all 60 Flutter tests pass; the full Android debug unit task passes. The
+      merged manifest and packaged APK expose `Ask Miku` as `ACTION_PROCESS_TEXT` / `text/plain` on
+      the existing exported singleTop activity, and the split debug APK contains only `arm64-v8a`.
+- [x] The macOS Keychain-backed release credential builds an arm64-only APK signed by the established
+      TempestMiku release certificate. The APK installs in place on the paired Android 15 device; the
+      system resolver exposes `Ask Miku`, cancel sends nothing, current/new-chat imports create
+      distinct durable turns, warm delivery succeeds, and a forced cold restart restores one user
+      message without replaying the review sheet or duplicating the send.
+
+P6.3 invariants:
+
+- Do not return replacement text to the source app, auto-send selected text, or add another client,
+  server, sandbox, model, or execution path.
+- Keep selected text untrusted and authority-free; it grants no host capability, resource access,
+  pairing change, approval, or URI access.
+- Preserve the closed P6.1 push, P6.2 Sharesheet, release-signing, secure-storage, and Firebase-free
+  contracts as regression gates.
 
 ## P7.0 North Star
 

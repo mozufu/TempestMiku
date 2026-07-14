@@ -46,6 +46,7 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
   Widget build(BuildContext context) {
     final tok = widget.tok;
     final copy = widget.copy;
+    final isSelection = widget.content.source == SharedContentSource.selection;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final canSend = _controller.text.trim().isNotEmpty && _destination != null;
     return AnimatedPadding(
@@ -77,7 +78,12 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                     color: tok.accentSoft.withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(Icons.share_outlined, color: tok.accentSoft),
+                  child: Icon(
+                    isSelection
+                        ? Icons.text_fields_rounded
+                        : Icons.share_outlined,
+                    color: tok.accentSoft,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -85,7 +91,9 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        copy.shareWithMiku,
+                        isSelection
+                            ? copy.askMikuAboutThis
+                            : copy.shareWithMiku,
                         style: TextStyle(
                           color: tok.text,
                           fontSize: 18,
@@ -140,8 +148,11 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
               maxLength: maxSharedTextLength,
               style: TextStyle(color: tok.text, fontSize: 14),
               decoration: InputDecoration(
-                labelText: copy.sharedContent,
-                helperText: copy.sharedFromAndroid,
+                labelText: isSelection ? copy.selectedText : copy.sharedContent,
+                helperText:
+                    isSelection
+                        ? copy.selectedFromAndroid
+                        : copy.sharedFromAndroid,
                 filled: true,
                 fillColor: tok.raised,
                 border: OutlineInputBorder(

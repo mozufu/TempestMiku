@@ -145,14 +145,14 @@ class MainActivity : FlutterActivity() {
                 },
             )
         handleNotificationIntent(intent)
-        handleShareIntent(intent)
+        handleTextImportIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleNotificationIntent(intent)
-        handleShareIntent(intent)
+        handleTextImportIntent(intent)
     }
 
     override fun onRequestPermissionsResult(
@@ -215,20 +215,22 @@ class MainActivity : FlutterActivity() {
         intent.removeExtra(EXTRA_DECISION)
     }
 
-    private fun handleShareIntent(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_SEND) return
-        val clipContainsUri = intent.clipData?.let { clip ->
+    private fun handleTextImportIntent(intent: Intent?) {
+        val textImportIntent = intent ?: return
+        if (textImportIntent.action !in setOf(Intent.ACTION_SEND, Intent.ACTION_PROCESS_TEXT)) return
+        val clipContainsUri = textImportIntent.clipData?.let { clip ->
             (0 until clip.itemCount).any { index -> clip.getItemAt(index).uri != null }
         } ?: false
         val hasUriPayload =
-            intent.flags and URI_GRANT_FLAGS != 0 ||
-                intent.hasExtra(Intent.EXTRA_STREAM) ||
+            textImportIntent.flags and URI_GRANT_FLAGS != 0 ||
+                textImportIntent.hasExtra(Intent.EXTRA_STREAM) ||
                 clipContainsUri
-        val parsed = ShareIntentParser.parse(
-            action = intent.action,
-            mimeType = intent.type,
-            text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT),
-            subject = intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT),
+        val parsed = TextImportIntentParser.parse(
+            action = textImportIntent.action,
+            mimeType = textImportIntent.type,
+            sharedText = textImportIntent.getCharSequenceExtra(Intent.EXTRA_TEXT),
+            selectedText = textImportIntent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT),
+            subject = textImportIntent.getCharSequenceExtra(Intent.EXTRA_SUBJECT),
             hasUriPayload = hasUriPayload,
         )
         if (parsed != null) {
@@ -240,12 +242,14 @@ class MainActivity : FlutterActivity() {
                 sink.success(payload)
             }
         }
-        intent.action = Intent.ACTION_MAIN
-        intent.removeExtra(Intent.EXTRA_TEXT)
-        intent.removeExtra(Intent.EXTRA_SUBJECT)
-        intent.removeExtra(Intent.EXTRA_STREAM)
-        intent.clipData = null
-        intent.flags = intent.flags and URI_GRANT_FLAGS.inv()
+        textImportIntent.action = Intent.ACTION_MAIN
+        textImportIntent.removeExtra(Intent.EXTRA_TEXT)
+        textImportIntent.removeExtra(Intent.EXTRA_PROCESS_TEXT)
+        textImportIntent.removeExtra(Intent.EXTRA_PROCESS_TEXT_READONLY)
+        textImportIntent.removeExtra(Intent.EXTRA_SUBJECT)
+        textImportIntent.removeExtra(Intent.EXTRA_STREAM)
+        textImportIntent.clipData = null
+        textImportIntent.flags = textImportIntent.flags and URI_GRANT_FLAGS.inv()
     }
 
 }

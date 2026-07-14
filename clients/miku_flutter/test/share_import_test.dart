@@ -31,6 +31,16 @@ void main() {
     expect(parsed.text, 'Example title\n\nhttps://example.test/path');
     expect(parsed.subject, 'Example title');
     expect(parsed.truncated, isFalse);
+    expect(parsed.source, SharedContentSource.share);
+
+    final selection = SharedContent.fromEvent({
+      'text': ' explain this ',
+      'source': 'selection',
+      'subject': 'ignored share subject',
+    });
+    expect(selection.text, 'explain this');
+    expect(selection.subject, isNull);
+    expect(selection.source, SharedContentSource.selection);
 
     final bounded = SharedContent.fromEvent({
       'text': 'x' * maxSharedTextLength,
@@ -50,6 +60,47 @@ void main() {
       () => SharedContent.fromEvent({'text': ' \u0000 '}),
       throwsFormatException,
     );
+    expect(
+      () => SharedContent.fromEvent({'text': 'x', 'source': 'unknown'}),
+      throwsFormatException,
+    );
+  });
+
+  testWidgets('reviews selected Android text and cancellation never sends', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final shares = RecordingShareImportService();
+    addTearDown(shares.close);
+    await tester.pumpWidget(MikuApp(client: client, shareImports: shares));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    shares.controller.add(
+      const SharedContent(
+        text: 'Explain this selected text',
+        source: SharedContentSource.selection,
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(find.text('Ask Miku about this'), findsOneWidget);
+    expect(find.text('Selected text'), findsOneWidget);
+    expect(find.text('Selected in another Android app'), findsOneWidget);
+    expect((await client.listSessions()).single.messageCount, 0);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('shareImportSend')))
+          .onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Ask Miku about this'), findsNothing);
+    expect((await client.listSessions()).single.messageCount, 0);
   });
 
   testWidgets('reviews and edits Android shares before sending', (

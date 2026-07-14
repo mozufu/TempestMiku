@@ -90,6 +90,24 @@ void main() {
     expect(app.themeMode, ThemeMode.dark);
   });
 
+  test('Miku themes preserve platform typography', () {
+    for (final (theme, brightness) in [
+      (MikuTheme.light, Brightness.light),
+      (MikuTheme.dark, Brightness.dark),
+    ]) {
+      final platformStyle =
+          ThemeData(
+            useMaterial3: true,
+            brightness: brightness,
+          ).textTheme.bodyMedium!;
+      final mikuStyle = theme.textTheme.bodyMedium!;
+
+      expect(mikuStyle.fontFamily, platformStyle.fontFamily);
+      expect(mikuStyle.fontFamilyFallback, platformStyle.fontFamilyFallback);
+      expect(mikuStyle.fontFamily, isNot('MikuCjkUi'));
+    }
+  });
+
   testWidgets('storm-cat brand badge exposes one accessible image label', (
     tester,
   ) async {

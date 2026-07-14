@@ -190,23 +190,6 @@ class _Tok extends MikuTokens {
 }
 
 abstract final class MikuTheme {
-  static const _fontFamily = 'MikuCjkUi';
-  static const _fontFallbacks = <String>[
-    '.SF Pro Text',
-    'Segoe UI',
-    'Roboto',
-    'PingFang TC',
-    'PingFang SC',
-    'Noto Sans CJK TC',
-    'Noto Sans CJK SC',
-    'Noto Sans TC',
-    'Noto Sans SC',
-    'Microsoft JhengHei',
-    'Microsoft YaHei',
-    'Arial',
-    'sans-serif',
-  ];
-
   static ThemeData get light => _build(Brightness.light, _Tok.light);
   static ThemeData get dark => _build(Brightness.dark, _Tok.dark);
 
@@ -248,8 +231,6 @@ abstract final class MikuTheme {
       hoverColor: tok.accent.withValues(alpha: 0.08),
       highlightColor: tok.accent.withValues(alpha: 0.12),
       splashFactory: InkSparkle.splashFactory,
-      fontFamily: _fontFamily,
-      fontFamilyFallback: _fontFallbacks,
       materialTapTargetSize: MaterialTapTargetSize.padded,
       visualDensity: VisualDensity.standard,
       extensions: <ThemeExtension<dynamic>>[tok],

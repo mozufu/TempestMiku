@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "completed_at": "2026-07-15T02:27:09.785903Z",
+  "passed": false,
+  "device": {
+    "manufacturer": "Xiaomi",
+    "model": "2412DPC0AG",
+    "device": "rodin",
+    "sdk": 35
+  },
+  "model": {
+    "id": "sensevoice-small-int8-2024-07-17",
+    "bytes": 239549735,
+    "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
+    "tokens_sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
+    "license": {
+      "name": "FunASR Model Open Source License Agreement 1.1",
+      "url": "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE"
+    },
+    "attribution": "SenseVoiceSmall by FunAudioLLM/FunASR",
+    "language": "auto",
+    "inverse_text_normalization": true,
+    "threads": 4
+  },
+  "runtime": {
+    "sherpa_onnx_version": "1.13.4",
+    "sherpa_onnx_git_sha": "14280725",
+    "sherpa_onnx_git_date": "Tue Jul 7 11:21:34 2026",
+    "os": "AP3A.240905.015.A2",
+    "processors": 8
+  },
+  "limits": {
+    "model_bytes": 367001600,
+    "peak_rss_kib": 1048576,
+    "inference_ms": 45000,
+    "max_rtf": 0.5,
+    "minimum_corpus_items": 50,
+    "required_60_second_runs": 3
+  },
+  "metrics": {
+    "model_load_ms": 1503,
+    "peak_rss_kib": 724160,
+    "max_inference_ms": 175,
+    "max_rtf": 0.02483100858369099,
+    "mean_cer": 0.0,
+    "corpus_items": 2,
+    "long_runs": 0
+  },
+  "gates": {
+    "passed": false,
+    "failures": [
+      "corpus_items",
+      "long_runs"
+    ]
+  },
+  "cases": [
+    {
+      "file": "en.wav",
+      "duration_seconds": 7.152,
+      "inference_ms": 175,
+      "rtf": 0.024470917225950784,
+      "text": "The tribal chieftain called for the boy and presented him with 50 pieces of code.",
+      "language": "<|en|>",
+      "emotion": "<|NEUTRAL|>",
+      "event": "<|Speech|>",
+      "reference": "The tribal chieftain called for the boy and presented him with 50 pieces of code.",
+      "cer": 0.0
+    },
+    {
+      "file": "zh.wav",
+      "duration_seconds": 5.592,
+      "inference_ms": 138,
+      "rtf": 0.02483100858369099,
+      "text": "开放时间早上9点至下午5点。",
+      "language": "<|zh|>",
+      "emotion": "<|NEUTRAL|>",
+      "event": "<|Speech|>",
+      "reference": "开放时间早上9点至下午5点。",
+      "cer": 0.0
+    }
+  ]
+}

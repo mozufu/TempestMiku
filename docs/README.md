@@ -9,6 +9,8 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
 - **[Design docs](design/README.md)** — the full specification, split by section.
 - **[Running Miku](running-miku.md)** — local server, browser app, CLI, and e2e run paths.
 - **[Roadmap](../ROADMAP.md)** — canonical milestones and execution order.
+- **[P6.6 ASR deferment evidence](evidence/2026-07-15-p6-6-on-device-asr-deferment.md)** — retained
+  benchmark, Taiwan Mandarin findings, open gates, and resume contract.
 - **[Changelog](../CHANGELOG.md)** — notable project changes.
 - **[Commit message spec](commit-messages.md)** — repository Conventional Commit dialect.
 

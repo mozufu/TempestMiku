@@ -277,11 +277,29 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   without replaying that draft. There is still **no on-device sandbox**, added model authority,
   background send, or second execution path.
 
-  P6.6 records bounded audio and uses a replaceable self-hosted Whisper-compatible service on lumo;
-  the editable transcript still requires explicit current/new-session send. It must preserve device
-  auth, revocation, signed upgrades, cold-start exact-once behavior, and authority-free imported
-  content. P6 closes after P6.6 physical evidence rather than accumulating open-ended OS
-  integrations.
+  If P6.6 resumes, it records at most 60 seconds / 1,920,000 raw bytes of PCM16-LE, 16 kHz, mono
+  audio and runs a replaceable `LocalAsrEngine` in a killable on-device worker. Raw audio never
+  leaves the phone and no server transcription endpoint or automatic platform/cloud/lumo fallback
+  exists. A versioned model is installed only after explicit owner action, verified by SHA-256,
+  capped at 350 MiB, kept app-private outside backup, and deletable. Its manifest pins the governing
+  license version/URL, source/author attribution, and retained model name. SenseVoice Small INT8
+  through sherpa-onnx is the first benchmark baseline, not a selected production model; NVIDIA
+  Parakeet zh-TW remains an equally unproven candidate until portable weights, redistribution,
+  Android conversion, and the same device gates are proven. Inference times out at
+  45 seconds, cancel/timeout/process death delete any audio cache, and retry is explicit. The
+  editable transcript still requires explicit current/new-session send. This must preserve device
+  auth, revocation, signed upgrades, airplane-mode operation after model installation, cold-start
+  exact-once behavior, and authority-free imported content. P6 closes only after deterministic
+  runtime tests, pinned-model RTF/RSS/thermal proof, APK inspection, and signed physical evidence
+  rather than accumulating open-ended OS integrations.
+
+  P6.6 was explicitly deferred on 2026-07-15. The interface spike and isolated harness do not alter
+  the production APK or authority surface, select a production model, or close P6.6/P6. The
+  benchmark provenance, Android 15 results, Taiwan-Mandarin quality findings, packaging boundaries,
+  raw artifact hashes, open gates, and resume contract are centralized in the independent
+  [P6.6 on-device ASR deferment evidence](../../evidence/2026-07-15-p6-6-on-device-asr-deferment.md)
+  note. Resume only after an explicit owner decision; until then there is no production microphone,
+  ASR runtime, model installer, fallback, or send path.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 

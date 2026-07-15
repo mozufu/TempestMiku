@@ -1,0 +1,51 @@
+# id	length	category	repeats	transcript
+001	short	daily	1	幫我記得今天晚上九點要倒垃圾。
+002	short	daily	1	我到家之後提醒我把衣服拿去洗。
+003	short	daily	1	明天早上七點半叫我起床。
+004	short	daily	1	晚餐想吃牛肉麵，不要加辣。
+005	short	daily	1	冰箱裡的鮮奶快喝完了，幫我加到購物清單。
+006	short	daily	1	等等經過超商時提醒我領包裹。
+007	short	daily	1	這張發票幫我存到本月的生活支出。
+008	short	daily	1	我的手機剩下百分之二十的電。
+009	short	daily	1	今天午休想去買一杯無糖少冰的紅茶。
+010	short	daily	1	週末如果沒下雨，我想去河濱騎腳踏車。
+011	short	taiwan-local	1	從臺北車站搭捷運到市政府要多久？
+012	short	taiwan-local	1	下一班往板橋的區間車幾點進站？
+013	short	taiwan-local	1	我的悠遊卡餘額只剩八十七元。
+014	short	taiwan-local	1	幫我找附近可以使用載具的早餐店。
+015	short	taiwan-local	1	今天臺北會不會宣布停班停課？
+016	short	taiwan-local	1	垃圾車剛剛是不是已經開過去了？
+017	short	taiwan-local	1	這個週末淡水老街的人會很多嗎？
+018	short	taiwan-local	1	我想查高鐵自由座的末班車時間。
+019	short	taiwan-local	1	外送到了，麻煩放在一樓管理室。
+020	short	taiwan-local	1	請問這裡可以刷悠遊付嗎？
+021	short	numbers	1	會議改到七月十八日下午三點四十五分。
+022	short	numbers	1	這筆費用是新臺幣一千兩百八十元。
+023	short	numbers	1	訂單編號是五零七三一九。
+024	short	numbers	1	室內溫度二十六點五度，濕度百分之六十八。
+025	short	numbers	1	從這裡走過去大約一點八公里。
+026	short	numbers	1	計時二十五分鐘，時間到要提醒我。
+027	short	numbers	1	民國一百一十五年七月十五日星期三。
+028	short	numbers	1	請把音量調低到百分之三十五。
+029	short	conversation	1	我剛剛講錯了，是下週二，不是這週二。
+030	short	conversation	1	嗯，先不用傳出去，讓我再改一下內容。
+031	short	conversation	1	這一段聽起來太正式，可以改得自然一點嗎？
+032	short	conversation	1	你先整理重點，我確認後再建立新的對話。
+033	short	conversation	1	剛才那個名字不是志明，是智銘。
+034	short	conversation	1	我想一下，晚點再決定要不要送出。
+035	short	code-switch	1	幫我打開 GitHub 上最新的 pull request。
+036	short	code-switch	1	這個 API 的 timeout 設成三十秒。
+037	short	code-switch	1	Flutter build 完成後再跑一次 integration test。
+038	short	code-switch	1	等一下改用 wireless ADB 連手機。
+039	short	code-switch	1	我們先測 on-device ASR 的 latency 和記憶體。
+040	short	code-switch	1	NVIDIA Parakeet 是下一個比較模型。
+041	short	code-switch	1	SenseVoice 的輸出要檢查繁體中文字形。
+042	short	code-switch	1	Rust workspace 的 clippy 不能有 warning。
+043	short	code-switch	1	Postgres migration 要先在測試資料庫重跑。
+044	short	code-switch	1	Tailscale Serve 的 HTTPS 連線目前正常。
+045	short	companion	1	咪庫，幫我把剛才的靈感先記下來。
+046	short	companion	1	這只是草稿，請不要直接幫我送出。
+047	short	companion	1	轉錄完成後我要先編輯文字，再選擇目前或新的對話。
+048	long	daily	3	今天早上我先搭公車到捷運站，進站以前用悠遊卡買了一杯熱豆漿。到了公司之後，我要整理昨天的會議紀錄，把待辦事項按照優先順序排好。中午十二點半和同事去附近吃飯，記得提醒我帶雨傘，因為下午可能會有短暫雷陣雨。下班以前再確認明天的行程，沒有問題才把摘要傳出去。
+049	long	engineering	3	我們正在測試手機上的語音辨識。第一步確認模型可以完全離線載入，第二步記錄每段音訊的 inference time、real-time factor 和 peak memory。接著檢查 Mandarin 跟 English code-switch 的結果，尤其是 GitHub、Flutter、wireless ADB 和 on-device ASR 這些詞。所有轉錄都先放在可編輯的草稿，不會自動送進目前的 session，也不會偷偷建立新的 session。
+050	long	companion	3	咪庫，這是一段接近一分鐘的連續語音測試。請把我說的內容完整轉成繁體中文，保留原本的意思，但先不要幫我送出。如果遇到人名、數字或英文縮寫，可以標記不確定的地方讓我修改。完成以後顯示預覽、錄音長度和模型處理時間，我確認內容正確，才會選擇送到目前的對話或建立新的對話。

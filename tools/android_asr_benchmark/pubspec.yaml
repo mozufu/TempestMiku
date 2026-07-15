@@ -1,0 +1,22 @@
+name: tm_asr_benchmark
+description: Isolated Android feasibility harness for TempestMiku P6.6 on-device ASR.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  crypto: 3.0.6
+  flutter:
+    sdk: flutter
+  path_provider: 2.1.5
+  sherpa_onnx: 1.13.4
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

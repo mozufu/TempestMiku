@@ -38,6 +38,8 @@ class _MikuHomePageState extends State<MikuHomePage>
   final List<ApprovalNotificationAction> _pendingNotificationActions = [];
   final List<NotificationRouteAction> _pendingNotificationRoutes = [];
   final List<SharedContent> _pendingShareImports = [];
+  final List<String> _recentQuickCaptureIds = [];
+  ValueNotifier<SharedContent>? _activeShareImport;
   bool _processingNotificationActions = false;
   bool _processingNotificationRoutes = false;
   bool _processingShareImports = false;
@@ -207,6 +209,22 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   void _enqueueShareImport(SharedContent content) {
+    if (content.source == SharedContentSource.quickCapture) {
+      final eventId = content.eventId;
+      if (eventId == null || _recentQuickCaptureIds.contains(eventId)) return;
+      _recentQuickCaptureIds.add(eventId);
+      if (_recentQuickCaptureIds.length > 64) {
+        _recentQuickCaptureIds.removeAt(0);
+      }
+      final active = _activeShareImport;
+      if (active?.value.source == SharedContentSource.quickCapture) {
+        active!.value = content;
+        return;
+      }
+      _pendingShareImports.removeWhere(
+        (pending) => pending.source == SharedContentSource.quickCapture,
+      );
+    }
     _pendingShareImports.add(content);
     if (_sessionBootComplete) unawaited(_drainShareImports());
   }
@@ -226,23 +244,33 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _reviewShareImport(SharedContent content) async {
     if (!mounted) return;
-    final decision = await showModalBottomSheet<_ShareImportDecision>(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: _tok.surface,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder:
-          (sheetContext) => _ShareImportSheet(
-            content: content,
-            currentSessionAvailable: _sessionId != null && !_sessionEnded,
-            tok: _tok,
-            copy: _copy,
-          ),
-    );
+    final contentListenable = ValueNotifier(content);
+    _activeShareImport = contentListenable;
+    late final _ShareImportDecision? decision;
+    try {
+      decision = await showModalBottomSheet<_ShareImportDecision>(
+        context: context,
+        showDragHandle: true,
+        backgroundColor: _tok.surface,
+        isScrollControlled: true,
+        useSafeArea: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        builder:
+            (sheetContext) => _ShareImportSheet(
+              contentListenable: contentListenable,
+              currentSessionAvailable: _sessionId != null && !_sessionEnded,
+              tok: _tok,
+              copy: _copy,
+            ),
+      );
+    } finally {
+      if (identical(_activeShareImport, contentListenable)) {
+        _activeShareImport = null;
+      }
+      contentListenable.dispose();
+    }
     if (decision == null || !mounted) return;
     if (decision.destination == _ShareDestination.newSession) {
       await _startNewSession(initialMessage: decision.text);

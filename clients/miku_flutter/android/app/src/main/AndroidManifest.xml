@@ -29,6 +29,9 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -44,11 +47,28 @@
                 <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name=".QuickCaptureShortcutActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service
             android:name=".TempestMikuPushService"
             android:exported="false">
             <intent-filter>
                 <action android:name="org.unifiedpush.android.connector.PUSH_EVENT"/>
+            </intent-filter>
+        </service>
+        <service
+            android:name=".QuickCaptureTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_quick_capture"
+            android:label="@string/quick_capture_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
         <receiver

@@ -14,6 +14,8 @@ class TextImportIntentParserTest {
             mimeType = "text/plain",
             sharedText = "  https://example.test/\u0000path\n  ",
             selectedText = "ignored selection",
+            quickCaptureText = null,
+            quickCaptureId = null,
             subject = " Example title\u0007 ",
         )
 
@@ -31,6 +33,8 @@ class TextImportIntentParserTest {
             mimeType = "text/plain",
             sharedText = "ignored share",
             selectedText = "  Explain this\u0000 code  ",
+            quickCaptureText = null,
+            quickCaptureId = null,
             subject = "ignored subject",
         )
 
@@ -46,7 +50,7 @@ class TextImportIntentParserTest {
         assertNull(parse(action = "android.intent.action.VIEW"))
         assertNull(parse(mimeType = "text/html"))
         assertNull(parse(sharedText = " \u0000 "))
-        assertNull(parse(hasUriPayload = true))
+        assertNull(parse(hasDisallowedPayload = true))
         assertNull(
             parse(
                 action = "android.intent.action.PROCESS_TEXT",
@@ -86,19 +90,101 @@ class TextImportIntentParserTest {
         assertTrue(selection.truncated)
     }
 
+    @Test
+    fun acceptsEmptyQuickCaptureWithVersionedId() {
+        val parsed = parse(
+            action = ACTION_QUICK_CAPTURE_V1,
+            mimeType = null,
+            sharedText = null,
+            quickCaptureText = null,
+            quickCaptureId = QUICK_CAPTURE_ID,
+        )
+
+        requireNotNull(parsed)
+        assertEquals("", parsed.text)
+        assertNull(parsed.subject)
+        assertEquals(TextImportSource.QUICK_CAPTURE, parsed.source)
+        assertEquals(QUICK_CAPTURE_ID, parsed.eventId)
+        assertEquals(QUICK_CAPTURE_ID, parsed.toEvent()["eventId"])
+        assertFalse(parsed.truncated)
+    }
+
+    @Test
+    fun sanitizesAndBoundsQuickCapturePrefill() {
+        val parsed = parse(
+            action = ACTION_QUICK_CAPTURE_V1,
+            mimeType = null,
+            sharedText = null,
+            quickCaptureText =
+                "  ${"x".repeat(MAX_TEXT_IMPORT_LENGTH)}\u0000extra  ",
+            quickCaptureId = QUICK_CAPTURE_ID,
+            subject = "ignored",
+        )
+
+        requireNotNull(parsed)
+        assertEquals(MAX_TEXT_IMPORT_LENGTH, parsed.text.length)
+        assertNull(parsed.subject)
+        assertTrue(parsed.truncated)
+    }
+
+    @Test
+    fun rejectsMalformedQuickCaptureContracts() {
+        assertNull(
+            parse(
+                action = ACTION_QUICK_CAPTURE_V1,
+                mimeType = null,
+                sharedText = null,
+                quickCaptureId = null,
+            ),
+        )
+        assertNull(
+            parse(
+                action = ACTION_QUICK_CAPTURE_V1,
+                mimeType = null,
+                sharedText = null,
+                quickCaptureId = "not-a-versioned-capture-id",
+            ),
+        )
+        assertNull(
+            parse(
+                action = ACTION_QUICK_CAPTURE_V1,
+                mimeType = "text/plain",
+                sharedText = null,
+                quickCaptureId = QUICK_CAPTURE_ID,
+            ),
+        )
+        assertNull(
+            parse(
+                action = ACTION_QUICK_CAPTURE_V1,
+                mimeType = null,
+                sharedText = null,
+                quickCaptureId = QUICK_CAPTURE_ID,
+                hasDisallowedPayload = true,
+            ),
+        )
+    }
+
     private fun parse(
         action: String = "android.intent.action.SEND",
-        mimeType: String = "text/plain",
+        mimeType: String? = "text/plain",
         sharedText: CharSequence? = "x",
         selectedText: CharSequence? = null,
+        quickCaptureText: CharSequence? = null,
+        quickCaptureId: String? = null,
         subject: CharSequence? = null,
-        hasUriPayload: Boolean = false,
+        hasDisallowedPayload: Boolean = false,
     ): ParsedTextImportIntent? = TextImportIntentParser.parse(
         action = action,
         mimeType = mimeType,
         sharedText = sharedText,
         selectedText = selectedText,
+        quickCaptureText = quickCaptureText,
+        quickCaptureId = quickCaptureId,
         subject = subject,
-        hasUriPayload = hasUriPayload,
+        hasDisallowedPayload = hasDisallowedPayload,
     )
+
+    private companion object {
+        const val QUICK_CAPTURE_ID = "12345678-1234-4abc-8def-1234567890ab"
+    }
 }

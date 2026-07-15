@@ -42,8 +42,10 @@
   review path; its local gates and signed Android 15 cancel/current/new-session exact-once canary are
   closed. P6.4 actionable notifications are closed with local Kotlin/Flutter/server/Postgres proof
   plus signed Android 15 foreground/background/killed-process, exact-once reply/retry, terminal
-  failure, and cold-start evidence. P6.5 quick capture is next, followed by P6.6 self-hosted voice
-  capture/closeout. The approved later order is P8 fuller memory, P7.2b
+  failure, and cold-start evidence. P6.5 quick capture is closed with deterministic tests, signed
+  APK inspection, and real launcher-shortcut/Quick Settings foreground/background/killed-process,
+  current/new-session exact-once, duplicate-intent, and process-death proof. P6.6 self-hosted voice
+  capture/closeout is next. The approved later order is P8 fuller memory, P7.2b
   approval-backed persona addenda, P9 egress/secrets, then P10 MCP/live research. `tm-trace`, cloud
   sync, AST/LSP, and extra sandbox backends are demand-triggered; aggressive self-evolution is out.
 
@@ -73,12 +75,11 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Implement P6.5 review-first quick capture through one bounded native capture intent reused by a
-   launcher shortcut and Quick Settings tile. Receipt must not send, pair, approve, or grant
-   authority; Flutter keeps the editable current/new-session confirmation, and native Android must
-   not run a model, sandbox, or second agent loop.
-2. Then implement P6.6 editable self-hosted voice transcription;
-   close P6 only after signed Android 15 physical evidence.
+1. Implement P6.6 bounded Android audio capture and editable transcription through a replaceable
+   self-hosted Whisper-compatible service on lumo. Define duration, byte, format, retention,
+   deletion, timeout, cancellation, and retry contracts; require explicit current/new-session send.
+2. Close P6 only after deterministic provider/client/server gates, live service degradation/restart
+   evidence, signed APK inspection, and signed Android 15 physical proof.
 3. Continue in the approved order: P8 fuller memory, P7.2b Auto-mode persona proposals with manual
    activation/rollback, P9 egress/opaque secrets, then P10 MCP/live research.
 4. Keep the native/OMP boundary boring: OMP ACP remains replaceable, while native Deno remains the
@@ -86,7 +87,7 @@ Default next work:
 
 Do not start yet unless explicitly requested:
 
-- P6.5/P6.6 before the preceding Android slice closes with deterministic and signed physical proof.
+- P8 before P6.6 closes with deterministic, live-provider, and signed physical proof.
 - P7.2b before P8 provenance/correction gates. Auto mode may decide when to propose, but persona
   activation and rollback always require durable manual approval.
 - MCP or live external research before P9 egress, redirect, budget, audit, revocation, and opaque

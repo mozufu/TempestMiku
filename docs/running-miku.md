@@ -275,6 +275,23 @@ and ended sessions each produced the expected visible terminal notification with
 messages. The temporarily revoked production device row was restored and a post-restore inline reply
 again produced exactly one message and turn.
 
+P6.5 uses one versioned quick-capture intent behind both the static launcher shortcut and the Quick
+Settings tile. Receipt opens the existing editable review sheet; it never sends, pairs, approves,
+or grants authority. The native parser accepts only a fresh UUID and optional sanitized bounded
+text, and rejects MIME, data, `ClipData`, selectors, streams, URI grants, and unknown extras. The
+launcher path uses a no-history trampoline, while Android 14+ tile launches use an immutable
+`PendingIntent`. No widget or second native send path is present.
+
+The P6.5 signed arm64 canary ran on Android 15 on 2026-07-15 with the same release fingerprint and
+an in-place `adb install -r`; `firstInstallTime`, pairing, and prior transcript state survived. The
+real launcher long-press menu exposed **Capture with Miku**, and the HyperOS control center exposed
+**Miku capture**. Each opened the same empty review from foreground, background, and a killed app
+process. Empty Send remained disabled and cancellation sent nothing. An edited current-session
+capture advanced the existing session from two to four messages, and a distinct new-session capture
+ended with exactly two messages. Re-delivering the same capture UUID opened no review and changed no
+message count. Killing the process while a draft was visible, then relaunching normally, restored
+the authenticated chat without replaying the draft.
+
 ```sh
 nix develop --command bash -lc \
   'cd clients/miku_flutter && flutter build apk --debug'

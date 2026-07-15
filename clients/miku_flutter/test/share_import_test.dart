@@ -21,6 +21,18 @@ class RecordingShareImportService implements MikuShareImportService {
   }
 }
 
+class ColdStartShareImportService implements MikuShareImportService {
+  const ColdStartShareImportService(this.contents);
+
+  final List<SharedContent> contents;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Stream<SharedContent> get imports => Stream.fromIterable(contents);
+}
+
 void main() {
   test('shared content parser sanitizes, combines, and bounds input', () {
     final parsed = SharedContent.fromEvent({
@@ -41,6 +53,16 @@ void main() {
     expect(selection.text, 'explain this');
     expect(selection.subject, isNull);
     expect(selection.source, SharedContentSource.selection);
+
+    final capture = SharedContent.fromEvent({
+      'text': '',
+      'source': 'quick_capture',
+      'eventId': '12345678-1234-4abc-8def-1234567890ab',
+    });
+    expect(capture.text, isEmpty);
+    expect(capture.subject, isNull);
+    expect(capture.source, SharedContentSource.quickCapture);
+    expect(capture.eventId, '12345678-1234-4abc-8def-1234567890ab');
 
     final bounded = SharedContent.fromEvent({
       'text': 'x' * maxSharedTextLength,
@@ -63,6 +85,203 @@ void main() {
     expect(
       () => SharedContent.fromEvent({'text': 'x', 'source': 'unknown'}),
       throwsFormatException,
+    );
+    expect(
+      () => SharedContent.fromEvent({'text': '', 'source': 'quick_capture'}),
+      throwsFormatException,
+    );
+  });
+
+  testWidgets(
+    'empty quick capture requires review and cancellation sends nothing',
+    (tester) async {
+      final client = ScriptedMikuClient();
+      final shares = RecordingShareImportService();
+      addTearDown(shares.close);
+      await tester.pumpWidget(MikuApp(client: client, shareImports: shares));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      shares.controller.add(
+        const SharedContent(
+          text: '',
+          source: SharedContentSource.quickCapture,
+          eventId: '10000000-0000-4000-8000-000000000001',
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(find.text('Quick capture'), findsOneWidget);
+      expect(find.text('Capture draft'), findsOneWidget);
+      expect((await client.listSessions()).single.messageCount, 0);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('shareImportSend')))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(find.text('Quick capture'), findsNothing);
+      expect((await client.listSessions()).single.messageCount, 0);
+    },
+  );
+
+  testWidgets('warm quick capture replaces the draft and deduplicates its id', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final shares = RecordingShareImportService();
+    addTearDown(shares.close);
+    await tester.pumpWidget(MikuApp(client: client, shareImports: shares));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    shares.controller.add(
+      const SharedContent(
+        text: 'first draft',
+        source: SharedContentSource.quickCapture,
+        eventId: '20000000-0000-4000-8000-000000000001',
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.enterText(
+      find.byKey(const ValueKey('shareImportEditor')),
+      'locally edited draft',
+    );
+    await tester.tap(find.text('Current chat'));
+    await tester.pump();
+
+    shares.controller.add(
+      const SharedContent(
+        text: 'newest draft',
+        source: SharedContentSource.quickCapture,
+        eventId: '20000000-0000-4000-8000-000000000002',
+      ),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('shareImportEditor')))
+          .controller
+          ?.text,
+      'newest draft',
+    );
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('shareImportSend')))
+          .onPressed,
+      isNull,
+    );
+
+    shares.controller.add(
+      const SharedContent(
+        text: 'duplicate must be ignored',
+        source: SharedContentSource.quickCapture,
+        eventId: '20000000-0000-4000-8000-000000000002',
+      ),
+    );
+    await tester.pump();
+    expect(find.text('duplicate must be ignored'), findsNothing);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Quick capture'), findsNothing);
+    expect((await client.listSessions()).single.messageCount, 0);
+  });
+
+  testWidgets('cold-start duplicate capture recovers into one review only', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    const capture = SharedContent(
+      text: 'cold capture',
+      source: SharedContentSource.quickCapture,
+      eventId: '30000000-0000-4000-8000-000000000001',
+    );
+    await tester.pumpWidget(
+      MikuApp(
+        client: client,
+        shareImports: const ColdStartShareImportService([capture, capture]),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+
+    expect(find.text('Quick capture'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+    expect(find.text('Quick capture'), findsNothing);
+    expect((await client.listSessions()).single.messageCount, 0);
+  });
+
+  testWidgets('sends an edited quick capture to current and new sessions', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final shares = RecordingShareImportService();
+    addTearDown(shares.close);
+    await tester.pumpWidget(MikuApp(client: client, shareImports: shares));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    shares.controller.add(
+      const SharedContent(
+        text: 'current capture',
+        source: SharedContentSource.quickCapture,
+        eventId: '40000000-0000-4000-8000-000000000001',
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.enterText(
+      find.byKey(const ValueKey('shareImportEditor')),
+      'edited current capture',
+    );
+    await tester.tap(find.text('Current chat'));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('shareImportSend')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 650));
+
+    shares.controller.add(
+      const SharedContent(
+        text: 'new capture',
+        source: SharedContentSource.quickCapture,
+        eventId: '40000000-0000-4000-8000-000000000002',
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.tap(find.text('New chat'));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('shareImportSend')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 650));
+
+    final sessions = await client.listSessions();
+    expect(sessions, hasLength(2));
+    expect(
+      sessions.any(
+        (session) =>
+            session.messageCount == 2 &&
+            session.preview == 'Miku heard: edited current capture',
+      ),
+      isTrue,
+    );
+    expect(
+      sessions.any(
+        (session) =>
+            session.messageCount == 2 &&
+            session.preview == 'Miku heard: new capture',
+      ),
+      isTrue,
     );
   });
 

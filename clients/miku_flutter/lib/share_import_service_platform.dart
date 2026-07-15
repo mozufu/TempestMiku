@@ -1,7 +1,7 @@
 const maxSharedTextLength = 16384;
 const maxSharedSubjectLength = 240;
 
-enum SharedContentSource { share, selection }
+enum SharedContentSource { share, selection, quickCapture }
 
 class SharedContent {
   const SharedContent({
@@ -9,9 +9,16 @@ class SharedContent {
     this.subject,
     this.truncated = false,
     this.source = SharedContentSource.share,
+    this.eventId,
   });
 
   factory SharedContent.fromEvent(Map<Object?, Object?> event) {
+    final source = switch (event['source']) {
+      null || 'share' => SharedContentSource.share,
+      'selection' => SharedContentSource.selection,
+      'quick_capture' => SharedContentSource.quickCapture,
+      _ => throw const FormatException('shared content has an invalid source'),
+    };
     final rawText = event['text'];
     if (rawText is! String) {
       throw const FormatException('shared content is missing text');
@@ -21,14 +28,15 @@ class SharedContent {
       sanitizedBody,
       maxSharedTextLength,
     );
-    if (body.isEmpty) {
+    if (body.isEmpty && source != SharedContentSource.quickCapture) {
       throw const FormatException('shared content is empty');
     }
-    final source = switch (event['source']) {
-      null || 'share' => SharedContentSource.share,
-      'selection' => SharedContentSource.selection,
-      _ => throw const FormatException('shared content has an invalid source'),
-    };
+    final eventId =
+        source == SharedContentSource.quickCapture ? event['eventId'] : null;
+    if (source == SharedContentSource.quickCapture &&
+        (eventId is! String || !_isQuickCaptureId(eventId))) {
+      throw const FormatException('quick capture is missing its event id');
+    }
     final rawSubject =
         source == SharedContentSource.share ? event['subject'] : null;
     final sanitizedSubject =
@@ -49,6 +57,7 @@ class SharedContent {
       subject: subject.isEmpty ? null : subject,
       truncated: wasTruncated,
       source: source,
+      eventId: eventId as String?,
     );
   }
 
@@ -56,7 +65,12 @@ class SharedContent {
   final String? subject;
   final bool truncated;
   final SharedContentSource source;
+  final String? eventId;
 }
+
+bool _isQuickCaptureId(String value) => RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+).hasMatch(value);
 
 bool _isHighSurrogate(int codeUnit) => codeUnit >= 0xd800 && codeUnit <= 0xdbff;
 

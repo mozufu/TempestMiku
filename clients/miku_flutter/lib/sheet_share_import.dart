@@ -11,13 +11,13 @@ class _ShareImportDecision {
 
 class _ShareImportSheet extends StatefulWidget {
   const _ShareImportSheet({
-    required this.content,
+    required this.contentListenable,
     required this.currentSessionAvailable,
     required this.tok,
     required this.copy,
   });
 
-  final SharedContent content;
+  final ValueListenable<SharedContent> contentListenable;
   final bool currentSessionAvailable;
   final _Tok tok;
   final _UiCopy copy;
@@ -28,16 +28,45 @@ class _ShareImportSheet extends StatefulWidget {
 
 class _ShareImportSheetState extends State<_ShareImportSheet> {
   late final TextEditingController _controller;
+  late SharedContent _content;
   _ShareDestination? _destination;
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.content.text);
+    _content = widget.contentListenable.value;
+    _controller = TextEditingController(text: _content.text);
+    widget.contentListenable.addListener(_handleContentChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ShareImportSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.contentListenable, widget.contentListenable)) {
+      return;
+    }
+    oldWidget.contentListenable.removeListener(_handleContentChanged);
+    _content = widget.contentListenable.value;
+    widget.contentListenable.addListener(_handleContentChanged);
+    _replaceEditorContent();
+  }
+
+  void _handleContentChanged() {
+    _content = widget.contentListenable.value;
+    _replaceEditorContent();
+  }
+
+  void _replaceEditorContent() {
+    _controller.value = TextEditingValue(
+      text: _content.text,
+      selection: TextSelection.collapsed(offset: _content.text.length),
+    );
+    setState(() => _destination = null);
   }
 
   @override
   void dispose() {
+    widget.contentListenable.removeListener(_handleContentChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -46,7 +75,8 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
   Widget build(BuildContext context) {
     final tok = widget.tok;
     final copy = widget.copy;
-    final isSelection = widget.content.source == SharedContentSource.selection;
+    final isSelection = _content.source == SharedContentSource.selection;
+    final isQuickCapture = _content.source == SharedContentSource.quickCapture;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final canSend = _controller.text.trim().isNotEmpty && _destination != null;
     return AnimatedPadding(
@@ -81,6 +111,8 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                   child: Icon(
                     isSelection
                         ? Icons.text_fields_rounded
+                        : isQuickCapture
+                        ? Icons.edit_note_rounded
                         : Icons.share_outlined,
                     color: tok.accentSoft,
                   ),
@@ -93,6 +125,8 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                       Text(
                         isSelection
                             ? copy.askMikuAboutThis
+                            : isQuickCapture
+                            ? copy.quickCapture
                             : copy.shareWithMiku,
                         style: TextStyle(
                           color: tok.text,
@@ -110,7 +144,7 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                 ),
               ],
             ),
-            if (widget.content.truncated) ...[
+            if (_content.truncated) ...[
               const SizedBox(height: 14),
               Container(
                 padding: const EdgeInsets.all(12),
@@ -131,7 +165,9 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                     const SizedBox(width: 9),
                     Expanded(
                       child: Text(
-                        copy.shareTruncated,
+                        isQuickCapture
+                            ? copy.quickCaptureTruncated
+                            : copy.shareTruncated,
                         style: TextStyle(color: tok.text, fontSize: 12.5),
                       ),
                     ),
@@ -148,10 +184,17 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
               maxLength: maxSharedTextLength,
               style: TextStyle(color: tok.text, fontSize: 14),
               decoration: InputDecoration(
-                labelText: isSelection ? copy.selectedText : copy.sharedContent,
+                labelText:
+                    isSelection
+                        ? copy.selectedText
+                        : isQuickCapture
+                        ? copy.captureDraft
+                        : copy.sharedContent,
                 helperText:
                     isSelection
                         ? copy.selectedFromAndroid
+                        : isQuickCapture
+                        ? copy.quickCaptureFromAndroid
                         : copy.sharedFromAndroid,
                 filled: true,
                 fillColor: tok.raised,

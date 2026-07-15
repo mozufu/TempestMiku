@@ -1,79 +1,82 @@
 # TODO
 
-Last aligned: **2026-07-14**.
+Last aligned: **2026-07-15**.
 
-Active milestone: **P6.5 — review-first Android quick capture**.
+Active milestone: **P6.6 — self-hosted voice capture and P6 closeout**.
 
 `ROADMAP.md` is the milestone-order and completion-history source. The approved long-range route is
 captured in `plans/one-shot-future-roadmap.md`. This file contains only the active executable slice,
 its regression boundaries, and the queued order.
 
-## P6.5 Outcome
+## P6.6 Outcome
 
-An Android owner can open one bounded quick-capture draft from a launcher shortcut or Quick Settings
-tile, edit it, and explicitly choose the current or a new session before sending. Receiving the
-native intent never sends, pairs, approves, grants authority, or runs a model.
+An Android owner can record bounded audio, receive a transcript from a replaceable self-hosted
+Whisper-compatible service on lumo, edit it, and explicitly choose the current or a new session
+before sending. Recording or transcription never sends a message, grants model authority, or creates
+a second agent loop.
 
-## P6.5 Contract
+## P6.6 Contract
 
-- [ ] Define one versioned native quick-capture intent with no URI grants, attachments, external
-      origins, or ambient authority.
-- [ ] Accept only sanitized bounded text and keep at most one cold-start payload; empty input opens
-      an empty editable draft instead of sending.
-- [ ] Route warm and cold intents through the existing platform event bridge into one Flutter review
-      sheet with editable text and explicit current/new-session choices.
-- [ ] Add a launcher shortcut and Quick Settings tile that both reuse that single intent contract.
-- [ ] Keep widget support out unless it can reuse the same bounded intent and review sheet without a
-      new send path or background authority.
-- [ ] Reuse the authenticated durable message API, stable client ids, session creation, event replay,
-      and existing composer semantics only after the owner presses Send.
-- [ ] Preserve process-death recovery without duplicate previews, messages, sessions, or turns.
-- [ ] Keep native Android free of model, sandbox, agent-loop, pairing, approval, filesystem, and
-      arbitrary-network execution.
+- [ ] Freeze the audio contract: supported format, sample rate/channels, maximum duration and bytes,
+      request timeout, cancellation, retry, retention, and deletion behavior.
+- [ ] Add explicit Android microphone permission and a visible record/stop/cancel flow; do not add
+      background recording, hotword listening, call capture, or ambient audio authority.
+- [ ] Upload only bounded audio over the existing origin-bound authenticated HTTPS path. Reject
+      wrong MIME/format, oversized or empty input, redirects, revoked credentials, and stale work.
+- [ ] Put transcription behind a narrow replaceable server/provider interface and deploy the
+      required Whisper-compatible provider on lumo. Platform or third-party recognition may be an
+      explicit fallback only, never the production dependency.
+- [ ] Keep raw audio ephemeral: never place it in prompts, transcripts, SSE, logs, notifications,
+      memory, Drive, or artifacts; delete it after success, terminal failure, expiry, or cancellation.
+- [ ] Present the returned text in an editable review sheet with no preselected destination and
+      explicit current/new-session confirmation before reusing the durable message path.
+- [ ] Make retries and process recovery idempotent so provider timeout, reconnect, repeated results,
+      or process death cannot duplicate a transcript preview, session, message, or turn.
+- [ ] Keep native Android and the transcription service free of sandbox, agent-loop, pairing,
+      approval, filesystem, arbitrary-network, and automatic-send authority.
 
 ## Deterministic Verification
 
-- [ ] Pure Kotlin tests cover intent/action matching, sanitization and bounds, empty input, URI or
-      attachment rejection, and single pending cold-start delivery.
-- [ ] Flutter parser/widget tests cover editable review, cancel/no-send, current/new-session routing,
-      warm replacement, cold-start recovery, and no duplicate preview or send.
-- [ ] Flutter analyze, the full Flutter suite, focused Android unit tests, and affected Rust/Web gates
-      pass.
-- [ ] Merged-manifest and APK inspection prove only the intended shortcut/tile components are
-      exported and that release ABI/signing, HTTPS-only networking, and backup exclusion remain
-      intact.
+- [ ] Server/provider tests cover auth, format and size bounds, timeout/cancel, retry/idempotency,
+      redirect refusal, revocation, provider failure, cleanup, and no retained or logged audio.
+- [ ] Flutter/Android tests cover permission denial, record/stop/cancel, duration and byte bounds,
+      editable transcript review, explicit current/new routing, no-auto-send, and cold/warm recovery.
+- [ ] Flutter analyze/full tests, focused Android unit tests, affected Rust/Web gates, strict Rust
+      format/clippy/tests, and deployment configuration checks pass.
+- [ ] Merged-manifest and APK inspection preserve exported-component boundaries, arm64 release ABI,
+      established signing, HTTPS-only networking, backup exclusion, push behavior, and Firebase absence.
 
 ## Physical And Live Closeout
 
-- [ ] Build an arm64 release APK with the established signing certificate and install it in place on
-      the paired Android 15 device without losing credentials or session state.
-- [ ] Prove launcher-shortcut and Quick Settings entry from foreground, background, and killed states.
-- [ ] Prove empty/edit/cancel paths send nothing and distinct current/new-session confirmations each
-      create exactly one durable user message and turn.
-- [ ] Prove process death and repeated intent delivery do not replay a draft or duplicate the message,
-      session, or turn.
-- [ ] Record replayable evidence and align product §27, `ROADMAP.md`, `TODO.md`, and `AGENTS.md`
-      before marking P6.5 complete.
+- [ ] Deploy the replaceable self-hosted transcription provider on lumo and prove health, bounded
+      latency, restart recovery, cancellation, cleanup, and visible degradation when it is unavailable.
+- [ ] Install the established signed arm64 release in place on the paired Android 15 device without
+      losing credentials, sessions, push registration, or prior transcript state.
+- [ ] Prove record/edit/cancel and permission-denial paths, plus distinct current/new-session sends
+      that each create exactly one durable user message and turn.
+- [ ] Prove background/foreground transitions, provider retry, process death, and cold start do not
+      retain audio or replay a transcript, message, session, or turn.
+- [ ] Record replayable evidence, align product §27, running docs, `ROADMAP.md`, `TODO.md`, and
+      `AGENTS.md`, and close P6 only after every deterministic, live, and signed physical gate passes.
 
 ## Regression Invariants
 
 - Preserve pairing, secure storage, HTTPS-only release networking, backup exclusion, release signing,
-  stable production push encryption, UnifiedPush/ntfy, actionable notifications, and Firebase/FCM
-  absence.
-- Preserve review-before-send for Sharesheet and selected-text imports; quick capture joins that
-  explicit review model and does not weaken notification Send semantics.
-- Keep captured text untrusted and authority-free. It grants no capability, resource, URI, pairing,
-  approval, filesystem, or network authority.
-- Reuse the durable turn queue, event log, SSE replay, and server-owned session authority.
-- Keep OMP ACP replaceable and native Deno as the coding dogfood path.
+  stable production push encryption, UnifiedPush/ntfy, actionable notifications, quick capture,
+  Sharesheet/selected-text review, and Firebase/FCM absence.
+- Treat audio and transcripts as untrusted, authority-free input. They grant no capability, resource,
+  URI, pairing, approval, filesystem, secret, or network authority.
+- Reuse the durable turn queue, stable client ids, event log, SSE replay, and server-owned session
+  authority only after explicit Send.
+- Keep the self-hosted provider replaceable, OMP ACP replaceable, and native Deno as the coding
+  dogfood path.
 
-## Queued After P6.5
+## Queued After P6.6
 
-1. P6.6 self-hosted voice capture and formal P6 closeout.
-2. P8 fuller memory with self-hosted Postgres FTS + pgvector hybrid recall.
-3. P7.2b Auto-mode persona proposals with durable manual activation and rollback.
-4. P9 production egress and opaque secret broker.
-5. P10 MCP catalog and live research through the P9 boundary.
+1. P8 fuller memory with self-hosted Postgres FTS + pgvector hybrid recall.
+2. P7.2b Auto-mode persona proposals with durable manual activation and rollback.
+3. P9 production egress and opaque secret broker.
+4. P10 MCP catalog and live research through the P9 boundary.
 
 ## Demand-Triggered Or Permanently Out
 

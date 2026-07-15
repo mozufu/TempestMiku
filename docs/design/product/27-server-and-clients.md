@@ -256,13 +256,31 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   replies, offline retry, and cold-start recovery create exactly one durable message and turn.
   Empty input stayed disabled and cancel sent nothing; oversized input, expired routes, revoked
   credentials, deleted sessions, and ended sessions all sent nothing and surfaced terminal
-  feedback. There is still **no on-device sandbox**,
-  added model authority, or second execution path. After that physical closeout, P6.5 adds one bounded quick-capture
-  intent reused by a launcher shortcut and Quick Settings tile, with a widget only if it adds no new
-  send path. P6.6 records bounded audio and uses a replaceable self-hosted Whisper-compatible service
-  on lumo; the editable transcript still requires explicit current/new-session send. Each slice must
-  preserve device auth, revocation, signed upgrades, cold-start exact-once behavior, and authority-free
-  imported content. P6 closes after P6.6 physical evidence rather than accumulating open-ended OS
+  feedback. P6.5 adds one versioned `ACTION_QUICK_CAPTURE_V1` contract carrying a fresh UUID and
+  optional sanitized text bounded to the existing 16,384-code-unit import limit. Native receipt
+  rejects MIME, data URIs, `ClipData`, selectors, streams, URI grants, and unexpected extras. The
+  static launcher shortcut uses a no-history trampoline to create that internal intent, while the
+  Quick Settings `TileService` uses the same constructor and the Android 14+ `PendingIntent` launch
+  API. Both entry points open an empty draft by default. They feed the existing platform event
+  bridge and editable review sheet; Flutter keeps only the newest cold capture, deduplicates recent
+  capture UUIDs, and still requires an explicit current/new-session choice before enabling Send. A
+  second widget entry point was intentionally not added.
+
+  The P6.5 signed Android 15 canary on 2026-07-15 preserved the established signer, pairing
+  credential, and transcript through an in-place upgrade. The registered shortcut appeared in the
+  real launcher long-press menu and the tile appeared in the HyperOS control center. Both opened the
+  same empty review from foreground, background, and killed-process states; empty Send stayed
+  disabled and cancel sent nothing. An edited current-session capture advanced the existing session
+  from two to four durable messages, while a distinct new-session capture completed with exactly two
+  messages. Repeated delivery of the same capture UUID opened no second review and changed neither
+  count. Killing the process with a draft open and relaunching normally restored the paired chat
+  without replaying that draft. There is still **no on-device sandbox**, added model authority,
+  background send, or second execution path.
+
+  P6.6 records bounded audio and uses a replaceable self-hosted Whisper-compatible service on lumo;
+  the editable transcript still requires explicit current/new-session send. It must preserve device
+  auth, revocation, signed upgrades, cold-start exact-once behavior, and authority-free imported
+  content. P6 closes after P6.6 physical evidence rather than accumulating open-ended OS
   integrations.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.

@@ -30,7 +30,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **P3+ — live actor mailbox** ✓ | Live MPSC resident delivery (`agents.send/wait/inbox/list/broadcast/cancel/pipeline`); active supervision (restart/subtree cancel); child approval routing through `ApprovalBroker`; DAG acyclicity + protocol invariants; Flutter smoke coverage | 5 | M2 | live siblings coordinate via `send`/`wait`; child cancel yields replayable `Cancelled` event; child approval requests reach the user; restart/timeout/subtree-failure decisions are replayable; Flutter attach/approve/reconnect pass |
 | **P4 — dreaming + proactivity** ✓ | consolidation + `skills/` generation (§22/§26); scheduler/cron (§27.2) | all | — | transactional session end, durable approvals/effects, fenced leases, enforced cron bounds, supervised roles, recovery tests, and final client verification pass |
 | **P5 — drive + research** ✓ | `drive.*` + auto-organizer (§24): transducers + virtual dirs; deep-research workspace (P3+P4+P5) | 4/5 | — | Postgres metadata/organizer/link persistence, CAS application, tombstones, startup link revalidation, and final restart/client verification pass |
-| **P6 — Android package + OS integrations (P6.1-P6.4 closed; P6.5 active)** | Finish the daily companion's Android entry points: actionable notifications, bounded quick capture, and self-hosted voice capture | all | — | Android/Web share authenticated durable turns and SSE; P6.4-P6.6 add exact-context reply, review-first capture, and editable self-hosted transcription without a second agent loop; signed Android 15 canaries close P6 |
+| **P6 — Android package + OS integrations (P6.1-P6.5 closed; P6.6 active)** | Finish the daily companion's Android entry points: actionable notifications, bounded quick capture, and self-hosted voice capture | all | — | Android/Web share authenticated durable turns and SSE; P6.4-P6.6 add exact-context reply, review-first capture, and editable self-hosted transcription without a second agent loop; signed Android 15 canaries close P6 |
 | **P7 — self-evolution tiers + hardening** | Typed, attenuated, reviewable evolution (§26); P7.2b eventually adds approval-backed persona addenda | all | M3–M4 | Auto mode may decide when to propose bounded persona guidance, but activation/rollback always require durable manual approval and never mutate identity, authority, or `SOUL.md` |
 | **P8 — fuller memory** | Self-hosted hybrid lexical/dense recall, scoped episodic/semantic stores, evidence-backed extraction, correction, and measured recall quality (§22) | all | — | Postgres FTS + pgvector recall degrades safely, preserves provenance and scope, never promotes unsupported inference to owner truth, and measurably improves replayable recall fixtures |
 | **P9 — production egress + secret broker** | Destination-scoped audited egress and opaque secret handles at the host boundary (§07/§08) | 4/5 | M4 | allowlists, DNS/IP/redirect policy, byte/request/time caps, revocation, denial, replay, and exfiltration tests pass before production egress can be enabled |
@@ -39,7 +39,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
 
-## Execution plan from current workspace (2026-07-14)
+## Execution plan from current workspace (2026-07-15)
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
 `tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
@@ -89,7 +89,7 @@ remains loopback-only behind an HTTPS reverse proxy or Tailscale Serve, and Post
 mandatory outside loopback and for embedded workers. This gate does not broaden the deployment
 target into multi-tenancy or arbitrary public-internet hosting.
 
-Also not production-complete: P6.5-P6.6 Android integrations, P8 fuller memory, P7.2b persona
+Also not production-complete: P6.6 Android voice capture, P8 fuller memory, P7.2b persona
 addenda, P9 production egress/secret hardening, and P10 `tm-mcp`/live research. Optional cloud drive
 sync, `code.ast`/`code.lsp`, `tm-trace`, generated SDK docs, and additional sandbox backends are
 demand-triggered rather than part of the committed critical path.
@@ -116,7 +116,7 @@ each milestone is done only when its acceptance checks pass.
 | 12 | **DONE — P6.2 ANDROID SHARE TARGET** | 1–2d | The exported Android `ACTION_SEND` target accepts only `text/plain`, sanitizes and bounds text/subject input, and forwards cold-start or singleTop intents through a platform event bridge. Flutter requires an editable confirmation sheet and explicit current/new-session selection before reusing the durable message path. | Pure Kotlin parser tests and Flutter parser/widget tests cover rejection, bounds, no-auto-send, editing, and both destinations. Flutter analyze/full tests, Kotlin parser tests, signed arm64 APK verification, and the physical Android 15 Sharesheet/current/new-session cold-start canary pass. |
 | 13 | **DONE — P6.3 ANDROID SELECTED-TEXT ACTION** | 1–2d | Add `ACTION_PROCESS_TEXT` / `text/plain` to the existing singleTop Android activity, accept only bounded `EXTRA_PROCESS_TEXT`, and reuse the P6.2 source-tagged event bridge plus editable current/new-session review flow. It never returns replacement text, consumes URI authority, or sends automatically. | Kotlin and Flutter tests, analyze, merged-manifest/APK inspection, and a Keychain-backed signed arm64 build pass. The in-place Android 15 canary proves OS resolver discovery, cancel without send, distinct current/new-session sends, warm delivery, and cold-start recovery without preview replay or duplicate user messages. |
 | 14 | **DONE — P6.4 ACTIONABLE ANDROID NOTIFICATIONS** | 2–4d | Deep-link notifications to their exact session/approval context and accept a bounded inline reply only after the owner explicitly presses Send. Native code posts one idempotent message through the existing authenticated durable API; it never runs the agent loop. `MessagingStyle` keeps the direct-reply action visible on HyperOS/MIUI. | Local Kotlin/Flutter/server and gated Postgres tests prove routing, bounds, idempotency, retry classification, revocation, expiry, missing-session handling, and no duplicate turn. A Keychain-backed signed arm64 APK installed in place on Android 15 and proved foreground/background/killed exact-context taps, distinct and double-tapped exact-once replies, offline retry, cold-start recovery, and visible no-send behavior for empty/cancelled/oversized, expired, revoked, deleted-session, and ended-session cases. |
-| 15 | **P6.5 QUICK CAPTURE** | 2–4d | Define one bounded capture intent, ship a launcher shortcut and Quick Settings tile, and add a widget only if it reuses the same editable composer path. No entry point sends, pairs, approves, or grants authority on receipt. | Parser/widget tests and a signed physical canary prove cancel/no-send, bounded prefill, warm/cold recovery, exact-once review state, and no added Android execution path. |
+| 15 | **DONE — P6.5 QUICK CAPTURE** | 2–4d | One versioned native action accepts only a fresh UUID plus optional sanitized bounded text and rejects MIME, data, `ClipData`, selectors, streams, URI grants, and unknown extras. A static launcher shortcut passes through a no-history trampoline and the Quick Settings `TileService` uses that same intent; both land in the existing editable current/new-session review path. No widget or native send/model path was added. | Kotlin parser/buffer tests, Flutter parser/widget tests, analyze/full Flutter, strict Rust workspace gates, signed arm64 APK inspection, and in-place Android 15 proof pass. The real launcher menu and HyperOS tile opened from foreground/background/killed states; empty/cancel sent nothing, current/new confirmations produced exactly one turn each, duplicate event ids were ignored, and process death did not replay a draft. |
 | 16 | **P6.6 SELF-HOSTED VOICE CAPTURE + P6 CLOSEOUT** | 4–7d | Record bounded audio, transcribe through a replaceable self-hosted Whisper-compatible service on lumo, and require editable transcript plus explicit current/new-session send. Define duration, byte, format, retention, deletion, timeout, and retry policy. | Deterministic client/server/provider tests, live service restart/degradation evidence, signed APK inspection, and an Android 15 record/edit/cancel/current/new/cold-start canary pass; P6 is then closed. |
 | 17 | **P8 FULLER MEMORY** | 8–14d | Add self-hosted Postgres FTS + pgvector hybrid recall, local embeddings, scoped episodic/semantic stores, fusion/reranking, provenance/confidence/correction history, evidence-backed extraction, and context budgeting. | Replayable recall fixtures show relevance improvement and scope isolation; provider loss degrades safely; re-embedding is versioned; stale/unsupported facts are corrected or withheld; no external SaaS is required. |
 | 18 | **P7.2b APPROVAL-BACKED PERSONA ADDENDA** | 4–7d | Let Auto mode detect repeated preference/persona mismatch and create typed, deduplicated, cooldown-bound proposals. Manual approval activates immutable tone/address/interaction guidance; rollback restores a prior version or the hand-authored base. | Tests/evidence prove auto-propose but never auto-apply, bounded evidence, stable base checks, deny/timeout/stale/retry safety, next-turn composition, rollback, and invariance of identity, `SOUL.md`, safety, modes, and capabilities. |
@@ -125,16 +125,15 @@ each milestone is done only when its acceptance checks pass.
 
 ### Immediate next task queue
 
-1. **Implement P6.5 review-first quick capture** — add one bounded native capture intent reused by
-   a launcher shortcut and Quick Settings tile; receipt never sends, pairs, approves, or grants
-   authority, and Flutter keeps the editable current/new-session confirmation.
-2. **Finish and close P6 in order** — after P6.5 signed physical closeout, P6.6 adds editable
-   self-hosted voice transcription. Do not widen either slice into a second client, server, model,
-   sandbox, or agent loop.
-3. **Deepen the companion before opening the platform** — P8 fuller memory precedes P7.2b persona
+1. **Implement P6.6 and close P6** — record bounded audio, transcribe through a replaceable
+   self-hosted Whisper-compatible service on lumo, and require editable transcript plus explicit
+   current/new-session confirmation. Do not widen it into a second client, model, sandbox, or agent
+   loop.
+2. **Deepen the companion before opening the platform** — after P6 closes, P8 fuller memory
+   precedes P7.2b persona
    addenda. Auto mode may propose persona guidance, but only durable manual approval can activate or
    roll it back.
-4. **Open external capabilities only through the safety spine** — P9 egress/secret hardening must
+3. **Open external capabilities only through the safety spine** — P9 egress/secret hardening must
    close before P10 MCP/live research. OMP remains replaceable and native Deno remains the coding
    dogfood path.
 
@@ -154,8 +153,8 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 ### Sequencing constraints
 
-- Close P6.4 before adding quick-capture entry points; close P6.5 before introducing audio/provider
-  state in P6.6.
+- P6.5 signed physical closeout is complete; close P6.6 with live-provider and signed Android
+  evidence before starting P8.
 - P8 provenance, correction, and recall-quality evidence precede Auto-mode persona proposals.
 - P9 egress and opaque-secret gates precede all P10 MCP/live-research production paths.
 - Cloud sync/CRDT, `code.ast`/`code.lsp`, `tm-trace`, and additional sandbox backends require a
@@ -163,7 +162,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 ### Do-not-start-yet list
 
-- P6.5/P6.6 before the preceding Android slice closes with signed physical evidence.
+- P8 before P6.6 closes with deterministic, live-provider, and signed physical evidence.
 - P7.2b persona activation before P8 provenance/correction gates; Auto mode may propose but never
   approve or activate.
 - MCP or live external research before P9 egress, byte/request caps, redirect policy, audit,

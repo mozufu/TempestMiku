@@ -43,7 +43,7 @@ class MainActivity : FlutterActivity() {
     private var permissionResult: MethodChannel.Result? = null
     private var actionSink: EventChannel.EventSink? = null
     private var shareImportSink: EventChannel.EventSink? = null
-    private var pendingShareImport: Map<String, Any>? = null
+    private val pendingShareImports = SinglePendingEventBuffer<Map<String, Any>>()
     private val pendingActions = mutableListOf<Map<String, Any>>()
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
@@ -148,8 +148,7 @@ class MainActivity : FlutterActivity() {
                 object : EventChannel.StreamHandler {
                     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                         shareImportSink = events
-                        pendingShareImport?.let(events::success)
-                        pendingShareImport = null
+                        pendingShareImports.drain(events::success)
                     }
 
                     override fun onCancel(arguments: Any?) {
@@ -265,7 +264,10 @@ class MainActivity : FlutterActivity() {
 
     private fun handleTextImportIntent(intent: Intent?) {
         val textImportIntent = intent ?: return
-        if (textImportIntent.action !in setOf(Intent.ACTION_SEND, Intent.ACTION_PROCESS_TEXT)) return
+        if (
+            textImportIntent.action !in
+            setOf(Intent.ACTION_SEND, Intent.ACTION_PROCESS_TEXT, ACTION_QUICK_CAPTURE_V1)
+        ) return
         val clipContainsUri = textImportIntent.clipData?.let { clip ->
             (0 until clip.itemCount).any { index -> clip.getItemAt(index).uri != null }
         } ?: false
@@ -273,22 +275,32 @@ class MainActivity : FlutterActivity() {
             textImportIntent.flags and URI_GRANT_FLAGS != 0 ||
                 textImportIntent.hasExtra(Intent.EXTRA_STREAM) ||
                 clipContainsUri
+        val hasUnexpectedQuickCapturePayload =
+            textImportIntent.action == ACTION_QUICK_CAPTURE_V1 &&
+                (
+                    textImportIntent.data != null ||
+                        textImportIntent.clipData != null ||
+                        textImportIntent.selector != null ||
+                        textImportIntent.extras?.keySet()?.any { key ->
+                            key !in setOf(EXTRA_QUICK_CAPTURE_ID, EXTRA_QUICK_CAPTURE_TEXT)
+                        } == true
+                )
         val parsed = TextImportIntentParser.parse(
             action = textImportIntent.action,
             mimeType = textImportIntent.type,
             sharedText = textImportIntent.getCharSequenceExtra(Intent.EXTRA_TEXT),
             selectedText = textImportIntent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT),
+            quickCaptureText = textImportIntent.getCharSequenceExtra(EXTRA_QUICK_CAPTURE_TEXT),
+            quickCaptureId = textImportIntent.getStringExtra(EXTRA_QUICK_CAPTURE_ID),
             subject = textImportIntent.getCharSequenceExtra(Intent.EXTRA_SUBJECT),
-            hasUriPayload = hasUriPayload,
+            hasDisallowedPayload = hasUriPayload || hasUnexpectedQuickCapturePayload,
         )
         if (parsed != null) {
             val payload = parsed.toEvent()
-            val sink = shareImportSink
-            if (sink == null) {
-                pendingShareImport = payload
-            } else {
-                sink.success(payload)
+            val consumer = shareImportSink?.let { sink ->
+                { event: Map<String, Any> -> sink.success(event) }
             }
+            pendingShareImports.offer(payload, consumer)
         }
         textImportIntent.action = Intent.ACTION_MAIN
         textImportIntent.removeExtra(Intent.EXTRA_TEXT)
@@ -296,7 +308,11 @@ class MainActivity : FlutterActivity() {
         textImportIntent.removeExtra(Intent.EXTRA_PROCESS_TEXT_READONLY)
         textImportIntent.removeExtra(Intent.EXTRA_SUBJECT)
         textImportIntent.removeExtra(Intent.EXTRA_STREAM)
+        textImportIntent.removeExtra(EXTRA_QUICK_CAPTURE_ID)
+        textImportIntent.removeExtra(EXTRA_QUICK_CAPTURE_TEXT)
+        textImportIntent.data = null
         textImportIntent.clipData = null
+        textImportIntent.selector = null
         textImportIntent.flags = textImportIntent.flags and URI_GRANT_FLAGS.inv()
     }
 

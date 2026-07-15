@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="quick_capture_short_label">Quick capture</string>
+    <string name="quick_capture_long_label">Capture with Miku</string>
+    <string name="quick_capture_tile_label">Miku capture</string>
+</resources>

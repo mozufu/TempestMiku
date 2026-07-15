@@ -54,9 +54,11 @@ delivers the §3 bet. Path 1 is a warning, not a plan.
 - **Failure action**: if `tm` loses on (1), it stays a design exercise. The fun is not a
   justification for a worse agent.
 
-`tm`'s syntax is chosen to stay *inside* the model's fluency basin (JSON, pipelines, match —
-all things models already write in Nu / OCaml / Roc-flavored examples). The benchmark is
-what tells us whether that bet landed.
+`tm`'s syntax is chosen to stay *inside* the model's fluency basin (JSON-shaped data,
+whitespace application, pipelines, match, and explicit blocks — all things models already write
+in Nu / OCaml / Roc-flavored examples). [§7](07-language-reference.md) fixes the exact source
+contract the corpus must use: top-level ---, do braces with semicolons, inferred effects, and
+options-first display calls. The benchmark is what tells us whether that bet landed.
 
 ## 5.4 Milestone sequencing (do not jump the line)
 
@@ -80,6 +82,9 @@ The smallest credible slice, if/when the gate is cleared:
 
 - `crates/tm-lang`: parser (rowan / pratt), effect-row type checker, tree-walking
   interpreter with suspend/resume.
+- Parser/checker conformance tests derived from [§7](07-language-reference.md), including
+  cell-form separation, data-last pipelines, local-type escape rejection, URI/capability
+  fail-closed checks, and par scopes.
 - A `Sandbox` impl that runs `tm` cells and performs effects into the existing
   `HostRegistry` (no new registry).
 - `tools.docs` returning `tm` effect declarations instead of TS `.d.ts` when the session is a

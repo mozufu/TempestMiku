@@ -46,4 +46,6 @@ Design doc, split by section. Read in order or jump to a section:
 > a structured execution trace and declarative presentation for the client UI.
 > Does not change §6.1 (TS on `deno_core` is the shipping sandbox language); `tm` would be a
 > third `Sandbox` backend that gives capability gating, approval suspension, provenance, replay,
-> and UI projection one observable execution model. See [`tm/README.md`](tm/README.md).
+> and UI projection one observable execution model. Its source syntax is now fixed in the
+> experimental [tm language reference](tm/07-language-reference.md). See
+> [`tm/README.md`](tm/README.md).

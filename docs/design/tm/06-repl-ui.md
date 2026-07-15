@@ -11,7 +11,8 @@ REPL with declarative presentation and a structured observable execution model.
 
 ## 6.1 Cell semantics
 
-A submitted cell runs now against the current committed REPL environment:
+A submitted cell runs now against the current committed REPL environment. Its top-level forms are
+separated by standalone --- syntax, but the whole cell is still one transaction:
 
 1. Parse and type-check the complete cell, including its grant-bearing effect row.
 2. Reject missing capability grants before evaluation.
@@ -29,7 +30,7 @@ environment; it never re-executes an old effectful cell to reconstruct either bi
 Therefore:
 
 ```tm
-let todos = @fs.read workspace:TODO.md |> lines |> filter (includes "P6")
+let todos = @fs.read workspace:TODO.md |> lines |> filter (contains "P6")
 ```
 
 means "read and bind this value now," not "keep `todos` reactively synchronized with the file."
@@ -121,7 +122,7 @@ Read 24 files    18 / 24
 
 and expand it into per-file children only on demand. Failure cancels siblings according to §2.8;
 the scope and child events make that cancellation visible without flooding the main conversation.
-Pure pipeline stages such as `filter`, `map`, and `sort by` do not emit nodes by default. A bounded
+Pure pipeline stages such as `filter`, `map`, and `sort_by` do not emit nodes by default. A bounded
 debug trace may expose them, but ordinary UI follows authority, latency, concurrency, approval, and
 intended presentation rather than every AST reduction.
 
@@ -165,15 +166,18 @@ For:
 
 ```tm
 let files = @fs.find {root: workspace:src, glob: "**/*.rs"}
+---
 let hits =
   files
   |> par map @fs.read
   |> flatmap lines
-  |> filter (includes "TODO")
+  |> filter (contains "TODO")
+---
 
-do
-  @code.edit {patch: build_patch hits}
+do {
+  @code.edit {patch: build_patch hits};
   hits |> display {kind: "table", title: "Updated TODOs"}
+}
 ```
 
 the main conversation can show:

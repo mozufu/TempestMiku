@@ -31,7 +31,7 @@ registry and actual runtime policy remain the authority on what needs approval.
 
 | Pillar | Maps to existing invariant | Language primitive |
 |---|---|---|
-| **Effectful** | §3.4 least-privilege, §3.9 one bridge | Algebraic effects + effect rows; host = handler |
+| **Effectful** | §3.4 least-privilege, §3.9 one bridge | Algebraic effects + inferred effect rows; host = handler |
 | **Approval-aware** | §7 approval policy, AGENTS.md approval boundary | Resumable effects (suspend → ask → resume) |
 | **Data-oriented, small** | §5.4 result shaping, §3.3 context-as-budget | Pipelines, tables, JSON, error effects |
 | **Observable** | §5 streaming, §12 replay, §27 clients | Structured cell/effect lifecycle + declarative presentation |
@@ -42,7 +42,7 @@ with [`ki`](https://github.com/awkward-squad/ki) structured concurrency, and
 [`atelier-core`](https://github.com/atelier-hub/tricorder/tree/b21172e/atelier-core) is a
 production catalog of exactly these effects (`Process`, `Conc`, `Cache`, `FileSystem`, …)
 with the same perform → interpreter dispatch `tm` adopts. `tm` does not claim "effects as
-capabilities" as novel. What it adds over a library: the effect **row** as a fail-closed
+capabilities" as novel. What it adds over a library: the inferred effect **row** as a fail-closed
 eval-time boundary rather than a post-hoc `:>` constraint (§3.1); **resumable** approval
 effects the library layer cannot express (§3.2); and the row as a **replay provenance**
 marker (§3.1). The load-bearing novelty is approval suspension plus the shared replay/UI trace;
@@ -63,13 +63,13 @@ intra-event-loop. You can fake it with a host op that blocks, but the TS type st
 says `Promise<void>`, identical to `fs.read`. In `tm`:
 
 ```
-fun ship(patch) : <_> Unit = @code.edit {patch}
+fun ship patch = @code.edit {patch}
 ```
 
-`<_>` asks the checker to infer the concrete authority row (`<code.edit>` here, plus the
-possible error set). `@` shows the host boundary. The registry declares that `code.edit` is
-resumable and carries `on-write` approval metadata; the effective runtime policy decides
-whether this particular perform suspends. The transcript records what actually happened.
+The checker infers the concrete authority row (code.edit here) and possible error set, then emits
+them through the typed-cell artifact and trace. @ shows the host boundary. The registry declares
+that code.edit is resumable and carries on-write approval metadata; the effective runtime policy
+decides whether this particular perform suspends. The transcript records what actually happened.
 
 There is deliberately no call-site `!`. Approval policy is not part of capability identity,
 and punctuation would be misleading when a pre-approved write does not prompt or a normally

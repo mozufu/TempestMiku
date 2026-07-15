@@ -6,8 +6,8 @@ bet.
 ## 3.1 Effects as the capability manifest
 
 Every external interaction is an **algebraic effect** and every effect perform is written with
-`@` at the call site. A capability declaration (which lives in the host registry, §3.9) is
-also a language-level effect declaration:
+`@` at the call site. A capability declaration lives in the host registry (§3.9) and is
+rendered by help/checker output as an effect signature:
 
 ```
 eff fs.read   : (path: Path) -> ResourceContent
@@ -17,14 +17,15 @@ eff code.edit : (patch: Patch) -> Unit
 eff proc.run  : (cmd: String, args: List String) -> ProcResult
 ```
 
-The declaration identifies authority and value types. Separate registry metadata describes
+These are registry documentation, not tm source forms. The declaration identifies authority and
+value types. Separate registry metadata describes
 execution policy: approval class (`none`, `on-write`, `on-external`, `always`), whether the
 handler supports suspend/resume, safe argument/result previews, and human-facing UI
 labels. Those properties are discoverable through `tools.docs`, but are not part of the
 canonical capability name.
 
 `error` is also an effect, but it is a core control effect rather than a grant-bearing host
-capability:
+capability. Its following signature is likewise documentation:
 
 ```
 eff error : HostError -> Never
@@ -34,21 +35,24 @@ Host capability docs declare which `HostError` payloads they may perform, and fa
 prelude functions do the same (for example `json.parse` performs `error ParseError`). For
 audit, the transcript shows the grant-bearing capability row separately from the possible
 error set: capabilities answer "what authority did this code touch?", while errors answer
-"how could this cell abort or be handled?" In source, `<_>` asks the checker to infer both.
+"how could this cell abort or be handled?" The checker infers both; source contains neither
+effect-row nor value-type annotations.
 
 A function's grant-bearing effect row is its **capability manifest**, computed by the type
 checker from the host capability effects it performs:
 
 ```
-fun backup(src, dst) : <_> Unit =
-  let data = @fs.read src
-  @fs.write dst data
+fun backup src dst =
+  do {
+    let data = @fs.read src;
+    @fs.write dst data
+  }
 ```
 
-Here `<_>` means "infer the effect row"; the checker records the concrete capability row
-`<fs.read, fs.write>` plus the possible error set in the typed cell and transcript. The
-grant-bearing effect names are exactly the host registry's canonical capability names. A
-policy change can alter whether `fs.write` prompts without changing source or authority type.
+The checker records the concrete capability row <fs.read, fs.write> plus the possible error set
+in the typed cell and transcript. The grant-bearing effect names are exactly the host registry's
+canonical capability names. A policy change can alter whether fs.write prompts without changing
+source or authority type.
 
 Three invariants from AGENTS.md / §3 fall out *for free, at type-check time, before any code
 runs*:
@@ -56,7 +60,7 @@ runs*:
 ### Fail-closed becomes a type error
 
 ```
-fun oops(url) : <_> Bytes = @http.get url   -- inferred <http.get>, not granted
+fun oops url = @http.get url   -- inferred <http.get>, not granted
 ```
 
 If the session's granted effect row does not include `http.get`, this is **rejected before
@@ -106,10 +110,11 @@ with deployment/session policy and would misleadingly resemble a mutation marker
 therefore uses the same `@capability` form for every host effect.
 
 ```
-do
-  let before = @fs.read workspace:config.json
-  @code.edit {patch: replace "v1" "v2"}
-  display "patched"
+do {
+  let before = @fs.read workspace:config.json;
+  @code.edit {patch: replace "v1" "v2" before};
+  display {kind: "text"} "patched"
+}
 ```
 
 Control flow under approval policy `always` for `code.edit`:
@@ -128,7 +133,7 @@ sequenceDiagram
   U-->>H: approve
   H->>I: resume ()
   I-->>E: effect_resumed
-  I->>M: continue → display "patched"
+  I->>M: continue → display {kind: "text"} "patched"
 ```
 
 Under policy `on-write` the same code might not suspend at all if the session pre-approved

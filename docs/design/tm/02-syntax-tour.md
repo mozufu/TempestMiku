@@ -1,249 +1,222 @@
 # 2. Syntax tour — the fun part
 
-`tm` is designed so the model's 90% case — *read, transform, display* — is one pipeline and
-nothing else. The syntax is a deliberate subset of things models already write fluently
-(JSON literals, URI literals, pipelines, record patterns) with one new visible marker: `@`
-for host capability effects. Approval is visible in live execution state, not encoded as
-punctuation in the capability name.
+The complete grammar is in [§7](07-language-reference.md). This tour shows the source surface
+the model should normally write: a small ML-shaped core, ordinary whitespace application, and a
+data-flow shell around the host boundary.
 
 ## 2.1 Hello, Miku
 
-```
+~~~tm
 print "hello, Miku"
-```
+~~~
 
-That's it. No `console.log`, no `Deno.core.ops.op_print`. `print` is a core primitive (§7).
+print is capped diagnostic output. User-facing output uses display with an explicit presentation
+specification:
 
-## 2.2 The shape of a cell
+~~~tm
+display {kind: "text"} "hello, Miku"
+~~~
 
-A cell is a series of bindings and a final expression. The last expression is the result;
-`display` emits an intended presentation (§6). `tm` is **expression-oriented**:
-there are no statements. `let x = e1; e2` is sugar for `let x = e1 in e2`, and a `do` block is
-a nested-`let` expression — sequential code is just expression nesting, not a second
-paradigm. Pipelines, `match`, `let`, `do`, and function bodies are all the same thing
-(expressions); the pipeline vs. sequence distinction is surface, not spine. This is the
-OCaml/Roc stance, and it is in the model's fluency basin.
+## 2.2 A persistent cell
 
-Cells run in a **persistent REPL**. Submitting a cell evaluates it immediately against the
-current committed environment; it does not install a reactive definition or deferred query.
-On success, new top-level bindings and the final value are committed for later cells. On
-failure or denial, partial bindings are discarded, while external effects that already
-completed retain their own durable/idempotent host semantics. Bindings persist for the life of
-the interpreter; a runtime reset starts a fresh environment and never blindly re-performs prior
-host effects to reconstruct it. Durable event replay restores the UI trace, not executable
-closures or isolate memory.
+A cell contains top-level forms separated by a standalone ---. The last form is its result.
+The complete cell evaluates now and commits its successful top-level bindings together; --- is
+not a sub-cell or a second transaction.
 
-```
-let paths = ["src/a.ts", "src/b.ts", "src/c.ts"]
+~~~tm
+let paths = [
+  workspace:src/a.rs,
+  workspace:src/b.rs,
+  workspace:src/c.rs
+]
+---
+let hits =
+  paths
+  |> par map @fs.read
+  |> flatmap lines
+  |> filter (fun line -> contains "TODO" line)
+  |> take 20
+---
+display {kind: "table", title: "first TODO lines"} hits
+~~~
 
-paths |> par map @fs.read
-      |> flatmap lines
-      |> filter (includes "TODO")
-      |> take 20
-      |> display {kind: "table", title: "first TODO lines"}
-```
+tm is expression-oriented. A nested sequence is explicit with do braces and semicolons:
 
-Compare the §6.5 TS original:
-
-```ts
-const docs = await Promise.all(paths.map(p => fs.read(p)));
-const hits = docs.flatMap(d => d.content?.split("\n") ?? []).filter(line => line.includes("TODO"));
-display(hits.slice(0, 20), { kind: "json", title: "first TODO lines" });
-```
-
-Same semantics. ~40% fewer tokens. No `await`/`Promise.all`/`?.`/`??` tangle — fan-out is one
-word (`par map`), null-safety is handled by `lines` returning `[]` on missing content rather
-than by an operator maze.
-
-## 2.3 Data is JSON (and a table)
-
-There is exactly one data literal: JSON. Records, arrays, strings, numbers, bools, null —
-what the model already emits in tool-call arguments.
-
-```
-let cfg = {
-  name: "miku",
-  modes: ["playful", "serious"],
-  cap: 8
+~~~tm
+do {
+  @code.edit {patch};
+  display {kind: "text"} "done"
 }
-```
+~~~
 
-The one extension is a **table** first-class type, because agents spend their lives in rows:
+There are no reactive definitions. A binding is the value computed by this eager REPL cell,
+not a subscription that silently re-runs an effect.
 
-```
+## 2.3 Whitespace application and pipelines
+
+Calls use left-associative whitespace application:
+
+~~~tm
+contains "TODO" line
+filter predicate values
+@fs.read workspace:src/main.rs
+~~~
+
+Pipelines put their input in the final argument position:
+
+~~~tm
+text |> split "," |> filter predicate
+rows |> display {kind: "table", title: "Rows"}
+~~~
+
+That means the direct forms are:
+
+~~~tm
+filter predicate (split "," text)
+display {kind: "table", title: "Rows"} rows
+~~~
+
+Ordinary parentheses only group an expression. They are useful for a partially applied
+predicate, not required around each call.
+
+## 2.4 JSON-shaped data and local types
+
+Values are JSON-shaped records, lists, strings, numbers, booleans, and JSON-boundary null.
+Record punning keeps common values compact; merge is the explicit immutable record update:
+
+~~~tm
+let config = {name: "miku", cap: 8}
+---
+let next = merge {cap: 9} config
+---
+display {kind: "json"} next
+~~~
+
+The checker infers value and effect types. The only source-level type spelling is a local,
+non-generic sum-type schema:
+
+~~~tm
+do {
+  type Finding =
+    | Hit {file: String, line: Int, text: String}
+    | Ignored {path: Path};
+  let finding = Hit {file: "src/lib.rs", line: 42, text: "TODO"};
+  match finding {
+    | Hit {file, line, text} ->
+        display {kind: "text"} "#file:#line #text"
+    | Ignored {path} ->
+        display {kind: "text"} "ignored #path"
+  }
+}
+~~~
+
+That type is scoped to this cell. It cannot leak into a persistent REPL binding or later cell.
+The checker instead emits inferred function, authority, error, and presentation facts through
+help and the typed execution trace.
+
+## 2.5 Tables are applications, not SQL grammar
+
+table is a core constructor. where, select, sort_by, group_by, and aggregate are normal
+data-last prelude functions:
+
+~~~tm
 let users = table [
   {name: "ice", age: 30, email: "i@x"},
   {name: "miku", age: 21, email: "m@x"},
   {name: "ren", age: 17, email: "r@x"}
 ]
-
+---
 users
-  |> where age > 18
-  |> select name, email
-  |> sort by name
-  |> display {kind: "table"}
-```
+  |> where (age > 18)
+  |> select {name, email}
+  |> sort_by name asc
+  |> display {kind: "table", title: "Adults"}
+~~~
 
-Tables flow into `display {kind: "table"}` for free (§7 `DisplayTable`). No DataFrame, no
-pandas — just rows the host already knows how to render.
+The parser sees only application and ordinary expressions. In a known table-prelude argument,
+the checker resolves an otherwise-unbound name such as age against the table schema. A lexical
+binding wins; row.age is the explicit escape when names collide.
 
-## 2.4 Functions and effect rows
+## 2.6 The @ host boundary
 
-```
-fun add(x, y) : Int = x + y
+Every registry-owned capability starts with @:
 
-fun gather_todos(paths) : <_> List String =
-  paths |> par map @fs.read |> flatmap lines |> filter (includes "TODO")
-```
-
--- [String] in a value is a JSON list literal; the *type* is `List String`.
--- `<>` is the effect row (angle brackets are free — `tm` has no generics, §2.9).
-
-The `: <_> List String` is the **effect row + return type** with an inferred row. `tm`
-uses the host registry's canonical capability names as grant-bearing effect names, so the
-checker infers the capability row `<fs.read>` for `gather_todos` and a separate possible-error
-set from the capability docs (§3.1). An empty row (or omitted `<>` entirely) means no host
-authority; full replay/memoization purity additionally requires empty core error and presentation
-sets (§3.1, §6.5). A concrete row such as `<fs.read, code.edit>` is still valid for library-like
-examples, but ordinary model-authored code should prefer `<_>` and let the checker print the
-inferred row into the transcript.
-```
-fun pure_sum(xs) : List Int = xs |> fold 0 (+)
-```
-
-No authority row and no core error/presentation effects → the host may cache it; the
-transcript may skip re-running it on replay.
-
-
-## 2.5 The `@` — host boundary in the syntax
-
-Every host capability perform starts with `@`. Plain names are language / prelude / runtime-local
-functions; `@name` crosses the sandbox boundary, is checked against the session's granted effect
-row before eval, and emits a provenance node in the transcript (§3.1).
-
-```
-lines text                  -- pure prelude
-display rows                -- core presentation effect
-@fs.read workspace:src/a.ts -- host capability: fs.read
-@mcp.github.search_issues {repo: "owner/repo", query: "is:open"}
-```
-
-Capability addresses use dot-separated names (`fs.read`, `code.edit`,
-`mcp.<server_alias>.<tool_name>`). MCP tools imported at runtime keep the `mcp.` prefix so code
-reviewers and the model can see the external boundary without consulting the registry.
-
-URI/path literals are first-class tokens when they start with a known scheme shape
-(`scheme:path` or `scheme://...`), so capability calls do not need string wrappers for resource
-addresses:
-
-```
-@resources.read artifact://cell/abc123
-@resources.read mcp://github/repos/owner/repo/issues/123
+~~~tm
 @fs.read workspace:src/main.rs
-```
+@resources.read artifact://cell/abc123
+@mcp.github.search_issues {repo: "owner/repo", query: "is:open"}
+~~~
 
-If the same text is meant as ordinary data, quote it as a string.
+The capability name is static and canonical. A URI is only data; @mcp.github.search_issues is a
+tool perform. Unknown capability names and URI schemes fail before evaluation. @capability can
+also be passed as an effectful function:
 
-## 2.6 Approval is an execution state, not punctuation
-
-```
-fun save(patch) : <_> Unit = @code.edit {patch}
-```
-
-The checker infers `<code.edit>` plus the possible error set. Registry metadata says that
-`code.edit` supports resumable approval and which approval class it belongs to; the effective
-host policy decides whether this particular call suspends. Capability identity and authority
-therefore remain stable when policy changes.
-
-The model does not write "if approved then… else…" — it writes the edit, and the language
-handles the wait. The runtime emits `effect_suspended` and `effect_resumed` events so review
-and UI see the actual boundary rather than an approximation in source. Denial performs an
-`error ApprovalDenied` effect as before.
-
-```
-do
-  @code.edit {patch}
-  display "done"
-```
-
-If the policy is `always`, execution suspends at `@code.edit`, the host prompts the user, and
-`display "done"` runs only on approval. On denial, the handler performs an `error
-ApprovalDenied` effect and normal error-effect handling takes over (§4). **No callback was
-written.**
-
-## 2.7 Pattern matching and error effects
-
-There are no exceptions and host capabilities do not wrap success values in `Result`. A
-successful `@fs.read` returns its success type; a failed one performs an `error` effect. If no
-handler catches it, the error bubbles to the cell result and the host shapes it as a
-structured error. When the model wants to recover, it handles the effect:
-
-```
-handle
-  path |> @fs.read |> display
-with error {
-  NotFound {uri} -> display {kind: "text", text: "missing: #uri"}
-  e              -> rethrow e
-}
-```
-
-`#uri` is interpolation in a string. `rethrow` re-performs the error effect so the cell's
-shaped result includes it (§5.4 error policy). This maps 1:1 to §6.3's "a killed cell returns
-a structured error the model can react to" — but the reaction is an explicit effect handler,
-not a `try/catch` that might silently swallow.
-
-## 2.8 `par` — concurrency is a word
-
-```
-let [a, b, c] = par [ @fs.read workspace:a, @http.get https://example.test/b, help @fs.write ]
-```
-
-`par` evaluates a tuple of effectful expressions concurrently and waits for all. Backed by
-Tokio on the deno path, host-side fan-out on the CPython path (§6.6 `host.parallel`) — **same
-syntax, different executor.** `par map` is `par` over a list.
-`par` has the strict semantics of a structured-concurrency scope (the shape
-[`ki`](https://github.com/awkward-squad/ki) / [`atelier-core`](https://github.com/atelier-hub/tricorder/tree/b21172e/atelier-core)
-`Conc.scoped` + `awaitAll` already implements): all branches are bound to the `par` scope;
-the scope does not close until every branch has completed or been cancelled; if any branch
-performs an error, the scope cancels its siblings and re-performs that error — the
-first-failure semantics of `Conc.race`, generalized to N arms. The model writes `par`,
-never `Promise.all` plus manual abort wiring.
-
-## 2.9 Discovering capabilities
-
-`help`, `tools.search`, and `tools.docs` are effects too (they hit the registry), and they
-are the language's **introspection entry point** — the `tm` equivalent of reading its own SDK
-docs:
-
-```
+~~~tm
+paths |> par map @fs.read
 help @fs.read
-help "table.aggregate"
-```
+~~~
 
-`help @name` is Python-shaped sugar for `tools.docs name |> display {kind: "help"}`. It
-returns the same documentation value if used in an expression, so the model can inspect the
-signature programmatically:
+Applying the capability is the perform that gets checked against current grants and becomes a
+provenance node. The source never writes an effect row or approval suffix.
 
-```
-let docs = help @fs.read
-docs.signature |> display {kind: "json"}
-```
+## 2.7 Approval is execution state
 
-This is §7's progressive disclosure, unchanged: nothing about a capability enters context
-until the code asks (§3.2). The difference is `docs.signature` comes back as an *effect row
-declaration*, not a TS `.d.ts` string — the model learns `tm` syntax by reading `tm` effect
-types.
+~~~tm
+fun save patch = @code.edit {patch}
+~~~
 
-## 2.10 What's deliberately not here
+The checker infers save's authority and possible errors. Registry metadata decides whether a
+particular code.edit perform suspends. If it does, the isolate waits, the UI emits
+effect_suspended, and the same continuation resumes after approval. The source is unchanged if
+the session was already approved.
 
-No classes. No prototypes. No `this`. No macros. No `async`/`await` (effects subsume both).
-No exceptions (`error` is an effect). No optional chaining operator (pattern match instead).
-No npm. No `Promise`. No parametric generics — `<>` is *only* the effect row, never `List<T>`
-or `Map<K,V>`; type parameters on a `type` declaration are sum-type fields, not
-generic-function syntax. The language is meant to be small
-enough that the *entire grammar fits in the system prompt's SDK section* if we want — and
-certainly small enough that `tools.docs` can teach it.
+~~~tm
+handle do {
+  @code.edit {patch};
+  display {kind: "text"} "patched"
+} with error {
+  | ApprovalDenied {capability} ->
+      display {kind: "text"} "denied #capability"
+  | e -> rethrow e
+}
+~~~
 
-There are also no reactive bindings, query planner, or implicit re-evaluation rules. Pipeline
-and presentation syntax may read declaratively, but the REPL remains eager and effect order is
-explicit. The runtime may parallelize only where the program gives it structure such as `par`.
+There are no exceptions or Result wrappers around successful host values. A failure performs the
+core error effect; handle ... with error makes recovery explicit.
+
+## 2.8 Pattern matching, options, and conditionals
+
+~~~tm
+match maybe_path {
+  | Some path -> @fs.read path
+  | None -> display {kind: "text"} "no path"
+}
+
+if length hits == 0
+then display {kind: "text"} "clean"
+else display {kind: "table"} hits
+~~~
+
+null is accepted only as JSON-boundary shorthand for None under an Option context. Direct field
+access is strict: a known missing field is a type error and a dynamic missing field performs a
+structured error. There is no optional-chaining syntax.
+
+## 2.9 par is visible concurrency
+
+~~~tm
+let {source, issue} = par {
+  source: @fs.read workspace:src/lib.rs,
+  issue: @mcp.github.get_issue {number: 42}
+}
+~~~
+
+par is the only concurrency word. It creates a structured scope with child effect nodes and
+bounded progress. On first failure it cancels siblings and re-performs that failure. The model
+never writes Promise.all, await, manual abort plumbing, or a thread API.
+
+## 2.10 What deliberately stays out
+
+No classes, prototypes, this, macros, packages, generic user types, source annotations, async
+syntax, exceptions, optional chaining, assignment, raw shell, dynamic capability lookup,
+reactive bindings, query planner, or UI widget language. The grammar stays small enough for
+progressive disclosure and a fluency benchmark, while the trace carries the operational detail.

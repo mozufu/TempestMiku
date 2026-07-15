@@ -24,6 +24,8 @@ Sections:
 4. [Data, pipelines & errors](04-data-pipelines.md)
 5. [Backend, fluency risk & where it lives](05-backend-fluency.md)
 6. [Persistent REPL, execution trace & UI](06-repl-ui.md)
+7. [Language reference — the syntax contract](07-language-reference.md)
 
 Read §6 (REPL/sandbox) and §7 (host SDK) of the core docs first; `tm` is a re-expression of
-those invariants, not a replacement for them.
+those invariants, not a replacement for them. The new §7 language reference is the canonical
+source grammar; the syntax tour remains the model-facing introduction.

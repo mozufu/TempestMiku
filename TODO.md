@@ -2,85 +2,133 @@
 
 Last aligned: **2026-07-15**.
 
-Active milestone: **P6.6 — self-hosted voice capture and P6 closeout**.
+Active milestone: **P8 — fuller memory**.
 
-`ROADMAP.md` is the milestone-order and completion-history source. The approved long-range route is
-captured in `plans/one-shot-future-roadmap.md`. This file contains only the active executable slice,
-its regression boundaries, and the queued order.
+Active slice: **P8.1 — replayable recall baseline and record contracts**.
 
-## P6.6 Outcome
+`ROADMAP.md` is the milestone-order and completion-history source. This file contains the ordered
+P8 execution slices, their regression boundaries, and explicit deferments; only P8.1 is active now.
 
-An Android owner can record bounded audio, receive a transcript from a replaceable self-hosted
-Whisper-compatible service on lumo, edit it, and explicitly choose the current or a new session
-before sending. Recording or transcription never sends a message, grants model authority, or creates
-a second agent loop.
+P6.6 on-device ASR was explicitly deferred on 2026-07-15. Its implementation state, model and
+corpus provenance, physical results, quality gaps, raw artifact hashes, and resume contract live in
+[`docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md`](docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md).
+P6.1–P6.5 remain closed; neither P6.6 nor P6 is marked complete.
 
-## P6.6 Contract
+## P8 Outcome
 
-- [ ] Freeze the audio contract: supported format, sample rate/channels, maximum duration and bytes,
-      request timeout, cancellation, retry, retention, and deletion behavior.
-- [ ] Add explicit Android microphone permission and a visible record/stop/cancel flow; do not add
-      background recording, hotword listening, call capture, or ambient audio authority.
-- [ ] Upload only bounded audio over the existing origin-bound authenticated HTTPS path. Reject
-      wrong MIME/format, oversized or empty input, redirects, revoked credentials, and stale work.
-- [ ] Put transcription behind a narrow replaceable server/provider interface and deploy the
-      required Whisper-compatible provider on lumo. Platform or third-party recognition may be an
-      explicit fallback only, never the production dependency.
-- [ ] Keep raw audio ephemeral: never place it in prompts, transcripts, SSE, logs, notifications,
-      memory, Drive, or artifacts; delete it after success, terminal failure, expiry, or cancellation.
-- [ ] Present the returned text in an editable review sheet with no preselected destination and
-      explicit current/new-session confirmation before reusing the durable message path.
-- [ ] Make retries and process recovery idempotent so provider timeout, reconnect, repeated results,
-      or process death cannot duplicate a transcript preview, session, message, or turn.
-- [ ] Keep native Android and the transcription service free of sandbox, agent-loop, pairing,
-      approval, filesystem, arbitrary-network, and automatic-send authority.
+TempestMiku can measure the current lexical/profile recall baseline, persist richer scoped memory
+records with evidence and correction history, and retrieve bounded hybrid lexical/dense candidates
+without weakening server-owned owner/scope authority. Dense recall is self-hosted and replaceable;
+when it is disabled or unavailable, recall degrades visibly to the existing lexical path.
 
-## Deterministic Verification
+## P8.1 — Replayable Baseline And Contracts
 
-- [ ] Server/provider tests cover auth, format and size bounds, timeout/cancel, retry/idempotency,
-      redirect refusal, revocation, provider failure, cleanup, and no retained or logged audio.
-- [ ] Flutter/Android tests cover permission denial, record/stop/cancel, duration and byte bounds,
-      editable transcript review, explicit current/new routing, no-auto-send, and cold/warm recovery.
-- [ ] Flutter analyze/full tests, focused Android unit tests, affected Rust/Web gates, strict Rust
-      format/clippy/tests, and deployment configuration checks pass.
-- [ ] Merged-manifest and APK inspection preserve exported-component boundaries, arm64 release ABI,
-      established signing, HTTPS-only networking, backup exclusion, push behavior, and Firebase absence.
+- [ ] Freeze replayable evaluation fixtures for global and `project:<slug>` recall. Include relevant,
+      irrelevant, unsupported, stale, corrected, superseded, and cross-scope cases; record the
+      current Postgres FTS/profile baseline before changing ranking.
+- [ ] Check in a versioned evaluator and manifest before tuning. Report nDCG@5, Recall@5, unsupported
+      or stale precision failures, scope leaks, prompt tokens, candidate counts, and p50/p95 latency;
+      keep a held-out fixture split and the existing 1,600-token/five-recall-item final bounds.
+- [ ] Freeze the P8 acceptance policy: hybrid nDCG@5 improves at least 10% relative to the lexical
+      baseline without reducing Recall@5; corrected, superseded, unsupported, and cross-scope items
+      have zero false inclusions; the benchmark-derived latency ceiling is recorded before tuning.
+- [ ] Add versioned episodic and semantic record shapes with server-owned `owner_subject` and
+      `memory_scope`, source session/event or resource evidence, confidence, observed/effective
+      timestamps, status, and correction/supersession links.
+- [ ] Freeze an embedding provenance contract covering provider/model id, dimensions, normalization,
+      content hash, embedding version, created time, and deterministic re-embedding state.
+- [ ] Exit P8.1 only when the lexical baseline artifact is reproducible from a clean database and
+      the contracts compile across `tm-memory`, both stores, and serialized resource/evidence shapes.
 
-## Physical And Live Closeout
+## P8.2 — Durable Scoped Memory Spine
 
-- [ ] Deploy the replaceable self-hosted transcription provider on lumo and prove health, bounded
-      latency, restart recovery, cancellation, cleanup, and visible degradation when it is unavailable.
-- [ ] Install the established signed arm64 release in place on the paired Android 15 device without
-      losing credentials, sessions, push registration, or prior transcript state.
-- [ ] Prove record/edit/cancel and permission-denial paths, plus distinct current/new-session sends
-      that each create exactly one durable user message and turn.
-- [ ] Prove background/foreground transitions, provider retry, process death, and cold start do not
-      retain audio or replay a transcript, message, session, or turn.
-- [ ] Record replayable evidence, align product §27, running docs, `ROADMAP.md`, `TODO.md`, and
-      `AGENTS.md`, and close P6 only after every deterministic, live, and signed physical gate passes.
+- [ ] Add ordered Postgres migrations for episodic/semantic records, evidence, correction history,
+      embedding jobs/provenance, and idempotent content/version keys; migrate existing profile facts,
+      summaries, and recall chunks without changing their lexical results.
+- [ ] Enforce subject/scope filtering in storage queries and correction/supersession filtering before
+      ranking. Project unlink tombstones revoke reads and queued embedding work immediately.
+- [ ] Add startup/readiness states that distinguish missing pgvector, unsupported dimensions, corrupt
+      schema, and temporarily unavailable embeddings. Durable roles never fall back to process-local
+      authority or writes.
+- [ ] Exit P8.2 with clean-schema, upgrade, restart, rollback-safe failure, idempotent replay, and
+      cross-subject/cross-scope denial coverage in gated Postgres tests.
+
+## P8.3 — Local Embeddings And Hybrid Retrieval
+
+- [ ] Add a narrow batch-capable embedding boundary with `disabled` and self-hosted `local` modes;
+      pin model id, dimensions, normalization, timeout, batch/input limits, and content/version hash.
+      `openai_compatible` remains optional and cannot be required for production acceptance.
+- [ ] Add pgvector storage/index creation plus resumable, deduplicated re-embedding. A provider/model/
+      dimension change creates a new version and atomically switches only after coverage is complete.
+- [ ] Generate lexical and dense candidates independently, fuse them with a deterministic bounded
+      RRF policy, and preserve rank/score components, evidence, subject, scope, and embedding version.
+- [ ] Apply correction/supersession and unsupported-fact filtering before context budgeting. LLM
+      extraction may propose candidates but cannot silently promote inference into owner truth.
+- [ ] Exit P8.3 when disabled, provider-loss, partial re-embedding, stale-version, and dimension/model
+      mismatch cases visibly use lexical-only recall with identical subject/scope enforcement.
+
+## P8.4 — Server Integration And Inspectability
+
+- [ ] Route hybrid results through the existing `MemoryProvider`, prompt budgeter, and turn assembly;
+      do not create a second agent loop, reorder durable turn semantics, or add ambient `memory.*`
+      authority.
+- [ ] Extend exact `memory://` resources and public SDK/types only as needed to inspect provenance,
+      correction status, score components, embedding version, degraded mode, and budget decisions;
+      previews remain bounded and authority-filtered.
+- [ ] Feed approved dream/extraction output into typed candidate records with evidence and idempotent
+      source keys. Unsupported inference stays reviewable/withheld and never becomes owner truth.
+- [ ] Exit P8.4 with scripted turn/resource tests proving the same bounded result after restart,
+      provider loss, correction, project unlink, and exact event replay.
+
+## P8.5 — Quality Gate And Closeout
+
+- [ ] Unit tests cover fusion determinism, deduplication, budget truncation, score ties, stale and
+      corrected records, unsupported claims, provider/model/dimension mismatch, and disabled/local
+      degradation.
+- [ ] Gated Postgres tests cover migrations, vector/lexical parity, subject and scope isolation,
+      unlink tombstones, restart persistence, re-embedding, idempotent replay, and fail-closed
+      unknown records/configuration.
+- [ ] Replay the frozen evaluation set against lexical-only and hybrid recall. Record machine-readable
+      evidence for both fixture splits showing the frozen relevance threshold, zero false inclusions,
+      bounded context/latency, and truthful provider-loss degradation.
+- [ ] Record self-hosted lumo evidence for local model provenance/hash, pgvector capability, cold and
+      warm latency, provider restart/loss, resumable re-embedding, server restart, and lexical-only
+      operation with external network access unavailable.
+- [ ] Run Rust format/clippy/tests, affected server/e2e suites, clean-schema and restart Postgres
+      gates, and client checks for any surfaced provenance/resource changes.
+- [ ] Align §22, public SDK/resource contracts, `ROADMAP.md`, `TODO.md`, and `AGENTS.md`; do not mark
+      P8 complete until the replayable quality evidence exists.
 
 ## Regression Invariants
 
-- Preserve pairing, secure storage, HTTPS-only release networking, backup exclusion, release signing,
-  stable production push encryption, UnifiedPush/ntfy, actionable notifications, quick capture,
-  Sharesheet/selected-text review, and Firebase/FCM absence.
-- Treat audio and transcripts as untrusted, authority-free input. They grant no capability, resource,
-  URI, pairing, approval, filesystem, secret, or network authority.
-- Reuse the durable turn queue, stable client ids, event log, SSE replay, and server-owned session
-  authority only after explicit Send.
-- Keep the self-hosted provider replaceable, OMP ACP replaceable, and native Deno as the coding
-  dogfood path.
+- Preserve Miku identity, mode routing, streaming-first turns, durable SSE replay, exact capability
+  grants, manual approvals, and server-owned owner/scope authority.
+- Preserve the current lexical/profile/summaries path as the safe degraded mode. Embedding failure
+  may reduce recall quality but must not broaden scope, invent facts, or make durable roles silently
+  non-durable.
+- Keep memory evidence inspectable and correctable. Retrieval scores and LLM extraction are
+  heuristics, never owner truth without supported provenance.
+- Keep the deployment self-hosted on the existing Postgres spine; do not add an external memory SaaS
+  dependency or expose secret material to model context.
 
-## Queued After P6.6
+## Explicit Deferments
 
-1. P8 fuller memory with self-hosted Postgres FTS + pgvector hybrid recall.
-2. P7.2b Auto-mode persona proposals with durable manual activation and rollback.
-3. P9 production egress and opaque secret broker.
-4. P10 MCP catalog and live research through the P9 boundary.
-
-## Demand-Triggered Or Permanently Out
-
-- Demand-triggered: cloud drive sync/CRDT, `code.ast`, `code.lsp`, `tm-trace`, and additional sandbox
-  backends.
+- **P6.6 on-device ASR:** deferred until the owner explicitly reopens it and the independent evidence
+  note's text-quality, real-speech, memory-headroom, production-flow, and signed-device resume gates
+  are accepted. Do not add production microphone permission, weights, model installer, ASR runtime,
+  server/cloud fallback, or automatic send while deferred.
+- **P7.2b persona addenda:** waits for P8 provenance, correction, scope, and recall-quality gates.
+  Auto mode may eventually propose; it never approves or activates persona changes.
+- **P9/P10:** production egress and opaque-secret hardening precede MCP or live external research.
+- Demand-triggered only: cloud drive sync/CRDT, `code.ast`, `code.lsp`, `tm-trace`, and additional
+  sandbox backends.
 - Permanently out: aggressive autonomous rewrites, automatic persona activation, raw `SOUL.md`
   mutation, raw shell/ambient authority, Firebase/FCM, and chat-native tool sprawl.
+
+## Queued After P8
+
+1. P7.2b Auto-mode persona proposals with durable manual activation and rollback.
+2. P9 production egress and opaque secret broker.
+3. P10 MCP catalog and live research through the P9 boundary.
+
+P6.6 has no scheduled queue position while deferred.

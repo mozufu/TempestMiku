@@ -1,6 +1,6 @@
 # TempestMiku Future Roadmap Alignment Brief
 
-Approved: **2026-07-14**.
+Approved: **2026-07-14**. Sequencing amended: **2026-07-15**.
 
 ## Outcome
 
@@ -21,9 +21,11 @@ marketplace.
 
 ## Success Criteria
 
-- Android supports notification reply, fast capture, and voice capture without creating a second
-  agent loop or ambient authority.
-- P6 closes after P6.4-P6.6 instead of becoming an unlimited OS-integration bucket.
+- Android supports notification reply and fast capture without creating a second agent loop or
+  ambient authority. Voice capture remains a bounded P6.6 design, explicitly deferred after its
+  feasibility spike.
+- P6.1-P6.5 remain closed; P6.6 and full P6 closeout remain incomplete and unscheduled until the
+  owner explicitly resumes them.
 - Fuller memory improves measured recall quality using self-hosted storage and embeddings.
 - Auto mode may decide when a persona improvement is worth proposing, but a human always approves
   activation; every version is immutable and rollbackable.
@@ -42,6 +44,10 @@ marketplace.
 - OMP ACP remains replaceable. Native Deno remains the coding dogfood path.
 
 ## Approved Execution Order
+
+The owner amended the order on 2026-07-15: P6.6 is deferred with retained evidence, and P8 is the
+active next milestone. This removes the former P6.6-before-P8 sequencing constraint without marking
+P6.6 or P6 complete. The active route is now P8 → P7.2b → P9 → P10; P6.6 has no scheduled position.
 
 ### P6.4 — Actionable Notifications
 
@@ -63,17 +69,30 @@ marketplace.
   authority before the owner reviews and confirms.
 - Prove cancel/no-send and warm/cold-start exact-once behavior.
 
-### P6.6 — Self-Hosted Voice Capture And P6 Closeout
+### Deferred — P6.6 On-Device Voice Capture And P6 Closeout
 
-- Record bounded audio on Android and send it over the authenticated HTTPS path to a self-hosted
-  transcription service on lumo.
-- Prefer a Whisper-compatible self-hosted provider. A third-party or platform recognizer is only an
-  explicit fallback, never the required path.
+- Record at most 60 seconds of PCM16-LE, 16 kHz, mono audio on Android and keep raw audio on-device
+  and ephemeral.
+- Put inference behind a replaceable `LocalAsrEngine`; do not add a server transcription route or
+  automatic platform/cloud/lumo fallback. Missing or unsupported local models fail visibly.
+- Use SenseVoice Small INT8 through sherpa-onnx only as the first benchmark baseline. No production
+  model is selected; NVIDIA Parakeet zh-TW also remains a candidate only after portable weights,
+  redistribution, conversion, and the same physical-device gates pass.
+- Download a versioned model only after explicit owner action, verify SHA-256, cap it at 350 MiB,
+  store it app-private outside backup, and expose delete/reinstall controls.
 - Show an editable transcript and explicit current/new-session destination before sending.
-- Define format, duration, byte, timeout, retention, deletion, cancellation, and retry contracts.
-- Close P6 after deterministic, signed-build, live-service, and physical Android evidence passes.
+- Bound inference to 45 seconds and define cancellation, explicit retry, process-death cleanup, and
+  no-replay behavior.
+- Close P6 after deterministic client/runtime, pinned-model RTF/RSS/thermal, airplane-mode,
+  signed-build, and physical Android evidence passes.
 
-### P8 — Fuller Memory
+The retained interface/harness work and all 2026-07-15 evidence are centralized in
+[`docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md`](../docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md).
+That note records the raw report hashes, model/corpus provenance, Android metrics, Taiwan-Mandarin
+quality gaps, wireless ADB proof, open acceptance gates, prohibited work while deferred, and the
+explicit resume contract. It is not milestone acceptance.
+
+### Active — P8 Fuller Memory
 
 - Promote the self-hosted Postgres spine to hybrid Postgres FTS plus pgvector recall.
 - Use a local embedding provider by default; keep dimensions/version provenance and deterministic
@@ -159,6 +178,8 @@ marketplace.
 - `docs/design/product/22-memory-dreaming.md` — fuller-memory architecture.
 - `docs/design/product/26-self-evolution.md` — persona proposal authority.
 - `docs/design/product/27-server-and-clients.md` — Android/server integration contracts.
+- `docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md` — retained P6.6 evidence and resume
+  contract.
 
 ## Fresh-Thread Prompt
 

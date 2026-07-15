@@ -44,8 +44,14 @@
   plus signed Android 15 foreground/background/killed-process, exact-once reply/retry, terminal
   failure, and cold-start evidence. P6.5 quick capture is closed with deterministic tests, signed
   APK inspection, and real launcher-shortcut/Quick Settings foreground/background/killed-process,
-  current/new-session exact-once, duplicate-intent, and process-death proof. P6.6 self-hosted voice
-  capture/closeout is next. The approved later order is P8 fuller memory, P7.2b
+  current/new-session exact-once, duplicate-intent, and process-death proof. P6.6 on-device voice
+  capture/closeout was explicitly deferred on 2026-07-15 after its interface spike and isolated
+  Android feasibility/Taiwan-Mandarin benchmark. P6.1-P6.5 remain closed; P6.6 and full P6 closeout
+  remain incomplete. Preserve the harness and evidence, but do not add production microphone,
+  model-install/runtime, fallback, or send work unless the owner explicitly resumes the slice. The
+  independent evidence and resume contract live at
+  `docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md`. P8 fuller memory is now active, followed
+  by P7.2b
   approval-backed persona addenda, P9 egress/secrets, then P10 MCP/live research. `tm-trace`, cloud
   sync, AST/LSP, and extra sandbox backends are demand-triggered; aggressive self-evolution is out.
 
@@ -56,6 +62,7 @@ Start with the narrowest docs for the task:
 - Overview: `docs/README.md`, `docs/design/README.md`.
 - Core architecture: `docs/design/core/01-tldr-the-bet.md`, `03-core-principles.md`, `04-architecture.md`, `05-agent-loop.md`, `06-repl-sandbox.md`, `07-host-sdk.md`, `08-security-model.md`, `09-context-artifacts.md`, `10-rust-implementation.md`; core roadmap lives in `ROADMAP.md` (§14).
 - Product layer: `docs/design/product/20-product-overview.md`, `21-persona-and-modes.md`, `22-memory-dreaming.md`, `23-agents-orchestration.md`, `24-drive-storage.md`, `25-coding-agent-sdk.md`, `26-self-evolution.md`, `27-server-and-clients.md`, `29-parity-baseline.md`; product roadmap lives in `ROADMAP.md` (§28).
+- Deferred P6.6 evidence: `docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md`.
 - Roadmap execution order lives in `ROADMAP.md` under “Execution plan from current workspace”. Follow it unless the user explicitly changes priority.
 
 ## Architectural invariants
@@ -75,19 +82,22 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Implement P6.6 bounded Android audio capture and editable transcription through a replaceable
-   self-hosted Whisper-compatible service on lumo. Define duration, byte, format, retention,
-   deletion, timeout, cancellation, and retry contracts; require explicit current/new-session send.
-2. Close P6 only after deterministic provider/client/server gates, live service degradation/restart
-   evidence, signed APK inspection, and signed Android 15 physical proof.
-3. Continue in the approved order: P8 fuller memory, P7.2b Auto-mode persona proposals with manual
-   activation/rollback, P9 egress/opaque secrets, then P10 MCP/live research.
+1. Implement the P8.1 recall baseline and hybrid-memory spine from `TODO.md`: freeze replayable
+   lexical fixtures and measured acceptance, add evidence/correction-aware scoped record contracts,
+   and preserve server-owned subject/scope authority.
+2. Add the self-hosted local embedding boundary and bounded Postgres FTS + pgvector fusion with
+   deterministic provenance, correction filtering, context budgeting, and lexical-only degradation.
+3. Close P8 only after replayable relevance improvement, zero scope leaks, provider-loss/restart/
+   re-embedding evidence, strict Rust/Postgres gates, and aligned SDK/docs. Then continue with P7.2b
+   manual-approval persona addenda, P9 egress/opaque secrets, and P10 MCP/live research.
 4. Keep the native/OMP boundary boring: OMP ACP remains replaceable, while native Deno remains the
    dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed approvals.
 
 Do not start yet unless explicitly requested:
 
-- P8 before P6.6 closes with deterministic, live-provider, and signed physical proof.
+- P6.6 product work unless the owner explicitly resumes it after reviewing the independent evidence
+  note. Incidental harness build hygiene is allowed; microphone permission, production weights,
+  model installer/runtime, server/cloud fallback, and automatic send are not.
 - P7.2b before P8 provenance/correction gates. Auto mode may decide when to propose, but persona
   activation and rollback always require durable manual approval.
 - MCP or live external research before P9 egress, redirect, budget, audit, revocation, and opaque

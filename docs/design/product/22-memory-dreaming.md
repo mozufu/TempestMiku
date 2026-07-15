@@ -172,13 +172,14 @@ follow-up hardening.
 - **Embeddings:** dense vectors/pgvector remain disabled by default while lexical + summaries harden.
   The config surface already exists as `embeddings.provider: disabled | local | openai_compatible`;
   any enabled provider must pin `embeddings.dimensions` (switching provider/dimension ⇒ re-embed).
-- **P8 rollout:** fuller memory is the first post-P6 product stage. It enables a self-hosted local
-  embedding path on lumo, combines Postgres FTS and pgvector candidates through bounded fusion and
-  reranking, and adds scoped episodic/semantic records, evidence, confidence, correction/supersession
-  history, and recall-quality fixtures. `openai_compatible` remains an optional replaceable fallback,
-  never a production requirement. LLM-backed extraction produces candidates and cannot silently
-  promote unsupported inference into owner facts. P8 provenance/correction gates must pass before
-  Auto mode can begin P7.2b persona proposals.
+- **P8 rollout:** fuller memory became the active product stage when the owner explicitly deferred
+  P6.6 on 2026-07-15; that sequencing decision does not close P6.6 or P6. P8 enables a self-hosted
+  local embedding path on lumo, combines Postgres FTS and pgvector candidates through bounded fusion
+  and reranking, and adds scoped episodic/semantic records, evidence, confidence,
+  correction/supersession history, and recall-quality fixtures. `openai_compatible` remains an
+  optional replaceable fallback, never a production requirement. LLM-backed extraction produces
+  candidates and cannot silently promote unsupported inference into owner facts. P8
+  provenance/correction gates must pass before Auto mode can begin P7.2b persona proposals.
 - **Scope:** `owner_subject` and `memory_scope` are server-owned session authority. A session starts in
   `global` or an active linked `project:<slug>` scope; changing modes never changes memory authority.
   Exact read/list/recall operations compare their subject/scope to the authorized invocation context

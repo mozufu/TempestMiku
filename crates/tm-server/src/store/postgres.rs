@@ -1,3 +1,4 @@
+mod memory_retrieval;
 mod rows;
 mod schema;
 
@@ -6,17 +7,20 @@ use chrono::{DateTime, Duration, Utc};
 use rows::{
     row_to_approval_effect, row_to_approval_request, row_to_cron_job, row_to_cron_run,
     row_to_dream_record, row_to_evolution_audit, row_to_evolution_review_proposal,
-    row_to_memory_summary, row_to_message_record, row_to_project_item, row_to_session_record,
-    row_to_session_turn, row_to_skill_proposal,
+    row_to_memory_embedding_job, row_to_memory_summary, row_to_message_record, row_to_project_item,
+    row_to_session_record, row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
 };
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus, EvolutionPolicyReason};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, MemorySummaryRecord, NewDreamQueueRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, DurableMemoryReadiness, EmbeddingConfig,
+    MemoryEmbeddingJobRecord, MemoryRecordKind, MemoryRecordResource, MemorySchemaReadiness,
+    MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord, NewMemoryEmbeddingJob,
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
+    StoredMemoryRecord,
 };
 use tm_modes::{ReviewProposalStatus, ReviewProposalTarget};
-use tokio_postgres::{Config as PostgresConfig, NoTls, Row, error::SqlState};
+use tokio_postgres::{Config as PostgresConfig, GenericClient, NoTls, Row, error::SqlState};
 use uuid::Uuid;
 
 use crate::{
@@ -26,8 +30,9 @@ use crate::{
 
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_cron_job_persistence,
-    sanitize_cron_run_persistence, sanitize_evolution_review_proposal_persistence,
-    sanitize_memory_summary_persistence, sanitize_project_item_persistence,
+    sanitize_cron_run_persistence, sanitize_durable_memory_record,
+    sanitize_evolution_review_proposal_persistence, sanitize_memory_summary_persistence,
+    sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
     sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
     validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
@@ -78,6 +83,175 @@ fn evolution_audit_params(
 
 pub struct PostgresStore {
     client: tokio_postgres::Client,
+    memory_mutation_client: tokio::sync::Mutex<tokio_postgres::Client>,
+}
+
+pub(super) const DURABLE_MEMORY_RECORD_COLUMNS: &str = "record_kind, id, schema_version, owner_subject, memory_scope, text, semantic_subject, predicate, object, evidence_json, confidence, importance, observed_at, effective_from, effective_to, status, corrects_record_id, corrected_by_record_id, supersedes_record_id, superseded_by_record_id, content_key, version_key, created_at";
+
+pub(super) const MEMORY_EMBEDDING_JOB_COLUMNS: &str = "j.id, j.record_kind, j.record_id, j.owner_subject, j.memory_scope, j.content_key, j.reembedding_key, j.status, j.input_limit_bytes, j.failure_code, j.attempts, j.available_at, j.locked_at, j.lease_owner, j.lease_epoch, j.cancelled_at, j.created_at, j.updated_at, p.schema_version, p.provider, p.model_id, p.dimensions, p.normalization, p.content_hash, p.embedding_version, p.created_at as provenance_created_at, p.reembedding_state";
+
+pub(super) const ACTIVE_MEMORY_SUCCESSOR_QUERY: &str = "
+with recursive successors(id) as (
+    select successor.id from memory_records successor
+     where successor.owner_subject = record.owner_subject
+       and successor.memory_scope = record.memory_scope
+       and (successor.corrects_record_id = record.id
+            or successor.supersedes_record_id = record.id
+            or successor.id = record.corrected_by_record_id
+            or successor.id = record.superseded_by_record_id)
+    union
+    select successor.id from memory_records successor
+     join successors prior on true
+     join memory_records prior_record on prior_record.id = prior.id
+      and prior_record.owner_subject = record.owner_subject
+      and prior_record.memory_scope = record.memory_scope
+     where successor.owner_subject = record.owner_subject
+       and successor.memory_scope = record.memory_scope
+       and (successor.corrects_record_id = prior.id
+            or successor.supersedes_record_id = prior.id
+            or successor.id = prior_record.corrected_by_record_id
+            or successor.id = prior_record.superseded_by_record_id)
+)
+select 1 from memory_records successor
+ join successors on successors.id = successor.id
+ where successor.status = 'active' and successor.effective_to is null
+";
+
+pub(super) fn postgres_memory_error(error: tokio_postgres::Error) -> ServerError {
+    if error.code().is_some_and(|code| code.code() == "TM001") {
+        ServerError::NotFound("revoked memory scope".to_string())
+    } else {
+        let message = error
+            .as_db_error()
+            .map(|database| format!("{} [{}]", database.message(), database.code().code()))
+            .unwrap_or_else(|| error.to_string());
+        ServerError::Store(tm_memory::redact_dream_text(&message).text)
+    }
+}
+
+async fn upsert_typed_memory_record<C>(client: &C, record: &StoredMemoryRecord) -> Result<()>
+where
+    C: GenericClient + Sync,
+{
+    let (
+        schema_version,
+        owner_subject,
+        memory_scope,
+        text,
+        semantic_subject,
+        predicate,
+        object,
+        evidence,
+        confidence,
+        importance,
+        observed_at,
+        effective_from,
+        effective_to,
+        status,
+        links,
+        created_at,
+    ) = match &record.resource {
+        MemoryRecordResource::Episodic(value) => (
+            value.schema_version,
+            value.owner_subject.as_str(),
+            value.memory_scope.as_str(),
+            Some(value.text.as_str()),
+            None,
+            None,
+            None,
+            &value.evidence,
+            value.confidence,
+            value.importance,
+            value.observed_at,
+            value.effective_from,
+            value.effective_to,
+            value.status,
+            &value.links,
+            value.created_at,
+        ),
+        MemoryRecordResource::Semantic(value) => (
+            value.schema_version,
+            value.owner_subject.as_str(),
+            value.memory_scope.as_str(),
+            None,
+            Some(value.semantic_subject.as_str()),
+            Some(value.predicate.as_str()),
+            Some(value.object.as_str()),
+            &value.evidence,
+            value.confidence,
+            value.importance,
+            value.observed_at,
+            value.effective_from,
+            value.effective_to,
+            value.status,
+            &value.links,
+            value.created_at,
+        ),
+    };
+    let evidence_json =
+        serde_json::to_value(evidence).map_err(|error| ServerError::Store(error.to_string()))?;
+    client
+        .execute(
+            "insert into memory_records(
+                record_kind, id, schema_version, owner_subject, memory_scope, text,
+                semantic_subject, predicate, object, evidence_json, confidence, importance,
+                observed_at, effective_from, effective_to, status,
+                corrects_record_id, corrected_by_record_id,
+                supersedes_record_id, superseded_by_record_id,
+                content_key, version_key, created_at
+             ) values (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+             ) on conflict (record_kind, id) do update set
+                schema_version = excluded.schema_version,
+                owner_subject = excluded.owner_subject,
+                memory_scope = excluded.memory_scope,
+                text = excluded.text,
+                semantic_subject = excluded.semantic_subject,
+                predicate = excluded.predicate,
+                object = excluded.object,
+                evidence_json = excluded.evidence_json,
+                confidence = excluded.confidence,
+                importance = excluded.importance,
+                observed_at = excluded.observed_at,
+                effective_from = excluded.effective_from,
+                effective_to = excluded.effective_to,
+                status = excluded.status,
+                corrects_record_id = excluded.corrects_record_id,
+                corrected_by_record_id = excluded.corrected_by_record_id,
+                supersedes_record_id = excluded.supersedes_record_id,
+                superseded_by_record_id = excluded.superseded_by_record_id,
+                content_key = excluded.content_key,
+                version_key = excluded.version_key",
+            &[
+                &record.kind().as_str(),
+                &record.id(),
+                &i32::from(schema_version),
+                &owner_subject,
+                &memory_scope,
+                &text,
+                &semantic_subject,
+                &predicate,
+                &object,
+                &evidence_json,
+                &confidence,
+                &importance,
+                &observed_at,
+                &effective_from,
+                &effective_to,
+                &status.as_str(),
+                &links.corrects_record_id,
+                &links.corrected_by_record_id,
+                &links.supersedes_record_id,
+                &links.superseded_by_record_id,
+                &record.content_key,
+                &record.version_key,
+                &created_at,
+            ],
+        )
+        .await
+        .map_err(postgres_memory_error)?;
+    Ok(())
 }
 
 impl PostgresStore {
@@ -110,6 +284,7 @@ impl PostgresStore {
 
     async fn connect_config(config: PostgresConfig) -> Result<Self> {
         let (client, connection) = config
+            .clone()
             .connect(NoTls)
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -119,13 +294,241 @@ impl PostgresStore {
                 tracing::error!(%err, "postgres connection failed");
             }
         });
-        let mut store = Self { client };
+        let (memory_mutation_client, mutation_connection) = config
+            .connect(NoTls)
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        tokio::spawn(async move {
+            if let Err(err) = mutation_connection.await {
+                let err = tm_memory::redact_dream_text(&err.to_string()).text;
+                tracing::error!(%err, "postgres memory mutation connection failed");
+            }
+        });
+        let mut store = Self {
+            client,
+            memory_mutation_client: tokio::sync::Mutex::new(memory_mutation_client),
+        };
         store.ensure_schema().await?;
         Ok(store)
     }
 
     pub fn client(&self) -> &tokio_postgres::Client {
         &self.client
+    }
+
+    /// Reports the P8.3 storage state without installing extensions or silently enabling dense
+    /// retrieval. A missing pgvector installation is observable but does not make lexical-only
+    /// durable memory unavailable while embeddings are disabled.
+    pub async fn memory_readiness(
+        &self,
+        embeddings: &EmbeddingConfig,
+    ) -> Result<DurableMemoryReadiness> {
+        let required_relations = self
+            .client
+            .query_one(
+                "select to_regclass('schema_migrations') is not null as migrations,
+                        to_regclass('memory_records') is not null as records,
+                        to_regclass('memory_record_evidence') is not null as evidence,
+                        to_regclass('memory_record_relations') is not null as relations,
+                        to_regclass('memory_embedding_provenance') is not null as provenance,
+                        to_regclass('memory_embedding_jobs') is not null as jobs,
+                        to_regclass('memory_embedding_generations') is not null as generations,
+                        to_regclass('memory_embedding_active_versions') is not null as active_versions,
+                        to_regclass('memory_scope_tombstones') is not null as tombstones,
+                        to_regclass('memory_scope_authority_guards') is not null as authority_guards,
+                        to_regclass('memory_scope_revisions') is not null as scope_revisions,
+                        to_regclass('memory_legacy_migration_quarantine') is not null as quarantine",
+                &[],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let relations_present = required_relations.get::<_, bool>("migrations")
+            && required_relations.get::<_, bool>("records")
+            && required_relations.get::<_, bool>("evidence")
+            && required_relations.get::<_, bool>("relations")
+            && required_relations.get::<_, bool>("provenance")
+            && required_relations.get::<_, bool>("jobs")
+            && required_relations.get::<_, bool>("generations")
+            && required_relations.get::<_, bool>("active_versions")
+            && required_relations.get::<_, bool>("tombstones")
+            && required_relations.get::<_, bool>("authority_guards")
+            && required_relations.get::<_, bool>("scope_revisions")
+            && required_relations.get::<_, bool>("quarantine");
+        let schema = if !relations_present {
+            MemorySchemaReadiness::Corrupt {
+                reason: "required P8.3 memory relation is missing".to_string(),
+            }
+        } else {
+            let migration = self
+                .client
+                .query_one(
+                    "select exists(select 1 from schema_migrations where version = 18) as applied,
+                            exists(
+                                select 1
+                                  from information_schema.columns
+                                 where table_schema = current_schema()
+                                   and table_name = 'memory_records'
+                                   and column_name = 'content_key'
+                            ) as record_key_column",
+                    &[],
+                )
+                .await;
+            match migration {
+                Ok(row) if row.get::<_, bool>("applied") && row.get("record_key_column") => {
+                    match self
+                        .client
+                        .batch_execute(
+                            "select record_kind, id, schema_version, owner_subject, memory_scope,
+                                    evidence_json, confidence, importance, observed_at,
+                                    effective_from, status, content_key, version_key, created_at
+                               from memory_records limit 0;
+                             select record_kind, record_id, ordinal, evidence_json
+                               from memory_record_evidence limit 0;
+                             select record_kind, record_id, relation, linked_record_id, created_at
+                               from memory_record_relations limit 0;
+                             select record_kind, record_id, embedding_version, schema_version,
+                                    provider, model_id, dimensions, normalization, content_hash,
+                                    reembedding_state, created_at
+                               from memory_embedding_provenance limit 0;
+                             select id, record_kind, record_id, owner_subject, memory_scope,
+                                    content_key, embedding_version, reembedding_key, status,
+                                    input_limit_bytes, failure_code, attempts, available_at,
+                                    lease_owner, lease_epoch, created_at, updated_at
+                               from memory_embedding_jobs limit 0;
+                             select owner_subject, memory_scope, embedding_version, provider,
+                                    model_id, dimensions, normalization, vector_table,
+                                    expected_records, completed_records, status, created_at, updated_at,
+                                    generation_order, snapshot_revision, input_limit_bytes
+                               from memory_embedding_generations limit 0;
+                             select owner_subject, memory_scope, embedding_version, activated_at,
+                                    generation_order, snapshot_revision
+                               from memory_embedding_active_versions limit 0;
+                             select owner_subject, memory_scope, reason, revoked_at
+                               from memory_scope_tombstones limit 0;
+                             select owner_subject, memory_scope, revoked_at
+                               from memory_scope_authority_guards limit 0;
+                             select owner_subject, memory_scope, revision, updated_at
+                               from memory_scope_revisions limit 0;
+                             select source_kind, source_id, reason, captured_at
+                               from memory_legacy_migration_quarantine limit 0;",
+                        )
+                        .await
+                    {
+                        Ok(()) => MemorySchemaReadiness::Ready,
+                        Err(error) => MemorySchemaReadiness::Corrupt {
+                            reason: tm_memory::redact_dream_text(&error.to_string()).text,
+                        },
+                    }
+                }
+                Ok(_) => MemorySchemaReadiness::Corrupt {
+                    reason: "P8 hardening migrations or idempotency key column are missing"
+                        .to_string(),
+                },
+                Err(error) => MemorySchemaReadiness::Corrupt {
+                    reason: tm_memory::redact_dream_text(&error.to_string()).text,
+                },
+            }
+        };
+        let pgvector_available = self
+            .client
+            .query_one(
+                "select exists(select 1 from pg_extension where extname = 'vector') as available",
+                &[],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .get("available");
+        Ok(DurableMemoryReadiness::from_embedding_config(
+            schema,
+            embeddings,
+            pgvector_available,
+        ))
+    }
+
+    async fn ensure_memory_scope_is_readable(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<()> {
+        let tombstoned = self
+            .client
+            .query_opt(
+                "select 1 from memory_scope_tombstones
+                  where owner_subject = $1 and memory_scope = $2",
+                &[&owner_subject, &memory_scope],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .is_some();
+        if tombstoned {
+            return Err(ServerError::NotFound(format!(
+                "memory scope {owner_subject}/{memory_scope}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn ensure_memory_record_links_are_scoped(
+        &self,
+        record: &StoredMemoryRecord,
+    ) -> Result<()> {
+        for target_id in [
+            record.resource.links().corrects_record_id,
+            record.resource.links().corrected_by_record_id,
+            record.resource.links().supersedes_record_id,
+            record.resource.links().superseded_by_record_id,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let target = self
+                .client
+                .query_opt(
+                    "select 1 from memory_records
+                      where id = $1 and owner_subject = $2 and memory_scope = $3",
+                    &[
+                        &target_id,
+                        &record.resource.owner_subject(),
+                        &record.resource.memory_scope(),
+                    ],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            if target.is_none() {
+                return Err(ServerError::NotFound(format!(
+                    "memory record {target_id} in requested authority"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    async fn memory_record_with_content_key(
+        &self,
+        record: &StoredMemoryRecord,
+    ) -> Result<Option<StoredMemoryRecord>> {
+        let row = self
+            .client
+            .query_opt(
+                &format!(
+                    "select {DURABLE_MEMORY_RECORD_COLUMNS}
+                       from memory_records
+                      where record_kind = $1
+                        and owner_subject = $2
+                        and memory_scope = $3
+                        and content_key = $4
+                        and status = 'active' and effective_to is null"
+                ),
+                &[
+                    &record.kind().as_str(),
+                    &record.resource.owner_subject(),
+                    &record.resource.memory_scope(),
+                    &record.content_key,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        row.map(row_to_stored_memory_record).transpose()
     }
 }
 
@@ -353,7 +756,8 @@ impl Store for PostgresStore {
                     returning owner_subject
                  )
                  select exists (select 1 from authority) as configured,
-                        coalesce((select count from changed), 0)::bigint as updated",
+                        coalesce((select count from changed), 0)::bigint as updated,
+                        (select owner_subject from current_authority) as prior_owner",
                 &[&owner_subject],
             )
             .await
@@ -362,6 +766,51 @@ impl Store for PostgresStore {
             return Err(ServerError::Conflict(
                 "server is already configured for a different owner subject".to_string(),
             ));
+        }
+        let prior_owner: String = row.get("prior_owner");
+        if prior_owner != owner_subject {
+            self.client
+                .execute(
+                    "update memory_records
+                        set owner_subject = $1
+                      where owner_subject = $2
+                        and content_key like 'legacy-memory-content-v1:%'",
+                    &[&owner_subject, &prior_owner],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            self.client
+                .execute(
+                    "update memory_embedding_jobs
+                        set owner_subject = $1, updated_at = now()
+                      where owner_subject = $2",
+                    &[&owner_subject, &prior_owner],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            self.client
+                .execute(
+                    "insert into memory_scope_tombstones(
+                        owner_subject, memory_scope, link_alias, reason, revoked_at
+                     )
+                     select $1, memory_scope, link_alias, reason, revoked_at
+                       from memory_scope_tombstones
+                      where owner_subject = $2
+                     on conflict (owner_subject, memory_scope) do update set
+                        link_alias = coalesce(memory_scope_tombstones.link_alias, excluded.link_alias),
+                        reason = excluded.reason,
+                        revoked_at = least(memory_scope_tombstones.revoked_at, excluded.revoked_at)",
+                    &[&owner_subject, &prior_owner],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            self.client
+                .execute(
+                    "delete from memory_scope_tombstones where owner_subject = $1",
+                    &[&prior_owner],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
         }
         Ok(row.get::<_, i64>("updated").max(0) as usize)
     }
@@ -844,6 +1293,113 @@ impl Store for PostgresStore {
         Ok(event)
     }
 
+    async fn append_event_for_turn_once(
+        &self,
+        session_id: Uuid,
+        event_type: &str,
+        payload_json: Value,
+        turn_id: Uuid,
+    ) -> Result<(SessionEvent, bool)> {
+        validate_persistence_identifier("event type", event_type)?;
+        let payload_json = redact_persisted_json(payload_json);
+        self.get_session(session_id).await?;
+        let turn = self.turn(turn_id).await?;
+        if turn.session_id != session_id {
+            return Err(ServerError::NotFound(format!("turn {turn_id}")));
+        }
+        let session_key = session_id.to_string();
+        let output_refs = SessionEvent::output_refs(event_type, &payload_json);
+        let mut collision_retries = 0usize;
+        let row = loop {
+            let result = self
+                .client
+                .query_one(
+                    "with lock as (
+                    select pg_advisory_xact_lock(hashtext($1))
+                 ), existing as (
+                    select event.session_id, event.seq, event.event_type, event.payload_json,
+                           event.actor_id, event.artifact_uri, event.history_uri, event.turn_id,
+                           event.created_at, false as inserted
+                      from session_events event, lock
+                     where event.session_id = $2 and event.turn_id = $8
+                       and event.event_type = $3
+                     order by event.seq asc limit 1
+                 ), next_seq as (
+                    select coalesce(max(event.seq) + 1, 1) as seq
+                      from session_events event, lock
+                     where event.session_id = $2
+                    having not exists (select 1 from existing)
+                 ), inserted as (
+                    insert into session_events (
+                        session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                        history_uri, turn_id, created_at
+                    )
+                    select $2, next_seq.seq, $3, $4, $5, $6, $7, $8, now()
+                      from next_seq
+                    returning session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                              history_uri, turn_id, created_at, true as inserted
+                 ), touch as (
+                    update sessions
+                       set updated_at = (select created_at from inserted)
+                     where id = $2 and exists (select 1 from inserted)
+                 )
+                 select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                        history_uri, turn_id, created_at, inserted
+                   from existing
+                 union all
+                 select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                        history_uri, turn_id, created_at, inserted
+                   from inserted
+                  order by seq asc limit 1",
+                    &[
+                        &session_key,
+                        &session_id,
+                        &event_type,
+                        &payload_json,
+                        &output_refs.actor_id,
+                        &output_refs.artifact_uri,
+                        &output_refs.history_uri,
+                        &turn_id,
+                    ],
+                )
+                .await;
+            match result {
+                Ok(row) => break row,
+                // A competing session event may have committed after this statement acquired its
+                // MVCC snapshot. The primary-key collision is the fence; retrying gets a fresh
+                // snapshot and either observes the existing typed event or allocates the next seq.
+                Err(error)
+                    if error.code() == Some(&SqlState::UNIQUE_VIOLATION)
+                        && collision_retries < 8 =>
+                {
+                    collision_retries += 1;
+                    continue;
+                }
+                Err(error) if error.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
+                    return Err(ServerError::Conflict(
+                        "could not allocate an exact-once turn event after concurrent writes"
+                            .to_string(),
+                    ));
+                }
+                Err(error) => return Err(ServerError::Store(error.to_string())),
+            }
+        };
+        Ok((
+            SessionEvent {
+                session_id: row.get("session_id"),
+                seq: row.get("seq"),
+                event_type: row.get("event_type"),
+                payload_json: row.get("payload_json"),
+                actor_id: row.get("actor_id"),
+                artifact_uri: row.get("artifact_uri"),
+                history_uri: row.get("history_uri"),
+                turn_id: row.get("turn_id"),
+                created_at: row.get("created_at"),
+            },
+            row.get("inserted"),
+        ))
+    }
+
     async fn events_after(
         &self,
         session_id: Uuid,
@@ -855,6 +1411,126 @@ impl Store for PostgresStore {
             .query("select session_id, seq, event_type, payload_json, actor_id, artifact_uri, history_uri, turn_id, created_at from session_events where session_id = $1 and seq > $2 order by seq asc", &[&session_id, &min_seq])
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SessionEvent {
+                session_id: row.get("session_id"),
+                seq: row.get("seq"),
+                event_type: row.get("event_type"),
+                payload_json: row.get("payload_json"),
+                actor_id: row.get("actor_id"),
+                artifact_uri: row.get("artifact_uri"),
+                history_uri: row.get("history_uri"),
+                turn_id: row.get("turn_id"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
+    async fn event_for_turn(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        event_type: &str,
+    ) -> Result<Option<SessionEvent>> {
+        self.get_session(session_id).await?;
+        let row = self
+            .client
+            .query_opt(
+                "select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                        history_uri, turn_id, created_at
+                   from session_events
+                  where session_id = $1 and turn_id = $2 and event_type = $3
+                  order by seq asc limit 1",
+                &[&session_id, &turn_id, &event_type],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        Ok(row.map(|row| SessionEvent {
+            session_id: row.get("session_id"),
+            seq: row.get("seq"),
+            event_type: row.get("event_type"),
+            payload_json: row.get("payload_json"),
+            actor_id: row.get("actor_id"),
+            artifact_uri: row.get("artifact_uri"),
+            history_uri: row.get("history_uri"),
+            turn_id: row.get("turn_id"),
+            created_at: row.get("created_at"),
+        }))
+    }
+
+    async fn events_by_type(
+        &self,
+        session_id: Uuid,
+        event_type: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEvent>> {
+        self.get_session(session_id).await?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| ServerError::InvalidRequest("event limit is too large".to_string()))?;
+        let rows = self
+            .client
+            .query(
+                "select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                        history_uri, turn_id, created_at
+                   from (
+                        select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                               history_uri, turn_id, created_at
+                          from session_events
+                         where session_id = $1 and event_type = $2
+                         order by seq desc limit $3
+                   ) bounded
+                  order by seq asc",
+                &[&session_id, &event_type, &limit],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SessionEvent {
+                session_id: row.get("session_id"),
+                seq: row.get("seq"),
+                event_type: row.get("event_type"),
+                payload_json: row.get("payload_json"),
+                actor_id: row.get("actor_id"),
+                artifact_uri: row.get("artifact_uri"),
+                history_uri: row.get("history_uri"),
+                turn_id: row.get("turn_id"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
+    async fn memory_recall_events(
+        &self,
+        session_id: Uuid,
+        owner_subject: &str,
+        memory_scope: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEvent>> {
+        self.get_session(session_id).await?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| ServerError::InvalidRequest("event limit is too large".to_string()))?;
+        let rows = self
+            .client
+            .query(
+                "select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                        history_uri, turn_id, created_at
+                   from (
+                        select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                               history_uri, turn_id, created_at
+                          from session_events
+                         where session_id = $1
+                           and event_type = 'memory_recall'
+                           and payload_json #>> '{context,subject}' = $2
+                           and payload_json #>> '{context,scope}' = $3
+                         order by seq desc limit $4
+                   ) bounded
+                  order by seq asc",
+                &[&session_id, &owner_subject, &memory_scope, &limit],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
         Ok(rows
             .into_iter()
             .map(|row| SessionEvent {
@@ -2460,6 +3136,150 @@ impl Store for PostgresStore {
         })
     }
 
+    async fn apply_approved_memory_proposal(
+        &self,
+        proposal: &crate::MemoryWriteProposal,
+    ) -> Result<crate::MemoryRecordRef> {
+        let mut client = self.memory_mutation_client.lock().await;
+        let transaction = client.transaction().await.map_err(postgres_memory_error)?;
+
+        match proposal.memory_kind {
+            crate::MemoryWriteKind::ProfileFact => {
+                let fact = crate::memory::profile_fact_record(proposal)?;
+                validate_profile_fact_persistence(&fact)?;
+                transaction
+                    .query_one(
+                        "select pg_advisory_xact_lock(hashtextextended($1, 0))",
+                        &[&format!("{}\n{}", fact.subject, fact.predicate)],
+                    )
+                    .await
+                    .map_err(postgres_memory_error)?;
+
+                let rows = transaction
+                    .query(
+                        &format!(
+                            "select {DURABLE_MEMORY_RECORD_COLUMNS}
+                               from memory_records
+                              where record_kind = 'semantic'
+                                and owner_subject = $1 and memory_scope = 'global'
+                                and semantic_subject = $1
+                                and predicate = $2 and object <> $3
+                                and status = 'active' and effective_to is null
+                              order by effective_from desc, id desc
+                              for update"
+                        ),
+                        &[&fact.subject, &fact.predicate, &fact.object],
+                    )
+                    .await
+                    .map_err(postgres_memory_error)?;
+                let mut predecessors = rows
+                    .into_iter()
+                    .map(row_to_stored_memory_record)
+                    .collect::<Result<Vec<_>>>()?;
+                let existing_forward = transaction
+                    .query_opt(
+                        "select supersedes_record_id
+                           from memory_records
+                          where record_kind = 'semantic' and id = $1
+                            and owner_subject = $2 and memory_scope = 'global'
+                          for update",
+                        &[&proposal.record_id, &proposal.subject],
+                    )
+                    .await
+                    .map_err(postgres_memory_error)?
+                    .and_then(|row| row.get("supersedes_record_id"));
+                let forward = predecessors
+                    .first()
+                    .map(StoredMemoryRecord::id)
+                    .or(existing_forward);
+
+                transaction
+                    .query_one(
+                        "with superseded as (
+                           update profile_facts
+                              set valid_to = $8
+                            where subject = $2 and predicate = $3 and object <> $4
+                              and id <> $1 and valid_to is null
+                         )
+                         insert into profile_facts(
+                            id, subject, predicate, object, confidence, importance, provenance,
+                            valid_from, valid_to
+                         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                         on conflict (id) do update set
+                            subject = excluded.subject,
+                            predicate = excluded.predicate,
+                            object = excluded.object,
+                            confidence = excluded.confidence,
+                            importance = excluded.importance,
+                            provenance = excluded.provenance,
+                            valid_from = excluded.valid_from,
+                            valid_to = coalesce(profile_facts.valid_to, excluded.valid_to)
+                         returning id",
+                        &[
+                            &fact.id,
+                            &fact.subject,
+                            &fact.predicate,
+                            &fact.object,
+                            &fact.confidence,
+                            &fact.importance,
+                            &fact.provenance,
+                            &fact.valid_from,
+                            &fact.valid_to,
+                        ],
+                    )
+                    .await
+                    .map_err(postgres_memory_error)?;
+
+                let typed = crate::memory::typed_memory_record(proposal, forward)?;
+                upsert_typed_memory_record(&transaction, &typed).await?;
+                for previous in &mut predecessors {
+                    let MemoryRecordResource::Semantic(value) = &mut previous.resource else {
+                        return Err(ServerError::Store(
+                            "profile predecessor is not semantic".to_string(),
+                        ));
+                    };
+                    value.status = tm_memory::MemoryRecordStatus::Superseded;
+                    value.effective_to = Some(proposal.created_at);
+                    value.links.superseded_by_record_id = Some(proposal.record_id);
+                    *previous = StoredMemoryRecord::new(previous.resource.clone())
+                        .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+                    upsert_typed_memory_record(&transaction, previous).await?;
+                }
+            }
+            crate::MemoryWriteKind::RecallChunk => {
+                let chunk = crate::memory::recall_chunk_record(proposal)?;
+                validate_recall_chunk_persistence(&chunk)?;
+                transaction
+                    .query_one(
+                        "insert into recall_chunks(id, scope, text, source, importance, created_at)
+                         values ($1, $2, $3, $4, $5, $6)
+                         on conflict (id) do update set
+                            scope = excluded.scope,
+                            text = excluded.text,
+                            source = excluded.source,
+                            importance = excluded.importance,
+                            created_at = excluded.created_at
+                         returning id",
+                        &[
+                            &chunk.id,
+                            &chunk.scope,
+                            &chunk.text,
+                            &chunk.source,
+                            &chunk.importance,
+                            &chunk.created_at,
+                        ],
+                    )
+                    .await
+                    .map_err(postgres_memory_error)?;
+                let typed = crate::memory::typed_memory_record(proposal, None)?;
+                upsert_typed_memory_record(&transaction, &typed).await?;
+            }
+        }
+
+        transaction.commit().await.map_err(postgres_memory_error)?;
+        Ok(proposal.record_ref())
+    }
+
     async fn profile_facts(&self, subject: &str) -> Result<Vec<ProfileFactRecord>> {
         let rows = self.client
             .query("select id, subject, predicate, object, confidence, importance, provenance, valid_from, valid_to from profile_facts where subject = $1 and valid_to is null order by importance desc, valid_from desc", &[&subject])
@@ -2556,6 +3376,466 @@ impl Store for PostgresStore {
             importance: row.get("importance"),
             created_at: row.get("created_at"),
         })
+    }
+
+    async fn upsert_memory_record(&self, record: StoredMemoryRecord) -> Result<StoredMemoryRecord> {
+        let record = sanitize_durable_memory_record(record)?;
+        self.ensure_memory_scope_is_readable(
+            record.resource.owner_subject(),
+            record.resource.memory_scope(),
+        )
+        .await?;
+        self.ensure_memory_record_links_are_scoped(&record).await?;
+        if let Some(existing) = self.memory_record_with_content_key(&record).await?
+            && existing.id() != record.id()
+        {
+            return Ok(existing);
+        }
+
+        let (
+            schema_version,
+            owner_subject,
+            memory_scope,
+            text,
+            semantic_subject,
+            predicate,
+            object,
+            evidence,
+            confidence,
+            importance,
+            observed_at,
+            effective_from,
+            effective_to,
+            status,
+            links,
+            created_at,
+        ) = match &record.resource {
+            MemoryRecordResource::Episodic(value) => (
+                value.schema_version,
+                value.owner_subject.as_str(),
+                value.memory_scope.as_str(),
+                Some(value.text.as_str()),
+                None,
+                None,
+                None,
+                &value.evidence,
+                value.confidence,
+                value.importance,
+                value.observed_at,
+                value.effective_from,
+                value.effective_to,
+                value.status,
+                &value.links,
+                value.created_at,
+            ),
+            MemoryRecordResource::Semantic(value) => (
+                value.schema_version,
+                value.owner_subject.as_str(),
+                value.memory_scope.as_str(),
+                None,
+                Some(value.semantic_subject.as_str()),
+                Some(value.predicate.as_str()),
+                Some(value.object.as_str()),
+                &value.evidence,
+                value.confidence,
+                value.importance,
+                value.observed_at,
+                value.effective_from,
+                value.effective_to,
+                value.status,
+                &value.links,
+                value.created_at,
+            ),
+        };
+        let evidence_json = serde_json::to_value(evidence)
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let schema_version = i32::from(schema_version);
+        let kind = record.kind().as_str();
+        let inserted = self
+            .client
+            .query_one(
+                &format!(
+                    "insert into memory_records(
+                        record_kind, id, schema_version, owner_subject, memory_scope, text,
+                        semantic_subject, predicate, object, evidence_json, confidence, importance,
+                        observed_at, effective_from, effective_to, status,
+                        corrects_record_id, corrected_by_record_id,
+                        supersedes_record_id, superseded_by_record_id,
+                        content_key, version_key, created_at
+                     ) values (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+                     )
+                     on conflict (record_kind, id) do update set
+                        schema_version = excluded.schema_version,
+                        owner_subject = excluded.owner_subject,
+                        memory_scope = excluded.memory_scope,
+                        text = excluded.text,
+                        semantic_subject = excluded.semantic_subject,
+                        predicate = excluded.predicate,
+                        object = excluded.object,
+                        evidence_json = excluded.evidence_json,
+                        confidence = excluded.confidence,
+                        importance = excluded.importance,
+                        observed_at = excluded.observed_at,
+                        effective_from = excluded.effective_from,
+                        effective_to = excluded.effective_to,
+                        status = excluded.status,
+                        corrects_record_id = excluded.corrects_record_id,
+                        corrected_by_record_id = excluded.corrected_by_record_id,
+                        supersedes_record_id = excluded.supersedes_record_id,
+                        superseded_by_record_id = excluded.superseded_by_record_id,
+                        content_key = excluded.content_key,
+                        version_key = excluded.version_key
+                     returning {DURABLE_MEMORY_RECORD_COLUMNS}"
+                ),
+                &[
+                    &kind,
+                    &record.id(),
+                    &schema_version,
+                    &owner_subject,
+                    &memory_scope,
+                    &text,
+                    &semantic_subject,
+                    &predicate,
+                    &object,
+                    &evidence_json,
+                    &confidence,
+                    &importance,
+                    &observed_at,
+                    &effective_from,
+                    &effective_to,
+                    &status.as_str(),
+                    &links.corrects_record_id,
+                    &links.corrected_by_record_id,
+                    &links.supersedes_record_id,
+                    &links.superseded_by_record_id,
+                    &record.content_key,
+                    &record.version_key,
+                    &created_at,
+                ],
+            )
+            .await;
+        match inserted {
+            Ok(row) => row_to_stored_memory_record(row),
+            Err(error) if error.code() == Some(&SqlState::UNIQUE_VIOLATION) => self
+                .memory_record_with_content_key(&record)
+                .await?
+                .ok_or_else(|| ServerError::Store(error.to_string())),
+            Err(error) => Err(postgres_memory_error(error)),
+        }
+    }
+
+    async fn memory_record(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        kind: MemoryRecordKind,
+        id: Uuid,
+    ) -> Result<StoredMemoryRecord> {
+        self.ensure_memory_scope_is_readable(owner_subject, memory_scope)
+            .await?;
+        let row = self
+            .client
+            .query_opt(
+                &format!(
+                    "select {DURABLE_MEMORY_RECORD_COLUMNS}
+                       from memory_records
+                      where record_kind = $1 and id = $2
+                        and owner_subject = $3 and memory_scope = $4"
+                ),
+                &[&kind.as_str(), &id, &owner_subject, &memory_scope],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| {
+                ServerError::NotFound(format!(
+                    "memory record {owner_subject}/{memory_scope}/{}/{}",
+                    kind.as_str(),
+                    id
+                ))
+            })?;
+        row_to_stored_memory_record(row)
+    }
+
+    async fn active_memory_records(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredMemoryRecord>> {
+        self.ensure_memory_scope_is_readable(owner_subject, memory_scope)
+            .await?;
+        let rows = self
+            .client
+            .query(
+                &format!(
+                    "select {DURABLE_MEMORY_RECORD_COLUMNS}
+                       from memory_records record
+                      where record.owner_subject = $1
+                        and record.memory_scope = $2
+                        and record.status = 'active'
+                        and record.effective_to is null
+                        and not exists ({ACTIVE_MEMORY_SUCCESSOR_QUERY})
+                      order by record.importance desc, record.observed_at desc,
+                               record.record_kind asc, record.id asc
+                      limit $3"
+                ),
+                &[&owner_subject, &memory_scope, &(limit as i64)],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        rows.into_iter().map(row_to_stored_memory_record).collect()
+    }
+
+    async fn active_memory_embedding_generation(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Option<tm_memory::MemoryEmbeddingGeneration>> {
+        PostgresStore::active_memory_embedding_generation(self, owner_subject, memory_scope).await
+    }
+
+    async fn memory_hybrid_candidates(
+        &self,
+        request: &tm_memory::HybridRecallRequest,
+        query: &str,
+        dense_query: Option<&tm_memory::DenseRecallQuery>,
+    ) -> Result<tm_memory::HybridRecallResult> {
+        PostgresStore::memory_hybrid_candidates(self, request, query, dense_query).await
+    }
+
+    async fn enqueue_memory_embedding_job(
+        &self,
+        job: NewMemoryEmbeddingJob,
+    ) -> Result<MemoryEmbeddingJobRecord> {
+        let job = sanitize_new_memory_embedding_job(job)?;
+        let record = self
+            .memory_record(
+                &job.owner_subject,
+                &job.memory_scope,
+                job.record_kind,
+                job.record_id,
+            )
+            .await?;
+        if record.content_key != job.content_key {
+            return Err(ServerError::NotFound(format!(
+                "memory record {}/{} at requested content version",
+                job.record_kind.as_str(),
+                job.record_id
+            )));
+        }
+        let dimensions = i32::try_from(job.provenance.dimensions).map_err(|_| {
+            ServerError::InvalidRequest(
+                "embedding dimensions exceed Postgres integer range".to_string(),
+            )
+        })?;
+        let input_limit_bytes = i32::try_from(job.input_limit_bytes).map_err(|_| {
+            ServerError::InvalidRequest("embedding input limit exceeds Postgres range".to_string())
+        })?;
+        let record_kind = job.record_kind.as_str();
+        let embedding_version = &job.provenance.embedding_version;
+        let mut client = self.memory_mutation_client.lock().await;
+        let transaction = client.transaction().await.map_err(postgres_memory_error)?;
+        transaction
+            .execute(
+                "insert into memory_embedding_provenance(
+                    record_kind, record_id, embedding_version, schema_version, provider,
+                    model_id, dimensions, normalization, content_hash, reembedding_state, created_at
+                 ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 on conflict (record_kind, record_id, embedding_version) do update set
+                    schema_version = excluded.schema_version,
+                    provider = excluded.provider,
+                    model_id = excluded.model_id,
+                    dimensions = excluded.dimensions,
+                    normalization = excluded.normalization,
+                    content_hash = excluded.content_hash,
+                    reembedding_state = excluded.reembedding_state,
+                    created_at = excluded.created_at",
+                &[
+                    &record_kind,
+                    &job.record_id,
+                    &embedding_version,
+                    &i32::from(job.provenance.schema_version),
+                    &job.provenance.provider.as_str(),
+                    &job.provenance.model_id,
+                    &dimensions,
+                    &job.provenance.normalization.as_str(),
+                    &job.provenance.content_hash,
+                    &job.provenance.reembedding_state.as_str(),
+                    &job.provenance.created_at,
+                ],
+            )
+            .await
+            .map_err(postgres_memory_error)?;
+        let reembedding_key = job.reembedding_key();
+        transaction
+            .query_one(
+                "insert into memory_embedding_jobs(
+                    id, record_kind, record_id, owner_subject, memory_scope, content_key,
+                    embedding_version, reembedding_key, status, attempts, available_at, locked_at,
+                    cancelled_at, created_at, updated_at, input_limit_bytes, failure_code
+                 ) values ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', 0, $9, null, null, $9, $9, $10, null)
+                 on conflict (reembedding_key) do update
+                    set status = case
+                            when memory_embedding_jobs.status = 'completed' then 'queued'
+                            when memory_embedding_jobs.status = 'failed'
+                              and (memory_embedding_jobs.failure_code is distinct from 'input_too_large'
+                                   or excluded.input_limit_bytes > memory_embedding_jobs.input_limit_bytes)
+                              then 'queued'
+                            else memory_embedding_jobs.status
+                        end,
+                        input_limit_bytes = greatest(memory_embedding_jobs.input_limit_bytes,
+                            excluded.input_limit_bytes),
+                        available_at = case
+                            when memory_embedding_jobs.status = 'completed'
+                              or (memory_embedding_jobs.status = 'failed'
+                                  and (memory_embedding_jobs.failure_code is distinct from 'input_too_large'
+                                       or excluded.input_limit_bytes > memory_embedding_jobs.input_limit_bytes))
+                            then excluded.available_at else memory_embedding_jobs.available_at end,
+                        failure_code = case
+                            when memory_embedding_jobs.status = 'completed'
+                              or (memory_embedding_jobs.status = 'failed'
+                                  and (memory_embedding_jobs.failure_code is distinct from 'input_too_large'
+                                       or excluded.input_limit_bytes > memory_embedding_jobs.input_limit_bytes))
+                            then null else memory_embedding_jobs.failure_code end,
+                        updated_at = case
+                            when memory_embedding_jobs.status = 'completed'
+                              or (memory_embedding_jobs.status = 'failed'
+                                  and (memory_embedding_jobs.failure_code is distinct from 'input_too_large'
+                                       or excluded.input_limit_bytes > memory_embedding_jobs.input_limit_bytes))
+                            then excluded.updated_at else memory_embedding_jobs.updated_at end
+                 returning id",
+                &[
+                    &job.id,
+                    &record_kind,
+                    &job.record_id,
+                    &job.owner_subject,
+                    &job.memory_scope,
+                    &job.content_key,
+                    &embedding_version,
+                    &reembedding_key,
+                    &job.created_at,
+                    &input_limit_bytes,
+                ],
+            )
+            .await
+            .map_err(postgres_memory_error)?;
+        let row = transaction
+            .query_one(
+                &format!(
+                    "select {MEMORY_EMBEDDING_JOB_COLUMNS}
+                       from memory_embedding_jobs j
+                       join memory_embedding_provenance p
+                         on p.record_kind = j.record_kind
+                        and p.record_id = j.record_id
+                        and p.embedding_version = j.embedding_version
+                      where j.reembedding_key = $1"
+                ),
+                &[&reembedding_key],
+            )
+            .await
+            .map_err(postgres_memory_error)?;
+        let record = row_to_memory_embedding_job(row)?;
+        transaction.commit().await.map_err(postgres_memory_error)?;
+        Ok(record)
+    }
+
+    async fn memory_embedding_jobs(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Vec<MemoryEmbeddingJobRecord>> {
+        self.ensure_memory_scope_is_readable(owner_subject, memory_scope)
+            .await?;
+        let rows = self
+            .client
+            .query(
+                &format!(
+                    "select {MEMORY_EMBEDDING_JOB_COLUMNS}
+                       from memory_embedding_jobs j
+                       join memory_embedding_provenance p
+                         on p.record_kind = j.record_kind
+                        and p.record_id = j.record_id
+                        and p.embedding_version = j.embedding_version
+                      where j.owner_subject = $1 and j.memory_scope = $2
+                      order by j.created_at asc, j.id asc"
+                ),
+                &[&owner_subject, &memory_scope],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        rows.into_iter().map(row_to_memory_embedding_job).collect()
+    }
+
+    async fn revoke_memory_scope(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        reason: &str,
+    ) -> Result<MemoryScopeTombstone> {
+        validate_persistence_identifier("memory tombstone owner subject", owner_subject)?;
+        validate_persistence_identifier("memory tombstone scope", memory_scope)?;
+        if memory_scope
+            .strip_prefix("project:")
+            .is_none_or(|slug| slug.trim().is_empty())
+        {
+            return Err(ServerError::InvalidRequest(
+                "memory tombstones only apply to project scopes".to_string(),
+            ));
+        }
+        let reason = redact_persisted_text(reason);
+        if reason.trim().is_empty() {
+            return Err(ServerError::InvalidRequest(
+                "memory tombstone reason must not be empty".to_string(),
+            ));
+        }
+        let now = Utc::now();
+        let row = self
+            .client
+            .query_one(
+                "insert into memory_scope_tombstones(
+                    owner_subject, memory_scope, link_alias, reason, revoked_at
+                 ) values ($1, $2, null, $3, $4)
+                 on conflict (owner_subject, memory_scope) do update set
+                    reason = excluded.reason,
+                    revoked_at = least(memory_scope_tombstones.revoked_at, excluded.revoked_at)
+                 returning owner_subject, memory_scope, link_alias, reason, revoked_at",
+                &[&owner_subject, &memory_scope, &reason, &now],
+            )
+            .await
+            .map_err(postgres_memory_error)?;
+        Ok(MemoryScopeTombstone {
+            owner_subject: row.get("owner_subject"),
+            memory_scope: row.get("memory_scope"),
+            link_alias: row.get("link_alias"),
+            reason: row.get("reason"),
+            revoked_at: row.get("revoked_at"),
+        })
+    }
+
+    async fn memory_scope_tombstone(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Option<MemoryScopeTombstone>> {
+        let row = self
+            .client
+            .query_opt(
+                "select owner_subject, memory_scope, link_alias, reason, revoked_at
+                   from memory_scope_tombstones
+                  where owner_subject = $1 and memory_scope = $2",
+                &[&owner_subject, &memory_scope],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        Ok(row.map(|row| MemoryScopeTombstone {
+            owner_subject: row.get("owner_subject"),
+            memory_scope: row.get("memory_scope"),
+            link_alias: row.get("link_alias"),
+            reason: row.get("reason"),
+            revoked_at: row.get("revoked_at"),
+        }))
     }
 
     async fn upsert_project_item(&self, item: NewProjectItem) -> Result<ProjectItemRecord> {

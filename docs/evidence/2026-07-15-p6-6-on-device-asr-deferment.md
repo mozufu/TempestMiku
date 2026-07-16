@@ -6,7 +6,7 @@ Status: **DEFERRED — feasible benchmark, incomplete product milestone**.
 
 The owner explicitly deferred P6.6 after the feasibility and Taiwan Mandarin benchmark work. This
 is a sequencing decision, not acceptance: P6.1–P6.5 remain closed, P6.6 remains incomplete, and P6
-is not marked fully closed. P8 fuller memory is the next active milestone. Resume P6.6 only after an
+is not marked fully closed. P8 fuller memory subsequently closed; P7.2b is now active. Resume P6.6 only after an
 explicit owner decision.
 
 ## Scope preserved at deferment

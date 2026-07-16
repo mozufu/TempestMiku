@@ -76,6 +76,31 @@ const MIGRATIONS: &[Migration] = &[
         name: "actionable_notifications",
         sql: include_str!("../../../migrations/0013_actionable_notifications.sql"),
     },
+    Migration {
+        version: 14,
+        name: "p8_durable_memory",
+        sql: include_str!("../../../migrations/0014_p8_durable_memory.sql"),
+    },
+    Migration {
+        version: 15,
+        name: "p8_hybrid_embeddings",
+        sql: include_str!("../../../migrations/0015_p8_hybrid_embeddings.sql"),
+    },
+    Migration {
+        version: 16,
+        name: "p8_active_content_dedupe",
+        sql: include_str!("../../../migrations/0016_p8_active_content_dedupe.sql"),
+    },
+    Migration {
+        version: 17,
+        name: "p8_memory_authority_serialization",
+        sql: include_str!("../../../migrations/0017_p8_memory_authority_serialization.sql"),
+    },
+    Migration {
+        version: 18,
+        name: "p8_embedding_lifecycle_hardening",
+        sql: include_str!("../../../migrations/0018_p8_embedding_lifecycle_hardening.sql"),
+    },
 ];
 
 impl PostgresStore {

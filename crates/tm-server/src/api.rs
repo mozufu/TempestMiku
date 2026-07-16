@@ -121,6 +121,7 @@ pub struct AppState<S, M, C> {
     pub drive_store: Option<SharedDriveStore>,
     pub actor_roster: Arc<MailboxRegistry>,
     pub push: Option<Arc<crate::PushService>>,
+    pub memory_embedding_worker: Option<Arc<dyn crate::MemoryEmbeddingWorker>>,
     pub self_evolution_tier: SelfEvolutionTier,
     runtime_status: Arc<crate::RuntimeStatus>,
     auto_start_turn_dispatcher: bool,
@@ -145,6 +146,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             drive_store: self.drive_store.clone(),
             actor_roster: Arc::clone(&self.actor_roster),
             push: self.push.clone(),
+            memory_embedding_worker: self.memory_embedding_worker.clone(),
             self_evolution_tier: self.self_evolution_tier,
             runtime_status: Arc::clone(&self.runtime_status),
             auto_start_turn_dispatcher: self.auto_start_turn_dispatcher,
@@ -181,6 +183,7 @@ impl<S, M, C> AppState<S, M, C> {
             drive_store: None,
             actor_roster: Arc::new(MailboxRegistry::new()),
             push: None,
+            memory_embedding_worker: None,
             self_evolution_tier: SelfEvolutionTier::default(),
             runtime_status: Arc::new(crate::RuntimeStatus::local_test()),
             // Production startup is role-supervised. Unit tests retain the small embedded
@@ -233,6 +236,14 @@ impl<S, M, C> AppState<S, M, C> {
 
     pub fn with_push_service(mut self, push: Arc<crate::PushService>) -> Self {
         self.push = Some(push);
+        self
+    }
+
+    pub fn with_memory_embedding_worker(
+        mut self,
+        worker: Arc<dyn crate::MemoryEmbeddingWorker>,
+    ) -> Self {
+        self.memory_embedding_worker = Some(worker);
         self
     }
 
@@ -555,6 +566,10 @@ where
     let runtime = state.runtime_status().snapshot();
     let ready = !runtime.shutting_down
         && (!runtime.postgres || runtime.migrations_applied)
+        && runtime
+            .memory_readiness
+            .as_ref()
+            .is_none_or(tm_memory::DurableMemoryReadiness::allows_durable_writes)
         && (!runtime.workers_enabled || runtime.postgres);
     let status = if runtime.shutting_down {
         "draining"

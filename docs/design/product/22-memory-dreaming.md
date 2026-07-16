@@ -151,6 +151,84 @@ audit hardening gate. When Postgres is
 enabled, scoped recall also uses a `simple` `tsvector`/`plainto_tsquery` path with substring fallback;
 the in-memory store keeps deterministic substring matching for normal tests.
 
+**Implemented P8.1 baseline/contract slice:** before changing ranking or storage, the repository now
+owns a versioned nine-case global/project recall manifest with tune and held-out cohorts. The shared
+evaluator reports nDCG@5, Recall@5, unsafe precision failures, authority/scope leaks, prompt tokens,
+candidate counts, and p50/p95 latency through the same `Store` queries and `MemoryContext` budgeter
+used by turns. A gated PostgreSQL 16 test creates an isolated clean schema, applies the ordered
+migrations, seeds the fixture, and must reproduce the checked-in deterministic lexical/profile
+report; latency is remeasured and checked per case against the frozen ceiling. P8.1 also adds
+schema-versioned episodic and semantic record/resource shapes with explicit server-owned
+`owner_subject`/`memory_scope`, session event/message or resource evidence, confidence and importance,
+observed/effective time, status, and bidirectional correction/supersession links. Embedding provenance
+pins provider, model id, dimensions, normalization, content hash, derived embedding version, created
+time, state, and a deterministic re-embedding key. Both legacy stores compile through explicit
+record adapters; P8.1 adds no tables, vectors, ranking changes, or production embedding calls. The
+frozen metrics, acceptance thresholds, known baseline failures, and replay command live in the
+[`P8.1 recall baseline evidence`](../../evidence/2026-07-15-p8-1-recall-baseline.md).
+
+**Implemented P8.2 durable-spine slice:** ordered migration 0014 now persists the versioned
+episodic/semantic records in `memory_records`, normalizes evidence and correction/supersession
+relations, and stores embedding provenance plus deduplicated jobs before any vector work begins.
+`profile_facts`, `recall_chunks`, and `memory_summaries` mirror through the same migration-triggered
+path while their legacy tables and lexical query remain unchanged. New records use a SHA-256 logical
+content key independent of a generated UUID and a state-bearing version key (excluding immutable
+creation time); scope/owner-filtered reads
+apply only active/effective corrections before any later ranking. Project unlink creates a durable
+tombstone, immediately denies future scoped reads/writes, and cancels queued/running embedding jobs.
+Startup/readiness checks report schema corruption separately from disabled/missing/unsupported
+pgvector and temporarily unavailable embeddings; a corrupt durable schema fails closed. P8.2 adds no
+vector extension/index, provider, hybrid ranker, or turn integration. The migration/restart/rollback
+and P8.1-control-group evidence lives in
+[`P8.2 durable memory evidence`](../../evidence/2026-07-15-p8-2-durable-memory-spine.md).
+
+**Implemented P8.3 local-embedding/hybrid slice:** ordered migration 0015 records each scoped
+embedding generation and its atomic active-version pointer. It never installs `pgvector` implicitly:
+when the operator has provisioned the extension, staging a pinned local model creates a safe,
+version-derived `vector(N)` table and HNSW cosine index. The generation snapshots active corrected
+records, enqueues deduplicated provenance jobs, and only changes the pointer after every snapshot job
+is complete; a provider error returns its lease to the queue, while a stale content hash fails that
+generation and leaves the prior pointer untouched. The local HTTP client accepts only a loopback,
+unauthenticated OpenAI-shaped endpoint; `openai_compatible` remains a contract-only option until P9
+egress/secret authority exists. Postgres FTS and the active dense table independently supply bounded
+candidates, then `tm-memory` fuses them with deterministic RRF while retaining rank/score components,
+evidence, subject, scope, and embedding version. Correction/supersession, non-active status,
+tombstones, cross-scope results, stale vector content keys, and invalid dense dimensions are withheld
+before later context budgeting. Disabled/missing/provider-loss/partial/stale/model-or-dimension-mismatch
+cases retain lexical-only candidates. P8.3 does **not** alter turn assembly or `memory://`; P8.4 owns
+that surface. Gates and limitations are recorded in
+[`P8.3 local embedding evidence`](../../evidence/2026-07-15-p8-3-local-embeddings-hybrid.md).
+
+**Implemented P8.4/P8.5 integration and closeout:** `StoreMemoryProvider` now embeds the turn query
+through the configured loopback client, retrieves the active scoped hybrid generation, and passes the
+bounded fused candidates through the existing `MemoryContext` prompt budgeter. The five-item prompt
+allocation reserves two profile facts, two ranked recalls, and one recent summary, then refills unused
+slots in that order without exceeding the existing 1,600-token limit. Every hybrid or typed
+lexical-fallback context is persisted as a turn-linked `memory_recall` event before model execution;
+a durable retry reuses that exact event rather than re-querying mutable memory. Exact records and
+recalls are inspectable through authority-filtered `memory://records/<kind>/<id>` and
+`memory://recalls/<turn-id>` resources, including evidence, correction state, component ranks/scores,
+embedding version, degraded reason, and budget decisions. Approved proposals also upsert idempotent
+typed episodic/semantic records; denial, timeout, unsupported inference, correction, supersession, or
+unlink cannot enter active recall. The supervised worker incrementally embeds new active records,
+reclaims expired leases, and advances an active generation only after complete current coverage.
+Frozen overall and held-out quality, zero unsafe inclusions, provider loss/restart, resumable
+re-embedding, server restart, strict Postgres/client gates, and the self-hosted lumo deployment are
+closed in the
+[`P8 fuller-memory evidence`](../../evidence/2026-07-15-p8-5-fuller-memory.md).
+
+**Post-closeout authority/lifecycle hardening:** ordered migrations 0017–0018 serialize project
+scope revocation with every typed-memory, embedding-provenance, generation, pointer, and job write.
+Approved legacy plus typed memory effects now commit in one transaction and preserve every
+contradictory predecessor. Exact resource replay and list/read paths consult the same durable scope
+authority as live recall. Each embedding generation pins a monotonic generation order, scope
+snapshot revision, model version, dimensions, and input limit; unchanged staging is a no-op, dirty
+snapshots degrade lexically until complete, and older workers cannot replace a newer active pointer.
+Dense queries pin that identity end to end and apply owner/scope/status/correction authority in a
+materialized relation before exact cosine ordering. Oversized inputs fail independently from valid
+batch peers and may be retried only after the configured input limit increases. The HNSW index remains
+provisioned for a future authority-safe ANN plan, but it is not the authoritative scoped query path.
+
 P5 drive documents add a second bounded recall source at turn construction: when `tm-server` has a
 configured drive store, project-scoped turns search filed drive entries for that project and inject at
 most three summary/snippet lines with `drive://` URI, selector, and content hash. Raw document bodies
@@ -164,7 +242,9 @@ follow-up hardening.
 
 ## 22.6 Storage substrate & embeddings (decisions)
 
-- **Spine: PostgreSQL + `pgvector`** (self-hosted on `lumo`) — `pgvector` (HNSW index) for dense ANN;
+- **Spine: PostgreSQL + `pgvector`** (self-hosted on `lumo`) — `pgvector` storage with an HNSW index
+  retained for a future authority-safe ANN plan; the shipped scoped path materializes authorized rows
+  and performs exact cosine ordering;
   **Postgres FTS** (`tsvector` / `tsquery` + GIN) for BM25-style lexical *(true BM25 via the
   `pg_search` / ParadeDB extension if needed)*; facts / episodic / summaries as tables; the **graph** as
   `nodes` + `edges` tables (bi-temporal columns) traversed by recursive CTEs *(optional `Apache AGE` for
@@ -179,7 +259,8 @@ follow-up hardening.
   correction/supersession history, and recall-quality fixtures. `openai_compatible` remains an
   optional replaceable fallback, never a production requirement. LLM-backed extraction produces
   candidates and cannot silently promote unsupported inference into owner facts. P8
-  provenance/correction gates must pass before Auto mode can begin P7.2b persona proposals.
+  provenance/correction gates must pass before Auto mode can begin P7.2b persona proposals. P8.1–P8.5
+  are closed; P7.2b approval-backed persona addenda is the active slice.
 - **Scope:** `owner_subject` and `memory_scope` are server-owned session authority. A session starts in
   `global` or an active linked `project:<slug>` scope; changing modes never changes memory authority.
   Exact read/list/recall operations compare their subject/scope to the authorized invocation context
@@ -293,12 +374,17 @@ profile/facts view; approved write proposals expose exact record views at
 add `memory://dreams` queue status, exact `memory://dreams/<id>` dream records,
 `memory://summaries/<id>`, and `memory://skill-proposals/<id>` previews. P7.0 adds bounded
 `memory://evolution-audits`, `memory://evolution-proposals/<id>`, and typed review-only
-`memory://review-proposals/<id>` resources without giving dreaming a persona/mode write path. The
+`memory://review-proposals/<id>` resources without giving dreaming a persona/mode write path. P8 adds
+bounded `memory://records` and `memory://recalls` lists, exact typed records at
+`memory://records/<episodic|semantic>/<id>`, and the exact persisted turn context at
+`memory://recalls/<turn-id>`. Exact and preview reads preserve server-owned subject/scope authority;
+record previews omit full content and evidence bodies while exact reads expose the bounded provenance
+and ranking trace. The
 server grants these reads
 through `resources.read:memory`, and unknown memory paths or missing grants are denied. The JS/TS SDK
 types these as resource URIs; the global `memory` namespace remains `undefined` until an explicit
-`memory.*` API ships. Broader resources such as `…/MEMORY.md`, `…/episodic?q=…`, and
-`…/projects/<name>/…` remain later `tm-memory` work. P7.1-approved managed skills are composed on the
+`memory.*` API ships. Query-shaped ambient resources such as `…/MEMORY.md`, `…/episodic?q=…`, and
+`…/projects/<name>/…` remain out of the shipped surface. P7.1-approved managed skills are composed on the
 next load and readable through capability-gated `skill://` active/version resources; the model-visible
 `skills.*` import/write namespace remains closed (§9.3 / §26.4).
 

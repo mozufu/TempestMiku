@@ -133,8 +133,12 @@ type SkillResourceUri =
 type MemoryResourceUri =
   | "memory://root"
   | "memory://user-model"
+  | "memory://records"
+  | "memory://recalls"
   | `memory://profile/${string}/facts/${string}`
-  | `memory://scopes/${string}/chunks/${string}`;
+  | `memory://scopes/${string}/chunks/${string}`
+  | `memory://records/${"episodic" | "semantic"}/${string}`
+  | `memory://recalls/${string}`;
 
 type ProjectResourceUri = `project://${string}`;
 

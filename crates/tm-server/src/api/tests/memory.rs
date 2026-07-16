@@ -1,5 +1,28 @@
 use super::*;
 
+struct HybridTraceProvider {
+    candidate: tm_memory::HybridMemoryCandidate,
+}
+
+#[async_trait]
+impl MemoryProvider for HybridTraceProvider {
+    async fn context_for_turn(
+        &self,
+        subject: &str,
+        scope: &str,
+        _query: &str,
+    ) -> Result<crate::MemoryContext> {
+        Ok(crate::MemoryContext::from_hybrid_candidates_with_summaries(
+            subject,
+            scope,
+            Vec::new(),
+            vec![self.candidate.clone()],
+            1_600,
+            Some("emb-v1-api-fixture".to_string()),
+        ))
+    }
+}
+
 #[tokio::test]
 async fn memory_write_proposal_fails_closed_when_self_evolution_is_off() {
     let store = Arc::new(InMemoryStore::default());
@@ -99,6 +122,221 @@ async fn memory_context_injects_profile_facts_and_recall_chunks() {
             .payload_json
             .to_string()
             .contains("hello project open loop")
+    );
+}
+
+#[tokio::test]
+async fn hybrid_turn_persists_exact_bounded_recall_and_typed_record_resources() {
+    let store = Arc::new(InMemoryStore::default());
+    let now = Utc::now();
+    let record_id = Uuid::new_v4();
+    let record = tm_memory::StoredMemoryRecord::new(tm_memory::MemoryRecordResource::Episodic(
+        tm_memory::EpisodicMemoryRecord {
+            schema_version: tm_memory::MEMORY_RECORD_SCHEMA_VERSION,
+            id: record_id,
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+            text: "The bounded hybrid trace survives event replay.".to_string(),
+            evidence: vec![tm_memory::MemoryRecordEvidence::resource(
+                "memory://evolution-proposals/api-fixture",
+                "approved extraction",
+            )],
+            confidence: 0.9,
+            importance: 0.8,
+            observed_at: now,
+            effective_from: now,
+            effective_to: None,
+            status: tm_memory::MemoryRecordStatus::Active,
+            links: Default::default(),
+            created_at: now,
+        },
+    ))
+    .unwrap();
+    store.upsert_memory_record(record.clone()).await.unwrap();
+    let memory = Arc::new(HybridTraceProvider {
+        candidate: tm_memory::HybridMemoryCandidate {
+            record,
+            lexical_rank: Some(2),
+            lexical_score: Some(0.6),
+            dense_rank: Some(1),
+            dense_score: Some(0.9),
+            embedding_version: Some("emb-v1-api-fixture".to_string()),
+            rrf_score: 0.0325,
+        },
+    });
+    let state = AppState::new(
+        Arc::clone(&store),
+        memory,
+        Arc::new(EchoChatRunner),
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let app = app(state);
+    let session = create(&app).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/messages", session.id))
+                .header("content-type", "application/json")
+                .body(message_body("show the replayable memory"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
+    let completed = wait_for_turn(&app, session.id, turn_id).await;
+    assert_eq!(completed["status"], json!("completed"));
+
+    let trace_event = store
+        .event_for_turn(session.id, turn_id, "memory_recall")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        trace_event.payload_json["resourceUri"],
+        json!(format!("memory://recalls/{turn_id}"))
+    );
+    assert_eq!(
+        trace_event.payload_json["context"]["retrieval"]["mode"],
+        json!("hybrid")
+    );
+    assert_eq!(
+        trace_event.payload_json["context"]["retrieval"]["candidates"][0]["included"],
+        json!(true)
+    );
+
+    let trace = get_session_resource_json(
+        &app,
+        session.id,
+        "resolve",
+        &format!("memory://recalls/{turn_id}"),
+    )
+    .await;
+    assert_eq!(trace["mime"], json!("application/json"));
+    let trace_content: Value = serde_json::from_str(trace["content"].as_str().unwrap()).unwrap();
+    assert_eq!(trace_content, trace_event.payload_json);
+
+    let record_uri = format!("memory://records/episodic/{record_id}");
+    let record = get_session_resource_json(&app, session.id, "resolve", &record_uri).await;
+    assert_eq!(record["mime"], json!("application/json"));
+    let record_content: Value = serde_json::from_str(record["content"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        record_content["resource"]["record"]["evidence"][0]["label"],
+        json!("approved extraction")
+    );
+    let preview = get_session_resource_json(&app, session.id, "preview", &record_uri).await;
+    assert_eq!(preview["content"], json!(""));
+    assert!(preview["preview"].as_str().unwrap().len() <= SESSION_RESOURCE_PREVIEW_BYTES + 64);
+
+    let recalls = get_session_resource_json(&app, session.id, "list", "memory://recalls").await;
+    assert!(
+        recalls
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["uri"] == json!(format!("memory://recalls/{turn_id}")))
+    );
+
+    let project_record_id = Uuid::new_v4();
+    store
+        .upsert_memory_record(
+            tm_memory::StoredMemoryRecord::new(tm_memory::MemoryRecordResource::Episodic(
+                tm_memory::EpisodicMemoryRecord {
+                    schema_version: tm_memory::MEMORY_RECORD_SCHEMA_VERSION,
+                    id: project_record_id,
+                    owner_subject: "brian".to_string(),
+                    memory_scope: "project:tempestmiku".to_string(),
+                    text: "Project-scoped memory must not leak into the global scope.".to_string(),
+                    evidence: vec![tm_memory::MemoryRecordEvidence::resource(
+                        "memory://evolution-proposals/project-fixture",
+                        "approved extraction",
+                    )],
+                    confidence: 0.9,
+                    importance: 0.8,
+                    observed_at: now,
+                    effective_from: now,
+                    effective_to: None,
+                    status: tm_memory::MemoryRecordStatus::Active,
+                    links: Default::default(),
+                    created_at: now,
+                },
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let project_record_uri = format!("memory://records/episodic/{project_record_id}");
+    let cross_scope = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={project_record_uri}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cross_scope.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn recall_trace_listing_filters_authority_before_applying_the_limit() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let authorized_turn = store
+        .enqueue_turn(session.id, "authorized-recall", "authorized recall")
+        .await
+        .unwrap();
+    store
+        .append_event_for_turn(
+            session.id,
+            "memory_recall",
+            json!({
+                "context": {
+                    "subject": "brian",
+                    "scope": "global"
+                }
+            }),
+            Some(authorized_turn.id),
+        )
+        .await
+        .unwrap();
+    for index in 0..crate::memory::DEFAULT_MEMORY_RESOURCE_RECALL_LIMIT {
+        let unauthorized_turn = store
+            .enqueue_turn(
+                session.id,
+                &format!("unauthorized-recall-{index}"),
+                "unauthorized recall",
+            )
+            .await
+            .unwrap();
+        store
+            .append_event_for_turn(
+                session.id,
+                "memory_recall",
+                json!({
+                    "context": {
+                        "subject": "brian",
+                        "scope": "project:other"
+                    }
+                }),
+                Some(unauthorized_turn.id),
+            )
+            .await
+            .unwrap();
+    }
+
+    let recalls = get_session_resource_json(&app, session.id, "list", "memory://recalls").await;
+    let recalls = recalls.as_array().unwrap();
+    assert_eq!(recalls.len(), 1);
+    assert_eq!(
+        recalls[0]["uri"],
+        json!(format!("memory://recalls/{}", authorized_turn.id))
     );
 }
 
@@ -226,6 +464,26 @@ async fn memory_write_proposal_approval_persists_profile_fact_and_replays() {
     assert_eq!(facts[0].predicate, "prefers");
     assert_eq!(facts[0].object, "approval-backed memory writes");
     assert_eq!(facts[0].provenance, "user-confirmed");
+    let typed = store
+        .memory_record(
+            "brian",
+            "global",
+            tm_memory::MemoryRecordKind::Semantic,
+            facts[0].id,
+        )
+        .await
+        .unwrap();
+    let tm_memory::MemoryRecordResource::Semantic(typed) = typed.resource else {
+        panic!("approved profile fact must create a typed semantic record");
+    };
+    assert_eq!(typed.status, tm_memory::MemoryRecordStatus::Active);
+    assert_eq!(typed.evidence[0].label, "user-confirmed");
+    assert_eq!(
+        typed.evidence[0].source,
+        tm_memory::MemoryEvidenceSource::Resource {
+            uri: pending["uri"].as_str().unwrap().to_string()
+        }
+    );
 
     let record = app
         .clone()
@@ -378,6 +636,13 @@ async fn memory_write_proposal_denial_does_not_persist() {
     let body = response_json(response).await;
     assert_eq!(body["status"], json!("denied"));
     assert_eq!(store.profile_facts("brian").await.unwrap().len(), 0);
+    assert!(
+        store
+            .active_memory_records("brian", "global", 5)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let events = store.events_after(session_id, None).await.unwrap();
     assert!(events.iter().any(|event| {
         event.event_type == "write_proposal" && event.payload_json["status"] == json!("denied")
@@ -612,6 +877,14 @@ async fn approved_profile_fact_contradiction_supersedes_without_erasing_history(
     let current_content = current["content"].as_str().unwrap();
     assert!(current_content.contains("larger design-first changes when risk is high"));
     assert!(current_content.contains("Valid to: active"));
+
+    let legacy_context = StoreMemoryProvider::new(Arc::clone(&store))
+        .context_for_turn("brian", "global", "prefers")
+        .await
+        .unwrap()
+        .render_prompt_block();
+    assert!(!legacy_context.contains("small, reviewable patches"));
+    assert!(legacy_context.contains("larger design-first changes when risk is high"));
 }
 
 #[tokio::test]
@@ -968,6 +1241,132 @@ async fn gated_postgres_memory_approval_flow_persists_and_replays() {
         .map(|event| event.payload_json["status"].as_str().unwrap().to_string())
         .collect::<Vec<_>>();
     assert_eq!(replay_write_statuses, vec!["pending", "approved"]);
+
+    let unrelated_record_id = Uuid::new_v4();
+    let unrelated_now = Utc::now();
+    store
+        .upsert_memory_record(
+            tm_memory::StoredMemoryRecord::new(tm_memory::MemoryRecordResource::Semantic(
+                tm_memory::SemanticMemoryRecord {
+                    schema_version: tm_memory::MEMORY_RECORD_SCHEMA_VERSION,
+                    id: unrelated_record_id,
+                    owner_subject: subject.clone(),
+                    memory_scope: "global".to_string(),
+                    semantic_subject: "miku".to_string(),
+                    predicate: "prefers".to_string(),
+                    object: "unrelated semantic subject".to_string(),
+                    evidence: vec![tm_memory::MemoryRecordEvidence::resource(
+                        "memory://fixtures/unrelated-semantic-subject",
+                        "postgres semantic subject isolation",
+                    )],
+                    confidence: 0.9,
+                    importance: 0.7,
+                    observed_at: unrelated_now,
+                    effective_from: unrelated_now,
+                    effective_to: None,
+                    status: tm_memory::MemoryRecordStatus::Active,
+                    links: Default::default(),
+                    created_at: unrelated_now,
+                },
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let replacement_session = create(&app).await;
+    let replacement_session_id = replacement_session.id;
+    let replacement_object = format!("replacement postgres memory {run_id}");
+    let post_app = app.clone();
+    let request = json!({
+        "memoryKind": "profile_fact",
+        "predicate": "prefers",
+        "object": replacement_object,
+        "confidence": 0.94,
+        "provenanceLabel": "postgres-replacement",
+        "timeoutMs": 5000
+    });
+    let replacement = tokio::spawn(async move {
+        post_memory_proposal(&post_app, replacement_session_id, request).await
+    });
+    let replacement_approval =
+        wait_for_event_payload(&store, replacement_session_id, "approval").await;
+    let replacement_approval_id = replacement_approval["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    resolve_test_approval(
+        &app,
+        replacement_session_id,
+        replacement_approval_id,
+        "approve",
+    )
+    .await;
+    let replacement_response = replacement.await.unwrap();
+    assert_eq!(replacement_response.status(), StatusCode::OK);
+    let replacement_body = response_json(replacement_response).await;
+    let replacement_record_id = replacement_body["record"]["id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let previous_typed = store
+        .memory_record(
+            &subject,
+            "global",
+            tm_memory::MemoryRecordKind::Semantic,
+            profile_record_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        previous_typed.resource.status(),
+        tm_memory::MemoryRecordStatus::Superseded
+    );
+    assert_eq!(
+        previous_typed.resource.links().superseded_by_record_id,
+        Some(replacement_record_id)
+    );
+    let replacement_typed = store
+        .memory_record(
+            &subject,
+            "global",
+            tm_memory::MemoryRecordKind::Semantic,
+            replacement_record_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        replacement_typed.resource.status(),
+        tm_memory::MemoryRecordStatus::Active
+    );
+    assert_eq!(
+        replacement_typed.resource.links().supersedes_record_id,
+        Some(profile_record_id)
+    );
+    assert!(
+        store
+            .profile_fact(&subject, profile_record_id)
+            .await
+            .unwrap()
+            .valid_to
+            .is_some()
+    );
+    let unrelated = store
+        .memory_record(
+            &subject,
+            "global",
+            tm_memory::MemoryRecordKind::Semantic,
+            unrelated_record_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        unrelated.resource.status(),
+        tm_memory::MemoryRecordStatus::Active
+    );
+    assert_eq!(unrelated.resource.links().superseded_by_record_id, None);
 
     let chunk_session = create(&app).await;
     let chunk_session_id = chunk_session.id;

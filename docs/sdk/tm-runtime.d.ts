@@ -7,6 +7,9 @@
  * resources.read:memory, not as a memory.* namespace. P4 adds constrained
  * memory:// dream queues/records, summaries, skill-proposal previews, bounded
  * evolution audit history, and review-only persona/mode addendum proposals.
+ * P8 adds authority-filtered typed episodic/semantic records and durable,
+ * bounded per-turn recall traces with score, provenance, degradation, and
+ * prompt-budget decisions.
  * P7.1 adds capability-gated skill:// reads for approved, immutable managed
  * skill versions; the skills.* namespace remains closed.
  *
@@ -77,9 +80,13 @@ type MemoryResourceUri =
   | "memory://evolution-audits"
   | "memory://skill-proposals"
   | "memory://review-proposals"
+  | "memory://records"
+  | "memory://recalls"
   | `memory://dreams/${string}`
   | `memory://profile/${string}/facts/${string}`
   | `memory://scopes/${string}/chunks/${string}`
+  | `memory://records/${"episodic" | "semantic"}/${string}`
+  | `memory://recalls/${string}`
   | `memory://summaries/${string}`
   | `memory://skill-proposals/${string}`
   | `memory://evolution-proposals/${string}`

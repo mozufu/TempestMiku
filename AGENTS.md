@@ -20,9 +20,12 @@
   - `crates/tm-host`: host registry, capability grants, approval policy, resource registry, linked folders, `fs.*`, `code.*`, and argv-vector `proc.run`.
   - `crates/tm-modes`: mode catalog, routing, voice caps, and configurable mode/skill asset status.
   - `crates/tm-agents`: actor lifecycle, mailbox, `agents.run/spawn/parallel/msg/send/broadcast/wait/inbox/list/cancel/pipeline`, supervision defaults, and `agent://` / `history://` resources.
-  - `crates/tm-memory`: dream queue contracts, deterministic extraction/redaction, reflections, summaries, and proposal types.
+  - `crates/tm-memory`: dream queue contracts, deterministic extraction/redaction, reflections,
+    summaries, proposal types, P8.1 recall evaluation, durable P8.2 episodic/semantic record,
+    job/tombstone/readiness contracts, and P8.3 local embedding plus deterministic hybrid-RRF
+    contracts.
   - `crates/tm-drive`: local-first drive entries, transducers, virtual directories/search, organizer proposals, linked-folder policy, and `drive://` resources.
-  - `crates/tm-server`: authenticated axum session API, durable turn queue, replayable SSE/event store, ordered Postgres migrations, supervised runtime roles, durable approvals/dreams/cron/drive state, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
+  - `crates/tm-server`: authenticated axum session API, durable turn queue, replayable SSE/event store, ordered Postgres migrations including the P8.3 scoped hybrid-memory spine, supervised runtime roles, durable approvals/dreams/cron/drive state, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
   - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and Deno sandbox by default; `--stub-sandbox` remains for protocol tests.
   - `apps/tm-e2e`: local/dev public-API workflow harness for scripted and opt-in live session smoke coverage.
   - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.
@@ -50,9 +53,14 @@
   remain incomplete. Preserve the harness and evidence, but do not add production microphone,
   model-install/runtime, fallback, or send work unless the owner explicitly resumes the slice. The
   independent evidence and resume contract live at
-  `docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md`. P8 fuller memory is now active, followed
-  by P7.2b
-  approval-backed persona addenda, P9 egress/secrets, then P10 MCP/live research. `tm-trace`, cloud
+  `docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md`. P8 is closed: the frozen lexical
+  control, durable scoped records, local embeddings, hybrid turn integration, exact bounded
+  inspection, typed approved extraction, and lumo quality/restart/fallback gates all pass. Its
+  post-closeout contract also requires serialized scope revocation/approved writes, monotonic
+  scope-revision-pinned embedding activation, authority-first dense queries, and balanced 2/2/1
+  prompt allocation. P7.2b
+  approval-backed persona addenda is now active, followed by P9 egress/secrets and P10 MCP/live
+  research. `tm-trace`, cloud
   sync, AST/LSP, and extra sandbox backends are demand-triggered; aggressive self-evolution is out.
 
 ## Read before changing code
@@ -63,6 +71,10 @@ Start with the narrowest docs for the task:
 - Core architecture: `docs/design/core/01-tldr-the-bet.md`, `03-core-principles.md`, `04-architecture.md`, `05-agent-loop.md`, `06-repl-sandbox.md`, `07-host-sdk.md`, `08-security-model.md`, `09-context-artifacts.md`, `10-rust-implementation.md`; core roadmap lives in `ROADMAP.md` (§14).
 - Product layer: `docs/design/product/20-product-overview.md`, `21-persona-and-modes.md`, `22-memory-dreaming.md`, `23-agents-orchestration.md`, `24-drive-storage.md`, `25-coding-agent-sdk.md`, `26-self-evolution.md`, `27-server-and-clients.md`, `29-parity-baseline.md`; product roadmap lives in `ROADMAP.md` (§28).
 - Deferred P6.6 evidence: `docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md`.
+- P8.1 recall baseline evidence: `docs/evidence/2026-07-15-p8-1-recall-baseline.md`.
+- P8.2 durable-memory evidence: `docs/evidence/2026-07-15-p8-2-durable-memory-spine.md`.
+- P8.3 local-embedding/hybrid evidence: `docs/evidence/2026-07-15-p8-3-local-embeddings-hybrid.md`.
+- P8.4/P8.5 closeout evidence: `docs/evidence/2026-07-15-p8-5-fuller-memory.md`.
 - Roadmap execution order lives in `ROADMAP.md` under “Execution plan from current workspace”. Follow it unless the user explicitly changes priority.
 
 ## Architectural invariants
@@ -82,15 +94,11 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Implement the P8.1 recall baseline and hybrid-memory spine from `TODO.md`: freeze replayable
-   lexical fixtures and measured acceptance, add evidence/correction-aware scoped record contracts,
-   and preserve server-owned subject/scope authority.
-2. Add the self-hosted local embedding boundary and bounded Postgres FTS + pgvector fusion with
-   deterministic provenance, correction filtering, context budgeting, and lexical-only degradation.
-3. Close P8 only after replayable relevance improvement, zero scope leaks, provider-loss/restart/
-   re-embedding evidence, strict Rust/Postgres gates, and aligned SDK/docs. Then continue with P7.2b
-   manual-approval persona addenda, P9 egress/opaque secrets, and P10 MCP/live research.
-4. Keep the native/OMP boundary boring: OMP ACP remains replaceable, while native Deno remains the
+1. Implement P7.2b from `TODO.md`: Auto mode may create bounded, evidence-backed persona addendum
+   proposals, but durable manual approval is the only activation/rollback path. Preserve identity,
+   `SOUL.md`, safety, modes, voice caps, skills, scopes, and capability invariants.
+2. Continue with P9 egress/opaque secrets only after P7.2b closes, then P10 MCP/live research.
+3. Keep the native/OMP boundary boring: OMP ACP remains replaceable, while native Deno remains the
    dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed approvals.
 
 Do not start yet unless explicitly requested:
@@ -98,8 +106,6 @@ Do not start yet unless explicitly requested:
 - P6.6 product work unless the owner explicitly resumes it after reviewing the independent evidence
   note. Incidental harness build hygiene is allowed; microphone permission, production weights,
   model installer/runtime, server/cloud fallback, and automatic send are not.
-- P7.2b before P8 provenance/correction gates. Auto mode may decide when to propose, but persona
-  activation and rollback always require durable manual approval.
 - MCP or live external research before P9 egress, redirect, budget, audit, revocation, and opaque
   secret gates.
 - `tm-trace`, cloud sync/CRDT, AST/LSP, or extra sandbox backends without a concrete second consumer.

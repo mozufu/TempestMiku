@@ -363,10 +363,43 @@ where
     let scope = session.memory_scope.clone();
     let subject = session.owner_subject.clone();
     let persona_prompt = build_turn_prompt(state, &session.mode_state.mode, &durable_turn.content);
-    let memory = state
-        .memory
-        .context_for_turn(&subject, &scope, &durable_turn.content)
+    state
+        .store
+        .ensure_memory_scope_active(&subject, &scope)
         .await?;
+    let memory = if let Some(event) = state
+        .store
+        .event_for_turn(session_id, durable_turn.id, "memory_recall")
+        .await?
+    {
+        persisted_memory_context(&event, &subject, &scope)?
+    } else {
+        let memory = state
+            .memory
+            .context_for_turn(&subject, &scope, &durable_turn.content)
+            .await?;
+        if memory.requires_durable_trace() {
+            let (event, inserted) = state
+                .store
+                .append_event_for_turn_once(
+                    session_id,
+                    "memory_recall",
+                    json!({
+                        "schemaVersion": 1,
+                        "resourceUri": format!("memory://recalls/{}", durable_turn.id),
+                        "context": &memory,
+                    }),
+                    durable_turn.id,
+                )
+                .await?;
+            if inserted {
+                let _ = state.sender(session_id).send(event.clone());
+            }
+            persisted_memory_context(&event, &subject, &scope)?
+        } else {
+            memory
+        }
+    };
     let mut recall_blocks = Vec::new();
     if !memory.is_empty() {
         recall_blocks.push(memory.render_prompt_block());
@@ -517,6 +550,26 @@ where
     )
     .await?;
     Ok(response)
+}
+
+fn persisted_memory_context(
+    event: &crate::SessionEvent,
+    subject: &str,
+    scope: &str,
+) -> Result<crate::MemoryContext> {
+    let memory: crate::MemoryContext =
+        serde_json::from_value(event.payload_json.get("context").cloned().ok_or_else(|| {
+            ServerError::Store("persisted memory recall is missing its context".to_string())
+        })?)
+        .map_err(|error| {
+            ServerError::Store(format!("persisted memory recall is invalid: {error}"))
+        })?;
+    if memory.subject != subject || memory.scope != scope {
+        return Err(ServerError::Store(
+            "persisted memory recall authority does not match the durable turn".to_string(),
+        ));
+    }
+    Ok(memory)
 }
 
 async fn bounded_prior_messages<S: Store>(
@@ -791,9 +844,13 @@ mod dispatcher_tests {
 
     use async_trait::async_trait;
     use tm_core::EventSink;
+    use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
 
     use super::*;
-    use crate::{AuthConfig, ChatTurn, InMemoryStore, NewSession, StoreMemoryProvider};
+    use crate::{
+        AuthConfig, ChatTurn, EchoChatRunner, InMemoryStore, MemoryContext, NewSession,
+        RecallChunkRecord, StoreMemoryProvider,
+    };
 
     #[derive(Default)]
     struct ConcurrentRunner {
@@ -802,6 +859,20 @@ mod dispatcher_tests {
     }
 
     struct SlowRunner;
+
+    struct ReplayMustNotQueryMemory;
+
+    #[async_trait]
+    impl MemoryProvider for ReplayMustNotQueryMemory {
+        async fn context_for_turn(
+            &self,
+            _subject: &str,
+            _scope: &str,
+            _query: &str,
+        ) -> Result<MemoryContext> {
+            panic!("a durable memory_recall event must be replayed without re-querying memory")
+        }
+    }
 
     #[async_trait]
     impl ChatRunner for ConcurrentRunner {
@@ -828,6 +899,148 @@ mod dispatcher_tests {
             tokio::time::sleep(Duration::from_millis(250)).await;
             Ok("slow turn done".to_string())
         }
+    }
+
+    #[tokio::test]
+    async fn durable_memory_recall_event_is_the_exact_retry_context() {
+        let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject("owner").await.unwrap();
+        let persona = tm_modes::ModesConfig::default();
+        let assets = persona.load_assets();
+        let session = store
+            .create_session(NewSession {
+                mode: assets.modes.default_mode(),
+                persona_status: assets.status.clone(),
+            })
+            .await
+            .unwrap();
+        let turn = store
+            .enqueue_turn(session.id, "memory-retry", "retry the durable turn")
+            .await
+            .unwrap();
+        let memory = MemoryContext::from_records(
+            "owner",
+            "global",
+            Vec::new(),
+            vec![RecallChunkRecord {
+                id: Uuid::new_v4(),
+                scope: "global".to_string(),
+                text: "persisted recall survives the retry boundary".to_string(),
+                source: "memory://fixture/retry".to_string(),
+                importance: 0.8,
+                created_at: Utc::now(),
+            }],
+            1_600,
+        )
+        .mark_lexical_fallback("fixture_restart");
+        store
+            .append_event_for_turn(
+                session.id,
+                "memory_recall",
+                json!({
+                    "schemaVersion": 1,
+                    "resourceUri": format!("memory://recalls/{}", turn.id),
+                    "context": memory,
+                }),
+                Some(turn.id),
+            )
+            .await
+            .unwrap();
+        let state = AppState::new(
+            Arc::clone(&store),
+            Arc::new(ReplayMustNotQueryMemory),
+            Arc::new(EchoChatRunner),
+            persona,
+            AuthConfig::NoAuth,
+        )
+        .with_auto_turn_dispatcher(false);
+
+        let output = execute_turn_body(&state, &turn).await.unwrap();
+        assert!(output.contains("persisted recall survives the retry boundary"));
+        assert_eq!(
+            store
+                .events_by_type(session.id, "memory_recall", 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_memory_recall_rechecks_a_revoked_project_scope() {
+        let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject("owner").await.unwrap();
+        let persona = tm_modes::ModesConfig::default();
+        let assets = persona.load_assets();
+        let session = store
+            .create_session(NewSession {
+                mode: assets.modes.default_mode(),
+                persona_status: assets.status.clone(),
+            })
+            .await
+            .unwrap();
+        store
+            .set_session_memory_scope(session.id, "project:tempestmiku")
+            .await
+            .unwrap();
+        let turn = store
+            .enqueue_turn(session.id, "revoked-memory-retry", "retry the durable turn")
+            .await
+            .unwrap();
+        let memory = MemoryContext::from_records(
+            "owner",
+            "project:tempestmiku",
+            Vec::new(),
+            vec![RecallChunkRecord {
+                id: Uuid::new_v4(),
+                scope: "project:tempestmiku".to_string(),
+                text: "revoked project memory must not survive retry".to_string(),
+                source: "memory://fixture/revoked-retry".to_string(),
+                importance: 0.8,
+                created_at: Utc::now(),
+            }],
+            1_600,
+        );
+        store
+            .append_event_for_turn(
+                session.id,
+                "memory_recall",
+                json!({
+                    "schemaVersion": 1,
+                    "resourceUri": format!("memory://recalls/{}", turn.id),
+                    "context": memory,
+                }),
+                Some(turn.id),
+            )
+            .await
+            .unwrap();
+        store
+            .revoke_memory_scope("owner", "project:tempestmiku", "linked folder removed")
+            .await
+            .unwrap();
+        let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+            name: "tempestmiku".to_string(),
+            path: std::env::current_dir().unwrap(),
+            mode: FsMode::Ro,
+            commands: Vec::new(),
+            safe_args: Vec::new(),
+        }])
+        .unwrap();
+        let state = AppState::new(
+            Arc::clone(&store),
+            Arc::new(ReplayMustNotQueryMemory),
+            Arc::new(EchoChatRunner),
+            persona,
+            AuthConfig::NoAuth,
+        )
+        .with_linked_folders(linked)
+        .with_auto_turn_dispatcher(false);
+
+        let error = execute_turn_body(&state, &turn).await.unwrap_err();
+        assert!(
+            matches!(error, ServerError::NotFound(message) if message.contains("project:tempestmiku"))
+        );
     }
 
     #[tokio::test]

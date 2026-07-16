@@ -1,8 +1,11 @@
 use serde_json::Value;
 use tm_host::EvolutionAuditRecord;
 use tm_memory::{
-    DreamQueueRecord, DreamReason, DreamStatus, MemorySummaryKind, MemorySummaryRecord,
-    SkillProposalRecord, SkillProposalStatus, SkillVerification,
+    DreamQueueRecord, DreamReason, DreamStatus, EmbeddingNormalization, EmbeddingProvenance,
+    EmbeddingProvider, EpisodicMemoryRecord, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus,
+    MemoryRecordKind, MemoryRecordLinks, MemoryRecordResource, MemoryRecordStatus,
+    MemorySummaryKind, MemorySummaryRecord, ReembeddingState, SemanticMemoryRecord,
+    SkillProposalRecord, SkillProposalStatus, SkillVerification, StoredMemoryRecord,
 };
 
 use crate::{Result, ServerError};
@@ -120,6 +123,151 @@ pub(super) fn row_to_memory_summary(row: tokio_postgres::Row) -> Result<MemorySu
         source_dream_id: row.get("source_dream_id"),
         source_session_id: row.get("source_session_id"),
         dedupe_key: row.get("dedupe_key"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub(super) fn row_to_stored_memory_record(row: tokio_postgres::Row) -> Result<StoredMemoryRecord> {
+    let record_kind: String = row.get("record_kind");
+    let kind = MemoryRecordKind::parse(&record_kind).ok_or_else(|| {
+        ServerError::Store(format!("unknown durable memory record kind {record_kind}"))
+    })?;
+    let status: String = row.get("status");
+    let status = MemoryRecordStatus::parse(&status)
+        .ok_or_else(|| ServerError::Store(format!("unknown durable memory status {status}")))?;
+    let schema_version: i32 = row.get("schema_version");
+    let schema_version = u16::try_from(schema_version).map_err(|_| {
+        ServerError::Store(format!(
+            "invalid durable memory schema version {schema_version}"
+        ))
+    })?;
+    let evidence = serde_json::from_value(row.get("evidence_json"))
+        .map_err(|error| ServerError::Store(format!("invalid durable memory evidence: {error}")))?;
+    let links = MemoryRecordLinks {
+        corrects_record_id: row.get("corrects_record_id"),
+        corrected_by_record_id: row.get("corrected_by_record_id"),
+        supersedes_record_id: row.get("supersedes_record_id"),
+        superseded_by_record_id: row.get("superseded_by_record_id"),
+    };
+    let resource = match kind {
+        MemoryRecordKind::Episodic => MemoryRecordResource::Episodic(EpisodicMemoryRecord {
+            schema_version,
+            id: row.get("id"),
+            owner_subject: row.get("owner_subject"),
+            memory_scope: row.get("memory_scope"),
+            text: row
+                .get::<_, Option<String>>("text")
+                .ok_or_else(|| ServerError::Store("episodic record is missing text".to_string()))?,
+            evidence,
+            confidence: row.get("confidence"),
+            importance: row.get("importance"),
+            observed_at: row.get("observed_at"),
+            effective_from: row.get("effective_from"),
+            effective_to: row.get("effective_to"),
+            status,
+            links,
+            created_at: row.get("created_at"),
+        }),
+        MemoryRecordKind::Semantic => MemoryRecordResource::Semantic(SemanticMemoryRecord {
+            schema_version,
+            id: row.get("id"),
+            owner_subject: row.get("owner_subject"),
+            memory_scope: row.get("memory_scope"),
+            semantic_subject: row
+                .get::<_, Option<String>>("semantic_subject")
+                .ok_or_else(|| {
+                    ServerError::Store("semantic record is missing semantic_subject".to_string())
+                })?,
+            predicate: row.get::<_, Option<String>>("predicate").ok_or_else(|| {
+                ServerError::Store("semantic record is missing predicate".to_string())
+            })?,
+            object: row.get::<_, Option<String>>("object").ok_or_else(|| {
+                ServerError::Store("semantic record is missing object".to_string())
+            })?,
+            evidence,
+            confidence: row.get("confidence"),
+            importance: row.get("importance"),
+            observed_at: row.get("observed_at"),
+            effective_from: row.get("effective_from"),
+            effective_to: row.get("effective_to"),
+            status,
+            links,
+            created_at: row.get("created_at"),
+        }),
+    };
+    let stored = StoredMemoryRecord {
+        resource,
+        content_key: row.get("content_key"),
+        version_key: row.get("version_key"),
+    };
+    stored
+        .validate()
+        .map_err(|error| ServerError::Store(format!("invalid durable memory record: {error}")))?;
+    Ok(stored)
+}
+
+pub(super) fn row_to_memory_embedding_job(
+    row: tokio_postgres::Row,
+) -> Result<MemoryEmbeddingJobRecord> {
+    let record_kind: String = row.get("record_kind");
+    let record_kind = MemoryRecordKind::parse(&record_kind).ok_or_else(|| {
+        ServerError::Store(format!("unknown durable memory record kind {record_kind}"))
+    })?;
+    let provider: String = row.get("provider");
+    let provider = EmbeddingProvider::parse(&provider)
+        .ok_or_else(|| ServerError::Store(format!("unknown embedding provider {provider}")))?;
+    let normalization: String = row.get("normalization");
+    let normalization = EmbeddingNormalization::parse(&normalization).ok_or_else(|| {
+        ServerError::Store(format!("unknown embedding normalization {normalization}"))
+    })?;
+    let reembedding_state: String = row.get("reembedding_state");
+    let reembedding_state = ReembeddingState::parse(&reembedding_state).ok_or_else(|| {
+        ServerError::Store(format!("unknown reembedding state {reembedding_state}"))
+    })?;
+    let status: String = row.get("status");
+    let status = MemoryEmbeddingJobStatus::parse(&status)
+        .ok_or_else(|| ServerError::Store(format!("unknown embedding job status {status}")))?;
+    let schema_version: i32 = row.get("schema_version");
+    let schema_version = u16::try_from(schema_version).map_err(|_| {
+        ServerError::Store(format!("invalid embedding schema version {schema_version}"))
+    })?;
+    let dimensions: i32 = row.get("dimensions");
+    let dimensions = usize::try_from(dimensions)
+        .map_err(|_| ServerError::Store(format!("invalid embedding dimensions {dimensions}")))?;
+    let provenance = EmbeddingProvenance {
+        schema_version,
+        provider,
+        model_id: row.get("model_id"),
+        dimensions,
+        normalization,
+        content_hash: row.get("content_hash"),
+        embedding_version: row.get("embedding_version"),
+        created_at: row.get("provenance_created_at"),
+        reembedding_state,
+    };
+    provenance
+        .validate()
+        .map_err(|error| ServerError::Store(format!("invalid embedding provenance: {error}")))?;
+    Ok(MemoryEmbeddingJobRecord {
+        id: row.get("id"),
+        record_kind,
+        record_id: row.get("record_id"),
+        owner_subject: row.get("owner_subject"),
+        memory_scope: row.get("memory_scope"),
+        content_key: row.get("content_key"),
+        provenance,
+        reembedding_key: row.get("reembedding_key"),
+        status,
+        input_limit_bytes: usize::try_from(row.get::<_, i32>("input_limit_bytes"))
+            .map_err(|_| ServerError::Store("invalid embedding job input limit".to_string()))?,
+        failure_code: row.get("failure_code"),
+        attempts: row.get("attempts"),
+        available_at: row.get("available_at"),
+        locked_at: row.get("locked_at"),
+        lease_owner: row.get("lease_owner"),
+        lease_epoch: row.get("lease_epoch"),
+        cancelled_at: row.get("cancelled_at"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })

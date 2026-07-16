@@ -5,9 +5,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tm_host::EvolutionAuditRecord;
 use tm_memory::{
-    DreamLease, DreamQueueRecord, MemoryEvidenceRef, MemorySummaryRecord, NewDreamQueueRecord,
-    NewMemorySummaryRecord, NewSkillProposalRecord, ProfileFactRecord, RecallChunkRecord,
-    SkillProposalRecord, SkillProposalStatus,
+    DenseRecallQuery, DreamLease, DreamQueueRecord, HybridRecallRequest, HybridRecallResult,
+    MemoryEmbeddingGeneration, MemoryEmbeddingJobRecord, MemoryEvidenceRef, MemoryEvidenceSource,
+    MemoryRecordKind, MemoryRecordResource, MemoryScopeTombstone, MemorySummaryRecord,
+    NewDreamQueueRecord, NewMemoryEmbeddingJob, NewMemorySummaryRecord, NewSkillProposalRecord,
+    ProfileFactRecord, RecallChunkRecord, SkillProposalRecord, SkillProposalStatus,
+    StoredMemoryRecord,
 };
 use tm_modes::{
     AssetStatus, ModeId, ReviewAddendumChange, ReviewApplyContract, ReviewProposalStatus,
@@ -207,6 +210,56 @@ pub(crate) fn validate_recall_chunk_persistence(chunk: &RecallChunkRecord) -> Re
     ])
 }
 
+pub(crate) fn sanitize_durable_memory_record(
+    mut record: StoredMemoryRecord,
+) -> Result<StoredMemoryRecord> {
+    match &mut record.resource {
+        MemoryRecordResource::Episodic(episodic) => {
+            reject_sensitive_persistence_fields([
+                (
+                    "memory record owner subject",
+                    episodic.owner_subject.as_str(),
+                ),
+                ("memory record scope", episodic.memory_scope.as_str()),
+            ])?;
+            episodic.text = redact_persisted_text(&episodic.text);
+            sanitize_durable_memory_evidence(&mut episodic.evidence)?;
+        }
+        MemoryRecordResource::Semantic(semantic) => {
+            reject_sensitive_persistence_fields([
+                (
+                    "memory record owner subject",
+                    semantic.owner_subject.as_str(),
+                ),
+                ("memory record scope", semantic.memory_scope.as_str()),
+                (
+                    "memory semantic subject",
+                    semantic.semantic_subject.as_str(),
+                ),
+                ("memory semantic predicate", semantic.predicate.as_str()),
+                ("memory semantic object", semantic.object.as_str()),
+            ])?;
+            sanitize_durable_memory_evidence(&mut semantic.evidence)?;
+        }
+    }
+    StoredMemoryRecord::new(record.resource)
+        .map_err(|error| ServerError::InvalidRequest(error.to_string()))
+}
+
+pub(crate) fn sanitize_new_memory_embedding_job(
+    job: NewMemoryEmbeddingJob,
+) -> Result<NewMemoryEmbeddingJob> {
+    job.validate()
+        .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+    reject_sensitive_persistence_fields([
+        ("embedding job owner subject", job.owner_subject.as_str()),
+        ("embedding job scope", job.memory_scope.as_str()),
+        ("embedding job content key", job.content_key.as_str()),
+        ("embedding model id", job.provenance.model_id.as_str()),
+    ])?;
+    Ok(job)
+}
+
 pub(crate) fn validate_persistence_identifier(field: &str, value: &str) -> Result<()> {
     reject_sensitive_persistence_fields([(field, value)])
 }
@@ -345,6 +398,18 @@ fn sanitize_memory_evidence(evidence: &mut [MemoryEvidenceRef]) -> Result<()> {
     for item in evidence {
         if let Some(uri) = item.uri.as_deref() {
             reject_sensitive_persistence_fields([("memory evidence URI", uri)])?;
+        }
+        item.label = redact_persisted_text(&item.label);
+    }
+    Ok(())
+}
+
+fn sanitize_durable_memory_evidence(
+    evidence: &mut [tm_memory::MemoryRecordEvidence],
+) -> Result<()> {
+    for item in evidence {
+        if let MemoryEvidenceSource::Resource { uri } = &item.source {
+            reject_sensitive_persistence_fields([("memory record evidence URI", uri.as_str())])?;
         }
         item.label = redact_persisted_text(&item.label);
     }
@@ -722,11 +787,86 @@ pub trait Store: Send + Sync + 'static {
         self.append_event(session_id, event_type, payload_json)
             .await
     }
+    async fn append_event_for_turn_once(
+        &self,
+        session_id: Uuid,
+        event_type: &str,
+        payload_json: Value,
+        turn_id: Uuid,
+    ) -> Result<(SessionEvent, bool)> {
+        if let Some(event) = self.event_for_turn(session_id, turn_id, event_type).await? {
+            return Ok((event, false));
+        }
+        self.append_event_for_turn(session_id, event_type, payload_json, Some(turn_id))
+            .await
+            .map(|event| (event, true))
+    }
     async fn events_after(
         &self,
         session_id: Uuid,
         last_event_id: Option<i64>,
     ) -> Result<Vec<SessionEvent>>;
+    async fn event_for_turn(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        event_type: &str,
+    ) -> Result<Option<SessionEvent>> {
+        Ok(self
+            .events_after(session_id, None)
+            .await?
+            .into_iter()
+            .find(|event| {
+                event.turn_id == Some(turn_id) && event.event_type.as_str() == event_type
+            }))
+    }
+    async fn events_by_type(
+        &self,
+        session_id: Uuid,
+        event_type: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEvent>> {
+        let mut events = self
+            .events_after(session_id, None)
+            .await?
+            .into_iter()
+            .filter(|event| event.event_type.as_str() == event_type)
+            .collect::<Vec<_>>();
+        if events.len() > limit {
+            events.drain(..events.len() - limit);
+        }
+        Ok(events)
+    }
+    async fn memory_recall_events(
+        &self,
+        session_id: Uuid,
+        owner_subject: &str,
+        memory_scope: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEvent>> {
+        let mut events = self
+            .events_after(session_id, None)
+            .await?
+            .into_iter()
+            .filter(|event| {
+                event.event_type == "memory_recall"
+                    && event
+                        .payload_json
+                        .pointer("/context/subject")
+                        .and_then(Value::as_str)
+                        == Some(owner_subject)
+                    && event
+                        .payload_json
+                        .pointer("/context/scope")
+                        .and_then(Value::as_str)
+                        == Some(memory_scope)
+            })
+            .collect::<Vec<_>>();
+        if events.len() > limit {
+            events.drain(..events.len() - limit);
+        }
+        Ok(events)
+    }
     async fn enqueue_turn(
         &self,
         session_id: Uuid,
@@ -901,6 +1041,14 @@ pub trait Store: Send + Sync + 'static {
     async fn add_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<()>;
     async fn upsert_profile_fact(&self, fact: ProfileFactRecord) -> Result<ProfileFactRecord>;
     async fn upsert_recall_chunk(&self, chunk: RecallChunkRecord) -> Result<RecallChunkRecord>;
+    async fn apply_approved_memory_proposal(
+        &self,
+        _proposal: &crate::MemoryWriteProposal,
+    ) -> Result<crate::MemoryRecordRef> {
+        Err(ServerError::Store(
+            "atomic approved memory proposal application is not implemented".to_string(),
+        ))
+    }
     async fn profile_facts(&self, subject: &str) -> Result<Vec<ProfileFactRecord>>;
     async fn profile_fact(&self, subject: &str, id: Uuid) -> Result<ProfileFactRecord>;
     async fn recall_chunks(
@@ -910,6 +1058,107 @@ pub trait Store: Send + Sync + 'static {
         limit: usize,
     ) -> Result<Vec<RecallChunkRecord>>;
     async fn recall_chunk(&self, scope: &str, id: Uuid) -> Result<RecallChunkRecord>;
+    async fn upsert_memory_record(
+        &self,
+        _record: StoredMemoryRecord,
+    ) -> Result<StoredMemoryRecord> {
+        Err(ServerError::Store(
+            "durable P8 memory record persistence is not implemented".to_string(),
+        ))
+    }
+    async fn memory_record(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+        _kind: MemoryRecordKind,
+        _id: Uuid,
+    ) -> Result<StoredMemoryRecord> {
+        Err(ServerError::Store(
+            "durable P8 memory record lookup is not implemented".to_string(),
+        ))
+    }
+    async fn active_memory_records(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+        _limit: usize,
+    ) -> Result<Vec<StoredMemoryRecord>> {
+        Err(ServerError::Store(
+            "durable P8 memory recall is not implemented".to_string(),
+        ))
+    }
+    async fn active_memory_embedding_generation(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+    ) -> Result<Option<MemoryEmbeddingGeneration>> {
+        Ok(None)
+    }
+    async fn memory_hybrid_candidates(
+        &self,
+        _request: &HybridRecallRequest,
+        _query: &str,
+        _dense_query: Option<&DenseRecallQuery>,
+    ) -> Result<HybridRecallResult> {
+        Err(ServerError::Store(
+            "hybrid memory recall is not implemented".to_string(),
+        ))
+    }
+    async fn enqueue_memory_embedding_job(
+        &self,
+        _job: NewMemoryEmbeddingJob,
+    ) -> Result<MemoryEmbeddingJobRecord> {
+        Err(ServerError::Store(
+            "durable P8 embedding jobs are not implemented".to_string(),
+        ))
+    }
+    async fn memory_embedding_jobs(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+    ) -> Result<Vec<MemoryEmbeddingJobRecord>> {
+        Err(ServerError::Store(
+            "durable P8 embedding job lookup is not implemented".to_string(),
+        ))
+    }
+    async fn revoke_memory_scope(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+        _reason: &str,
+    ) -> Result<MemoryScopeTombstone> {
+        Err(ServerError::Store(
+            "durable P8 memory scope revocation is not implemented".to_string(),
+        ))
+    }
+    async fn memory_scope_tombstone(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+    ) -> Result<Option<MemoryScopeTombstone>> {
+        Err(ServerError::Store(
+            "durable P8 memory scope tombstone lookup is not implemented".to_string(),
+        ))
+    }
+    async fn ensure_memory_scope_active(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<()> {
+        if memory_scope == "global" {
+            return Ok(());
+        }
+        if self
+            .memory_scope_tombstone(owner_subject, memory_scope)
+            .await?
+            .is_some()
+        {
+            return Err(ServerError::NotFound(format!(
+                "memory scope {owner_subject}/{memory_scope}"
+            )));
+        }
+        Ok(())
+    }
     async fn upsert_project_item(&self, item: NewProjectItem) -> Result<ProjectItemRecord>;
     async fn project_items(
         &self,

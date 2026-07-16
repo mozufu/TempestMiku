@@ -1,0 +1,325 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-15T03:48:29.856047Z",
+  "environment": {
+    "database": "PostgreSQL 16 clean isolated schema",
+    "retrieval": "profile facts plus simple tsvector/plainto_tsquery with ILIKE fallback",
+    "notes": "Seven warm query samples per case; setup and migrations excluded."
+  },
+  "report": {
+    "schemaVersion": 1,
+    "evaluatorVersion": "p8.1-recall-eval-v1",
+    "manifestSha256": "d8da1bd15234b96c2bea73ed8d1a2d4a2623785970b68427fde674a5a9570903",
+    "retrievalMode": "postgres_fts_profile_v1",
+    "measuredAt": "2026-07-15T03:48:29.856047Z",
+    "acceptance": {
+      "minRelativeNdcgAt5Improvement": 0.1,
+      "preserveRecallAt5": true,
+      "requiredCohorts": [
+        "overall",
+        "held_out"
+      ],
+      "zeroFalseInclusions": [
+        "unsupported",
+        "stale",
+        "corrected",
+        "superseded",
+        "authority_scope_leak"
+      ],
+      "maxPromptTokens": 1600,
+      "maxFinalRecallItems": 5,
+      "latencyP95CeilingMs": 50.0
+    },
+    "cases": [
+      {
+        "caseId": "tune-global-corrected-passport",
+        "split": "tune",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005",
+          "20000000-0000-0000-0000-000000000101",
+          "20000000-0000-0000-0000-000000000102"
+        ],
+        "ndcgAt5": 0.0,
+        "recallAt5": 0.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 0,
+          "corrected": 1,
+          "superseded": 0,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 1,
+        "promptTokens": 250,
+        "candidateCount": 6,
+        "latencyP50Ms": 1.839,
+        "latencyP95Ms": 3.745
+      },
+      {
+        "caseId": "tune-global-stale-flight",
+        "split": "tune",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005",
+          "20000000-0000-0000-0000-000000000103",
+          "20000000-0000-0000-0000-000000000104"
+        ],
+        "ndcgAt5": 0.0,
+        "recallAt5": 0.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 1,
+          "corrected": 0,
+          "superseded": 0,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 2,
+        "promptTokens": 245,
+        "candidateCount": 6,
+        "latencyP50Ms": 0.815,
+        "latencyP95Ms": 0.848
+      },
+      {
+        "caseId": "tune-project-unsupported-schema",
+        "split": "tune",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005",
+          "20000000-0000-0000-0000-000000000201",
+          "20000000-0000-0000-0000-000000000202"
+        ],
+        "ndcgAt5": 0.0,
+        "recallAt5": 0.0,
+        "falseInclusions": {
+          "unsupported": 2,
+          "stale": 0,
+          "corrected": 0,
+          "superseded": 0,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 2,
+        "promptTokens": 258,
+        "candidateCount": 6,
+        "latencyP50Ms": 0.755,
+        "latencyP95Ms": 0.806
+      },
+      {
+        "caseId": "tune-global-editor-profile",
+        "split": "tune",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005"
+        ],
+        "ndcgAt5": 0.63093,
+        "recallAt5": 1.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 0,
+          "corrected": 0,
+          "superseded": 0,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 1,
+        "promptTokens": 166,
+        "candidateCount": 4,
+        "latencyP50Ms": 0.837,
+        "latencyP95Ms": 1.151
+      },
+      {
+        "caseId": "tune-global-cross-owner",
+        "split": "tune",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005",
+          "20000000-0000-0000-0000-000000000109",
+          "20000000-0000-0000-0000-000000000110"
+        ],
+        "ndcgAt5": 0.0,
+        "recallAt5": 0.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 0,
+          "corrected": 0,
+          "superseded": 0,
+          "authorityScopeLeaks": 1
+        },
+        "unsupportedOrStalePrecisionFailures": 1,
+        "promptTokens": 249,
+        "candidateCount": 6,
+        "latencyP50Ms": 0.864,
+        "latencyP95Ms": 0.958
+      },
+      {
+        "caseId": "held-vector-supersession",
+        "split": "held_out",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005",
+          "20000000-0000-0000-0000-000000000203",
+          "20000000-0000-0000-0000-000000000204"
+        ],
+        "ndcgAt5": 0.0,
+        "recallAt5": 0.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 0,
+          "corrected": 0,
+          "superseded": 1,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 1,
+        "promptTokens": 261,
+        "candidateCount": 6,
+        "latencyP50Ms": 0.852,
+        "latencyP95Ms": 1.253
+      },
+      {
+        "caseId": "held-global-language-profile",
+        "split": "held_out",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005"
+        ],
+        "ndcgAt5": 1.0,
+        "recallAt5": 1.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 0,
+          "corrected": 0,
+          "superseded": 0,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 1,
+        "promptTokens": 166,
+        "candidateCount": 4,
+        "latencyP50Ms": 0.737,
+        "latencyP95Ms": 0.842
+      },
+      {
+        "caseId": "held-global-timezone-profile",
+        "split": "held_out",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005"
+        ],
+        "ndcgAt5": 0.5,
+        "recallAt5": 1.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 0,
+          "corrected": 0,
+          "superseded": 0,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 1,
+        "promptTokens": 166,
+        "candidateCount": 4,
+        "latencyP50Ms": 0.822,
+        "latencyP95Ms": 0.874
+      },
+      {
+        "caseId": "held-other-project-scope",
+        "split": "held_out",
+        "rankedRecordIds": [
+          "10000000-0000-0000-0000-000000000001",
+          "10000000-0000-0000-0000-000000000002",
+          "10000000-0000-0000-0000-000000000004",
+          "10000000-0000-0000-0000-000000000005",
+          "20000000-0000-0000-0000-000000000301"
+        ],
+        "ndcgAt5": 0.386853,
+        "recallAt5": 1.0,
+        "falseInclusions": {
+          "unsupported": 1,
+          "stale": 0,
+          "corrected": 0,
+          "superseded": 0,
+          "authorityScopeLeaks": 0
+        },
+        "unsupportedOrStalePrecisionFailures": 1,
+        "promptTokens": 214,
+        "candidateCount": 5,
+        "latencyP50Ms": 0.839,
+        "latencyP95Ms": 0.88
+      }
+    ],
+    "splits": [
+      {
+        "split": "tune",
+        "metrics": {
+          "caseCount": 5,
+          "meanNdcgAt5": 0.126186,
+          "meanRecallAt5": 0.2,
+          "falseInclusions": {
+            "unsupported": 6,
+            "stale": 1,
+            "corrected": 1,
+            "superseded": 0,
+            "authorityScopeLeaks": 1
+          },
+          "unsupportedOrStalePrecisionFailures": 7,
+          "meanPromptTokens": 233.6,
+          "maxPromptTokens": 258,
+          "meanCandidateCount": 5.6,
+          "latencyP50Ms": 0.846,
+          "latencyP95Ms": 2.535
+        }
+      },
+      {
+        "split": "held_out",
+        "metrics": {
+          "caseCount": 4,
+          "meanNdcgAt5": 0.471713,
+          "meanRecallAt5": 0.75,
+          "falseInclusions": {
+            "unsupported": 4,
+            "stale": 0,
+            "corrected": 0,
+            "superseded": 1,
+            "authorityScopeLeaks": 0
+          },
+          "unsupportedOrStalePrecisionFailures": 4,
+          "meanPromptTokens": 201.75,
+          "maxPromptTokens": 261,
+          "meanCandidateCount": 4.75,
+          "latencyP50Ms": 0.832,
+          "latencyP95Ms": 0.898
+        }
+      }
+    ],
+    "overall": {
+      "caseCount": 9,
+      "meanNdcgAt5": 0.279754,
+      "meanRecallAt5": 0.444444,
+      "falseInclusions": {
+        "unsupported": 10,
+        "stale": 1,
+        "corrected": 1,
+        "superseded": 1,
+        "authorityScopeLeaks": 1
+      },
+      "unsupportedOrStalePrecisionFailures": 11,
+      "meanPromptTokens": 219.444444,
+      "maxPromptTokens": 261,
+      "meanCandidateCount": 5.222222,
+      "latencyP50Ms": 0.837,
+      "latencyP95Ms": 1.839
+    }
+  }
+}

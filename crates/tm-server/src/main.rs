@@ -21,13 +21,19 @@ use tm_sandbox::DenoSandboxOptions;
 use tm_server::{
     AgentChatRunner, AppState, ApprovalBroker, AuthConfig, ChatActorExecutor, CodingBackend,
     CodingEventSink, DeviceAuthConfig, EchoChatRunner, ForwardedAuthConfig, HttpApprovalPolicy,
-    InMemoryAuthDeviceStore, InMemoryStore, NativeApprovalMode, NativeDenoBackend, OmpAcpBackend,
-    OmpAcpConfig, PostgresDriveMetadataStore, PostgresPushStore, PostgresStore, PushCipher,
-    PushProvider, PushService, RosterCodingEventSink, RuntimeConfig, RuntimeStatus,
-    ServerChatRunner, ServerRole, Store, StoreMemoryProvider, UnifiedPushProvider, run_server,
+    InMemoryAuthDeviceStore, InMemoryStore, LocalEmbeddingHttpClient, NativeApprovalMode,
+    NativeDenoBackend, OmpAcpBackend, OmpAcpConfig, PostgresDriveMetadataStore,
+    PostgresMemoryEmbeddingWorker, PostgresPushStore, PostgresStore, PushCipher, PushProvider,
+    PushService, RosterCodingEventSink, RuntimeConfig, RuntimeStatus, ServerChatRunner, ServerRole,
+    Store, StoreMemoryProvider, UnifiedPushProvider, run_server,
 };
 
 type ConfiguredPush = (Arc<dyn PushProvider>, PushCipher);
+
+struct EmbeddingSetup {
+    config: tm_memory::EmbeddingConfig,
+    client: Option<Arc<dyn tm_memory::EmbeddingClient>>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,6 +49,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_dsn = std::env::var("TM_DATABASE_URL")
         .ok()
         .filter(|dsn| !dsn.trim().is_empty());
+    let embedding_setup = embedding_setup_from_env()?;
+    if embedding_setup.config.is_enabled() && database_dsn.is_none() {
+        return Err("enabled memory embeddings require TM_DATABASE_URL".into());
+    }
     let role = std::env::var("TM_SERVER_ROLE")
         .unwrap_or_else(|_| "api".to_string())
         .parse::<ServerRole>()?;
@@ -110,17 +120,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         let backfilled = store.configure_owner_subject(&owner_subject).await?;
         tracing::info!(%owner_subject, backfilled_sessions = backfilled, "configured server owner authority");
-        let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
-        let runtime_status = Arc::new(RuntimeStatus::new(role, true, true));
+        let memory_readiness = store.memory_readiness(&embedding_setup.config).await?;
+        if !memory_readiness.allows_durable_writes() {
+            let error: Box<dyn std::error::Error> =
+                Box::new(tm_server::ServerError::Policy(format!(
+                    "durable P8 memory schema is not ready: {:?}",
+                    memory_readiness.schema
+                )));
+            return Err(error);
+        }
+        tracing::info!(
+            ?memory_readiness,
+            "configured durable P8 memory storage state"
+        );
+        let memory = match &embedding_setup.client {
+            Some(client) => Arc::new(
+                StoreMemoryProvider::new(store.clone())
+                    .with_embeddings(embedding_setup.config.clone(), Arc::clone(client))?,
+            ),
+            None => Arc::new(StoreMemoryProvider::new(store.clone())),
+        };
+        let runtime_status =
+            Arc::new(RuntimeStatus::new(role, true, true).with_memory_readiness(memory_readiness));
         runtime_status.add_link_hydration_failures(link_hydration_failures as u64);
         let mut state = AppState::new(store.clone(), memory, runtime.chat, persona, auth.clone())
-            .with_auth_store(store)
+            .with_auth_store(store.clone())
             .with_approval_broker(Arc::clone(&approval_broker))
             .with_actor_roster(Arc::clone(&roster))
             .with_drive_store(drive_store.clone())
             .with_self_evolution_tier(host_config.self_evolution.tier)
             .with_runtime_status(runtime_status)
             .with_auto_turn_dispatcher(false);
+        if let Some(client) = &embedding_setup.client {
+            state =
+                state.with_memory_embedding_worker(Arc::new(PostgresMemoryEmbeddingWorker::new(
+                    store.clone(),
+                    Arc::clone(client),
+                    embedding_setup.config.clone(),
+                    owner_subject.clone(),
+                )?));
+        }
         if let Some((provider, cipher)) = &push_config {
             let push_store = Arc::new(PostgresPushStore::connect(&dsn).await?);
             state = state.with_push_service(Arc::new(PushService::new(
@@ -209,6 +248,79 @@ fn push_config_from_env() -> Result<Option<ConfiguredPush>, Box<dyn std::error::
             "unsupported TM_PUSH_PROVIDER={other}; expected disabled or unifiedpush"
         )
         .into()),
+    }
+}
+
+fn embedding_setup_from_env() -> Result<EmbeddingSetup, Box<dyn std::error::Error>> {
+    let provider = std::env::var("TM_MEMORY_EMBEDDING_PROVIDER")
+        .unwrap_or_else(|_| "disabled".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(provider.as_str(), "" | "disabled" | "none") {
+        return Ok(EmbeddingSetup {
+            config: tm_memory::EmbeddingConfig::default(),
+            client: None,
+        });
+    }
+    if provider == "openai_compatible" {
+        return Err(
+            "TM_MEMORY_EMBEDDING_PROVIDER=openai_compatible waits for the P9 egress/secret boundary"
+                .into(),
+        );
+    }
+    if provider != "local" {
+        return Err(format!(
+            "unsupported TM_MEMORY_EMBEDDING_PROVIDER={provider}; expected disabled or local"
+        )
+        .into());
+    }
+    let model = required_env("TM_MEMORY_EMBEDDING_MODEL")?;
+    let dimensions = required_env("TM_MEMORY_EMBEDDING_DIMENSIONS")?.parse::<usize>()?;
+    let endpoint = reqwest::Url::parse(&required_env("TM_MEMORY_EMBEDDING_ENDPOINT")?)?;
+    let normalization = match std::env::var("TM_MEMORY_EMBEDDING_NORMALIZATION")
+        .unwrap_or_else(|_| "l2".to_string())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "l2" => tm_memory::EmbeddingNormalization::L2,
+        "none" => tm_memory::EmbeddingNormalization::None,
+        other => {
+            return Err(format!(
+                "unsupported TM_MEMORY_EMBEDDING_NORMALIZATION={other}; expected l2 or none"
+            )
+            .into());
+        }
+    };
+    let config = tm_memory::EmbeddingConfig {
+        provider: tm_memory::EmbeddingProvider::Local,
+        dimensions: Some(dimensions),
+        model: Some(model),
+        normalization,
+        timeout_ms: optional_env_parse("TM_MEMORY_EMBEDDING_TIMEOUT_MS", 5_000)?,
+        max_batch_size: optional_env_parse("TM_MEMORY_EMBEDDING_MAX_BATCH_SIZE", 32)?,
+        max_input_bytes: optional_env_parse("TM_MEMORY_EMBEDDING_MAX_INPUT_BYTES", 16 * 1024)?,
+    };
+    config.validate()?;
+    let client: Arc<dyn tm_memory::EmbeddingClient> =
+        Arc::new(LocalEmbeddingHttpClient::new(endpoint)?);
+    Ok(EmbeddingSetup {
+        config,
+        client: Some(client),
+    })
+}
+
+fn optional_env_parse<T>(name: &str, default: T) -> Result<T, Box<dyn std::error::Error>>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + 'static,
+{
+    match std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) => Ok(value.parse::<T>()?),
+        None => Ok(default),
     }
 }
 

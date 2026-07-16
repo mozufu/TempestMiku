@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -6,8 +9,10 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, MemorySummaryRecord, NewDreamQueueRecord,
-    NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
+    DreamLease, DreamQueueRecord, DreamStatus, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus,
+    MemoryRecordKind, MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord,
+    NewMemoryEmbeddingJob, NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord,
+    SkillProposalStatus, StoredMemoryRecord,
 };
 use tm_modes::ReviewProposalStatus;
 use uuid::Uuid;
@@ -16,8 +21,9 @@ use crate::{Result, ServerError};
 
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_cron_job_persistence,
-    sanitize_cron_run_persistence, sanitize_evolution_review_proposal_persistence,
-    sanitize_memory_summary_persistence, sanitize_project_item_persistence,
+    sanitize_cron_run_persistence, sanitize_durable_memory_record,
+    sanitize_evolution_review_proposal_persistence, sanitize_memory_summary_persistence,
+    sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
     sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
     validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
@@ -36,7 +42,7 @@ pub struct InMemoryStore {
     inner: Arc<Mutex<Inner>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Inner {
     configured_owner_subject: Option<String>,
     sessions: BTreeMap<Uuid, SessionRecord>,
@@ -49,6 +55,9 @@ struct Inner {
     evolution_review_proposals: Vec<EvolutionReviewProposalRecord>,
     profile_facts: Vec<ProfileFactRecord>,
     recall_chunks: Vec<RecallChunkRecord>,
+    memory_records: Vec<StoredMemoryRecord>,
+    memory_embedding_jobs: Vec<MemoryEmbeddingJobRecord>,
+    memory_scope_tombstones: Vec<MemoryScopeTombstone>,
     project_items: Vec<ProjectItemRecord>,
     dream_queue: Vec<DreamQueueRecord>,
     memory_summaries: Vec<MemorySummaryRecord>,
@@ -92,6 +101,109 @@ fn stale_approval_effect_lease(lease: &ApprovalEffectLease) -> ServerError {
         "active approval effect lease {} owner {} epoch {}",
         lease.effect.id, lease.owner_id, lease.epoch
     ))
+}
+
+fn memory_scope_is_tombstoned(inner: &Inner, owner_subject: &str, memory_scope: &str) -> bool {
+    inner.memory_scope_tombstones.iter().any(|tombstone| {
+        tombstone.owner_subject == owner_subject && tombstone.memory_scope == memory_scope
+    })
+}
+
+fn ensure_memory_scope_is_readable(
+    inner: &Inner,
+    owner_subject: &str,
+    memory_scope: &str,
+) -> Result<()> {
+    if memory_scope_is_tombstoned(inner, owner_subject, memory_scope) {
+        return Err(ServerError::NotFound(format!(
+            "memory scope {owner_subject}/{memory_scope}"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_memory_record_links_are_scoped(inner: &Inner, record: &StoredMemoryRecord) -> Result<()> {
+    for target_id in [
+        record.resource.links().corrects_record_id,
+        record.resource.links().corrected_by_record_id,
+        record.resource.links().supersedes_record_id,
+        record.resource.links().superseded_by_record_id,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let target = inner
+            .memory_records
+            .iter()
+            .find(|candidate| candidate.id() == target_id)
+            .ok_or_else(|| ServerError::NotFound(format!("memory record {target_id}")))?;
+        if target.resource.owner_subject() != record.resource.owner_subject()
+            || target.resource.memory_scope() != record.resource.memory_scope()
+        {
+            return Err(ServerError::NotFound(format!(
+                "memory record {target_id} in requested authority"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn memory_record_is_retrievable(inner: &Inner, record: &StoredMemoryRecord) -> bool {
+    record.resource.status().is_retrievable()
+        && record.resource.effective_to().is_none()
+        && !memory_record_has_active_successor(inner, record)
+}
+
+fn memory_record_has_active_successor(inner: &Inner, record: &StoredMemoryRecord) -> bool {
+    let owner = record.resource.owner_subject();
+    let scope = record.resource.memory_scope();
+    let mut visited = HashSet::from([record.id()]);
+    let mut frontier = direct_memory_successors(inner, record)
+        .into_iter()
+        .map(StoredMemoryRecord::id)
+        .collect::<Vec<_>>();
+
+    while let Some(id) = frontier.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(successor) = inner.memory_records.iter().find(|candidate| {
+            candidate.id() == id
+                && candidate.resource.owner_subject() == owner
+                && candidate.resource.memory_scope() == scope
+        }) else {
+            continue;
+        };
+        if successor.resource.status().is_retrievable()
+            && successor.resource.effective_to().is_none()
+        {
+            return true;
+        }
+        frontier.extend(
+            direct_memory_successors(inner, successor)
+                .into_iter()
+                .map(StoredMemoryRecord::id),
+        );
+    }
+    false
+}
+
+fn direct_memory_successors<'a>(
+    inner: &'a Inner,
+    record: &StoredMemoryRecord,
+) -> Vec<&'a StoredMemoryRecord> {
+    inner
+        .memory_records
+        .iter()
+        .filter(|candidate| {
+            candidate.resource.owner_subject() == record.resource.owner_subject()
+                && candidate.resource.memory_scope() == record.resource.memory_scope()
+                && (record.resource.links().corrected_by_record_id == Some(candidate.id())
+                    || record.resource.links().superseded_by_record_id == Some(candidate.id())
+                    || candidate.resource.links().corrects_record_id == Some(record.id())
+                    || candidate.resource.links().supersedes_record_id == Some(record.id()))
+        })
+        .collect()
 }
 
 fn approval_effect_is_claimable(
@@ -710,6 +822,43 @@ impl Store for InMemoryStore {
             session.updated_at = event.created_at;
         }
         Ok(event)
+    }
+
+    async fn append_event_for_turn_once(
+        &self,
+        session_id: Uuid,
+        event_type: &str,
+        payload_json: Value,
+        turn_id: Uuid,
+    ) -> Result<(SessionEvent, bool)> {
+        validate_persistence_identifier("event type", event_type)?;
+        let mut inner = self.inner.lock();
+        if !inner.sessions.contains_key(&session_id) {
+            return Err(ServerError::NotFound(format!("session {session_id}")));
+        }
+        if !inner
+            .turns
+            .iter()
+            .any(|turn| turn.id == turn_id && turn.session_id == session_id)
+        {
+            return Err(ServerError::NotFound(format!("turn {turn_id}")));
+        }
+        let events = inner.events.entry(session_id).or_default();
+        if let Some(existing) = events
+            .iter()
+            .find(|event| event.turn_id == Some(turn_id) && event.event_type == event_type)
+            .cloned()
+        {
+            return Ok((existing, false));
+        }
+        let seq = events.len() as i64 + 1;
+        let mut event = SessionEvent::new(session_id, seq, event_type, payload_json, Utc::now());
+        event.turn_id = Some(turn_id);
+        events.push(event.clone());
+        if let Some(session) = inner.sessions.get_mut(&session_id) {
+            session.updated_at = event.created_at;
+        }
+        Ok((event, true))
     }
 
     async fn events_after(
@@ -1710,6 +1859,135 @@ impl Store for InMemoryStore {
         Ok(chunk)
     }
 
+    async fn apply_approved_memory_proposal(
+        &self,
+        proposal: &crate::MemoryWriteProposal,
+    ) -> Result<crate::MemoryRecordRef> {
+        let scope = match proposal.memory_kind {
+            crate::MemoryWriteKind::ProfileFact => "global",
+            crate::MemoryWriteKind::RecallChunk => proposal.scope.as_str(),
+        };
+        let mut inner = self.inner.lock();
+        ensure_memory_scope_is_readable(&inner, &proposal.subject, scope)?;
+        let mut staged = inner.clone();
+
+        match proposal.memory_kind {
+            crate::MemoryWriteKind::ProfileFact => {
+                let fact = crate::memory::profile_fact_record(proposal)?;
+                validate_profile_fact_persistence(&fact)?;
+                let predicate = fact.predicate.as_str();
+                let mut predecessors = staged
+                    .profile_facts
+                    .iter()
+                    .filter(|existing| {
+                        existing.subject == fact.subject
+                            && existing.predicate == predicate
+                            && existing.object != fact.object
+                            && existing.valid_to.is_none()
+                    })
+                    .map(|existing| (existing.valid_from, existing.id))
+                    .collect::<Vec<_>>();
+                for record in staged.memory_records.iter().filter(|record| {
+                    matches!(
+                        &record.resource,
+                        tm_memory::MemoryRecordResource::Semantic(value)
+                            if value.owner_subject == fact.subject
+                                && value.memory_scope == "global"
+                                && value.predicate == predicate
+                                && value.object != fact.object
+                                && value.status.is_retrievable()
+                                && value.effective_to.is_none()
+                    )
+                }) {
+                    predecessors.push((record.resource.observed_at(), record.id()));
+                }
+                predecessors
+                    .sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+                predecessors.dedup_by_key(|item| item.1);
+                let existing_forward = staged
+                    .memory_records
+                    .iter()
+                    .find(|record| {
+                        record.kind() == MemoryRecordKind::Semantic
+                            && record.id() == proposal.record_id
+                    })
+                    .and_then(|record| record.resource.links().supersedes_record_id);
+                let forward = predecessors.first().map(|item| item.1).or(existing_forward);
+
+                for existing in staged.profile_facts.iter_mut().filter(|existing| {
+                    existing.subject == fact.subject
+                        && existing.predicate == fact.predicate
+                        && existing.object != fact.object
+                        && existing.valid_to.is_none()
+                }) {
+                    existing.valid_to = Some(fact.valid_from);
+                }
+                if let Some(existing) = staged
+                    .profile_facts
+                    .iter_mut()
+                    .find(|existing| existing.id == fact.id)
+                {
+                    *existing = fact.clone();
+                } else {
+                    staged.profile_facts.push(fact.clone());
+                }
+
+                for (_, predecessor_id) in &predecessors {
+                    if let Some(previous) = staged.memory_records.iter_mut().find(|record| {
+                        record.kind() == MemoryRecordKind::Semantic
+                            && record.id() == *predecessor_id
+                    }) {
+                        if let tm_memory::MemoryRecordResource::Semantic(value) =
+                            &mut previous.resource
+                        {
+                            value.status = tm_memory::MemoryRecordStatus::Superseded;
+                            value.effective_to = Some(proposal.created_at);
+                            value.links.superseded_by_record_id = Some(proposal.record_id);
+                        }
+                        *previous = StoredMemoryRecord::new(previous.resource.clone())
+                            .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+                    }
+                }
+                let typed = crate::memory::typed_memory_record(proposal, forward)?;
+                if let Some(existing) = staged
+                    .memory_records
+                    .iter_mut()
+                    .find(|record| record.kind() == typed.kind() && record.id() == typed.id())
+                {
+                    *existing = typed;
+                } else {
+                    staged.memory_records.push(typed);
+                }
+            }
+            crate::MemoryWriteKind::RecallChunk => {
+                let chunk = crate::memory::recall_chunk_record(proposal)?;
+                validate_recall_chunk_persistence(&chunk)?;
+                if let Some(existing) = staged
+                    .recall_chunks
+                    .iter_mut()
+                    .find(|existing| existing.id == chunk.id)
+                {
+                    *existing = chunk;
+                } else {
+                    staged.recall_chunks.push(chunk);
+                }
+                let typed = crate::memory::typed_memory_record(proposal, None)?;
+                if let Some(existing) = staged
+                    .memory_records
+                    .iter_mut()
+                    .find(|record| record.kind() == typed.kind() && record.id() == typed.id())
+                {
+                    *existing = typed;
+                } else {
+                    staged.memory_records.push(typed);
+                }
+            }
+        }
+
+        *inner = staged;
+        Ok(proposal.record_ref())
+    }
+
     async fn profile_facts(&self, subject: &str) -> Result<Vec<ProfileFactRecord>> {
         let mut facts = self
             .inner
@@ -1771,6 +2049,259 @@ impl Store for InMemoryStore {
             .find(|chunk| chunk.scope == scope && chunk.id == id)
             .cloned()
             .ok_or_else(|| ServerError::NotFound(format!("recall chunk {scope}/{id}")))
+    }
+
+    async fn upsert_memory_record(&self, record: StoredMemoryRecord) -> Result<StoredMemoryRecord> {
+        let record = sanitize_durable_memory_record(record)?;
+        let mut inner = self.inner.lock();
+        ensure_memory_scope_is_readable(
+            &inner,
+            record.resource.owner_subject(),
+            record.resource.memory_scope(),
+        )?;
+        ensure_memory_record_links_are_scoped(&inner, &record)?;
+        if let Some(existing) = inner
+            .memory_records
+            .iter_mut()
+            .find(|existing| existing.kind() == record.kind() && existing.id() == record.id())
+        {
+            *existing = record.clone();
+            return Ok(existing.clone());
+        }
+        if let Some(existing) = inner.memory_records.iter().find(|existing| {
+            existing.kind() == record.kind()
+                && existing.resource.owner_subject() == record.resource.owner_subject()
+                && existing.resource.memory_scope() == record.resource.memory_scope()
+                && existing.content_key == record.content_key
+                && existing.resource.status().is_retrievable()
+                && existing.resource.effective_to().is_none()
+        }) {
+            return Ok(existing.clone());
+        }
+        inner.memory_records.push(record.clone());
+        Ok(record)
+    }
+
+    async fn memory_record(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        kind: MemoryRecordKind,
+        id: Uuid,
+    ) -> Result<StoredMemoryRecord> {
+        let inner = self.inner.lock();
+        ensure_memory_scope_is_readable(&inner, owner_subject, memory_scope)?;
+        inner
+            .memory_records
+            .iter()
+            .find(|record| {
+                record.kind() == kind
+                    && record.id() == id
+                    && record.resource.owner_subject() == owner_subject
+                    && record.resource.memory_scope() == memory_scope
+            })
+            .cloned()
+            .ok_or_else(|| {
+                ServerError::NotFound(format!(
+                    "memory record {owner_subject}/{memory_scope}/{}/{}",
+                    kind.as_str(),
+                    id
+                ))
+            })
+    }
+
+    async fn active_memory_records(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredMemoryRecord>> {
+        let inner = self.inner.lock();
+        ensure_memory_scope_is_readable(&inner, owner_subject, memory_scope)?;
+        let mut records = inner
+            .memory_records
+            .iter()
+            .filter(|record| {
+                record.resource.owner_subject() == owner_subject
+                    && record.resource.memory_scope() == memory_scope
+                    && memory_record_is_retrievable(&inner, record)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            right
+                .resource
+                .importance()
+                .total_cmp(&left.resource.importance())
+                .then_with(|| {
+                    right
+                        .resource
+                        .observed_at()
+                        .cmp(&left.resource.observed_at())
+                })
+                .then_with(|| left.kind().cmp(&right.kind()))
+                .then_with(|| left.id().cmp(&right.id()))
+        });
+        records.truncate(limit);
+        Ok(records)
+    }
+
+    async fn enqueue_memory_embedding_job(
+        &self,
+        job: NewMemoryEmbeddingJob,
+    ) -> Result<MemoryEmbeddingJobRecord> {
+        let job = sanitize_new_memory_embedding_job(job)?;
+        let reembedding_key = job.reembedding_key();
+        let mut inner = self.inner.lock();
+        ensure_memory_scope_is_readable(&inner, &job.owner_subject, &job.memory_scope)?;
+        let record = inner
+            .memory_records
+            .iter()
+            .find(|record| record.kind() == job.record_kind && record.id() == job.record_id)
+            .ok_or_else(|| ServerError::NotFound(format!("memory record {}", job.record_id)))?;
+        if record.resource.owner_subject() != job.owner_subject
+            || record.resource.memory_scope() != job.memory_scope
+            || record.content_key != job.content_key
+        {
+            return Err(ServerError::NotFound(format!(
+                "memory record {}/{} in requested authority",
+                job.record_kind.as_str(),
+                job.record_id
+            )));
+        }
+        if let Some(existing) = inner
+            .memory_embedding_jobs
+            .iter_mut()
+            .find(|existing| existing.reembedding_key == reembedding_key)
+        {
+            let recoverable = existing.status == MemoryEmbeddingJobStatus::Completed
+                || (existing.status == MemoryEmbeddingJobStatus::Failed
+                    && (existing.failure_code.as_deref() != Some("input_too_large")
+                        || job.input_limit_bytes > existing.input_limit_bytes));
+            if recoverable {
+                existing.status = MemoryEmbeddingJobStatus::Queued;
+                existing.available_at = job.created_at;
+                existing.failure_code = None;
+                existing.input_limit_bytes = existing.input_limit_bytes.max(job.input_limit_bytes);
+                existing.updated_at = job.created_at;
+            }
+            return Ok(existing.clone());
+        }
+        let record = MemoryEmbeddingJobRecord {
+            id: job.id,
+            record_kind: job.record_kind,
+            record_id: job.record_id,
+            owner_subject: job.owner_subject,
+            memory_scope: job.memory_scope,
+            content_key: job.content_key,
+            provenance: job.provenance,
+            reembedding_key,
+            status: MemoryEmbeddingJobStatus::Queued,
+            input_limit_bytes: job.input_limit_bytes,
+            failure_code: None,
+            attempts: 0,
+            available_at: job.created_at,
+            locked_at: None,
+            lease_owner: None,
+            lease_epoch: 0,
+            cancelled_at: None,
+            created_at: job.created_at,
+            updated_at: job.created_at,
+        };
+        inner.memory_embedding_jobs.push(record.clone());
+        Ok(record)
+    }
+
+    async fn memory_embedding_jobs(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Vec<MemoryEmbeddingJobRecord>> {
+        let inner = self.inner.lock();
+        ensure_memory_scope_is_readable(&inner, owner_subject, memory_scope)?;
+        let mut jobs = inner
+            .memory_embedding_jobs
+            .iter()
+            .filter(|job| job.owner_subject == owner_subject && job.memory_scope == memory_scope)
+            .cloned()
+            .collect::<Vec<_>>();
+        jobs.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(jobs)
+    }
+
+    async fn revoke_memory_scope(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        reason: &str,
+    ) -> Result<MemoryScopeTombstone> {
+        validate_persistence_identifier("memory tombstone owner subject", owner_subject)?;
+        validate_persistence_identifier("memory tombstone scope", memory_scope)?;
+        if memory_scope
+            .strip_prefix("project:")
+            .is_none_or(|slug| slug.trim().is_empty())
+        {
+            return Err(ServerError::InvalidRequest(
+                "memory tombstones only apply to project scopes".to_string(),
+            ));
+        }
+        let reason = redact_persisted_text(reason);
+        if reason.trim().is_empty() {
+            return Err(ServerError::InvalidRequest(
+                "memory tombstone reason must not be empty".to_string(),
+            ));
+        }
+        let now = Utc::now();
+        let mut inner = self.inner.lock();
+        let tombstone =
+            if let Some(existing) = inner.memory_scope_tombstones.iter_mut().find(|item| {
+                item.owner_subject == owner_subject && item.memory_scope == memory_scope
+            }) {
+                existing.reason = reason;
+                existing.clone()
+            } else {
+                let tombstone = MemoryScopeTombstone {
+                    owner_subject: owner_subject.to_string(),
+                    memory_scope: memory_scope.to_string(),
+                    link_alias: None,
+                    reason,
+                    revoked_at: now,
+                };
+                inner.memory_scope_tombstones.push(tombstone.clone());
+                tombstone
+            };
+        for job in inner.memory_embedding_jobs.iter_mut().filter(|job| {
+            job.owner_subject == owner_subject
+                && job.memory_scope == memory_scope
+                && matches!(
+                    job.status,
+                    MemoryEmbeddingJobStatus::Queued | MemoryEmbeddingJobStatus::Running
+                )
+        }) {
+            job.status = MemoryEmbeddingJobStatus::Cancelled;
+            job.cancelled_at = Some(now);
+            job.locked_at = None;
+            job.updated_at = now;
+        }
+        Ok(tombstone)
+    }
+
+    async fn memory_scope_tombstone(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Option<MemoryScopeTombstone>> {
+        Ok(self
+            .inner
+            .lock()
+            .memory_scope_tombstones
+            .iter()
+            .find(|item| item.owner_subject == owner_subject && item.memory_scope == memory_scope)
+            .cloned())
     }
 
     async fn upsert_project_item(&self, item: NewProjectItem) -> Result<ProjectItemRecord> {

@@ -4,12 +4,14 @@ TempestMiku is a Rust rewrite of the running `hermes-agent` Tempest Miku deploym
 self-hosted, single-user, characterful AI companion built on a streaming code-execution agent
 runtime.
 
-Current implementation status: the workspace contains the M0/M1 runtime, P0-P3+ product slices,
-the P4 dreaming/scheduler and P5 drive/research mechanisms, and the audit hardening implementation.
-Postgres now uses ordered checksummed migrations and backs sessions, turns, approvals/effects,
-dream/cron leases, and drive metadata/link tombstones. `tm-server` supports explicit `api`, `worker`,
-and `all` roles, durable `202` message turns, one replayable `session_event` SSE envelope, and secure
-single-owner device pairing for Web and Android.
+Current implementation status: M0/M1 and P0-P5 are closed; Android P6.1-P6.5 are closed while P6.6
+voice capture remains explicitly deferred. P7.0-P7.2a are closed, and P8 fuller memory is closed with
+self-hosted hybrid lexical/dense recall, scoped typed records, inspectable evidence/corrections,
+exact retry/replay context, and safe lexical fallback. Postgres uses ordered checksummed migrations
+and backs sessions, turns, approvals/effects, dream/cron leases, drive metadata/link tombstones, and
+the durable memory/embedding spine. `tm-server` supports explicit `api`, `worker`, and `all` roles,
+durable `202` message turns, one replayable `session_event` SSE envelope, and secure single-owner
+device pairing for Web and Android.
 
 The complete verification matrix passes: strict Rust checks, clean-schema Postgres tests, split
 API/worker restart recovery, Flutter tests, signed Android APK builds, Playwright pairing/replay,
@@ -18,10 +20,10 @@ canary proved in-app QR confirmation, durable chat, cold-start credential/sessio
 exact-once offline SSE replay, and immediate device revocation. The audit hardening gate is closed
 for the documented single-owner deployment. Production exposure must remain loopback-only behind
 an HTTPS reverse proxy or Tailscale Serve; Postgres is mandatory outside loopback and for
-`worker`/`all` roles. P6 now includes encrypted provider-neutral push registration/outbox and
-authenticated Android notification actions; a production provider and remote killed-process canary
-remain open. Broader P6/P7 work such as MCP/trace, cloud drive sync, live egress, and self-evolution
-remains out of scope.
+`worker`/`all` roles. Production UnifiedPush/ntfy delivery, actionable notifications, share/selected
+text, and quick capture are closed on physical Android. P7.2b approval-backed persona addenda is the
+active product slice; P9 egress/opaque secrets must close before P10 MCP/live research. Cloud sync,
+`tm-trace`, AST/LSP, and extra sandbox backends remain demand-triggered.
 
 ## Project docs
 

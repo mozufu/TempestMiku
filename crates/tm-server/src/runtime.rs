@@ -11,6 +11,7 @@ use std::{
 use chrono::Utc;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
+use tm_memory::DurableMemoryReadiness;
 use tokio::{sync::watch, task::JoinHandle};
 use uuid::Uuid;
 
@@ -67,6 +68,7 @@ pub struct RuntimeConfig {
     pub approval_poll_interval: Duration,
     pub push_poll_interval: Duration,
     pub scheduler_poll_interval: Duration,
+    pub embedding_poll_interval: Duration,
     pub shutdown_grace: Duration,
 }
 
@@ -78,6 +80,7 @@ impl Default for RuntimeConfig {
             approval_poll_interval: Duration::from_millis(500),
             push_poll_interval: Duration::from_millis(500),
             scheduler_poll_interval: Duration::from_secs(5),
+            embedding_poll_interval: Duration::from_secs(2),
             shutdown_grace: Duration::from_secs(30),
         }
     }
@@ -88,6 +91,7 @@ pub struct RuntimeStatus {
     role: ServerRole,
     postgres: bool,
     migrations_applied: bool,
+    memory_readiness: Option<DurableMemoryReadiness>,
     workers_enabled: bool,
     shutting_down: AtomicBool,
     lease_reclaims: AtomicU64,
@@ -101,6 +105,8 @@ pub struct RuntimeStatusSnapshot {
     pub role: String,
     pub postgres: bool,
     pub migrations_applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_readiness: Option<DurableMemoryReadiness>,
     pub workers_enabled: bool,
     pub shutting_down: bool,
     pub lease_reclaims: u64,
@@ -114,6 +120,7 @@ impl RuntimeStatus {
             role,
             postgres,
             migrations_applied,
+            memory_readiness: None,
             workers_enabled: role.runs_workers(),
             shutting_down: AtomicBool::new(false),
             lease_reclaims: AtomicU64::new(0),
@@ -126,11 +133,17 @@ impl RuntimeStatus {
         Self::new(ServerRole::Api, false, false)
     }
 
+    pub fn with_memory_readiness(mut self, memory_readiness: DurableMemoryReadiness) -> Self {
+        self.memory_readiness = Some(memory_readiness);
+        self
+    }
+
     pub fn snapshot(&self) -> RuntimeStatusSnapshot {
         RuntimeStatusSnapshot {
             role: self.role.as_str().to_string(),
             postgres: self.postgres,
             migrations_applied: self.migrations_applied,
+            memory_readiness: self.memory_readiness.clone(),
             workers_enabled: self.workers_enabled,
             shutting_down: self.shutting_down.load(Ordering::Relaxed),
             lease_reclaims: self.lease_reclaims.load(Ordering::Relaxed),
@@ -290,6 +303,13 @@ where
             config.push_poll_interval,
         ))
     });
+    let embeddings = state.memory_embedding_worker.clone().map(|worker| {
+        tokio::spawn(run_embedding_worker(
+            worker,
+            shutdown.clone(),
+            config.embedding_poll_interval,
+        ))
+    });
     let dream = state
         .dream_worker(DreamWorkerConfig::default())
         .into_daemon();
@@ -304,7 +324,38 @@ where
     ));
     let mut workers = vec![turn, approvals, dream, scheduler];
     workers.extend(push);
+    workers.extend(embeddings);
     workers
+}
+
+async fn run_embedding_worker(
+    worker: Arc<dyn crate::MemoryEmbeddingWorker>,
+    mut shutdown: watch::Receiver<bool>,
+    poll_interval: Duration,
+) {
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        match worker.tick().await {
+            Ok(completed) if completed > 0 => {
+                tracing::info!(completed, "memory embedding batch completed");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let error = tm_memory::redact_dream_text(&error.to_string()).text;
+                tracing::warn!(%error, "memory embedding worker tick failed");
+            }
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+            _ = tokio::time::sleep(poll_interval) => {}
+        }
+    }
 }
 
 async fn run_push_worker(

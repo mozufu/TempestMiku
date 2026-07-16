@@ -41,8 +41,12 @@ pub use dream::{
 };
 pub use error::{Result, ServerError};
 pub use memory::{
-    MemoryContext, MemoryProvider, MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal,
-    MemoryWriteStatus, ProfileFactProposalInput, StoreMemoryProvider,
+    IN_MEMORY_LEXICAL_BASELINE_MODE, LocalEmbeddingHttpClient, MemoryCandidateTrace, MemoryContext,
+    MemoryEmbeddingWorker, MemoryProvider, MemoryRecordRef, MemoryRetrievalMode,
+    MemoryRetrievalTrace, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus,
+    POSTGRES_HYBRID_RECALL_MODE, POSTGRES_LEXICAL_BASELINE_MODE, PostgresMemoryEmbeddingWorker,
+    ProfileFactProposalInput, StoreMemoryProvider, evaluate_lexical_recall_baseline,
+    evaluate_memory_provider_recall,
 };
 pub use native_deno::{
     HttpApprovalPolicy, NativeApprovalMode, NativeDenoBackend, NativeDenoBackendOptions,
@@ -70,11 +74,15 @@ pub use tm_agents::MailboxRegistry;
 pub use tm_memory::{
     BudgetedDreamInput, DreamInputBudget, DreamInputChunk, DreamInputMessage, DreamLease,
     DreamLeaseStore, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport,
-    EpisodicMemoryStore, MemoryError, MemoryEvidenceRef, MemoryStoreError, MemoryStoreResult,
-    MemorySummaryKind, MemorySummaryRecord, MemorySummaryStore, NewDreamQueueRecord,
-    NewMemorySummaryRecord, NewSkillProposalRecord, NoopDreamWorker, ProfileFactRecord,
-    ProfileMemoryStore, RecallChunkRecord, SkillProposalRecord, SkillProposalStatus,
-    SkillProposalStore, SkillVerification,
+    EmbeddingNormalization, EmbeddingProvenance, EmbeddingProvenanceError, EpisodicMemoryRecord,
+    EpisodicMemoryStore, MemoryError, MemoryEvidenceRef, MemoryRecordContractError,
+    MemoryRecordEvidence, MemoryRecordLinks, MemoryRecordResource, MemoryRecordStatus,
+    MemoryStoreError, MemoryStoreResult, MemorySummaryKind, MemorySummaryRecord,
+    MemorySummaryStore, NewDreamQueueRecord, NewMemorySummaryRecord, NewSkillProposalRecord,
+    NoopDreamWorker, ProfileFactRecord, ProfileMemoryStore, RecallBaselineArtifact,
+    RecallChunkRecord, RecallEvaluationManifest, RecallEvaluationReport, ReembeddingState,
+    SemanticMemoryRecord, SkillProposalRecord, SkillProposalStatus, SkillProposalStore,
+    SkillVerification,
 };
 pub use tm_modes::{
     AssetStatus, ComposedPrompt, ModeAssets, ModeCatalog, ModeId, ModeProfile, ModesConfig,

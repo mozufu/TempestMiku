@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-15T07:11:30.834460Z",
+  "manifestSha256": "d8da1bd15234b96c2bea73ed8d1a2d4a2623785970b68427fde674a5a9570903",
+  "acceptance": {
+    "minRelativeNdcgAt5Improvement": 0.1,
+    "preserveRecallAt5": true,
+    "zeroFalseInclusions": true,
+    "maxPromptTokens": 1600,
+    "maxFinalRecallItems": 5,
+    "liveLocalP95CeilingMs": 5000.0
+  },
+  "lexicalBaseline": {
+    "retrievalMode": "postgres_fts_profile_v1",
+    "overall": {
+      "meanNdcgAt5": 0.279754,
+      "meanRecallAt5": 0.444444,
+      "falseInclusions": {
+        "unsupported": 10,
+        "stale": 1,
+        "corrected": 1,
+        "superseded": 1,
+        "authorityScopeLeaks": 1
+      },
+      "maxPromptTokens": 261,
+      "latencyP95Ms": 1.839
+    },
+    "heldOut": {
+      "meanNdcgAt5": 0.471713,
+      "meanRecallAt5": 0.75,
+      "falseInclusions": {
+        "unsupported": 4,
+        "stale": 0,
+        "corrected": 0,
+        "superseded": 1,
+        "authorityScopeLeaks": 0
+      }
+    }
+  },
+  "lumoHybrid": {
+    "retrievalMode": "postgres_fts_pgvector_rrf_v1",
+    "overall": {
+      "caseCount": 9,
+      "meanNdcgAt5": 1.0,
+      "relativeNdcgAt5Improvement": 2.574569,
+      "meanRecallAt5": 1.0,
+      "falseInclusions": {
+        "unsupported": 0,
+        "stale": 0,
+        "corrected": 0,
+        "superseded": 0,
+        "authorityScopeLeaks": 0
+      },
+      "meanPromptTokens": 302.444444,
+      "maxPromptTokens": 382,
+      "meanCandidateCount": 3.888889,
+      "latencyP50Ms": 773.211,
+      "latencyP95Ms": 902.987
+    },
+    "tune": {
+      "caseCount": 5,
+      "meanNdcgAt5": 1.0,
+      "meanRecallAt5": 1.0,
+      "falseInclusions": 0,
+      "maxPromptTokens": 382,
+      "latencyP95Ms": 916.705
+    },
+    "heldOut": {
+      "caseCount": 4,
+      "meanNdcgAt5": 1.0,
+      "relativeNdcgAt5Improvement": 1.119933,
+      "meanRecallAt5": 1.0,
+      "falseInclusions": 0,
+      "maxPromptTokens": 376,
+      "latencyP95Ms": 902.987
+    }
+  },
+  "lumoRuntime": {
+    "host": {
+      "hardware": "Raspberry Pi 5 Model B Rev 1.0",
+      "architecture": "aarch64",
+      "logicalCpus": 4,
+      "memoryGiB": 7.8
+    },
+    "postgres": {
+      "version": "17.10",
+      "pgvectorVersion": "0.8.2"
+    },
+    "embeddingService": {
+      "runtime": "Ollama 0.32.0",
+      "imageIndexDigest": "sha256:57f573b47f1f71ebb445789f279fe3e596a8beab182f7cf486db9205bad87c5a",
+      "imageArm64Digest": "sha256:8f3760da9e4f897f1f9e40e475132910f3842c582332a64717841e3d0e2041d2",
+      "model": "bge-m3:567m",
+      "modelManifestSha256": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+      "modelWeightDigest": "sha256:daec91ffb5dd0c27411bd71f29932917c49cf529a641d0168496c3a501e3062c",
+      "modelWeightBytes": 1157671200,
+      "parameters": "566.70M",
+      "dimensions": 1024,
+      "quantization": "F16",
+      "license": "MIT",
+      "embeddingVersion": "emb-v1-a88aa55439deb6c3f5d9a2159697259ed5c837af7d1d5f735372b3dc8a3111df",
+      "coldLatencyMs": 3765,
+      "warmLatencyMs": 632,
+      "restartColdLatencyMs": 3857,
+      "batchEmbeddedRecords": 9,
+      "batchEmbeddingElapsedMs": 3579
+    },
+    "networkIsolation": {
+      "podmanInternalNetwork": true,
+      "ollamaCloudDisabled": true,
+      "externalTcpProbe": "network_unreachable",
+      "endpointExposure": "SSH-forwarded from an internal network for the acceptance run; the persisted OpenRC service binds only 127.0.0.1:11434 with Ollama cloud disabled",
+      "openRcService": "lumo-tempestmiku-embeddings",
+      "openRcStatus": "started"
+    },
+    "providerLoss": {
+      "actualContainerStopObserved": true,
+      "fallbackMode": "lexical_fallback",
+      "fallbackReason": "embedding_provider_unavailable",
+      "fallbackCandidateCount": 1
+    },
+    "providerRestart": {
+      "beforeVectorSha256": "69e273e00c3f7d530932f3e370a0ab14ce4fa4a837f8b29a9aa0ab971a7ccbe5",
+      "afterVectorSha256": "69e273e00c3f7d530932f3e370a0ab14ce4fa4a837f8b29a9aa0ab971a7ccbe5",
+      "identical": true
+    },
+    "resumableReembedding": {
+      "scope": "project:p8-reembedding",
+      "recordId": "30000000-0000-0000-0000-000000000001",
+      "abandonedLeaseCount": 1,
+      "reembeddedRecords": 1,
+      "generationStatus": "ready",
+      "completedRecords": 1
+    },
+    "serverRestart": {
+      "separateProcessReusedSchema": "tm_p8_lumo_restart_evidence",
+      "meanNdcgAt5": 1.0,
+      "meanRecallAt5": 1.0,
+      "falseInclusions": 0,
+      "maxPromptTokens": 382,
+      "latencyP95Ms": 899.478
+    }
+  }
+}

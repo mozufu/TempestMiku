@@ -11,6 +11,14 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
 - **[Roadmap](../ROADMAP.md)** — canonical milestones and execution order.
 - **[P6.6 ASR deferment evidence](evidence/2026-07-15-p6-6-on-device-asr-deferment.md)** — retained
   benchmark, Taiwan Mandarin findings, open gates, and resume contract.
+- **[P8.1 recall baseline evidence](evidence/2026-07-15-p8-1-recall-baseline.md)** — frozen
+  lexical/profile metrics, fixtures, acceptance policy, and versioned record/provenance contracts.
+- **[P8.2 durable memory evidence](evidence/2026-07-15-p8-2-durable-memory-spine.md)** — ordered
+  scoped storage/migration, correction and unlink denial, readiness, and Postgres gate evidence.
+- **[P8.3 hybrid retrieval evidence](evidence/2026-07-15-p8-3-local-embeddings-hybrid.md)** — local
+  embedding boundary, pgvector generations, deterministic RRF, and lexical degradation gates.
+- **[P8 fuller-memory closeout evidence](evidence/2026-07-15-p8-5-fuller-memory.md)** — turn/resource
+  integration, frozen quality metrics, lumo provenance, restart/fallback proof, and final gate matrix.
 - **[Changelog](../CHANGELOG.md)** — notable project changes.
 - **[Commit message spec](commit-messages.md)** — repository Conventional Commit dialect.
 

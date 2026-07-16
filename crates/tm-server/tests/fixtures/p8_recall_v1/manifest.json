@@ -1,0 +1,361 @@
+{
+  "schemaVersion": 1,
+  "evaluatorVersion": "p8.1-recall-eval-v1",
+  "name": "p8-recall-global-project-v1",
+  "createdAt": "2026-07-15T00:00:00Z",
+  "topK": 5,
+  "recallLimit": 5,
+  "promptBudgetTokens": 1600,
+  "latencySamplesPerCase": 7,
+  "acceptance": {
+    "minRelativeNdcgAt5Improvement": 0.1,
+    "preserveRecallAt5": true,
+    "requiredCohorts": ["overall", "held_out"],
+    "zeroFalseInclusions": [
+      "unsupported",
+      "stale",
+      "corrected",
+      "superseded",
+      "authority_scope_leak"
+    ],
+    "maxPromptTokens": 1600,
+    "maxFinalRecallItems": 5,
+    "latencyP95CeilingMs": 50.0
+  },
+  "records": [
+    {
+      "kind": "profile_fact",
+      "quality": "supported",
+      "record": {
+        "id": "10000000-0000-0000-0000-000000000001",
+        "subject": "brian",
+        "predicate": "prefers",
+        "object": "concise Traditional Chinese replies",
+        "confidence": 0.95,
+        "importance": 0.95,
+        "provenance": "memory://fixtures/p8/profile/1",
+        "valid_from": "2026-07-01T00:00:00Z",
+        "valid_to": null
+      }
+    },
+    {
+      "kind": "profile_fact",
+      "quality": "supported",
+      "record": {
+        "id": "10000000-0000-0000-0000-000000000002",
+        "subject": "brian",
+        "predicate": "uses_editor",
+        "object": "Helix editor",
+        "confidence": 0.9,
+        "importance": 0.9,
+        "provenance": "memory://fixtures/p8/profile/2",
+        "valid_from": "2026-07-02T00:00:00Z",
+        "valid_to": null
+      }
+    },
+    {
+      "kind": "profile_fact",
+      "quality": "superseded",
+      "record": {
+        "id": "10000000-0000-0000-0000-000000000003",
+        "subject": "brian",
+        "predicate": "uses_editor",
+        "object": "Vim editor",
+        "confidence": 0.9,
+        "importance": 0.99,
+        "provenance": "memory://fixtures/p8/profile/3",
+        "valid_from": "2026-06-01T00:00:00Z",
+        "valid_to": "2026-07-02T00:00:00Z"
+      }
+    },
+    {
+      "kind": "profile_fact",
+      "quality": "supported",
+      "record": {
+        "id": "10000000-0000-0000-0000-000000000004",
+        "subject": "brian",
+        "predicate": "timezone",
+        "object": "Asia Taipei timezone",
+        "confidence": 0.98,
+        "importance": 0.85,
+        "provenance": "memory://fixtures/p8/profile/4",
+        "valid_from": "2026-07-03T00:00:00Z",
+        "valid_to": null
+      }
+    },
+    {
+      "kind": "profile_fact",
+      "quality": "unsupported",
+      "record": {
+        "id": "10000000-0000-0000-0000-000000000005",
+        "subject": "brian",
+        "predicate": "favorite_database",
+        "object": "SQLite for every project",
+        "confidence": 0.4,
+        "importance": 0.8,
+        "provenance": "memory://fixtures/p8/profile/unsupported",
+        "valid_from": "2026-07-04T00:00:00Z",
+        "valid_to": null
+      }
+    },
+    {
+      "kind": "profile_fact",
+      "quality": "supported",
+      "record": {
+        "id": "10000000-0000-0000-0000-000000000099",
+        "subject": "alice",
+        "predicate": "prefers",
+        "object": "unrelated profile data",
+        "confidence": 1.0,
+        "importance": 1.0,
+        "provenance": "memory://fixtures/p8/profile/other-owner",
+        "valid_from": "2026-07-01T00:00:00Z",
+        "valid_to": null
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "corrected",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000101",
+        "scope": "global",
+        "text": "Passport appointment date is July 1 after correction.",
+        "source": "memory://fixtures/p8/global/corrected",
+        "importance": 0.99,
+        "created_at": "2026-07-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "supported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000102",
+        "scope": "global",
+        "text": "Passport appointment date is August 20 and confirmed.",
+        "source": "memory://fixtures/p8/global/passport",
+        "importance": 0.9,
+        "created_at": "2026-07-10T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "stale",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000103",
+        "scope": "global",
+        "text": "JL802 flight status is cancelled permanently.",
+        "source": "memory://fixtures/p8/global/stale",
+        "importance": 0.99,
+        "created_at": "2026-07-05T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "supported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000104",
+        "scope": "global",
+        "text": "JL802 flight status is confirmed for Friday.",
+        "source": "memory://fixtures/p8/global/flight",
+        "importance": 0.9,
+        "created_at": "2026-07-11T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "alice",
+      "quality": "supported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000109",
+        "scope": "global",
+        "text": "Orchid project access remains granted to the owner.",
+        "source": "memory://fixtures/p8/global/other-owner",
+        "importance": 0.99,
+        "created_at": "2026-07-12T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "supported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000110",
+        "scope": "global",
+        "text": "Orchid project access remains denied to the owner.",
+        "source": "memory://fixtures/p8/global/orchid",
+        "importance": 0.9,
+        "created_at": "2026-07-13T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "unsupported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000201",
+        "scope": "project:tempestmiku",
+        "text": "P8 memory schema status is complete and shipped.",
+        "source": "memory://fixtures/p8/project/unsupported",
+        "importance": 0.99,
+        "created_at": "2026-07-10T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "supported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000202",
+        "scope": "project:tempestmiku",
+        "text": "P8 memory schema status is active design work.",
+        "source": "memory://fixtures/p8/project/schema",
+        "importance": 0.9,
+        "created_at": "2026-07-14T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "superseded",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000203",
+        "scope": "project:tempestmiku",
+        "text": "Vector storage provider is Pinecone cloud service.",
+        "source": "memory://fixtures/p8/project/superseded",
+        "importance": 0.99,
+        "created_at": "2026-07-10T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "supported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000204",
+        "scope": "project:tempestmiku",
+        "text": "Vector storage provider is self-hosted Postgres pgvector.",
+        "source": "memory://fixtures/p8/project/vector",
+        "importance": 0.9,
+        "created_at": "2026-07-14T00:00:00Z"
+      }
+    },
+    {
+      "kind": "recall_chunk",
+      "owner_subject": "brian",
+      "quality": "supported",
+      "record": {
+        "id": "20000000-0000-0000-0000-000000000301",
+        "scope": "project:other",
+        "text": "P8 memory schema status is queued in the other project.",
+        "source": "memory://fixtures/p8/other/schema",
+        "importance": 1.0,
+        "created_at": "2026-07-14T00:00:00Z"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "tune-global-corrected-passport",
+      "split": "tune",
+      "ownerSubject": "brian",
+      "memoryScope": "global",
+      "query": "appointment passport date",
+      "coverage": ["relevant", "irrelevant", "corrected"],
+      "relevance": [
+        {"recordId": "20000000-0000-0000-0000-000000000102", "grade": 3}
+      ]
+    },
+    {
+      "id": "tune-global-stale-flight",
+      "split": "tune",
+      "ownerSubject": "brian",
+      "memoryScope": "global",
+      "query": "status flight JL802",
+      "coverage": ["relevant", "irrelevant", "stale"],
+      "relevance": [
+        {"recordId": "20000000-0000-0000-0000-000000000104", "grade": 3}
+      ]
+    },
+    {
+      "id": "tune-project-unsupported-schema",
+      "split": "tune",
+      "ownerSubject": "brian",
+      "memoryScope": "project:tempestmiku",
+      "query": "schema memory P8 status",
+      "coverage": ["relevant", "irrelevant", "unsupported", "cross_scope"],
+      "relevance": [
+        {"recordId": "20000000-0000-0000-0000-000000000202", "grade": 3}
+      ]
+    },
+    {
+      "id": "tune-global-editor-profile",
+      "split": "tune",
+      "ownerSubject": "brian",
+      "memoryScope": "global",
+      "query": "editor",
+      "coverage": ["relevant", "irrelevant", "superseded"],
+      "relevance": [
+        {"recordId": "10000000-0000-0000-0000-000000000002", "grade": 3}
+      ]
+    },
+    {
+      "id": "tune-global-cross-owner",
+      "split": "tune",
+      "ownerSubject": "brian",
+      "memoryScope": "global",
+      "query": "access orchid project remains",
+      "coverage": ["relevant", "irrelevant", "cross_scope"],
+      "relevance": [
+        {"recordId": "20000000-0000-0000-0000-000000000110", "grade": 3}
+      ]
+    },
+    {
+      "id": "held-vector-supersession",
+      "split": "held_out",
+      "ownerSubject": "brian",
+      "memoryScope": "project:tempestmiku",
+      "query": "storage vector provider",
+      "coverage": ["relevant", "irrelevant", "superseded"],
+      "relevance": [
+        {"recordId": "20000000-0000-0000-0000-000000000204", "grade": 3}
+      ]
+    },
+    {
+      "id": "held-global-language-profile",
+      "split": "held_out",
+      "ownerSubject": "brian",
+      "memoryScope": "global",
+      "query": "Traditional Chinese replies",
+      "coverage": ["relevant", "irrelevant"],
+      "relevance": [
+        {"recordId": "10000000-0000-0000-0000-000000000001", "grade": 3}
+      ]
+    },
+    {
+      "id": "held-global-timezone-profile",
+      "split": "held_out",
+      "ownerSubject": "brian",
+      "memoryScope": "global",
+      "query": "Taipei timezone",
+      "coverage": ["relevant", "irrelevant"],
+      "relevance": [
+        {"recordId": "10000000-0000-0000-0000-000000000004", "grade": 3}
+      ]
+    },
+    {
+      "id": "held-other-project-scope",
+      "split": "held_out",
+      "ownerSubject": "brian",
+      "memoryScope": "project:other",
+      "query": "schema memory P8 status",
+      "coverage": ["relevant", "irrelevant", "cross_scope"],
+      "relevance": [
+        {"recordId": "20000000-0000-0000-0000-000000000301", "grade": 3}
+      ]
+    }
+  ]
+}

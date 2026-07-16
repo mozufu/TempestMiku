@@ -1,11 +1,13 @@
 //! TempestMiku memory ownership crate.
 //!
-//! The first P4 slice is intentionally narrow: own the durable dream-queue
-//! record shape and provide a no-op worker contract. Extraction, reflection,
-//! summaries, embeddings, and skill proposals attach here in later P4 slices.
+//! Owns durable dream, summary, skill, record, evidence, recall-evaluation, and embedding-provenance
+//! contracts. Concrete Postgres and in-memory persistence remains in `tm-server`.
 
 mod dream;
+mod durable;
 mod embedding;
+mod evaluation;
+mod hybrid;
 mod input;
 mod records;
 mod redaction;
@@ -17,9 +19,44 @@ pub use dream::{
     DreamLease, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport,
     MemoryError, NewDreamQueueRecord, NoopDreamWorker,
 };
-pub use embedding::{EmbeddingConfig, EmbeddingConfigError, EmbeddingProvider};
+pub use durable::{
+    DurableMemoryReadiness, DurableMemoryRecordError, EmbeddingReadiness,
+    MAX_PGVECTOR_INDEX_DIMENSIONS, MemoryEmbeddingGeneration, MemoryEmbeddingGenerationStatus,
+    MemoryEmbeddingJobClaim, MemoryEmbeddingJobLease, MemoryEmbeddingJobRecord,
+    MemoryEmbeddingJobStatus, MemorySchemaReadiness, MemoryScopeTombstone,
+    NewMemoryEmbeddingGeneration, NewMemoryEmbeddingJob, PgVectorReadiness, StoredMemoryRecord,
+};
+pub use embedding::{
+    DEFAULT_EMBEDDING_MAX_BATCH_SIZE, DEFAULT_EMBEDDING_MAX_INPUT_BYTES,
+    DEFAULT_EMBEDDING_TIMEOUT_MS, EMBEDDING_PROVENANCE_SCHEMA_VERSION, EmbeddingClient,
+    EmbeddingConfig, EmbeddingConfigError, EmbeddingError, EmbeddingInput, EmbeddingNormalization,
+    EmbeddingProvenance, EmbeddingProvenanceError, EmbeddingProvider, EmbeddingRequest,
+    EmbeddingResponse, EmbeddingVector, MAX_EMBEDDING_BATCH_SIZE, MAX_EMBEDDING_INPUT_BYTES,
+    ReembeddingState, embedding_content_hash, embedding_text,
+};
+pub use evaluation::{
+    RECALL_EVALUATION_SCHEMA_VERSION, RECALL_EVALUATOR_VERSION, RecallAcceptanceCohort,
+    RecallAcceptancePolicy, RecallBaselineArtifact, RecallBaselineEnvironment,
+    RecallDeterministicAggregate, RecallDeterministicCaseReport, RecallDeterministicReport,
+    RecallDeterministicSplitReport, RecallEvaluationAggregate, RecallEvaluationCase,
+    RecallEvaluationCaseReport, RecallEvaluationError, RecallEvaluationManifest,
+    RecallEvaluationObservation, RecallEvaluationReport, RecallEvaluationSplit,
+    RecallEvaluationSplitReport, RecallFalseInclusionCounts, RecallFalseInclusionKind,
+    RecallFixtureCoverage, RecallFixtureRecord, RecallRecordQuality, RecallRelevanceJudgment,
+    evaluate_recall_observations,
+};
+pub use hybrid::{
+    DEFAULT_HYBRID_CANDIDATE_LIMIT, DEFAULT_HYBRID_TOP_K, DEFAULT_RRF_K, DenseRecallQuery,
+    DenseRecallStatus, HybridMemoryCandidate, HybridRecallError, HybridRecallRequest,
+    HybridRecallResult, MAX_HYBRID_CANDIDATE_LIMIT, RankedMemoryCandidate, fuse_hybrid_candidates,
+};
 pub use input::{BudgetedDreamInput, DreamInputBudget, DreamInputChunk, DreamInputMessage};
-pub use records::{ProfileFactRecord, RecallChunkRecord};
+pub use records::{
+    EpisodicMemoryRecord, MEMORY_RECORD_SCHEMA_VERSION, MemoryEvidenceSource,
+    MemoryRecordContractError, MemoryRecordEvidence, MemoryRecordKind, MemoryRecordLinks,
+    MemoryRecordResource, MemoryRecordStatus, ProfileFactRecord, RecallChunkRecord,
+    SemanticMemoryRecord,
+};
 pub use redaction::{
     Redaction, RedactionReport, contains_sensitive_data, redact_dream_text, redact_json_value,
 };

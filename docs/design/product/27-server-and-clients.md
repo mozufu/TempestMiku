@@ -202,7 +202,9 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
   The P2/P4 memory gateway currently exposes `memory://root`, `memory://user-model`, exact approved
   profile fact / scoped recall record URIs, dream queue/record previews, dream summaries, and skill
-  proposal previews, P7.0 evolution audit history, typed persona/mode review-proposal resources, and
+  proposal previews; P8 adds bounded typed-record/recall lists plus exact
+  `memory://records/<kind>/<id>` and turn-linked `memory://recalls/<turn-id>` provenance views. P7.0
+  adds evolution audit history, typed persona/mode review-proposal resources, and
   P7.1 active/immutable managed-skill versions and P7.2a typed mode-addendum review/apply/rollback,
   with compact previews and fail-closed unknown paths (§22.9 / §26.4).
 - **Android target (P6 security slice).** The same Flutter app uses an in-app camera scanner

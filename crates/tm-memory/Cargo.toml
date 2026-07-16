@@ -4,7 +4,7 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "TempestMiku memory ownership crate: dream queue contracts and future consolidation."
+description = "TempestMiku memory contracts, recall evaluation, and consolidation ownership crate."
 
 [dependencies]
 async-trait.workspace = true

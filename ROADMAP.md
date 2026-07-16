@@ -32,7 +32,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **P5 — drive + research** ✓ | `drive.*` + auto-organizer (§24): transducers + virtual dirs; deep-research workspace (P3+P4+P5) | 4/5 | — | Postgres metadata/organizer/link persistence, CAS application, tombstones, startup link revalidation, and final restart/client verification pass |
 | **P6 — Android package + OS integrations (P6.1-P6.5 closed; P6.6 deferred)** | Shipped actionable notifications and bounded quick capture; on-device voice capture remains a named but unscheduled slice | all | — | P6.1-P6.5 retain their signed Android acceptance. P6.6 and full P6 closeout remain incomplete until the owner explicitly resumes voice work and its deterministic, quality, signed-build, and physical gates pass. |
 | **P7 — self-evolution tiers + hardening** | Typed, attenuated, reviewable evolution (§26); P7.2b eventually adds approval-backed persona addenda | all | M3–M4 | Auto mode may decide when to propose bounded persona guidance, but activation/rollback always require durable manual approval and never mutate identity, authority, or `SOUL.md` |
-| **P8 — fuller memory (active)** | Self-hosted hybrid lexical/dense recall, scoped episodic/semantic stores, evidence-backed extraction, correction, and measured recall quality (§22) | all | — | Postgres FTS + pgvector recall degrades safely, preserves provenance and scope, never promotes unsupported inference to owner truth, and measurably improves replayable recall fixtures |
+| **P8 — fuller memory** ✓ | Self-hosted hybrid lexical/dense recall, scoped episodic/semantic stores, evidence-backed extraction, correction, and measured recall quality (§22) | all | — | Frozen overall/held-out nDCG and Recall gates pass with zero unsafe inclusions; hybrid turn injection, exact retry/replay resources, provider-loss fallback, resumable re-embedding, restart, strict Postgres/client gates, and lumo self-hosting evidence are closed |
 | **P9 — production egress + secret broker** | Destination-scoped audited egress and opaque secret handles at the host boundary (§07/§08) | 4/5 | M4 | allowlists, DNS/IP/redirect policy, byte/request/time caps, revocation, denial, replay, and exfiltration tests pass before production egress can be enabled |
 | **P10 — MCP + live research** | Import selected MCP capabilities into lazy SDK/resource surfaces and run live research through P9 authority (§25) | 4/5 | M2 + P9 | one model-visible `execute(code)` tool remains; catalog reload, prompt-injection isolation, provenance, bounded results, approval-backed writes, and audit/replay gates pass |
 
@@ -89,8 +89,8 @@ remains loopback-only behind an HTTPS reverse proxy or Tailscale Serve, and Post
 mandatory outside loopback and for embedded workers. This gate does not broaden the deployment
 target into multi-tenancy or arbitrary public-internet hosting.
 
-Also not production-complete: deferred P6.6 Android voice capture, active P8 fuller memory, P7.2b persona
-addenda, P9 production egress/secret hardening, and P10 `tm-mcp`/live research. Optional cloud drive
+Also not production-complete: deferred P6.6 Android voice capture, active P7.2b persona addenda, P9
+production egress/secret hardening, and P10 `tm-mcp`/live research. Optional cloud drive
 sync, `code.ast`/`code.lsp`, `tm-trace`, generated SDK docs, and additional sandbox backends are
 demand-triggered rather than part of the committed critical path.
 
@@ -118,8 +118,8 @@ each milestone is done only when its acceptance checks pass.
 | 14 | **DONE — P6.4 ACTIONABLE ANDROID NOTIFICATIONS** | 2–4d | Deep-link notifications to their exact session/approval context and accept a bounded inline reply only after the owner explicitly presses Send. Native code posts one idempotent message through the existing authenticated durable API; it never runs the agent loop. `MessagingStyle` keeps the direct-reply action visible on HyperOS/MIUI. | Local Kotlin/Flutter/server and gated Postgres tests prove routing, bounds, idempotency, retry classification, revocation, expiry, missing-session handling, and no duplicate turn. A Keychain-backed signed arm64 APK installed in place on Android 15 and proved foreground/background/killed exact-context taps, distinct and double-tapped exact-once replies, offline retry, cold-start recovery, and visible no-send behavior for empty/cancelled/oversized, expired, revoked, deleted-session, and ended-session cases. |
 | 15 | **DONE — P6.5 QUICK CAPTURE** | 2–4d | One versioned native action accepts only a fresh UUID plus optional sanitized bounded text and rejects MIME, data, `ClipData`, selectors, streams, URI grants, and unknown extras. A static launcher shortcut passes through a no-history trampoline and the Quick Settings `TileService` uses that same intent; both land in the existing editable current/new-session review path. No widget or native send/model path was added. | Kotlin parser/buffer tests, Flutter parser/widget tests, analyze/full Flutter, strict Rust workspace gates, signed arm64 APK inspection, and in-place Android 15 proof pass. The real launcher menu and HyperOS tile opened from foreground/background/killed states; empty/cancel sent nothing, current/new confirmations produced exactly one turn each, duplicate event ids were ignored, and process death did not replay a draft. |
 | — | **DEFERRED — P6.6 ON-DEVICE VOICE CAPTURE + P6 CLOSEOUT** | 5–9d | Retain the replaceable `LocalAsrEngine` spike and isolated benchmark evidence, but schedule no production microphone, model installer/runtime, review/send, or closeout work until the owner explicitly resumes the slice. | Resumption starts from the independent evidence note; Taiwan-ready quality, real speech, memory headroom, deterministic runtime, airplane mode, signed APK inspection, and Android 15 record/edit/cancel/current/new/process-death gates all remain required. |
-| 16 | **ACTIVE — P8 FULLER MEMORY** | 8–14d | Add self-hosted Postgres FTS + pgvector hybrid recall, local embeddings, scoped episodic/semantic stores, fusion/reranking, provenance/confidence/correction history, evidence-backed extraction, and context budgeting. | Replayable recall fixtures show relevance improvement and scope isolation; provider loss degrades safely; re-embedding is versioned; stale/unsupported facts are corrected or withheld; no external SaaS is required. |
-| 17 | **P7.2b APPROVAL-BACKED PERSONA ADDENDA** | 4–7d | Let Auto mode detect repeated preference/persona mismatch and create typed, deduplicated, cooldown-bound proposals. Manual approval activates immutable tone/address/interaction guidance; rollback restores a prior version or the hand-authored base. | Tests/evidence prove auto-propose but never auto-apply, bounded evidence, stable base checks, deny/timeout/stale/retry safety, next-turn composition, rollback, and invariance of identity, `SOUL.md`, safety, modes, and capabilities. |
+| 16 | **DONE — P8 FULLER MEMORY** | 8–14d | P8.1 froze replayable global/project lexical controls and contracts; P8.2 added restart-safe scoped records, evidence, corrections, tombstones, and jobs; P8.3 added local embeddings, pgvector/HNSW generations, and deterministic FTS+dense RRF; P8.4/P8.5 compose bounded results into durable turns/resources, type approved extraction, and close quality/deployment evidence. | Frozen overall and held-out quality improve beyond threshold with no Recall regression and zero unsafe inclusions. Exact retry/replay, scope/unlink/correction, provider-loss/restart, resumable re-embedding, strict Rust/Postgres/client gates, and self-hosted lumo evidence pass. |
+| 17 | **ACTIVE — P7.2b APPROVAL-BACKED PERSONA ADDENDA** | 4–7d | Let Auto mode detect repeated preference/persona mismatch and create typed, deduplicated, cooldown-bound proposals. Manual approval activates immutable tone/address/interaction guidance; rollback restores a prior version or the hand-authored base. | Tests/evidence prove auto-propose but never auto-apply, bounded evidence, stable base checks, deny/timeout/stale/retry safety, next-turn composition, rollback, and invariance of identity, `SOUL.md`, safety, modes, and capabilities. |
 | 18 | **P9 PRODUCTION EGRESS + SECRET BROKER** | 6–10d | Add destination allowlists, DNS/IP/redirect policy, request/byte/time budgets, audit/revocation, exact grants, and opaque egress-scoped secret handles resolved only at the host boundary. | Denial, timeout, redirect, rebinding, exfiltration, replay, secret-redaction, restart, and audit gates pass with production egress disabled by default. |
 | 19 | **P10 MCP + LIVE RESEARCH** | 6–10d | Import selected MCP resources/prompts/tools into lazy SDK/resource surfaces behind P9 and build live research on that same boundary. Preserve `execute(code)` as the only model-visible tool. | Catalog/reload, bounded schema/result, prompt-injection isolation, provenance, approval-backed mutation, egress, audit, replay, and context-size gates pass. |
 
@@ -130,16 +130,37 @@ open gates, and resume contract are preserved in the independent
 [`P6.6 on-device ASR deferment evidence`](docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md)
 note. That note is evidence, not acceptance; P6.6 and full P6 closeout remain incomplete.
 
+P8.1 closed on 2026-07-15 before ranking changes. Its nine-case clean-schema PostgreSQL 16 replay
+freezes overall nDCG@5 `0.279754`, Recall@5 `0.444444`, held-out nDCG@5 `0.471713`, held-out
+Recall@5 `0.75`, the existing 1,600-token/five-item bounds, and a 50 ms per-case p95 ceiling. The
+versioned record/evidence and embedding-provenance contracts compile through both stores; the
+machine-readable baseline and limitations are recorded in the
+[`P8.1 recall baseline evidence`](docs/evidence/2026-07-15-p8-1-recall-baseline.md). P8.2 closed on
+the same date with ordered scoped tables, legacy mirroring, correction/unlink denial, and readiness;
+its storage-only contract and gates are recorded in the
+[`P8.2 durable memory evidence`](docs/evidence/2026-07-15-p8-2-durable-memory-spine.md). P8.3 then
+closed with a local-only batch embedding boundary, pgvector/HNSW generation tables, resumable leased
+jobs, an atomic active-version pointer, and deterministic FTS+dense RRF that preserves evidence and
+authority. Missing pgvector, disabled/provider-loss, partial/stale re-embedding, and dimension/model
+mismatch keep lexical-only results visible; its exact gates are in
+[`P8.3 local embedding evidence`](docs/evidence/2026-07-15-p8-3-local-embeddings-hybrid.md). P8.4/P8.5
+then closed hybrid turn integration, exact bounded inspection, approved typed extraction, incremental
+and resumable embedding, and the frozen quality/deployment gates. Overall nDCG@5 improved from
+`0.279754` to `1.0`, held-out nDCG@5 from `0.471713` to `1.0`, Recall@5 did not regress, and unsafe
+inclusions remained zero. The local lumo provider, provider-loss/restart, server restart, and exact
+gate matrix are recorded in
+[`P8 fuller-memory closeout evidence`](docs/evidence/2026-07-15-p8-5-fuller-memory.md).
+The follow-up PR review hardening adds serialized scope revocation and approved writes, monotonic
+scope-revision-pinned embedding generations, exact authority-first dense queries, balanced 2/2/1
+prompt allocation, and isolated oversized-input recovery without reopening P8 or changing the frozen
+P8.1 control. P7.2b remains the active product slice.
+
 ### Immediate next task queue
 
-1. **Deepen the companion with P8 fuller memory** — establish the replayable lexical baseline,
-   richer evidence/correction schema, self-hosted embedding boundary, bounded hybrid recall, and
-   measured scope-safe quality improvement. The owner-approved P6.6 deferment removes the previous
-   P6.6-before-P8 sequencing constraint without marking P6.6 or P6 complete.
-2. **Keep persona changes behind memory truthfulness** — P8 fuller memory precedes P7.2b persona
-   addenda. Auto mode may propose persona guidance, but only durable manual approval can activate or
-   roll it back.
-3. **Open external capabilities only through the safety spine** — P9 egress/secret hardening must
+1. **Implement P7.2b approval-backed persona addenda** — Auto mode may create only bounded,
+   evidence-backed proposals. Durable manual approval remains the sole activation/rollback path, and
+   addenda cannot mutate identity, `SOUL.md`, safety, modes, voice caps, scopes, or capabilities.
+2. **Open external capabilities only through the safety spine** — P9 egress/secret hardening must
    close before P10 MCP/live research. OMP remains replaceable and native Deno remains the coding
    dogfood path.
 

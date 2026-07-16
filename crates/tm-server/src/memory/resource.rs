@@ -5,7 +5,10 @@ use tm_artifacts::{ResourceContent, preview};
 use tm_host::{HostError, InvocationCtx, ResourceEntry, ResourceHandler, Result as HostResult};
 use uuid::Uuid;
 
-use tm_memory::{DreamQueueRecord, MemorySummaryRecord, SkillProposalRecord};
+use tm_memory::{
+    DreamQueueRecord, MemoryRecordKind, MemorySummaryRecord, SkillProposalRecord,
+    StoredMemoryRecord,
+};
 
 use crate::store::{ProfileFactRecord, RecallChunkRecord};
 use crate::{ServerError, Store};
@@ -74,6 +77,10 @@ where
         ctx: &InvocationCtx,
     ) -> HostResult<ResourceContent> {
         let authority = self.authority(ctx, uri)?;
+        self.store
+            .ensure_memory_scope_active(&authority.subject, &authority.scope)
+            .await
+            .map_err(map_memory_store_error)?;
         match parse_memory_uri(uri)? {
             MemoryUri::Root => self.root_resource(selector).await,
             MemoryUri::UserModel => self.user_model_resource(selector).await,
@@ -134,6 +141,51 @@ where
                     "memory_recall_chunk",
                     Some(format!("recall chunk {}", short_id(chunk.id))),
                     render_recall_chunk(&chunk),
+                    selector,
+                )
+            }
+            MemoryUri::Record { kind, id } => {
+                let record = self
+                    .store
+                    .memory_record(&authority.subject, &authority.scope, kind, id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                self.json_resource(
+                    &memory_record_uri(&record),
+                    "memory_record",
+                    Some(format!("{} memory record {}", kind.as_str(), short_id(id))),
+                    serde_json::to_value(record)
+                        .map_err(|error| HostError::HostCall(error.to_string()))?,
+                    selector,
+                )
+            }
+            MemoryUri::RecallTrace { turn_id } => {
+                let session_id = Uuid::parse_str(&ctx.session_id)
+                    .map_err(|_| unauthorized_memory_resource(uri))?;
+                let event = self
+                    .store
+                    .event_for_turn(session_id, turn_id, "memory_recall")
+                    .await
+                    .map_err(map_memory_store_error)?
+                    .ok_or_else(|| unauthorized_memory_resource(uri))?;
+                let event_subject = event
+                    .payload_json
+                    .pointer("/context/subject")
+                    .and_then(serde_json::Value::as_str);
+                let event_scope = event
+                    .payload_json
+                    .pointer("/context/scope")
+                    .and_then(serde_json::Value::as_str);
+                if event_subject != Some(authority.subject.as_str())
+                    || event_scope != Some(authority.scope.as_str())
+                {
+                    return Err(unauthorized_memory_resource(uri));
+                }
+                self.json_resource(
+                    uri,
+                    "memory_recall_trace",
+                    Some(format!("memory recall for turn {}", short_id(turn_id))),
+                    event.payload_json,
                     selector,
                 )
             }
@@ -233,12 +285,22 @@ where
     async fn list(&self, uri: Option<&str>, ctx: &InvocationCtx) -> HostResult<Vec<ResourceEntry>> {
         let uri = uri.unwrap_or("memory://root");
         let authority = self.authority(ctx, uri)?;
+        self.store
+            .ensure_memory_scope_active(&authority.subject, &authority.scope)
+            .await
+            .map_err(map_memory_store_error)?;
         match parse_memory_list_uri(uri)? {
             MemoryListUri::Root => self.root_entries().await,
             MemoryListUri::UserModel => self.profile_fact_entries().await,
             MemoryListUri::ScopeChunks { scope } => {
                 ensure_authorized_scope(authority, &scope, uri)?;
                 self.recall_chunk_entries(&scope).await
+            }
+            MemoryListUri::Records => self.memory_record_entries(authority).await,
+            MemoryListUri::Recalls => {
+                let session_id = Uuid::parse_str(&ctx.session_id)
+                    .map_err(|_| unauthorized_memory_resource(uri))?;
+                self.recall_trace_entries(session_id, authority).await
             }
             MemoryListUri::Summaries => self.summary_entries(&self.scope).await,
             MemoryListUri::Dreams => self.dream_entries(&self.scope).await,
@@ -365,6 +427,22 @@ where
                 modified_at: None,
             },
             ResourceEntry {
+                uri: "memory://records".to_string(),
+                name: "records".to_string(),
+                kind: "memory_record_collection".to_string(),
+                title: Some(format!("{} typed memory records", self.scope)),
+                size_bytes: None,
+                modified_at: None,
+            },
+            ResourceEntry {
+                uri: "memory://recalls".to_string(),
+                name: "recalls".to_string(),
+                kind: "memory_recall_trace_collection".to_string(),
+                title: Some("Turn recall traces".to_string()),
+                size_bytes: None,
+                modified_at: None,
+            },
+            ResourceEntry {
                 uri: "memory://dreams".to_string(),
                 name: "dreams".to_string(),
                 kind: "memory_dream_queue".to_string(),
@@ -464,6 +542,61 @@ where
             .collect())
     }
 
+    async fn memory_record_entries(
+        &self,
+        authority: &tm_host::MemoryAuthority,
+    ) -> HostResult<Vec<ResourceEntry>> {
+        let records = self
+            .store
+            .active_memory_records(&authority.subject, &authority.scope, self.recall_limit)
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(records
+            .into_iter()
+            .map(|record| ResourceEntry {
+                uri: memory_record_uri(&record),
+                name: short_id(record.id()),
+                kind: format!("memory_{}_record", record.kind().as_str()),
+                title: Some(memory_record_title(&record)),
+                size_bytes: serde_json::to_vec(&record).ok().map(|value| value.len()),
+                modified_at: Some(record.resource.observed_at().to_rfc3339()),
+            })
+            .collect())
+    }
+
+    async fn recall_trace_entries(
+        &self,
+        session_id: Uuid,
+        authority: &tm_host::MemoryAuthority,
+    ) -> HostResult<Vec<ResourceEntry>> {
+        let events = self
+            .store
+            .memory_recall_events(
+                session_id,
+                &authority.subject,
+                &authority.scope,
+                self.recall_limit,
+            )
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(events
+            .into_iter()
+            .filter_map(|event| {
+                let turn_id = event.turn_id?;
+                Some(ResourceEntry {
+                    uri: format!("memory://recalls/{turn_id}"),
+                    name: short_id(turn_id),
+                    kind: "memory_recall_trace".to_string(),
+                    title: Some(format!("turn {} recall", short_id(turn_id))),
+                    size_bytes: serde_json::to_vec(&event.payload_json)
+                        .ok()
+                        .map(|value| value.len()),
+                    modified_at: Some(event.created_at.to_rfc3339()),
+                })
+            })
+            .collect())
+    }
+
     async fn skill_proposal_entries(&self, session_id: Uuid) -> HostResult<Vec<ResourceEntry>> {
         let proposals = self
             .store
@@ -548,6 +681,21 @@ where
             content: selected,
         })
     }
+
+    fn json_resource(
+        &self,
+        uri: &str,
+        kind: &str,
+        title: Option<String>,
+        value: serde_json::Value,
+        selector: Option<&str>,
+    ) -> HostResult<ResourceContent> {
+        let content = serde_json::to_string_pretty(&value)
+            .map_err(|error| HostError::HostCall(error.to_string()))?;
+        let mut resource = self.text_resource(uri, kind, title, content, selector)?;
+        resource.mime = "application/json".to_string();
+        Ok(resource)
+    }
 }
 
 fn ensure_authorized_subject(
@@ -596,6 +744,8 @@ enum MemoryUri {
     Dream { id: Uuid },
     ProfileFact { subject: String, id: Uuid },
     RecallChunk { scope: String, id: Uuid },
+    Record { kind: MemoryRecordKind, id: Uuid },
+    RecallTrace { turn_id: Uuid },
     Summary { id: Uuid },
     SkillProposal { id: Uuid },
     EvolutionProposal { id: Uuid },
@@ -606,6 +756,8 @@ enum MemoryListUri {
     Root,
     UserModel,
     ScopeChunks { scope: String },
+    Records,
+    Recalls,
     Summaries,
     Dreams,
     SkillProposals,
@@ -641,6 +793,13 @@ fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
             scope: decode_memory_segment(scope)?,
             id: parse_memory_uuid(id, uri)?,
         }),
+        ["records", kind, id] => Ok(MemoryUri::Record {
+            kind: parse_memory_record_kind(kind, uri)?,
+            id: parse_memory_uuid(id, uri)?,
+        }),
+        ["recalls", turn_id] => Ok(MemoryUri::RecallTrace {
+            turn_id: parse_memory_uuid(turn_id, uri)?,
+        }),
         ["summaries", id] => Ok(MemoryUri::Summary {
             id: parse_memory_uuid(id, uri)?,
         }),
@@ -670,6 +829,12 @@ fn parse_memory_list_uri(uri: &str) -> HostResult<MemoryListUri> {
     if path == "dreams" {
         return Ok(MemoryListUri::Dreams);
     }
+    if path == "records" {
+        return Ok(MemoryListUri::Records);
+    }
+    if path == "recalls" {
+        return Ok(MemoryListUri::Recalls);
+    }
     let parts = path.split('/').collect::<Vec<_>>();
     match parts.as_slice() {
         ["scopes", scope, "chunks"] => Ok(MemoryListUri::ScopeChunks {
@@ -690,6 +855,10 @@ fn parse_memory_uuid(value: &str, uri: &str) -> HostResult<Uuid> {
     Uuid::parse_str(value).map_err(|_| HostError::InvalidPath(format!("invalid memory uri {uri}")))
 }
 
+fn parse_memory_record_kind(value: &str, uri: &str) -> HostResult<MemoryRecordKind> {
+    MemoryRecordKind::parse(value).ok_or_else(|| unsupported_memory_uri(uri))
+}
+
 fn profile_fact_uri(fact: &ProfileFactRecord) -> String {
     format!(
         "memory://profile/{}/facts/{}",
@@ -704,6 +873,24 @@ fn recall_chunk_uri(chunk: &RecallChunkRecord) -> String {
         encode_memory_segment(&chunk.scope),
         chunk.id
     )
+}
+
+fn memory_record_uri(record: &StoredMemoryRecord) -> String {
+    format!(
+        "memory://records/{}/{}",
+        record.kind().as_str(),
+        record.id()
+    )
+}
+
+fn memory_record_title(record: &StoredMemoryRecord) -> String {
+    match &record.resource {
+        tm_memory::MemoryRecordResource::Episodic(record) => preview(&record.text, 120),
+        tm_memory::MemoryRecordResource::Semantic(record) => format!(
+            "{} {} {}",
+            record.semantic_subject, record.predicate, record.object
+        ),
+    }
 }
 
 fn dream_uri(dream: &DreamQueueRecord) -> String {

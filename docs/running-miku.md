@@ -93,6 +93,7 @@ TM_CONFIG=.tempestmiku/config.json
 TM_MODES_PATH=/absolute/path/to/persona-assets # optional hand-authored SOUL/modes/skills
 TM_MANAGED_SKILLS_PATH=/shared/path/to/managed-skills # optional; defaults under artifact root
 TM_MANAGED_MODE_ADDENDA_PATH=/shared/path/to/managed-mode-addenda # optional; defaults under artifact root
+TM_MEMORY_EMBEDDING_PROVIDER=disabled # disabled or local; local requires Postgres + pgvector
 TM_OMP_ACP_ENABLED=0
 TM_PUSH_PROVIDER=disabled # set unifiedpush only after configuring the exact endpoint origin
 ```
@@ -102,6 +103,30 @@ Drive blobs still use the configured artifact root, but entries, attributes/tags
 version counters, corrections, and dynamic link tombstones do not survive a restart. This historical
 `InMemoryDriveStore` path remains the normal local-development exception; do not use it for a durable
 deployment.
+
+P8 hybrid recall is disabled by default. To use the self-hosted path, provision `pgvector` in the
+TempestMiku database and expose an unauthenticated OpenAI-shaped embedding endpoint on loopback only:
+
+```sh
+TM_MEMORY_EMBEDDING_PROVIDER=local
+TM_MEMORY_EMBEDDING_ENDPOINT=http://127.0.0.1:11434/v1/embeddings
+TM_MEMORY_EMBEDDING_MODEL=bge-m3:567m
+TM_MEMORY_EMBEDDING_DIMENSIONS=1024
+TM_MEMORY_EMBEDDING_NORMALIZATION=l2 # l2 or none; defaults to l2
+TM_MEMORY_EMBEDDING_TIMEOUT_MS=10000 # defaults to 5000
+TM_MEMORY_EMBEDDING_MAX_BATCH_SIZE=16 # defaults to 32
+TM_MEMORY_EMBEDDING_MAX_INPUT_BYTES=16384
+```
+
+Enabled embeddings require `TM_DATABASE_URL`. Split `api` and `worker` processes must use the same
+pinned values: API roles embed queries for turn recall, and worker roles stage/reclaim durable jobs
+and promote a generation only after active-record coverage is complete. The endpoint validator
+accepts only plain HTTP on a loopback host without user info, query data, or fragments; the client
+bypasses ambient proxies and refuses redirects. Provider loss, missing/partial generations, and
+configuration mismatch remain visible as typed lexical fallback;
+`openai_compatible` is rejected until the P9 egress/opaque-secret boundary exists. The checked-in
+lumo deployment binds the embedding service only to `127.0.0.1:11434`; see the
+[P8 closeout evidence](evidence/2026-07-15-p8-5-fuller-memory.md) for pinned provenance and gates.
 
 Approved P7.1 skill proposals are stored as immutable digest-addressed versions beneath
 `TM_MANAGED_SKILLS_PATH`; when unset, the server uses `<artifact-root>/managed-skills`. API and worker

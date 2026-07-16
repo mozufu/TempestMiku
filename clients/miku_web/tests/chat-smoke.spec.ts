@@ -4,7 +4,7 @@ test('session API streams text, finalizes, and replay resumes by Last-Event-ID',
   const root = await request.get('/');
   expect(root.status()).toBe(200);
   expect(root.headers()['content-type']).toContain('text/html');
-  expect(await root.text()).toContain('TempestMiku Remote');
+  expect(await root.text()).toContain('<title>Tempest Miku</title>');
 
   const pairingCode = await request.post('/auth/pairing-codes');
   expect(pairingCode.ok()).toBeTruthy();

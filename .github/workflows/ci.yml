@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_DB: tempestmiku_test
           POSTGRES_PASSWORD: postgres
@@ -85,8 +85,14 @@ jobs:
       - name: Cache Rust build outputs
         uses: Swatinem/rust-cache@v2
 
+      - name: Enable pgvector
+        run: >-
+          docker exec "${{ job.services.postgres.id }}"
+          psql -U postgres -d tempestmiku_test -v ON_ERROR_STOP=1
+          -c 'CREATE EXTENSION IF NOT EXISTS vector'
+
       - name: Run gated Postgres tests
-        run: cargo test -p tm-server --locked -- --test-threads=1
+        run: cargo test -p tm-server --locked gated_postgres -- --test-threads=1
 
   flutter-checks:
     name: Flutter analysis and tests

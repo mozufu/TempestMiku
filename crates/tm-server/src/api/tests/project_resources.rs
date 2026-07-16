@@ -1302,6 +1302,51 @@ async fn memory_resource_gateway_denies_unknown_and_ungranted_reads() {
 }
 
 #[tokio::test]
+async fn memory_resource_gateway_denies_reads_and_lists_after_scope_revocation() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create_project_session(&app).await;
+
+    let before = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=memory://root",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(before.status(), StatusCode::OK);
+
+    store
+        .revoke_memory_scope("brian", "project:tempestmiku", "project unlinked")
+        .await
+        .unwrap();
+
+    for endpoint in ["resolve", "list"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/sessions/{}/resources/{endpoint}?uri=memory://root",
+                        session.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{endpoint}");
+    }
+}
+
+#[tokio::test]
 async fn session_resource_preview_returns_compact_bounded_memory_preview() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;

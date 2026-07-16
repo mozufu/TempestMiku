@@ -1,6 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tm_memory::{
+    EpisodicMemoryRecord, MEMORY_RECORD_SCHEMA_VERSION, MemoryRecordEvidence, MemoryRecordLinks,
+    MemoryRecordResource, MemoryRecordStatus, SemanticMemoryRecord, StoredMemoryRecord,
+};
 use uuid::Uuid;
 
 use crate::store::{ProfileFactRecord, RecallChunkRecord};
@@ -282,6 +286,64 @@ pub fn recall_chunk_record(proposal: &MemoryWriteProposal) -> Result<RecallChunk
         importance: proposal.importance_score,
         created_at: proposal.created_at,
     })
+}
+
+pub fn typed_memory_record(
+    proposal: &MemoryWriteProposal,
+    supersedes_record_id: Option<Uuid>,
+) -> Result<StoredMemoryRecord> {
+    let evidence = vec![MemoryRecordEvidence::resource(
+        proposal.proposal_uri(),
+        proposal.provenance_label.clone(),
+    )];
+    let links = MemoryRecordLinks {
+        supersedes_record_id,
+        ..MemoryRecordLinks::default()
+    };
+    let resource = match proposal.memory_kind {
+        MemoryWriteKind::ProfileFact => MemoryRecordResource::Semantic(SemanticMemoryRecord {
+            schema_version: MEMORY_RECORD_SCHEMA_VERSION,
+            id: proposal.record_id,
+            owner_subject: proposal.subject.clone(),
+            memory_scope: "global".to_string(),
+            semantic_subject: proposal.subject.clone(),
+            predicate: proposal.predicate.clone().ok_or_else(|| {
+                ServerError::InvalidRequest(
+                    "profile fact proposal is missing predicate".to_string(),
+                )
+            })?,
+            object: proposal.object.clone().ok_or_else(|| {
+                ServerError::InvalidRequest("profile fact proposal is missing object".to_string())
+            })?,
+            evidence,
+            confidence: proposal.confidence.unwrap_or(0.8),
+            importance: proposal.importance_score,
+            observed_at: proposal.created_at,
+            effective_from: proposal.created_at,
+            effective_to: None,
+            status: MemoryRecordStatus::Active,
+            links,
+            created_at: proposal.created_at,
+        }),
+        MemoryWriteKind::RecallChunk => MemoryRecordResource::Episodic(EpisodicMemoryRecord {
+            schema_version: MEMORY_RECORD_SCHEMA_VERSION,
+            id: proposal.record_id,
+            owner_subject: proposal.subject.clone(),
+            memory_scope: proposal.scope.clone(),
+            text: proposal.text.clone(),
+            evidence,
+            confidence: 1.0,
+            importance: proposal.importance_score,
+            observed_at: proposal.created_at,
+            effective_from: proposal.created_at,
+            effective_to: None,
+            status: MemoryRecordStatus::Active,
+            links,
+            created_at: proposal.created_at,
+        }),
+    };
+    StoredMemoryRecord::new(resource)
+        .map_err(|error| ServerError::InvalidRequest(error.to_string()))
 }
 
 fn default_importance_score(kind: MemoryWriteKind, text: &str) -> f32 {

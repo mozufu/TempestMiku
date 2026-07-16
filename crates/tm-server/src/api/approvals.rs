@@ -314,19 +314,7 @@ where
             &proposal.proposal_id.to_string(),
             &digest,
         )?;
-        match proposal.memory_kind {
-            MemoryWriteKind::ProfileFact => {
-                store
-                    .upsert_profile_fact(crate::memory::profile_fact_record(&proposal)?)
-                    .await?;
-            }
-            MemoryWriteKind::RecallChunk => {
-                store
-                    .upsert_recall_chunk(crate::memory::recall_chunk_record(&proposal)?)
-                    .await?;
-            }
-        }
-        Some(proposal.record_ref())
+        Some(store.apply_approved_memory_proposal(&proposal).await?)
     } else {
         None
     };

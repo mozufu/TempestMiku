@@ -21,6 +21,8 @@ part 'modes.dart';
 part 'app.dart';
 part 'adaptive_shell.dart';
 part 'home.dart';
+part 'home_chrome.dart';
+part 'home_thread.dart';
 part 'app_models.dart';
 part 'home_event_parsing.dart';
 part 'home_activity_mapping.dart';

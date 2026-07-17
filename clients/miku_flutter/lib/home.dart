@@ -1856,470 +1856,84 @@ class _MikuHomePageState extends State<MikuHomePage>
                     )
                     : Column(
                       children: [
-                        _buildTopBar(tok),
-                        _buildConnectionBanner(tok),
-                        Expanded(child: _buildChatSurface(tok, accent)),
-                        _buildComposer(tok, accent),
-                      ],
-                    ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTopBar(_Tok tok) {
-    final copy = _copy;
-    final online =
-        _status == 'connected' ||
-        _status == 'streaming' ||
-        _status == 'complete';
-    final statusColor =
-        online
-            ? tok.success
-            : _status == 'connecting'
-            ? tok.cool
-            : tok.warning;
-    return Container(
-      constraints: const BoxConstraints(minHeight: 52),
-      padding: const EdgeInsets.fromLTRB(6, 4, 12, 4),
-      decoration: BoxDecoration(
-        color: tok.glass,
-        border: Border(bottom: BorderSide(color: tok.glassBorder)),
-      ),
-      child: Row(
-        children: [
-          Builder(
-            builder:
-                (menuContext) => IconButton(
-                  tooltip: copy.pick('Open menu', '開啟選單'),
-                  onPressed: () => Scaffold.of(menuContext).openDrawer(),
-                  icon: const Icon(Icons.menu_rounded),
-                ),
-          ),
-          const SizedBox(width: 2),
-          Expanded(
-            child: Row(
-              children: [
-                Text(
-                  'Miku',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: tok.text,
-                    fontSize: 16.5,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.35,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: statusColor,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    copy.statusLabel(_status),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: tok.muted,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildConnectionBanner(_Tok tok) {
-    return _ConnectionBanner(
-      tok: tok,
-      copy: _copy,
-      status: _status,
-      onRetry: _retryConnection,
-      onNewSession: _startFreshChat,
-    );
-  }
-
-  Widget _buildChatSurface(
-    _Tok tok,
-    Color accent, {
-    bool showPendingApprovals = true,
-  }) {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: _buildThread(
-            tok,
-            accent,
-            showPendingApprovals: showPendingApprovals,
-          ),
-        ),
-        if (_showJumpToLatest)
-          Positioned(
-            right: 18,
-            bottom: 12,
-            child: Semantics(
-              button: true,
-              label: _copy.pick('Jump to latest message', '跳到最新訊息'),
-              child: FloatingActionButton.small(
-                heroTag: 'jump-to-latest',
-                onPressed: () => _scrollToBottom(force: true, animate: true),
-                child: const Icon(Icons.arrow_downward_rounded),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildThread(
-    _Tok tok,
-    Color accent, {
-    bool showPendingApprovals = true,
-  }) {
-    final copy = _copy;
-    final items = <Widget>[];
-
-    if (_rounds.isEmpty && _memoryProposals.isEmpty && _approvals.isEmpty) {
-      items.add(_EmptyState(tok: tok, status: _status, copy: copy));
-      items.add(const SizedBox(height: 14));
-    }
-
-    for (final round in _rounds) {
-      if (round.userText.isNotEmpty) {
-        items.add(
-          _UserBubble(tok: tok, text: round.userText, accent: tok.accentSoft),
-        );
-        items.add(const SizedBox(height: 10));
-      }
-
-      final assistantText = round.assistantText;
-      void addActivityTrace() {
-        if (round.activities.isEmpty) return;
-        items.add(
-          _AgentStatusBar(
-            tok: tok,
-            copy: copy,
-            accent: accent,
-            anim: _dotAnim,
-            roundIndex: round.index,
-            agents: _agentStatuses(round.activities),
-            activities: round.activities,
-            expanded: round.activityExpanded,
-            onTap: () => _showActivitySheet(round),
-            onOpenResource: _openResource,
-          ),
-        );
-        items.add(const SizedBox(height: 10));
-      }
-
-      void addReasoningTrace() {
-        if (!round.hasReasoning) return;
-        items.add(
-          _ThinkingTrace(
-            tok: tok,
-            copy: copy,
-            accent: accent,
-            text: round.reasoningText,
-            expanded: round.reasoningExpanded,
-            isStreaming:
-                round.assistantFinalText.isEmpty &&
-                round.isStreaming &&
-                round.assistantStreamedText.isEmpty,
-          ),
-        );
-        items.add(const SizedBox(height: 10));
-      }
-
-      void addAssistantAnswer() {
-        if (assistantText.isEmpty) return;
-        final resources = _extractResources(assistantText);
-        items.add(
-          _MikuBubble(
-            tok: tok,
-            copy: copy,
-            text: assistantText,
-            accent: accent,
-            resources: resources,
-            onOpenResource: _openResource,
-            isStreaming: round.assistantFinalText.isEmpty && round.isStreaming,
-          ),
-        );
-      }
-
-      if (assistantText.isNotEmpty) {
-        addAssistantAnswer();
-        items.add(const SizedBox(height: 10));
-      } else if (round.isStreaming) {
-        items.add(_TypingIndicator(tok: tok, accent: accent, anim: _dotAnim));
-        items.add(const SizedBox(height: 10));
-      }
-      addActivityTrace();
-      addReasoningTrace();
-      items.add(const SizedBox(height: 14));
-    }
-
-    for (final proposal in _memoryProposals) {
-      final approval = _approvalForProposal(proposal);
-      items.add(
-        _MemoryProposalCard(
-          tok: tok,
-          copy: copy,
-          proposal: proposal,
-          approval: approval,
-          accent: accent,
-          onApprove:
-              approval == null ? null : () => _resolve(approval, 'approve'),
-          onDeny: approval == null ? null : () => _resolve(approval, 'deny'),
-        ),
-      );
-      items.add(const SizedBox(height: 10));
-    }
-
-    if (showPendingApprovals) {
-      for (final approval in _approvals.where(
-        (item) => !_isRenderedAsMemoryProposal(item),
-      )) {
-        items.add(
-          _ApprovalCard(
-            tok: tok,
-            copy: copy,
-            approval: approval,
-            accent: accent,
-            onTap: () => _showApprovalSheet(approval),
-          ),
-        );
-        items.add(const SizedBox(height: 10));
-      }
-    }
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Center(
-          child: SizedBox(
-            width: math.min(constraints.maxWidth, 720),
-            height: constraints.maxHeight,
-            child: ListView.builder(
-              controller: _scrollCtrl,
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
-              itemCount: items.length,
-              itemBuilder: (context, index) => items[index],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildComposer(_Tok tok, Color accent) {
-    final copy = _copy;
-    final canSubmit = _canSend && !_sessionEnded && !_isSending;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Container(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
-          decoration: BoxDecoration(
-            color: tok.glass,
-            border: Border(top: BorderSide(color: tok.glassBorder)),
-          ),
-          child: Center(
-            child: SizedBox(
-              width: math.min(constraints.maxWidth, 720),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (_sendError.isNotEmpty) ...[
-                    Semantics(
-                      liveRegion: true,
-                      label: _sendError,
-                      child: Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 9,
+                        _MikuTopBar(tok: tok, copy: _copy, status: _status),
+                        _ConnectionBanner(
+                          tok: tok,
+                          copy: _copy,
+                          status: _status,
+                          onRetry: _retryConnection,
+                          onNewSession: _startFreshChat,
                         ),
-                        decoration: BoxDecoration(
-                          color: tok.danger.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: tok.danger.withValues(alpha: 0.45),
-                          ),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              Icons.error_outline_rounded,
-                              size: 19,
-                              color: tok.danger,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                _sendError,
-                                style: TextStyle(
-                                  color: tok.text,
-                                  fontSize: 12.5,
-                                  height: 1.35,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                  Container(
-                    decoration: BoxDecoration(
-                      color: tok.raised,
-                      border: Border.all(
-                        color:
-                            _sendError.isEmpty
-                                ? tok.border
-                                : tok.danger.withValues(alpha: 0.7),
-                      ),
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: tok.glow,
-                          blurRadius: 18,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
                         Expanded(
-                          child: TextField(
-                            controller: _inputCtrl,
-                            enabled: !_sessionEnded,
-                            readOnly: _isSending,
-                            style: TextStyle(
-                              color: tok.text,
-                              fontSize: 15,
-                              height: 1.4,
-                            ),
-                            minLines: 1,
-                            maxLines: 6,
-                            keyboardType: TextInputType.multiline,
-                            textInputAction: TextInputAction.send,
-                            decoration: InputDecoration(
-                              hintText:
-                                  _sessionEnded
-                                      ? copy.sessionEndedHint
-                                      : copy.messageHint,
-                              filled: false,
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              contentPadding: const EdgeInsets.fromLTRB(
-                                16,
-                                14,
-                                8,
-                                14,
-                              ),
-                            ),
-                            onChanged: (value) {
-                              final text = value.trim();
-                              final shouldSend =
-                                  !_sessionEnded && text.isNotEmpty;
-                              final changedPending =
-                                  _pendingMessageText != null &&
-                                  _pendingMessageText != text;
-                              if (shouldSend != _canSend ||
-                                  changedPending ||
-                                  _sendError.isNotEmpty) {
-                                setState(() {
-                                  _canSend = shouldSend;
-                                  if (changedPending) {
-                                    final optimisticRound =
-                                        _pendingOptimisticRound;
-                                    if (optimisticRound != null &&
-                                        optimisticRound.assistantText.isEmpty &&
-                                        optimisticRound.activities.isEmpty &&
-                                        !optimisticRound.hasReasoning) {
-                                      _rounds.remove(optimisticRound);
-                                    }
-                                    _pendingMessageId = null;
-                                    _pendingMessageText = null;
-                                    _pendingOptimisticRound = null;
-                                  }
-                                  _sendError = '';
-                                });
-                              }
-                            },
-                            onSubmitted: (_) {
-                              if (canSubmit) unawaited(_send());
-                            },
+                          child: _MikuChatSurface(
+                            tok: tok,
+                            copy: _copy,
+                            accent: accent,
+                            status: _status,
+                            scrollController: _scrollCtrl,
+                            dotAnimation: _dotAnim,
+                            rounds: _rounds,
+                            memoryProposals: _memoryProposals,
+                            approvals: _approvals,
+                            showJumpToLatest: _showJumpToLatest,
+                            approvalForProposal: _approvalForProposal,
+                            isRenderedAsMemoryProposal:
+                                _isRenderedAsMemoryProposal,
+                            onJumpToLatest:
+                                () =>
+                                    _scrollToBottom(force: true, animate: true),
+                            onShowActivity: _showActivitySheet,
+                            onOpenResource:
+                                (uri) => unawaited(_openResource(uri)),
+                            onResolve:
+                                (approval, decision) =>
+                                    unawaited(_resolve(approval, decision)),
+                            onShowApproval: _showApprovalSheet,
                           ),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Semantics(
-                            button: true,
-                            enabled: canSubmit,
-                            label: copy.sendMessage,
-                            child: Tooltip(
-                              message:
-                                  _sessionEnded
-                                      ? copy.sessionEnded
-                                      : canSubmit
-                                      ? copy.send
-                                      : copy.typeMessage,
-                              child: SizedBox.square(
-                                dimension: 48,
-                                child: IconButton.filled(
-                                  onPressed: canSubmit ? _send : null,
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: accent,
-                                    foregroundColor: _textOn(accent),
-                                    disabledBackgroundColor: tok.border
-                                        .withValues(alpha: 0.55),
-                                    disabledForegroundColor: tok.muted,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                  ),
-                                  icon:
-                                      _isSending
-                                          ? SizedBox.square(
-                                            dimension: 20,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2.2,
-                                              color: _textOn(accent),
-                                            ),
-                                          )
-                                          : const Icon(Icons.send, size: 21),
-                                ),
-                              ),
-                            ),
-                          ),
+                        _MikuComposer(
+                          tok: tok,
+                          copy: _copy,
+                          accent: accent,
+                          controller: _inputCtrl,
+                          sessionEnded: _sessionEnded,
+                          isSending: _isSending,
+                          canSend: _canSend,
+                          sendError: _sendError,
+                          onChanged: _handleComposerChanged,
+                          onSend: () => unawaited(_send()),
                         ),
                       ],
                     ),
-                  ),
-                ],
-              ),
-            ),
           ),
-        );
-      },
+        ),
+      ),
     );
+  }
+
+  void _handleComposerChanged(String value) {
+    final text = value.trim();
+    final shouldSend = !_sessionEnded && text.isNotEmpty;
+    final changedPending =
+        _pendingMessageText != null && _pendingMessageText != text;
+    if (shouldSend == _canSend && !changedPending && _sendError.isEmpty) {
+      return;
+    }
+    setState(() {
+      _canSend = shouldSend;
+      if (changedPending) {
+        final optimisticRound = _pendingOptimisticRound;
+        if (optimisticRound != null &&
+            optimisticRound.assistantText.isEmpty &&
+            optimisticRound.activities.isEmpty &&
+            !optimisticRound.hasReasoning) {
+          _rounds.remove(optimisticRound);
+        }
+        _pendingMessageId = null;
+        _pendingMessageText = null;
+        _pendingOptimisticRound = null;
+      }
+      _sendError = '';
+    });
   }
 }

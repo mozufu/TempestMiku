@@ -144,6 +144,7 @@ struct CachedSession {
     profile: SandboxProfile,
     last_used: Instant,
     event_proxy: Arc<SwappableHostEventSink>,
+    runtime_reset_pending: bool,
 }
 
 #[derive(Default)]
@@ -358,6 +359,7 @@ async fn run_cached_turn(
                 profile,
                 last_used: Instant::now(),
                 event_proxy,
+                runtime_reset_pending: !request.turn.prior_messages.is_empty(),
             },
         );
     }
@@ -371,8 +373,9 @@ async fn run_cached_turn(
     apply_turn_limits(&mut cfg, request.turn.limits);
     let agent = Agent::new(Arc::clone(llm), Arc::clone(&cached.sandbox), cfg);
     let result = async {
-        if replace_session && !request.turn.prior_messages.is_empty() {
-            request.sink.try_on_runtime_reset()?;
+        if cached.runtime_reset_pending {
+            request.sink.try_on_runtime_reset_confirmed().await?;
+            cached.runtime_reset_pending = false;
         }
         agent
             .run_with_session_and_controls(
@@ -482,6 +485,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::{InMemoryStore, NewSession, PersistingEventSink, Store};
 
     struct AlwaysApprove;
 
@@ -1126,16 +1130,110 @@ result |> display {kind: "json"}"#,
     }
 
     #[tokio::test]
-    async fn runtime_reset_backpressure_fails_before_the_model_turn() {
+    async fn runtime_reset_backpressure_retries_before_the_model_turn() {
         let harness = Harness::new();
         let runner = harness.runner(options(1, Duration::from_secs(60)), Duration::ZERO);
         let mut resumed_turn = chat_turn(Uuid::from_u128(13));
         resumed_turn.prior_messages = vec![Message::user("persisted question")];
         let sink: Arc<dyn EventSink + Send + Sync> = Arc::new(FailingResetSink);
 
-        let error = runner.run_turn(resumed_turn, sink).await.unwrap_err();
+        let error = runner
+            .run_turn(resumed_turn.clone(), sink)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("runtime_reset backpressure"));
         assert!(harness.llm.requests.lock().unwrap().is_empty());
         assert!(harness.evaluations.lock().unwrap().is_empty());
+
+        let reset_sink = Arc::new(ResetSink::default());
+        let sink: Arc<dyn EventSink + Send + Sync> = reset_sink.clone();
+        assert_eq!(
+            runner.run_turn(resumed_turn.clone(), sink).await.unwrap(),
+            "done"
+        );
+        assert_eq!(reset_sink.0.load(Ordering::SeqCst), 1);
+
+        let sink: Arc<dyn EventSink + Send + Sync> = reset_sink.clone();
+        assert_eq!(runner.run_turn(resumed_turn, sink).await.unwrap(), "done");
+        assert_eq!(
+            reset_sink.0.load(Ordering::SeqCst),
+            1,
+            "an acknowledged runtime reset must not be emitted again"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_reset_persistence_failure_retries_before_the_model_turn() {
+        let harness = Harness::new();
+        let runner = harness.runner(options(1, Duration::from_secs(60)), Duration::ZERO);
+        let store = Arc::new(InMemoryStore::default());
+        let session = store
+            .create_session(NewSession {
+                mode: ModeId::from("general"),
+                persona_status: tm_modes::AssetStatus::Degraded {
+                    warning: "test assets".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+        let (sender, _receiver) = tokio::sync::broadcast::channel(32);
+        let mut resumed_turn = chat_turn(session.id);
+        resumed_turn.prior_messages = vec![Message::user("persisted question")];
+
+        let failing_sink = Arc::new(PersistingEventSink::new(
+            Uuid::nil(),
+            Arc::clone(&store),
+            sender.clone(),
+        ));
+        let sink: Arc<dyn EventSink + Send + Sync> = failing_sink.clone();
+        let error = runner
+            .run_turn(resumed_turn.clone(), sink)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("session"), "{error}");
+        assert!(harness.llm.requests.lock().unwrap().is_empty());
+        assert!(harness.evaluations.lock().unwrap().is_empty());
+        assert!(failing_sink.flush().await.is_err());
+
+        let persisted_sink = Arc::new(PersistingEventSink::new(
+            session.id,
+            Arc::clone(&store),
+            sender.clone(),
+        ));
+        let sink: Arc<dyn EventSink + Send + Sync> = persisted_sink.clone();
+        assert_eq!(
+            runner.run_turn(resumed_turn.clone(), sink).await.unwrap(),
+            "done"
+        );
+        persisted_sink.flush().await.unwrap();
+
+        let later_sink = Arc::new(PersistingEventSink::new(
+            session.id,
+            Arc::clone(&store),
+            sender,
+        ));
+        let sink: Arc<dyn EventSink + Send + Sync> = later_sink.clone();
+        assert_eq!(runner.run_turn(resumed_turn, sink).await.unwrap(), "done");
+        later_sink.flush().await.unwrap();
+
+        let event_types = store
+            .events_after(session.id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            event_types.first().map(String::as_str),
+            Some("runtime_reset")
+        );
+        assert_eq!(
+            event_types
+                .iter()
+                .filter(|event_type| event_type.as_str() == "runtime_reset")
+                .count(),
+            1,
+            "an acknowledged runtime reset must not be persisted again"
+        );
     }
 }

@@ -1,3 +1,5 @@
+use std::{future::Future, pin::Pin};
+
 /// Observer for streaming loop events. The loop calls these as things happen, so a UI can
 /// render assistant tokens the instant they arrive (day-1 streaming, design §5.5).
 ///
@@ -45,6 +47,16 @@ pub trait EventSink: Send + Sync {
     fn try_on_runtime_reset(&self) -> crate::Result<()> {
         self.on_runtime_reset();
         Ok(())
+    }
+    /// Emits a runtime reset and completes only once the sink can confirm delivery.
+    ///
+    /// In-memory and synchronous sinks inherit the callback-based default. Durable sinks should
+    /// override this method and wait until persistence succeeds so callers can safely suppress
+    /// duplicate reset notifications on retries.
+    fn try_on_runtime_reset_confirmed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + '_>> {
+        Box::pin(async { self.try_on_runtime_reset() })
     }
     /// Backend-specific structured runtime event. Payloads must already be bounded and redacted.
     fn on_runtime_event(&self, _event_type: &str, _payload: &serde_json::Value) {}

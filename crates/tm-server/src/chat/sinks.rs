@@ -1,12 +1,17 @@
 use std::{
+    future::Future,
     marker::PhantomData,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
 use serde_json::json;
 use tm_core::{Error as CoreError, EventSink};
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+};
 use uuid::Uuid;
 
 use crate::{CodingEventSink, Result, ServerError, SessionEvent, Store, StoreEvent};
@@ -22,6 +27,7 @@ pub struct PersistingEventSink<S> {
 struct PendingEvent {
     event_type: String,
     payload: serde_json::Value,
+    confirmation: Option<oneshot::Sender<std::result::Result<(), String>>>,
 }
 
 const EVENT_WRITER_CAPACITY: usize = 4_096;
@@ -65,6 +71,15 @@ where
     }
 
     fn push_event(&self, event_type: &str, payload: serde_json::Value) -> tm_core::Result<()> {
+        self.push_event_with_confirmation(event_type, payload, None)
+    }
+
+    fn push_event_with_confirmation(
+        &self,
+        event_type: &str,
+        payload: serde_json::Value,
+        confirmation: Option<oneshot::Sender<std::result::Result<(), String>>>,
+    ) -> tm_core::Result<()> {
         if let Some(error) = self
             .failure
             .lock()
@@ -83,6 +98,7 @@ where
             .try_send(PendingEvent {
                 event_type: event_type.to_string(),
                 payload,
+                confirmation,
             })
             .map_err(|error| match error {
                 mpsc::error::TrySendError::Full(_) => {
@@ -174,6 +190,31 @@ where
             "runtime_reset",
             json!({ "reason": "sandbox_runtime_reopened" }),
         )
+    }
+
+    fn try_on_runtime_reset_confirmed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = tm_core::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let (confirmation, response) = oneshot::channel();
+            self.push_event_with_confirmation(
+                "runtime_reset",
+                json!({ "reason": "sandbox_runtime_reopened" }),
+                Some(confirmation),
+            )?;
+            response
+                .await
+                .map_err(|_| {
+                    CoreError::EventSink(
+                        self.failure
+                            .lock()
+                            .expect("event writer failure lock poisoned")
+                            .clone()
+                            .unwrap_or_else(|| "event writer stopped".to_string()),
+                    )
+                })?
+                .map_err(CoreError::EventSink)
+        })
     }
 
     fn on_runtime_event(&self, event_type: &str, payload: &serde_json::Value) {
@@ -270,10 +311,28 @@ async fn write_events<S: Store>(
                 }
             }
         }
-        let event = store
-            .append_event_for_turn(session_id, &pending.event_type, pending.payload, turn_id)
-            .await?;
-        let _ = sender.send(event);
+        let PendingEvent {
+            event_type,
+            payload,
+            confirmation,
+        } = pending;
+        match store
+            .append_event_for_turn(session_id, &event_type, payload, turn_id)
+            .await
+        {
+            Ok(event) => {
+                let _ = sender.send(event);
+                if let Some(confirmation) = confirmation {
+                    let _ = confirmation.send(Ok(()));
+                }
+            }
+            Err(error) => {
+                if let Some(confirmation) = confirmation {
+                    let _ = confirmation.send(Err(error.to_string()));
+                }
+                return Err(error);
+            }
+        }
     }
     Ok(())
 }

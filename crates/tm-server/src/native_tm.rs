@@ -1,5 +1,7 @@
 use std::{
     collections::HashMap,
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex, mpsc as std_mpsc},
     time::{Duration, Instant},
 };
@@ -104,6 +106,7 @@ struct CachedNativeSession {
     host_event_proxy: Arc<SwappableHostEventSink>,
     profile: NativeSessionProfile,
     last_used: Instant,
+    runtime_reset_pending: bool,
 }
 
 impl NativeTmBackend {
@@ -275,6 +278,7 @@ async fn run_cached_native_turn(
                 host_event_proxy,
                 profile,
                 last_used: Instant::now(),
+                runtime_reset_pending: !request.turn.prior_messages.is_empty(),
             },
         );
     }
@@ -292,8 +296,9 @@ async fn run_cached_native_turn(
     cached.host_event_proxy.bind(host_event_sink);
     let forwarder = tokio::spawn(forward_events(event_rx, Arc::clone(&request.sink)));
     let run_result = async {
-        if reopened && !request.turn.prior_messages.is_empty() {
-            event_sink.try_on_runtime_reset()?;
+        if cached.runtime_reset_pending {
+            event_sink.try_on_runtime_reset_confirmed().await?;
+            cached.runtime_reset_pending = false;
         }
         agent
             .run_with_session_and_controls(
@@ -506,7 +511,9 @@ enum NativeEvent {
     ToolCall(String),
     CellStart(String),
     CellResult(String),
-    RuntimeReset,
+    RuntimeReset {
+        persisted: Option<tokio::sync::oneshot::Sender<std::result::Result<(), String>>>,
+    },
     Runtime {
         event_type: String,
         payload: Value,
@@ -581,7 +588,24 @@ impl EventSink for ForwardingEventSink {
     }
 
     fn try_on_runtime_reset(&self) -> tm_core::Result<()> {
-        self.send(NativeEvent::RuntimeReset)
+        self.send(NativeEvent::RuntimeReset { persisted: None })
+    }
+
+    fn try_on_runtime_reset_confirmed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = tm_core::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let (persisted, response) = tokio::sync::oneshot::channel();
+            self.send(NativeEvent::RuntimeReset {
+                persisted: Some(persisted),
+            })?;
+            response
+                .await
+                .map_err(|_| {
+                    tm_core::Error::EventSink("native tm event forwarder stopped".to_string())
+                })?
+                .map_err(tm_core::Error::EventSink)
+        })
     }
 
     fn on_final(&self, text: &str) {
@@ -625,10 +649,28 @@ async fn forward_events(
             NativeEvent::ToolCall(name) => ("tool_call", json!({ "name": name })),
             NativeEvent::CellStart(code) => ("cell_start", json!({ "code": code })),
             NativeEvent::CellResult(shaped) => ("cell_result", json!({ "shaped": shaped })),
-            NativeEvent::RuntimeReset => (
-                "runtime_reset",
-                json!({ "reason": "sandbox_runtime_reopened" }),
-            ),
+            NativeEvent::RuntimeReset { persisted } => {
+                match sink
+                    .emit(
+                        "runtime_reset",
+                        json!({ "reason": "sandbox_runtime_reopened" }),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        if let Some(persisted) = persisted {
+                            let _ = persisted.send(Ok(()));
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(persisted) = persisted {
+                            let _ = persisted.send(Err(error.to_string()));
+                        }
+                        return Err(error);
+                    }
+                }
+                continue;
+            }
             NativeEvent::Runtime {
                 event_type,
                 payload,
@@ -659,7 +701,7 @@ async fn forward_events(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
     use futures::stream::{self, BoxStream};
     use parking_lot::Mutex as ParkingMutex;
@@ -777,12 +819,21 @@ mod tests {
         events: ParkingMutex<Vec<(String, Value)>>,
         next_seq: AtomicI64,
         delay: Duration,
+        runtime_reset_failures: AtomicUsize,
+        runtime_reset_attempts: AtomicUsize,
     }
 
     impl RecordingCodingSink {
         fn slow(delay: Duration) -> Self {
             Self {
                 delay,
+                ..Self::default()
+            }
+        }
+
+        fn fail_runtime_reset_once() -> Self {
+            Self {
+                runtime_reset_failures: AtomicUsize::new(1),
                 ..Self::default()
             }
         }
@@ -799,6 +850,20 @@ mod tests {
     #[async_trait]
     impl CodingEventSink for RecordingCodingSink {
         async fn emit(&self, event_type: &str, payload_json: Value) -> Result<crate::SessionEvent> {
+            if event_type == "runtime_reset" {
+                self.runtime_reset_attempts.fetch_add(1, Ordering::SeqCst);
+                let should_fail = self
+                    .runtime_reset_failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_ok();
+                if should_fail {
+                    return Err(ServerError::Store(
+                        "runtime_reset persistence failed".to_string(),
+                    ));
+                }
+            }
             if !self.delay.is_zero() {
                 tokio::time::sleep(self.delay).await;
             }
@@ -1004,6 +1069,79 @@ mod tests {
         let tool_results = llm.tool_results();
         assert!(tool_results[0].contains("result:\n1"));
         assert!(tool_results[1].contains("result:\n1"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn native_runtime_reset_persistence_failure_retries_before_model_turn() {
+        let temp = tempfile::tempdir().unwrap();
+        let llm = Arc::new(StatefulLlm::new());
+        let llm_client: Arc<dyn LlmClient> = llm.clone();
+        let backend = backend(
+            llm_client,
+            temp.path(),
+            options(Duration::from_secs(60), 64),
+        );
+        let session_id = Uuid::from_u128(14);
+        run_turn(
+            &backend,
+            coding_turn(session_id),
+            Arc::new(RecordingCodingSink::default()),
+        )
+        .await
+        .unwrap();
+        let requests_before_reset = llm.requests.lock().len();
+
+        let mut resumed = coding_turn(session_id);
+        resumed.scope = "project:retry-reset".to_string();
+        resumed.prior_messages = vec![
+            Message::user("earlier native question"),
+            Message::assistant("earlier native answer"),
+        ];
+        let sink = Arc::new(RecordingCodingSink::fail_runtime_reset_once());
+
+        let error = run_turn(&backend, resumed.clone(), Arc::clone(&sink))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("runtime_reset persistence failed"),
+            "{error}"
+        );
+        assert_eq!(llm.requests.lock().len(), requests_before_reset);
+
+        run_turn(&backend, resumed.clone(), Arc::clone(&sink))
+            .await
+            .unwrap();
+        let mut incremented = resumed;
+        incremented.user_prompt = "increment native state".to_string();
+        run_turn(&backend, incremented, Arc::clone(&sink))
+            .await
+            .unwrap();
+
+        assert_eq!(sink.runtime_reset_attempts.load(Ordering::SeqCst), 2);
+        let event_types = sink.event_types();
+        let reset = event_types
+            .iter()
+            .position(|event| event == "runtime_reset")
+            .unwrap();
+        let first_cell = event_types
+            .iter()
+            .position(|event| event == "cell_start")
+            .unwrap();
+        assert!(
+            reset < first_cell,
+            "runtime reset must persist before cells"
+        );
+        assert_eq!(
+            event_types
+                .into_iter()
+                .filter(|event| event == "runtime_reset")
+                .count(),
+            1,
+            "an acknowledged runtime reset must not be persisted again"
+        );
     }
 
     #[tokio::test]

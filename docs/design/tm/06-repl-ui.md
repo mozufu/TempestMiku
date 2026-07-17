@@ -71,10 +71,12 @@ Every trace node carries at least:
 turnId, cellId, nodeId, parentNodeId?, sequence, type, status, createdAt
 ```
 
-Capability nodes additionally carry the canonical capability name, bounded/redacted argument and
-result previews, registry presentation metadata, duration, and resource/artifact references for
-content too large or sensitive to inline. Raw secrets and unbounded source/result bodies never enter
-events.
+Capability nodes additionally carry the canonical capability name, content-blind argument/result
+markers, registry presentation metadata, duration, and resource/artifact references. Durable tm
+events never persist model-authored source, result, display, or error content: this applies to every
+cell, including apparently pure cells, because authority-derived values can flow through persistent
+bindings. Structural ids, status, counts, capability names, and approved resource/artifact
+references remain observable.
 
 ## 6.3 Lifecycle events
 
@@ -82,7 +84,7 @@ The minimum event vocabulary extends the existing core events:
 
 | Event | Meaning |
 |---|---|
-| `cell_start` | A checked cell began evaluation; includes bounded source or a source artifact reference. |
+| `cell_start` | A checked cell began evaluation; source content is always redacted. |
 | `scope_start` | A structured scope such as `par` began and owns child nodes. |
 | `scope_progress` | A bounded aggregate such as completed/total children changed. |
 | `effect_start` | An `@capability` perform reached its host handler. |
@@ -91,9 +93,9 @@ The minimum event vocabulary extends the existing core events:
 | `effect_resumed` | A suspended continuation resumed with an approved/control result. |
 | `effect_result` | The effect completed, failed, timed out, or was cancelled. |
 | `scope_result` | A structured scope completed or cancelled its remaining children. |
-| `display` | The cell emitted a declarative presentation item. |
-| `binding_committed` | Successful top-level bindings became available to later cells. |
-| `cell_result` | The cell completed with its shaped final result or structured error. |
+| `display` | The cell emitted a declarative presentation item; durable value/spec content is redacted. |
+| `binding_committed` | Successful top-level bindings became available; only `bindingCount` plus `namesRedacted: true` persist. |
+| `cell_result` | The cell completed; status persists while result/error preview content is redacted. |
 
 Existing `approval` and `approval_resolved` events remain the durable approval control plane. They
 link to `cellId` and `nodeId`; `effect_suspended` / `effect_resumed` describe interpreter state, not

@@ -79,6 +79,7 @@ async fn permission_request_round_trips_selected_and_cancelled() {
     let active = Arc::new(tokio::sync::Mutex::new(Some(ActiveOmpTurn {
         turn: CodingTurn {
             session_id,
+            durable_turn_id: None,
             user_prompt: "prompt".to_string(),
             system_prompt: "system prompt".to_string(),
             mode: tm_modes::ModeId::from("handoff"),

@@ -255,15 +255,30 @@ where
             }
         };
     match result {
-        Ok(response) => {
-            state
+        Ok(executed) => {
+            let completed = state
                 .store
-                .complete_turn(turn.id, worker_id, &response, Utc::now())
-                .await?;
+                .complete_turn(turn.id, worker_id, &executed.response, Utc::now())
+                .await;
+            if let Err(error) = completed {
+                abort_turn_runtime(state, turn.session_id, turn.id, Some(executed.runtime)).await?;
+                return Err(error);
+            }
+            if let Err(error) =
+                promote_turn_runtime(state, turn.session_id, turn.id, executed.runtime).await
+            {
+                // The durable response is already committed. Fail closed by evicting the live
+                // interpreter so the next turn reconstructs from durable history.
+                abort_turn_runtime(state, turn.session_id, turn.id, Some(executed.runtime)).await?;
+                return Err(error);
+            }
             Ok(())
         }
         Err(error) => {
             let message = tm_memory::redact_dream_text(&error.to_string()).text;
+            // Await shard cleanup before this turn is failed/reclaimed. This prevents a dropped
+            // API future from leaving its std-thread interpreter mutating in the background.
+            abort_turn_runtime(state, turn.session_id, turn.id, None).await?;
             state
                 .store
                 .fail_turn(turn.id, worker_id, &message, Utc::now())
@@ -290,7 +305,7 @@ async fn execute_turn_with_heartbeat<S, M, C>(
     worker_id: Uuid,
     turn: &crate::SessionTurnRecord,
     heartbeat_interval: Duration,
-) -> Result<Result<String>>
+) -> Result<Result<ExecutedTurn>>
 where
     S: Store,
     M: MemoryProvider,
@@ -307,11 +322,99 @@ where
         tokio::select! {
             result = &mut execution => return Ok(result),
             _ = heartbeat.tick() => {
-                state
+                let heartbeat_result = state
                     .store
                     .heartbeat_turn(turn.id, worker_id, Utc::now())
-                    .await?;
+                    .await;
+                if let Err(error) = heartbeat_result {
+                    cancel_turn_runtime(state, turn.session_id, turn.id);
+                    // The concrete tm runners cooperatively terminate their cell and cross the
+                    // terminal-event boundary. Keep polling the body until its shard responds,
+                    // then synchronously evict any quarantined state before returning ownership.
+                    let _ = execution.as_mut().await;
+                    abort_turn_runtime(state, turn.session_id, turn.id, None).await?;
+                    return Err(error);
+                }
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TurnRuntime {
+    Chat,
+    Coding,
+}
+
+#[derive(Debug)]
+struct ExecutedTurn {
+    response: String,
+    runtime: TurnRuntime,
+}
+
+fn cancel_turn_runtime<S, M, C>(state: &AppState<S, M, C>, session_id: Uuid, turn_id: Uuid)
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.chat.cancel_turn(session_id, turn_id);
+    if let Some(backend) = &state.coding_backend {
+        backend.cancel_turn(session_id, turn_id);
+    }
+}
+
+async fn promote_turn_runtime<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    turn_id: Uuid,
+    runtime: TurnRuntime,
+) -> Result<()>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    match runtime {
+        TurnRuntime::Chat => state.chat.promote_session(session_id, turn_id).await,
+        TurnRuntime::Coding => {
+            if let Some(backend) = &state.coding_backend {
+                backend.promote_session(session_id, turn_id).await
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+async fn abort_turn_runtime<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    turn_id: Uuid,
+    runtime: Option<TurnRuntime>,
+) -> Result<()>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    match runtime {
+        Some(TurnRuntime::Chat) => state.chat.abort_session(session_id, turn_id).await,
+        Some(TurnRuntime::Coding) => {
+            if let Some(backend) = &state.coding_backend {
+                backend.abort_session(session_id, turn_id).await
+            } else {
+                Ok(())
+            }
+        }
+        None => {
+            let chat = state.chat.abort_session(session_id, turn_id).await;
+            let coding = if let Some(backend) = &state.coding_backend {
+                backend.abort_session(session_id, turn_id).await
+            } else {
+                Ok(())
+            };
+            chat.and(coding)
         }
     }
 }
@@ -337,7 +440,7 @@ where
 async fn execute_turn_body<S, M, C>(
     state: &AppState<S, M, C>,
     durable_turn: &crate::SessionTurnRecord,
-) -> Result<String>
+) -> Result<ExecutedTurn>
 where
     S: Store,
     M: MemoryProvider,
@@ -427,7 +530,7 @@ where
     // current sandbox profile includes modes.suggest.
     let chat_host_functions = vec![mode_suggest_host];
 
-    let response = if turn_profile.has_capability("backend.coding") {
+    let (response, runtime) = if turn_profile.has_capability("backend.coding") {
         if let Some(backend) = &state.coding_backend {
             let sink = Arc::new(StoreCodingEventSink::for_turn(
                 session_id,
@@ -435,10 +538,11 @@ where
                 Arc::clone(&state.store),
                 state.sender(session_id),
             ));
-            backend
+            let response = backend
                 .run_turn(
                     CodingTurn {
                         session_id,
+                        durable_turn_id: Some(durable_turn.id),
                         user_prompt,
                         system_prompt: persona_prompt.system_prompt.clone(),
                         mode: session.mode_state.mode.clone(),
@@ -449,7 +553,8 @@ where
                     sink,
                 )
                 .await?
-                .final_text
+                .final_text;
+            (response, TurnRuntime::Coding)
         } else {
             let sink = Arc::new(PersistingEventSink::for_turn(
                 session_id,
@@ -462,6 +567,7 @@ where
                 .run_turn(
                     ChatTurn {
                         session_id,
+                        durable_turn_id: Some(durable_turn.id),
                         user_prompt,
                         system_prompt: persona_prompt.system_prompt.clone(),
                         mode: session.mode_state.mode.clone(),
@@ -476,11 +582,12 @@ where
                 )
                 .await;
             let flushed = sink.flush().await;
-            match (response, flushed) {
+            let response = match (response, flushed) {
                 (Ok(response), Ok(())) => response,
                 (Err(error), _) => return Err(error),
                 (Ok(_), Err(error)) => return Err(error),
-            }
+            };
+            (response, TurnRuntime::Chat)
         }
     } else {
         let sink = Arc::new(PersistingEventSink::for_turn(
@@ -494,6 +601,7 @@ where
             .run_turn(
                 ChatTurn {
                     session_id,
+                    durable_turn_id: Some(durable_turn.id),
                     user_prompt,
                     system_prompt: persona_prompt.system_prompt,
                     mode: session.mode_state.mode.clone(),
@@ -508,11 +616,12 @@ where
             )
             .await;
         let flushed = sink.flush().await;
-        match (response, flushed) {
+        let response = match (response, flushed) {
             (Ok(response), Ok(())) => response,
             (Err(error), _) => return Err(error),
             (Ok(_), Err(error)) => return Err(error),
-        }
+        };
+        (response, TurnRuntime::Chat)
     };
 
     persist_drive_recall_chunks(state, &scope).await?;
@@ -549,7 +658,7 @@ where
         durable_turn.content.clone(),
     )
     .await?;
-    Ok(response)
+    Ok(ExecutedTurn { response, runtime })
 }
 
 fn persisted_memory_context(
@@ -838,8 +947,8 @@ fn stable_drive_recall_id(scope: &str, content_hash: &str) -> Uuid {
 #[cfg(test)]
 mod dispatcher_tests {
     use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use async_trait::async_trait;
@@ -861,6 +970,50 @@ mod dispatcher_tests {
     struct SlowRunner;
 
     struct ReplayMustNotQueryMemory;
+
+    #[derive(Clone, Copy)]
+    enum OwnershipLossPoint {
+        BeforeComplete,
+        DuringHeartbeat,
+    }
+
+    struct LinearizedRunner {
+        store: Arc<InMemoryStore>,
+        loss: OwnershipLossPoint,
+        losses_remaining: AtomicUsize,
+        committed: AtomicUsize,
+        pending: Mutex<Option<(Uuid, Uuid, usize)>>,
+        observed: Mutex<Vec<usize>>,
+        cancelled: AtomicBool,
+        cancellation: tokio::sync::Notify,
+        promotions: AtomicUsize,
+        aborts: AtomicUsize,
+    }
+
+    impl LinearizedRunner {
+        fn new(store: Arc<InMemoryStore>, loss: OwnershipLossPoint) -> Self {
+            Self {
+                store,
+                loss,
+                losses_remaining: AtomicUsize::new(1),
+                committed: AtomicUsize::new(0),
+                pending: Mutex::new(None),
+                observed: Mutex::new(Vec::new()),
+                cancelled: AtomicBool::new(false),
+                cancellation: tokio::sync::Notify::new(),
+                promotions: AtomicUsize::new(0),
+                aborts: AtomicUsize::new(0),
+            }
+        }
+
+        fn take_loss(&self) -> bool {
+            self.losses_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+        }
+    }
 
     #[async_trait]
     impl MemoryProvider for ReplayMustNotQueryMemory {
@@ -898,6 +1051,74 @@ mod dispatcher_tests {
         ) -> Result<String> {
             tokio::time::sleep(Duration::from_millis(250)).await;
             Ok("slow turn done".to_string())
+        }
+    }
+
+    #[async_trait]
+    impl ChatRunner for LinearizedRunner {
+        async fn run_turn(
+            &self,
+            turn: ChatTurn,
+            _sink: Arc<dyn EventSink + Send + Sync>,
+        ) -> Result<String> {
+            let turn_id = turn
+                .durable_turn_id
+                .expect("linearization fixture only runs durable turns");
+            self.cancelled.store(false, Ordering::SeqCst);
+            let next = self.committed.load(Ordering::SeqCst) + 1;
+            self.observed.lock().unwrap().push(next);
+            *self.pending.lock().unwrap() = Some((turn.session_id, turn_id, next));
+
+            if self.take_loss() {
+                self.store
+                    .fail_stale_running_turns(
+                        Utc::now() + chrono::Duration::seconds(1),
+                        Utc::now(),
+                        "fixture ownership loss",
+                    )
+                    .await?;
+                if matches!(self.loss, OwnershipLossPoint::DuringHeartbeat) {
+                    while !self.cancelled.load(Ordering::SeqCst) {
+                        self.cancellation.notified().await;
+                    }
+                    return Err(ServerError::Backend("fixture cancelled".to_string()));
+                }
+            }
+
+            Ok(format!("state {next}"))
+        }
+
+        async fn promote_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+            let pending = self.pending.lock().unwrap().take();
+            if let Some((pending_session, pending_turn, value)) = pending {
+                if pending_session != session_id || pending_turn != turn_id {
+                    return Err(ServerError::Conflict(
+                        "fixture promotion identity mismatch".to_string(),
+                    ));
+                }
+                self.committed.store(value, Ordering::SeqCst);
+                self.promotions.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(())
+        }
+
+        async fn abort_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+            let mut pending = self.pending.lock().unwrap();
+            if pending
+                .as_ref()
+                .is_some_and(|(pending_session, pending_turn, _)| {
+                    *pending_session == session_id && *pending_turn == turn_id
+                })
+            {
+                pending.take();
+            }
+            self.aborts.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn cancel_turn(&self, _session_id: Uuid, _turn_id: Uuid) {
+            self.cancelled.store(true, Ordering::SeqCst);
+            self.cancellation.notify_one();
         }
     }
 
@@ -956,7 +1177,11 @@ mod dispatcher_tests {
         .with_auto_turn_dispatcher(false);
 
         let output = execute_turn_body(&state, &turn).await.unwrap();
-        assert!(output.contains("persisted recall survives the retry boundary"));
+        assert!(
+            output
+                .response
+                .contains("persisted recall survives the retry boundary")
+        );
         assert_eq!(
             store
                 .events_by_type(session.id, "memory_recall", 10)
@@ -1041,6 +1266,135 @@ mod dispatcher_tests {
         assert!(
             matches!(error, ServerError::NotFound(message) if message.contains("project:tempestmiku"))
         );
+    }
+
+    #[tokio::test]
+    async fn complete_turn_failure_aborts_runtime_before_same_session_retry() {
+        let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject("owner").await.unwrap();
+        let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+        let runner = Arc::new(LinearizedRunner::new(
+            Arc::clone(&store),
+            OwnershipLossPoint::BeforeComplete,
+        ));
+        let persona = tm_modes::ModesConfig::default();
+        let assets = persona.load_assets();
+        let session = store
+            .create_session(NewSession {
+                mode: assets.modes.default_mode(),
+                persona_status: assets.status.clone(),
+            })
+            .await
+            .unwrap();
+        let state = AppState::new(
+            Arc::clone(&store),
+            memory,
+            Arc::clone(&runner),
+            persona,
+            AuthConfig::NoAuth,
+        )
+        .with_auto_turn_dispatcher(false);
+        let worker_id = Uuid::new_v4();
+
+        store
+            .enqueue_turn(session.id, "complete-fails", "first")
+            .await
+            .unwrap();
+        let first = store
+            .claim_next_turn(worker_id, Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+        let error = execute_claimed_turn(&state, worker_id, first, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("is not owned"), "{error}");
+        assert_eq!(runner.committed.load(Ordering::SeqCst), 0);
+        assert_eq!(runner.aborts.load(Ordering::SeqCst), 1);
+
+        store
+            .enqueue_turn(session.id, "complete-retry", "second")
+            .await
+            .unwrap();
+        let second = store
+            .claim_next_turn(worker_id, Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+        execute_claimed_turn(&state, worker_id, second, Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(*runner.observed.lock().unwrap(), vec![1, 1]);
+        assert_eq!(runner.committed.load(Ordering::SeqCst), 1);
+        assert_eq!(runner.promotions.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_ownership_loss_cancels_and_evicts_before_same_session_retry() {
+        let store = Arc::new(InMemoryStore::default());
+        store.configure_owner_subject("owner").await.unwrap();
+        let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+        let runner = Arc::new(LinearizedRunner::new(
+            Arc::clone(&store),
+            OwnershipLossPoint::DuringHeartbeat,
+        ));
+        let persona = tm_modes::ModesConfig::default();
+        let assets = persona.load_assets();
+        let session = store
+            .create_session(NewSession {
+                mode: assets.modes.default_mode(),
+                persona_status: assets.status.clone(),
+            })
+            .await
+            .unwrap();
+        let state = AppState::new(
+            Arc::clone(&store),
+            memory,
+            Arc::clone(&runner),
+            persona,
+            AuthConfig::NoAuth,
+        )
+        .with_auto_turn_dispatcher(false);
+        let worker_id = Uuid::new_v4();
+
+        store
+            .enqueue_turn(session.id, "heartbeat-lost", "first")
+            .await
+            .unwrap();
+        let first = store
+            .claim_next_turn(worker_id, Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            execute_claimed_turn(&state, worker_id, first, Duration::from_millis(5)),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(error.to_string().contains("is not owned"), "{error}");
+        assert!(runner.cancelled.load(Ordering::SeqCst));
+        assert_eq!(runner.committed.load(Ordering::SeqCst), 0);
+        assert_eq!(runner.aborts.load(Ordering::SeqCst), 1);
+
+        store
+            .enqueue_turn(session.id, "heartbeat-retry", "second")
+            .await
+            .unwrap();
+        let second = store
+            .claim_next_turn(worker_id, Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+        execute_claimed_turn(&state, worker_id, second, Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(*runner.observed.lock().unwrap(), vec![1, 1]);
+        assert_eq!(runner.committed.load(Ordering::SeqCst), 1);
+        assert_eq!(runner.promotions.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

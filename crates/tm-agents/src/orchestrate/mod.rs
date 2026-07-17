@@ -1,4 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +13,7 @@ use tm_host::{
 
 use crate::actor::{
     ActorBudget, ActorDigest, ActorId, ActorLifecycleEvent, ActorRecord, ActorSpec, ActorStatus,
+    MAX_ACTOR_MESSAGE_BYTES, MAX_ACTOR_ROLE_BYTES, MAX_ACTOR_TASK_BYTES,
 };
 use crate::executor::{ActorError, failure_reason_for_error, run_to_digest_with_budget};
 use crate::mailbox::{ActorMessage, MailboxRegistry, Receipt};
@@ -36,6 +37,57 @@ pub mod caps {
     pub const AGENTS_WAIT: &str = "agents.wait";
     pub const AGENTS_INBOX: &str = "agents.inbox";
     pub const AGENTS_LIST: &str = "agents.list";
+}
+
+const MAX_ACTORS_PER_CALL: usize = 8;
+const MAX_CONCURRENT_ACTORS: usize = 4;
+const MAX_PIPELINE_STAGES: usize = 4;
+const MAX_ACTOR_BATCH_TEXT_BYTES: usize = 32 * 1024;
+const MAX_PIPELINE_INPUT_BYTES: usize = 32 * 1024;
+const MAX_CHILD_CAPABILITIES: usize = 32;
+const MAX_CHILD_CAPABILITY_BYTES: usize = 128;
+const MAX_CHILD_CAPABILITY_TOTAL_BYTES: usize = 2 * 1024;
+
+struct CancelActorOnDrop(Option<crate::actor::ActorCancelToken>);
+
+impl CancelActorOnDrop {
+    fn new(token: crate::actor::ActorCancelToken) -> Self {
+        Self(Some(token))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for CancelActorOnDrop {
+    fn drop(&mut self) {
+        if let Some(token) = self.0.take() {
+            token.cancel();
+        }
+    }
+}
+
+struct CancelActorsOnDrop(Option<Vec<crate::actor::ActorCancelToken>>);
+
+impl CancelActorsOnDrop {
+    fn new(tokens: Vec<crate::actor::ActorCancelToken>) -> Self {
+        Self(Some(tokens))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for CancelActorsOnDrop {
+    fn drop(&mut self) {
+        if let Some(tokens) = self.0.take() {
+            for token in tokens {
+                token.cancel();
+            }
+        }
+    }
 }
 
 macro_rules! check_grant {
@@ -138,22 +190,33 @@ async fn mark_actor_error(
     else {
         return;
     };
-    spawn_restart_actions(Arc::clone(roster), decision).await;
+    spawn_restart_actions(Arc::clone(roster), session_id.to_string(), decision).await;
 }
 
-async fn spawn_restart_actions(roster: Arc<MailboxRegistry>, decision: SupervisionDecision) {
+async fn spawn_restart_actions(
+    roster: Arc<MailboxRegistry>,
+    session_id: String,
+    decision: SupervisionDecision,
+) {
     for action in decision.actions {
         if let SupervisionAction::Restart { actor_id } = action {
-            spawn_restarted_actor(Arc::clone(&roster), actor_id).await;
+            spawn_restarted_actor(Arc::clone(&roster), session_id.clone(), actor_id).await;
         }
     }
 }
 
-async fn spawn_restarted_actor(roster: Arc<MailboxRegistry>, actor_id: ActorId) {
+async fn spawn_restarted_actor(
+    roster: Arc<MailboxRegistry>,
+    session_id: String,
+    actor_id: ActorId,
+) {
     let Some(executor) = roster.executor() else {
         return;
     };
-    let Some(spec) = roster.prepare_actor_restart(&actor_id).await else {
+    let Some(spec) = roster
+        .prepare_actor_restart_for_session(&session_id, &actor_id)
+        .await
+    else {
         return;
     };
     let session_id = spec.session_id.clone();
@@ -195,15 +258,19 @@ async fn mark_actor_completed(
     actor_id: &ActorId,
     mut digest: ActorDigest,
 ) -> bool {
+    digest.enforce_text_limits();
     digest.summary = tm_memory::redact_dream_text(&digest.summary).text;
     digest.history_content = digest
         .history_content
         .map(|content| tm_memory::redact_dream_text(&content).text);
     if let Some(content) = digest.history_content.clone() {
-        roster.store_transcript(actor_id, content).await;
+        roster
+            .store_transcript_for_session(session_id, actor_id, content)
+            .await;
     }
     let completed = roster
-        .mark_complete_with_digest(
+        .mark_complete_with_digest_for_session(
+            session_id,
             actor_id,
             digest.summary.clone(),
             digest.artifact_uri.clone(),
@@ -271,7 +338,61 @@ fn parse_plain_prose_text(args: &Value, field: &str) -> Result<String> {
         .and_then(Value::as_str)
         .ok_or_else(|| HostError::InvalidArgs(format!("{field} must be a string")))?;
     validate_plain_prose_text(text, field)?;
+    validate_bounded_text(text, field, MAX_ACTOR_MESSAGE_BYTES)?;
     Ok(text.to_string())
+}
+
+fn parse_actor_role(value: &Value, field: &str) -> Result<String> {
+    let role = value
+        .as_str()
+        .ok_or_else(|| HostError::InvalidArgs(format!("{field} must be a string")))?;
+    if role.trim().is_empty() {
+        return Err(HostError::InvalidArgs(format!("{field} must not be empty")));
+    }
+    validate_bounded_text(role, field, MAX_ACTOR_ROLE_BYTES)?;
+    Ok(role.to_string())
+}
+
+fn parse_actor_task(value: &Value, field: &str) -> Result<String> {
+    let task = value
+        .as_str()
+        .ok_or_else(|| HostError::InvalidArgs(format!("{field} must be a string")))?;
+    if task.trim().is_empty() {
+        return Err(HostError::InvalidArgs(format!("{field} must not be empty")));
+    }
+    validate_bounded_text(task, field, MAX_ACTOR_TASK_BYTES)?;
+    Ok(task.to_string())
+}
+
+fn validate_bounded_text(text: &str, field: &str, max_bytes: usize) -> Result<()> {
+    if text.len() > max_bytes {
+        return Err(HostError::InvalidArgs(format!(
+            "{field} must be at most {max_bytes} UTF-8 bytes, got {}",
+            text.len()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_aggregate_text_bytes<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+    field: &str,
+) -> Result<()> {
+    let total = values.into_iter().try_fold(0usize, |total, value| {
+        total
+            .checked_add(value.len())
+            .ok_or_else(|| HostError::InvalidArgs(format!("{field} is too large")))
+    })?;
+    if total > MAX_ACTOR_BATCH_TEXT_BYTES {
+        return Err(HostError::InvalidArgs(format!(
+            "{field} must total at most {MAX_ACTOR_BATCH_TEXT_BYTES} UTF-8 bytes, got {total}"
+        )));
+    }
+    Ok(())
+}
+
+fn registry_error(error: crate::mailbox::RegistryError) -> HostError {
+    HostError::InvalidArgs(error.to_string())
 }
 
 fn validate_plain_prose_text(text: &str, field: &str) -> Result<()> {
@@ -309,11 +430,15 @@ fn parse_timeout_ms(args: &Value, default_ms: u64) -> Result<u64> {
 
 async fn reject_descendant_wait(
     roster: &MailboxRegistry,
+    session_id: &str,
     waiter: &ActorId,
     target: &ActorId,
     field: &str,
 ) -> Result<()> {
-    if roster.would_wait_on_descendant(waiter, target).await {
+    if roster
+        .would_wait_on_descendant_for_session(session_id, waiter, target)
+        .await
+    {
         return Err(HostError::InvalidArgs(format!(
             "{field} would make actor {waiter} wait on itself or its own descendant {target}"
         )));
@@ -323,6 +448,7 @@ async fn reject_descendant_wait(
 
 async fn configure_supervision_from_opts(
     roster: &MailboxRegistry,
+    session_id: &str,
     parent_id: Option<&ActorId>,
     opts: Option<&Value>,
 ) -> Result<Option<ActorId>> {
@@ -358,7 +484,8 @@ async fn configure_supervision_from_opts(
         None => parent_id.cloned().unwrap_or_else(root_actor_id),
     };
     roster
-        .set_supervision_policy(
+        .set_supervision_policy_for_session(
+            session_id,
             supervisor_id.clone(),
             SupervisionPolicy {
                 strategy,
@@ -400,16 +527,82 @@ fn spawn_group_supervisor_id(parent_id: Option<&ActorId>, group: &str) -> Result
         .map_err(|err| HostError::InvalidArgs(format!("invalid supervision group: {err}")))
 }
 
-fn child_agent_grants(ctx: &InvocationCtx) -> CapabilityGrants {
-    let mut grants = CapabilityGrants::default();
-    for name in ctx
-        .grants
-        .names()
-        .filter(|name| name.starts_with("agents."))
-    {
-        grants = grants.allow(name.to_string());
+fn child_agent_grants(ctx: &InvocationCtx, opts: Option<&Value>) -> Result<CapabilityGrants> {
+    let Some(opts) = opts else {
+        return Ok(CapabilityGrants::default());
+    };
+    let opts = opts
+        .as_object()
+        .ok_or_else(|| HostError::InvalidArgs("opts must be an object".to_string()))?;
+    let Some(capabilities) = opts.get("capabilities") else {
+        return Ok(CapabilityGrants::default());
+    };
+    let capabilities = capabilities
+        .as_array()
+        .ok_or_else(|| HostError::InvalidArgs("opts.capabilities must be an array".to_string()))?;
+    if capabilities.len() > MAX_CHILD_CAPABILITIES {
+        return Err(HostError::InvalidArgs(format!(
+            "opts.capabilities must contain at most {MAX_CHILD_CAPABILITIES} entries"
+        )));
     }
-    grants
+
+    let mut total_bytes = 0usize;
+    let mut requested = BTreeSet::new();
+    for (index, capability) in capabilities.iter().enumerate() {
+        let capability = capability.as_str().ok_or_else(|| {
+            HostError::InvalidArgs(format!("opts.capabilities[{index}] must be a string"))
+        })?;
+        validate_child_capability_name(capability, index)?;
+        total_bytes = total_bytes
+            .checked_add(capability.len())
+            .ok_or_else(|| HostError::InvalidArgs("opts.capabilities is too large".to_string()))?;
+        if total_bytes > MAX_CHILD_CAPABILITY_TOTAL_BYTES {
+            return Err(HostError::InvalidArgs(format!(
+                "opts.capabilities must total at most {MAX_CHILD_CAPABILITY_TOTAL_BYTES} UTF-8 bytes"
+            )));
+        }
+        if !is_child_delegable(capability) {
+            return Err(HostError::CapabilityDenied(format!(
+                "child capability {capability} is not delegable"
+            )));
+        }
+        if !ctx.grants.permits(capability) {
+            return Err(HostError::CapabilityDenied(format!(
+                "child capability {capability} is not held by the parent"
+            )));
+        }
+        requested.insert(capability.to_string());
+    }
+    Ok(CapabilityGrants::default().allow_many(requested))
+}
+
+fn validate_child_capability_name(capability: &str, index: usize) -> Result<()> {
+    let valid_chars = capability.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'_' | b'-' | b'*')
+    });
+    let wildcard_count = capability.bytes().filter(|byte| *byte == b'*').count();
+    let valid_wildcard = wildcard_count == 0
+        || (wildcard_count == 1 && capability.ends_with(".*") && capability.len() > 2);
+    if capability.is_empty()
+        || capability.len() > MAX_CHILD_CAPABILITY_BYTES
+        || !capability
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !valid_chars
+        || !valid_wildcard
+    {
+        return Err(HostError::InvalidArgs(format!(
+            "opts.capabilities[{index}] must be a safe capability name of at most {MAX_CHILD_CAPABILITY_BYTES} ASCII bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn is_child_delegable(capability: &str) -> bool {
+    // These names select server control planes rather than tm SDK authority. A child receives an
+    // ordinary tm sandbox and may never select another backend or mutate the parent's mode.
+    !capability.starts_with("modes.") && !capability.starts_with("backend.")
 }
 
 fn message_json(message: ActorMessage) -> Value {
@@ -435,13 +628,14 @@ fn receipt_json(receipt: Receipt) -> Value {
 
 async fn wait_for_actor_message_or_cancel(
     roster: &MailboxRegistry,
+    session_id: &str,
     actor_id: &ActorId,
     from: Option<&ActorId>,
     timeout: Duration,
 ) -> Result<Option<ActorMessage>> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if roster.is_cancelled(actor_id).await {
+        if roster.is_cancelled_for_session(session_id, actor_id).await {
             return Err(HostError::HostCall("actor cancelled".to_string()));
         }
         let now = tokio::time::Instant::now();
@@ -450,7 +644,10 @@ async fn wait_for_actor_message_or_cancel(
         }
         let remaining = deadline.saturating_duration_since(now);
         let slice = remaining.min(Duration::from_millis(50));
-        if let Some(message) = roster.wait_for_message(actor_id, from, slice).await {
+        if let Some(message) = roster
+            .wait_for_message_for_session(session_id, actor_id, from, slice)
+            .await
+        {
             return Ok(Some(message));
         }
     }

@@ -778,6 +778,84 @@ async fn run_with_controls_cancels_a_pending_session_eval() {
     assert!(!sink.events().contains(&"cell_result".to_string()));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn cancellation_aware_session_finishes_its_terminal_protocol_before_agent_returns() {
+    struct CooperativeSandbox {
+        cancellation: Arc<FlagCancellation>,
+        terminalized: Arc<AtomicBool>,
+    }
+    struct CooperativeSession {
+        cancellation: Arc<FlagCancellation>,
+        terminalized: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl Sandbox for CooperativeSandbox {
+        async fn open(&self, _cfg: SessionConfig) -> Result<Box<dyn Session>> {
+            Ok(Box::new(CooperativeSession {
+                cancellation: Arc::clone(&self.cancellation),
+                terminalized: Arc::clone(&self.terminalized),
+            }))
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl Session for CooperativeSession {
+        fn handles_cancellation(&self) -> bool {
+            true
+        }
+
+        async fn eval(&mut self, _code: &str, _budget: CellBudget) -> Result<EvalOutput> {
+            self.cancellation.cancelled().await;
+            // Model the runtime's bounded terminal-persistence/commit shield. An outer race would
+            // return on cancellation and drop this future before the protocol completes.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            self.terminalized.store(true, Ordering::SeqCst);
+            Err(Error::Cancelled)
+        }
+
+        async fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    let llm = Arc::new(FakeLlm::new(vec![vec![
+        StreamEvent::ToolCall {
+            index: 0,
+            id: Some("call_cooperative_eval".to_string()),
+            name: Some("execute".to_string()),
+            arguments: Some(r#"{"code":"await cooperativeHostWait()"}"#.to_string()),
+        },
+        StreamEvent::Finish {
+            reason: Some("tool_calls".to_string()),
+        },
+    ]]));
+    let cancellation = Arc::new(FlagCancellation::active());
+    let terminalized = Arc::new(AtomicBool::new(false));
+    let agent = Agent::new(
+        llm,
+        Arc::new(CooperativeSandbox {
+            cancellation: Arc::clone(&cancellation),
+            terminalized: Arc::clone(&terminalized),
+        }),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let run = agent.run_with_controls("evaluate", &sink, None, Some(cancellation.as_ref()));
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        cancellation.cancel();
+    };
+
+    let (result, ()) = tokio::join!(run, cancel);
+
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(
+        terminalized.load(Ordering::SeqCst),
+        "agent returned before the session completed terminal persistence"
+    );
+}
+
 #[tokio::test]
 async fn rejects_oversized_or_malformed_tool_call_batches_before_execution() {
     let mut oversized = (0..17)

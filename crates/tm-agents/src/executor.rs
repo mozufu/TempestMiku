@@ -50,10 +50,16 @@ pub async fn run_to_digest_with_budget(
     executor: Arc<dyn ActorExecutor>,
     spec: ActorSpec,
 ) -> Result<ActorDigest, ActorError> {
+    spec.validate_text_limits()
+        .map_err(ActorError::InvalidSpec)?;
     let timeout = Duration::from_millis(spec.budget.wall_ms);
     let cancellation = spec.cancellation.clone();
     match tokio::time::timeout(timeout, executor.run_to_digest(spec)).await {
-        Ok(result) => result,
+        Ok(Ok(mut digest)) => {
+            digest.enforce_text_limits();
+            Ok(digest)
+        }
+        Ok(Err(error)) => Err(error),
         Err(_) => {
             cancellation.cancel();
             Err(ActorError::Timeout)

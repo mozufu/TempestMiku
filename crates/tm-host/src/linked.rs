@@ -1,5 +1,6 @@
 mod config;
 mod docs;
+mod secure_fs;
 mod tools;
 mod util;
 

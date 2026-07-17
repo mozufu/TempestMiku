@@ -23,6 +23,8 @@ use thiserror::Error;
 pub type Result<T, E = ArtifactError> = std::result::Result<T, E>;
 
 const MAX_ARTIFACT_METADATA_BYTES: usize = 64 * 1024;
+const MAX_ARTIFACT_TITLE_BYTES: usize = 1024;
+const MAX_ARTIFACT_MIME_BYTES: usize = 256;
 
 /// Validated identifier for one artifact namespace.
 ///
@@ -139,9 +141,7 @@ pub enum ArtifactError {
     InvalidUri(String),
     #[error("invalid selector: {0}")]
     InvalidSelector(String),
-    #[error(
-        "artifact quota exceeded for {resource}: attempted {attempted} bytes, limit {limit} bytes"
-    )]
+    #[error("artifact quota exceeded for {resource}: attempted {attempted}, limit {limit}")]
     QuotaExceeded {
         resource: &'static str,
         attempted: usize,
@@ -162,6 +162,10 @@ pub struct ArtifactLimits {
     pub max_artifact_bytes: usize,
     pub max_blob_bytes: usize,
     pub max_session_bytes: usize,
+    pub max_artifact_count: usize,
+    pub max_session_metadata_bytes: usize,
+    pub max_blob_count: usize,
+    pub max_session_blob_ref_bytes: usize,
     pub default_page_lines: usize,
     pub default_page_bytes: usize,
     pub max_page_lines: usize,
@@ -174,6 +178,10 @@ impl Default for ArtifactLimits {
             max_artifact_bytes: 4 * 1024 * 1024,
             max_blob_bytes: 64 * 1024 * 1024,
             max_session_bytes: 256 * 1024 * 1024,
+            max_artifact_count: 4_096,
+            max_session_metadata_bytes: 16 * 1024 * 1024,
+            max_blob_count: 4_096,
+            max_session_blob_ref_bytes: 256 * 1024,
             default_page_lines: 200,
             default_page_bytes: 64 * 1024,
             max_page_lines: 1_000,
@@ -251,54 +259,24 @@ impl ArtifactStore {
         let session_write_lock = session_write_lock(&fs::canonicalize(&session_dir)?);
         let _write_guard = session_write_lock.lock();
 
-        let mut refs = Vec::new();
-        let mut max_id = None;
-        for entry in fs::read_dir(&session_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("meta") {
-                continue;
-            }
-            ensure_managed_file(&session_dir, &path, &path.display().to_string())?;
-            let meta = read_bounded_file(
-                &path,
-                MAX_ARTIFACT_METADATA_BYTES,
-                &path.display().to_string(),
-            )?;
-            let artifact: ArtifactRef = serde_json::from_slice(&meta).map_err(io::Error::other)?;
-            validate_loaded_ref(&path, &artifact)?;
-            let content_path = session_dir.join(format!("{}.txt", artifact.id));
-            let content_metadata = ensure_managed_file(&session_dir, &content_path, &artifact.uri)?;
-            let actual_size = usize::try_from(content_metadata.len())
-                .map_err(|_| ArtifactError::Integrity(format!("artifact://{}", artifact.id)))?;
-            if actual_size != artifact.size_bytes {
-                return Err(ArtifactError::Integrity(artifact.uri));
-            }
-            if let Ok(id) = artifact.id.parse::<u64>() {
-                max_id = Some(max_id.map_or(id, |m: u64| m.max(id)));
-            }
-            refs.push(artifact);
-        }
-        refs.sort_by_key(|r| r.id.parse::<u64>().unwrap_or(u64::MAX));
-        let next_id = max_id.map_or(0, |id| id + 1);
-        let artifact_bytes = refs.iter().try_fold(0usize, |total, artifact| {
-            total
-                .checked_add(artifact.size_bytes)
-                .ok_or(ArtifactError::QuotaExceeded {
-                    resource: "session",
-                    attempted: usize::MAX,
-                    limit: limits.max_session_bytes,
-                })
-        })?;
-        let blob_bytes = blob_reference_bytes(&blob_refs_dir, &blob_dir, limits)?;
-        let total_bytes =
-            artifact_bytes
-                .checked_add(blob_bytes)
-                .ok_or(ArtifactError::QuotaExceeded {
-                    resource: "session",
-                    attempted: usize::MAX,
-                    limit: limits.max_session_bytes,
-                })?;
+        let usage = artifact_namespace_usage(&session_dir, limits)?;
+        let next_id = usage
+            .max_id
+            .map(|id| {
+                id.checked_add(1)
+                    .ok_or_else(|| ArtifactError::Integrity(format!("artifact://{id}")))
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let blob_usage = blob_reference_usage(&blob_refs_dir, &blob_dir, limits)?;
+        let total_bytes = usage
+            .content_bytes
+            .checked_add(blob_usage.content_bytes)
+            .ok_or(ArtifactError::QuotaExceeded {
+                resource: "session",
+                attempted: usize::MAX,
+                limit: limits.max_session_bytes,
+            })?;
         if total_bytes > limits.max_session_bytes {
             return Err(ArtifactError::QuotaExceeded {
                 resource: "session",
@@ -314,7 +292,7 @@ impl ArtifactStore {
             inner: Arc::new(Mutex::new(Inner {
                 next_id,
                 total_bytes,
-                refs,
+                refs: usage.refs,
             })),
             session_write_lock: Arc::clone(&session_write_lock),
         })
@@ -329,14 +307,34 @@ impl ArtifactStore {
         let content = content.as_ref();
         let bytes = content.as_bytes();
         self.check_item_quota(bytes.len(), "artifact", self.limits.max_artifact_bytes)?;
+        if let Some(title) = title.as_deref() {
+            self.check_item_quota(title.len(), "artifact title", MAX_ARTIFACT_TITLE_BYTES)?;
+        }
+        self.check_item_quota(mime.len(), "artifact MIME", MAX_ARTIFACT_MIME_BYTES)?;
         let dir = self.validated_session_artifact_dir()?;
         let blob_refs_dir = self.validated_session_blob_ref_dir()?;
         let blob_dir = self.validated_blob_dir()?;
         let _write_guard = self.session_write_lock.lock();
-        let (id, artifact, lock_path) = {
+        let (id, artifact, lock_path, prior_metadata_bytes) = {
             let mut inner = self.inner.lock();
-            let current_bytes =
-                session_bytes_on_disk(&dir, &blob_refs_dir, &blob_dir, self.limits)?;
+            let usage = artifact_namespace_usage(&dir, self.limits)?;
+            if usage.count >= self.limits.max_artifact_count {
+                return Err(ArtifactError::QuotaExceeded {
+                    resource: "artifact count",
+                    attempted: usage.count.saturating_add(1),
+                    limit: self.limits.max_artifact_count,
+                });
+            }
+            let current_bytes = usage
+                .content_bytes
+                .checked_add(
+                    blob_reference_usage(&blob_refs_dir, &blob_dir, self.limits)?.content_bytes,
+                )
+                .ok_or(ArtifactError::QuotaExceeded {
+                    resource: "session",
+                    attempted: usize::MAX,
+                    limit: self.limits.max_session_bytes,
+                })?;
             let attempted =
                 current_bytes
                     .checked_add(bytes.len())
@@ -352,9 +350,16 @@ impl ArtifactStore {
                     limit: self.limits.max_session_bytes,
                 });
             }
-            let mut id = inner
-                .next_id
-                .max(max_artifact_id(&dir)?.map_or(0, |id| id + 1));
+            let mut id = inner.next_id.max(
+                usage
+                    .max_id
+                    .map(|id| {
+                        id.checked_add(1)
+                            .ok_or_else(|| ArtifactError::Integrity(format!("artifact://{id}")))
+                    })
+                    .transpose()?
+                    .unwrap_or(0),
+            );
             loop {
                 let lock_path = dir.join(format!("{id}.lock"));
                 match OpenOptions::new()
@@ -365,10 +370,14 @@ impl ArtifactStore {
                     Ok(_) => {
                         if dir.join(format!("{id}.meta")).exists() {
                             let _ = fs::remove_file(&lock_path);
-                            id += 1;
+                            id = id.checked_add(1).ok_or_else(|| {
+                                ArtifactError::Integrity(format!("artifact://{id}"))
+                            })?;
                             continue;
                         }
-                        inner.next_id = id + 1;
+                        inner.next_id = id
+                            .checked_add(1)
+                            .ok_or_else(|| ArtifactError::Integrity(format!("artifact://{id}")))?;
                         let id_s = id.to_string();
                         let artifact = ArtifactRef {
                             uri: format!("artifact://{id_s}"),
@@ -379,24 +388,42 @@ impl ArtifactStore {
                             size_bytes: bytes.len(),
                             preview: preview(content, 1024),
                         };
-                        break (id, artifact, lock_path);
+                        break (id, artifact, lock_path, usage.metadata_bytes);
                     }
                     Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                        id += 1;
+                        id = id
+                            .checked_add(1)
+                            .ok_or_else(|| ArtifactError::Integrity(format!("artifact://{id}")))?;
                     }
                     Err(err) => return Err(err.into()),
                 }
             }
         };
 
+        let metadata = serde_json::to_vec_pretty(&artifact).map_err(io::Error::other)?;
+        self.check_item_quota(
+            metadata.len(),
+            "artifact metadata",
+            MAX_ARTIFACT_METADATA_BYTES,
+        )?;
+        let attempted_metadata = prior_metadata_bytes.checked_add(metadata.len()).ok_or(
+            ArtifactError::QuotaExceeded {
+                resource: "session artifact metadata",
+                attempted: usize::MAX,
+                limit: self.limits.max_session_metadata_bytes,
+            },
+        )?;
+        if attempted_metadata > self.limits.max_session_metadata_bytes {
+            let _ = fs::remove_file(&lock_path);
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "session artifact metadata",
+                attempted: attempted_metadata,
+                limit: self.limits.max_session_metadata_bytes,
+            });
+        }
+
         let write_result = (|| -> Result<()> {
             write_atomic(&dir.join(format!("{id}.txt")), bytes)?;
-            let metadata = serde_json::to_vec_pretty(&artifact).map_err(io::Error::other)?;
-            self.check_item_quota(
-                metadata.len(),
-                "artifact metadata",
-                MAX_ARTIFACT_METADATA_BYTES,
-            )?;
             write_atomic(&dir.join(format!("{id}.meta")), &metadata)?;
             Ok(())
         })();
@@ -427,8 +454,39 @@ impl ArtifactStore {
                 false
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                let current_bytes =
-                    session_bytes_on_disk(&artifact_dir, &blob_refs_dir, &blob_dir, self.limits)?;
+                let artifact_usage = artifact_namespace_usage(&artifact_dir, self.limits)?;
+                let blob_usage = blob_reference_usage(&blob_refs_dir, &blob_dir, self.limits)?;
+                if blob_usage.count >= self.limits.max_blob_count {
+                    return Err(ArtifactError::QuotaExceeded {
+                        resource: "blob reference count",
+                        attempted: blob_usage.count.saturating_add(1),
+                        limit: self.limits.max_blob_count,
+                    });
+                }
+                let reference_bytes = bytes.len().to_string().len();
+                let attempted_reference_bytes = blob_usage
+                    .metadata_bytes
+                    .checked_add(reference_bytes)
+                    .ok_or(ArtifactError::QuotaExceeded {
+                        resource: "session blob-reference metadata",
+                        attempted: usize::MAX,
+                        limit: self.limits.max_session_blob_ref_bytes,
+                    })?;
+                if attempted_reference_bytes > self.limits.max_session_blob_ref_bytes {
+                    return Err(ArtifactError::QuotaExceeded {
+                        resource: "session blob-reference metadata",
+                        attempted: attempted_reference_bytes,
+                        limit: self.limits.max_session_blob_ref_bytes,
+                    });
+                }
+                let current_bytes = artifact_usage
+                    .content_bytes
+                    .checked_add(blob_usage.content_bytes)
+                    .ok_or(ArtifactError::QuotaExceeded {
+                        resource: "session",
+                        attempted: usize::MAX,
+                        limit: self.limits.max_session_bytes,
+                    })?;
                 let attempted =
                     current_bytes
                         .checked_add(bytes.len())
@@ -538,8 +596,28 @@ impl ArtifactStore {
         })
     }
 
+    /// Return the in-memory bounded namespace snapshot loaded by this handle.
+    ///
+    /// Model-visible and async callers should prefer [`Self::list_page`], which
+    /// refreshes from disk and never clones the whole namespace.
     pub fn list(&self) -> Vec<ArtifactRef> {
         self.inner.lock().refs.clone()
+    }
+
+    /// Refresh the artifact namespace and return one bounded page plus a continuation flag.
+    pub fn list_page(&self, offset: usize, limit: usize) -> Result<(Vec<ArtifactRef>, bool)> {
+        if limit == 0 || limit > self.limits.max_artifact_count {
+            return Err(ArtifactError::InvalidSelector(format!(
+                "artifact list limit must be in 1..={}",
+                self.limits.max_artifact_count
+            )));
+        }
+        let dir = self.validated_session_artifact_dir()?;
+        let _write_guard = self.session_write_lock.lock();
+        let usage = artifact_namespace_usage(&dir, self.limits)?;
+        let end = offset.saturating_add(limit).min(usage.refs.len());
+        let items = usage.refs.get(offset..end).unwrap_or_default().to_vec();
+        Ok((items, end < usage.refs.len()))
     }
 
     pub fn limits(&self) -> ArtifactLimits {
@@ -606,67 +684,213 @@ fn session_write_lock(path: &Path) -> Arc<Mutex<()>> {
     lock
 }
 
-fn session_bytes_on_disk(
-    session_dir: &Path,
-    blob_refs_dir: &Path,
-    blob_dir: &Path,
-    limits: ArtifactLimits,
-) -> Result<usize> {
-    let mut total = 0usize;
-    for entry in fs::read_dir(session_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("txt") {
-            continue;
-        }
-        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        if stem.parse::<u64>().is_err() {
-            continue;
-        }
-        let metadata = ensure_regular_file(&path, &path.display().to_string())?;
-        let size = usize::try_from(metadata.len())
-            .map_err(|_| ArtifactError::Integrity(path.display().to_string()))?;
-        total = total
-            .checked_add(size)
-            .ok_or(ArtifactError::QuotaExceeded {
-                resource: "session",
-                attempted: usize::MAX,
-                limit: usize::MAX,
-            })?;
-    }
-    total
-        .checked_add(blob_reference_bytes(blob_refs_dir, blob_dir, limits)?)
-        .ok_or(ArtifactError::QuotaExceeded {
-            resource: "session",
-            attempted: usize::MAX,
-            limit: limits.max_session_bytes,
-        })
+#[derive(Debug)]
+struct ArtifactNamespaceUsage {
+    refs: Vec<ArtifactRef>,
+    count: usize,
+    metadata_bytes: usize,
+    content_bytes: usize,
+    max_id: Option<u64>,
 }
 
-fn blob_reference_bytes(
+/// Scan a session namespace with hard entry, count, metadata, and content bounds.
+///
+/// Counting every directory entry, including interrupted temporary/lock files and
+/// unknown names, prevents an attacker with access to the storage directory from
+/// turning an otherwise bounded artifact operation into an unbounded scan.
+fn artifact_namespace_usage(
+    session_dir: &Path,
+    limits: ArtifactLimits,
+) -> Result<ArtifactNamespaceUsage> {
+    let max_directory_entries = limits
+        .max_artifact_count
+        .checked_mul(3)
+        .and_then(|count| count.checked_add(64))
+        .ok_or_else(|| ArtifactError::InvalidLimits(format!("{limits:?}")))?;
+    let mut directory_entries = 0usize;
+    let mut refs = Vec::new();
+    let mut metadata_bytes = 0usize;
+    let mut content_bytes = 0usize;
+    let mut max_id = None;
+
+    for entry in fs::read_dir(session_dir)? {
+        let entry = entry?;
+        directory_entries =
+            directory_entries
+                .checked_add(1)
+                .ok_or(ArtifactError::QuotaExceeded {
+                    resource: "artifact namespace entries",
+                    attempted: usize::MAX,
+                    limit: max_directory_entries,
+                })?;
+        if directory_entries > max_directory_entries {
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "artifact namespace entries",
+                attempted: directory_entries,
+                limit: max_directory_entries,
+            });
+        }
+
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("meta") {
+            continue;
+        }
+        if refs.len() >= limits.max_artifact_count {
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "artifact count",
+                attempted: refs.len().saturating_add(1),
+                limit: limits.max_artifact_count,
+            });
+        }
+        let metadata = ensure_managed_file(session_dir, &path, &path.display().to_string())?;
+        let metadata_len = usize::try_from(metadata.len())
+            .map_err(|_| ArtifactError::Integrity(path.display().to_string()))?;
+        metadata_bytes =
+            metadata_bytes
+                .checked_add(metadata_len)
+                .ok_or(ArtifactError::QuotaExceeded {
+                    resource: "session artifact metadata",
+                    attempted: usize::MAX,
+                    limit: limits.max_session_metadata_bytes,
+                })?;
+        if metadata_bytes > limits.max_session_metadata_bytes {
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "session artifact metadata",
+                attempted: metadata_bytes,
+                limit: limits.max_session_metadata_bytes,
+            });
+        }
+
+        let encoded = read_bounded_file(
+            &path,
+            MAX_ARTIFACT_METADATA_BYTES,
+            &path.display().to_string(),
+        )?;
+        let artifact: ArtifactRef = serde_json::from_slice(&encoded).map_err(io::Error::other)?;
+        validate_loaded_ref(&path, &artifact)?;
+        let content_path = session_dir.join(format!("{}.txt", artifact.id));
+        let content_metadata = ensure_managed_file(session_dir, &content_path, &artifact.uri)?;
+        let actual_size = usize::try_from(content_metadata.len())
+            .map_err(|_| ArtifactError::Integrity(artifact.uri.clone()))?;
+        if actual_size != artifact.size_bytes {
+            return Err(ArtifactError::Integrity(artifact.uri));
+        }
+        content_bytes =
+            content_bytes
+                .checked_add(actual_size)
+                .ok_or(ArtifactError::QuotaExceeded {
+                    resource: "session",
+                    attempted: usize::MAX,
+                    limit: limits.max_session_bytes,
+                })?;
+        if content_bytes > limits.max_session_bytes {
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "session",
+                attempted: content_bytes,
+                limit: limits.max_session_bytes,
+            });
+        }
+        let id = ArtifactId::parse(&artifact.id)?.get();
+        max_id = Some(max_id.map_or(id, |current: u64| current.max(id)));
+        refs.push(artifact);
+    }
+    refs.sort_by_key(|artifact| ArtifactId::parse(&artifact.id).map_or(u64::MAX, ArtifactId::get));
+
+    Ok(ArtifactNamespaceUsage {
+        count: refs.len(),
+        refs,
+        metadata_bytes,
+        content_bytes,
+        max_id,
+    })
+}
+
+#[derive(Debug, Default)]
+struct BlobReferenceUsage {
+    count: usize,
+    metadata_bytes: usize,
+    content_bytes: usize,
+}
+
+fn blob_reference_usage(
     blob_refs_dir: &Path,
     blob_dir: &Path,
     limits: ArtifactLimits,
-) -> Result<usize> {
-    let mut total = 0usize;
+) -> Result<BlobReferenceUsage> {
+    let max_directory_entries = limits
+        .max_blob_count
+        .checked_mul(2)
+        .and_then(|count| count.checked_add(32))
+        .ok_or_else(|| ArtifactError::InvalidLimits(format!("{limits:?}")))?;
+    let mut directory_entries = 0usize;
+    let mut usage = BlobReferenceUsage::default();
     for entry in fs::read_dir(blob_refs_dir)? {
         let entry = entry?;
+        directory_entries =
+            directory_entries
+                .checked_add(1)
+                .ok_or(ArtifactError::QuotaExceeded {
+                    resource: "blob-reference namespace entries",
+                    attempted: usize::MAX,
+                    limit: max_directory_entries,
+                })?;
+        if directory_entries > max_directory_entries {
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "blob-reference namespace entries",
+                attempted: directory_entries,
+                limit: max_directory_entries,
+            });
+        }
         let path = entry.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("ref") {
             continue;
         }
+        if usage.count >= limits.max_blob_count {
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "blob reference count",
+                attempted: usage.count.saturating_add(1),
+                limit: limits.max_blob_count,
+            });
+        }
+        let metadata = ensure_managed_file(blob_refs_dir, &path, &path.display().to_string())?;
+        let metadata_len = usize::try_from(metadata.len())
+            .map_err(|_| ArtifactError::Integrity(path.display().to_string()))?;
+        usage.metadata_bytes =
+            usage
+                .metadata_bytes
+                .checked_add(metadata_len)
+                .ok_or(ArtifactError::QuotaExceeded {
+                    resource: "session blob-reference metadata",
+                    attempted: usize::MAX,
+                    limit: limits.max_session_blob_ref_bytes,
+                })?;
+        if usage.metadata_bytes > limits.max_session_blob_ref_bytes {
+            return Err(ArtifactError::QuotaExceeded {
+                resource: "session blob-reference metadata",
+                attempted: usage.metadata_bytes,
+                limit: limits.max_session_blob_ref_bytes,
+            });
+        }
         let size = validate_blob_reference(&path, blob_dir, limits)?;
-        total = total
-            .checked_add(size)
-            .ok_or(ArtifactError::QuotaExceeded {
+        usage.content_bytes =
+            usage
+                .content_bytes
+                .checked_add(size)
+                .ok_or(ArtifactError::QuotaExceeded {
+                    resource: "session",
+                    attempted: usize::MAX,
+                    limit: limits.max_session_bytes,
+                })?;
+        if usage.content_bytes > limits.max_session_bytes {
+            return Err(ArtifactError::QuotaExceeded {
                 resource: "session",
-                attempted: usize::MAX,
+                attempted: usage.content_bytes,
                 limit: limits.max_session_bytes,
-            })?;
+            });
+        }
+        usage.count = usage.count.saturating_add(1);
     }
-    Ok(total)
+    Ok(usage)
 }
 
 fn validate_blob_reference(
@@ -706,28 +930,14 @@ fn validate_blob_reference(
     Ok(size)
 }
 
-fn max_artifact_id(session_dir: &Path) -> io::Result<Option<u64>> {
-    let mut max_id = None;
-    for entry in fs::read_dir(session_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("meta") {
-            continue;
-        }
-        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        if let Ok(id) = stem.parse::<u64>() {
-            max_id = Some(max_id.map_or(id, |m: u64| m.max(id)));
-        }
-    }
-    Ok(max_id)
-}
-
 fn validate_limits(limits: ArtifactLimits) -> Result<()> {
     if limits.max_artifact_bytes == 0
         || limits.max_blob_bytes == 0
         || limits.max_session_bytes == 0
+        || limits.max_artifact_count == 0
+        || limits.max_session_metadata_bytes == 0
+        || limits.max_blob_count == 0
+        || limits.max_session_blob_ref_bytes == 0
         || limits.default_page_lines == 0
         || limits.default_page_bytes == 0
         || limits.max_page_lines == 0
@@ -751,7 +961,22 @@ fn validate_loaded_ref(meta_path: &Path, artifact: &ArtifactRef) -> Result<()> {
     {
         return Err(ArtifactError::Integrity(artifact.uri.clone()));
     }
+    if artifact.kind != "text"
+        || artifact.mime.len() > MAX_ARTIFACT_MIME_BYTES
+        || artifact
+            .title
+            .as_ref()
+            .is_some_and(|title| title.len() > MAX_ARTIFACT_TITLE_BYTES)
+        || artifact.preview.len() > preview_marker_bound(1024)
+    {
+        return Err(ArtifactError::Integrity(artifact.uri.clone()));
+    }
     Ok(())
+}
+
+fn preview_marker_bound(cap: usize) -> usize {
+    // `preview` appends a newline, ellipsis, decimal byte count, and a fixed suffix.
+    cap.saturating_add(64)
 }
 
 fn ensure_regular_file(path: &Path, identity: &str) -> Result<fs::Metadata> {
@@ -1131,6 +1356,136 @@ mod tests {
     }
 
     #[test]
+    fn zero_byte_artifacts_still_consume_count_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = ArtifactLimits {
+            max_artifact_count: 2,
+            ..ArtifactLimits::default()
+        };
+        let store = ArtifactStore::open_with_limits(dir.path(), "counted", limits).unwrap();
+        store.put_text("", None, "text/plain").unwrap();
+        store.put_text("", None, "text/plain").unwrap();
+        assert!(matches!(
+            store.put_text("", None, "text/plain"),
+            Err(ArtifactError::QuotaExceeded {
+                resource: "artifact count",
+                attempted: 3,
+                limit: 2,
+            })
+        ));
+        drop(store);
+
+        let too_small = ArtifactLimits {
+            max_artifact_count: 1,
+            ..ArtifactLimits::default()
+        };
+        assert!(matches!(
+            ArtifactStore::open_with_limits(dir.path(), "counted", too_small),
+            Err(ArtifactError::QuotaExceeded {
+                resource: "artifact count",
+                attempted: 2,
+                limit: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn aggregate_artifact_metadata_is_bounded_before_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = ArtifactStore::open(dir.path(), "metadata").unwrap();
+        let artifact = first.put_text("", None, "text/plain").unwrap();
+        drop(first);
+        let first_metadata_bytes = fs::metadata(
+            dir.path()
+                .join("sessions/metadata/artifacts")
+                .join(format!("{}.meta", artifact.id)),
+        )
+        .unwrap()
+        .len() as usize;
+        let limits = ArtifactLimits {
+            max_session_metadata_bytes: first_metadata_bytes + 64,
+            ..ArtifactLimits::default()
+        };
+        let store = ArtifactStore::open_with_limits(dir.path(), "metadata", limits).unwrap();
+        assert!(matches!(
+            store.put_text("", Some("x".repeat(256)), "text/plain"),
+            Err(ArtifactError::QuotaExceeded {
+                resource: "session artifact metadata",
+                ..
+            })
+        ));
+        assert_eq!(
+            ArtifactStore::open(dir.path(), "metadata")
+                .unwrap()
+                .list()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn list_page_is_bounded_and_refreshes_cross_handle_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = ArtifactStore::open(dir.path(), "listed").unwrap();
+        let second = ArtifactStore::open(dir.path(), "listed").unwrap();
+        for value in ["zero", "one", "two"] {
+            second.put_text(value, None, "text/plain").unwrap();
+        }
+
+        let (page, has_more) = first.list_page(1, 1).unwrap();
+        assert_eq!(
+            page.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            ["1"]
+        );
+        assert!(has_more);
+        let (page, has_more) = first.list_page(2, 1).unwrap();
+        assert_eq!(
+            page.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            ["2"]
+        );
+        assert!(!has_more);
+        assert!(matches!(
+            first.list_page(0, 0),
+            Err(ArtifactError::InvalidSelector(_))
+        ));
+    }
+
+    #[test]
+    fn blob_references_have_count_and_metadata_quotas() {
+        let dir = tempfile::tempdir().unwrap();
+        let count_limits = ArtifactLimits {
+            max_blob_count: 1,
+            ..ArtifactLimits::default()
+        };
+        let store =
+            ArtifactStore::open_with_limits(dir.path(), "blob-count", count_limits).unwrap();
+        store.put_blob(b"one").unwrap();
+        assert!(matches!(
+            store.put_blob(b"two"),
+            Err(ArtifactError::QuotaExceeded {
+                resource: "blob reference count",
+                attempted: 2,
+                limit: 1,
+            })
+        ));
+
+        let metadata_limits = ArtifactLimits {
+            max_session_blob_ref_bytes: 1,
+            ..ArtifactLimits::default()
+        };
+        let store =
+            ArtifactStore::open_with_limits(dir.path(), "blob-metadata", metadata_limits).unwrap();
+        assert!(matches!(
+            store.put_blob(&[0; 10]),
+            Err(ArtifactError::QuotaExceeded {
+                resource: "session blob-reference metadata",
+                attempted: 2,
+                limit: 1,
+            })
+        ));
+    }
+
+    #[test]
     fn rejects_unsafe_storage_identifiers() {
         let dir = tempfile::tempdir().unwrap();
         for session_id in ["", ".", "..", "../escape", "/tmp/escape", "nested/id"] {
@@ -1215,18 +1570,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_oversized_artifact_metadata_before_writing_it() {
+    fn rejects_oversized_artifact_title_before_writing_it() {
         let dir = tempfile::tempdir().unwrap();
         let store = ArtifactStore::open(dir.path(), "default").unwrap();
 
         assert!(matches!(
             store.put_text(
                 "small content",
-                Some("x".repeat(MAX_ARTIFACT_METADATA_BYTES)),
+                Some("x".repeat(MAX_ARTIFACT_TITLE_BYTES + 1)),
                 "text/plain",
             ),
             Err(ArtifactError::QuotaExceeded {
-                resource: "artifact metadata",
+                resource: "artifact title",
                 ..
             })
         ));
@@ -1257,6 +1612,10 @@ mod tests {
             max_artifact_bytes: 16,
             max_blob_bytes: 32,
             max_session_bytes: 24,
+            max_artifact_count: 8,
+            max_session_metadata_bytes: 64 * 1024,
+            max_blob_count: 8,
+            max_session_blob_ref_bytes: 64 * 1024,
             default_page_lines: 2,
             default_page_bytes: 8,
             max_page_lines: 3,
@@ -1303,6 +1662,10 @@ mod tests {
                 max_artifact_bytes: 64,
                 max_blob_bytes: 64,
                 max_session_bytes: 64,
+                max_artifact_count: 8,
+                max_session_metadata_bytes: 64 * 1024,
+                max_blob_count: 8,
+                max_session_blob_ref_bytes: 64 * 1024,
                 default_page_lines: 2,
                 default_page_bytes: 3,
                 max_page_lines: 2,

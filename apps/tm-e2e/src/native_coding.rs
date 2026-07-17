@@ -193,8 +193,11 @@ async fn run_approved_path(
     let (_, approval) = client
         .wait_for_event(session_id, replay_anchor, is_native_approval)
         .await?;
+    let approval_action = structured_approval_action(&approval)?;
     ensure!(
-        approval.data["action"] == json!("proc.run cargo test answer_is_two -- --nocapture"),
+        approval_action["operation"] == json!("proc.run")
+            && approval_action["details"]["argvPreview"]
+                == json!(["cargo", "test", "answer_is_two", "--", "--nocapture"]),
         "approved path should gate the targeted cargo test, got {}",
         approval.data
     );
@@ -205,20 +208,23 @@ async fn run_approved_path(
     let replayed = client.read_until_final(session_id, replay_anchor).await?;
     ensure_turn_provenance(&replayed, &turn_id)?;
     ensure_resolution(&replayed, "approved")?;
-    let display = cell_display(&replayed)?;
-    ensure!(
-        display["editChanged"] == json!(true)
-            && display["exitCode"] == json!(0)
-            && display["truncated"] == json!(true),
-        "approved native result did not prove edit, test, and spill: {display}"
-    );
-    let artifact_uri = display["artifactUri"]
-        .as_str()
-        .context("approved native result did not include artifactUri")?
+    ensure_redacted_cell_display(&replayed)?;
+    let artifacts = client
+        .list_resources(session_id, Some("artifact://"))
+        .await?;
+    let artifact_uri = artifacts
+        .as_array()
+        .and_then(|artifacts| artifacts.last())
+        .and_then(|artifact| artifact["uri"].as_str())
+        .context("approved native result did not create a process artifact")?
         .to_string();
+    let process_artifact = client.resolve_resource(session_id, &artifact_uri).await?;
     ensure!(
-        artifact_uri.starts_with("artifact://"),
-        "proc.run spill should return an artifact URI, got {artifact_uri}"
+        artifact_uri.starts_with("artifact://")
+            && process_artifact["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("test result: ok")),
+        "approved native result did not prove successful test spill: {process_artifact}"
     );
     let linked_uri = format!("linked://{LINK_ALIAS}/src/lib.rs");
     capture_resource(recorder, client, session_id, &artifact_uri).await?;
@@ -260,8 +266,11 @@ async fn run_denied_path(
     let (_, approval) = client
         .wait_for_event(session_id, replay_anchor, is_native_approval)
         .await?;
+    let approval_action = structured_approval_action(&approval)?;
     ensure!(
-        approval.data["action"] == json!("fs.write overwrite repo:guard.txt"),
+        approval_action["operation"] == json!("fs.write")
+            && approval_action["details"]["path"] == json!("repo:guard.txt")
+            && approval_action["details"]["effect"] == json!("overwrite"),
         "denied path should gate the guard overwrite, got {}",
         approval.data
     );
@@ -272,11 +281,7 @@ async fn run_denied_path(
     let replayed = client.read_until_final(session_id, replay_anchor).await?;
     ensure_turn_provenance(&replayed, &turn_id)?;
     ensure_resolution(&replayed, "denied")?;
-    let display = cell_display(&replayed)?;
-    ensure!(
-        display["name"] == json!("ApprovalDeniedError"),
-        "denied overwrite should return ApprovalDeniedError: {display}"
-    );
+    ensure_redacted_cell_display(&replayed)?;
     ensure!(
         fs::read_to_string(linked_root.join("guard.txt"))? == "unchanged\n",
         "denied overwrite mutated guard.txt"
@@ -312,8 +317,11 @@ async fn run_timeout_path(
     let (_, approval) = client
         .wait_for_event(session_id, replay_anchor, is_native_approval)
         .await?;
+    let approval_action = structured_approval_action(&approval)?;
     ensure!(
-        approval.data["action"] == json!("fs.write overwrite repo:timeout.txt"),
+        approval_action["operation"] == json!("fs.write")
+            && approval_action["details"]["path"] == json!("repo:timeout.txt")
+            && approval_action["details"]["effect"] == json!("overwrite"),
         "timeout path should gate the timeout guard overwrite, got {}",
         approval.data
     );
@@ -321,11 +329,7 @@ async fn run_timeout_path(
     let replayed = client.read_until_final(session_id, replay_anchor).await?;
     ensure_turn_provenance(&replayed, &turn_id)?;
     ensure_resolution(&replayed, "timed_out")?;
-    let display = cell_display(&replayed)?;
-    ensure!(
-        display["name"] == json!("ApprovalTimeoutError"),
-        "timed-out overwrite should return ApprovalTimeoutError: {display}"
-    );
+    ensure_redacted_cell_display(&replayed)?;
     ensure!(
         fs::read_to_string(linked_root.join("timeout.txt"))? == "unchanged\n",
         "timed-out overwrite mutated timeout.txt"
@@ -395,6 +399,15 @@ fn approval_id(event: &E2eEvent) -> Result<String> {
         .context("native approval did not include approvalId")
 }
 
+fn structured_approval_action(event: &E2eEvent) -> Result<Value> {
+    serde_json::from_str(
+        event.data["action"]
+            .as_str()
+            .context("native approval action was not a string")?,
+    )
+    .context("native approval action was not a structured envelope")
+}
+
 fn ensure_resolution(events: &[E2eEvent], expected_status: &str) -> Result<()> {
     ensure!(
         events.iter().any(|event| {
@@ -407,25 +420,17 @@ fn ensure_resolution(events: &[E2eEvent], expected_status: &str) -> Result<()> {
     Ok(())
 }
 
-fn cell_display(events: &[E2eEvent]) -> Result<Value> {
-    if let Some(value) = events
+fn ensure_redacted_cell_display(events: &[E2eEvent]) -> Result<()> {
+    let display = events
         .iter()
         .find(|event| event.event_type == "display")
-        .map(|event| event.data["value"].clone())
-    {
-        return Ok(value);
-    }
-    events
-        .iter()
-        .filter(|event| event.event_type == "cell_result")
-        .filter_map(|event| event.data["shaped"].as_str())
-        .find_map(|shaped| {
-            shaped
-                .lines()
-                .find_map(|line| line.strip_prefix("display: "))
-                .and_then(|display| serde_json::from_str(display).ok())
-        })
-        .context("native replay did not include a JSON display cell result")
+        .context("native replay did not include a display event")?;
+    ensure!(
+        display.data["value"] == json!("[redacted]") && display.data["spec"] == json!("[redacted]"),
+        "sensitive native display payload crossed the durable event boundary: {}",
+        display.data
+    );
+    Ok(())
 }
 
 fn final_text(events: &[E2eEvent]) -> Result<&str> {

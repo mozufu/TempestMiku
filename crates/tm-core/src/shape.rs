@@ -48,8 +48,9 @@ fn cap_text(s: &str, cap: usize) -> String {
             s.len()
         );
     }
-    let head = floor_boundary(s, cap * 2 / 3);
-    let tail = ceil_boundary(s, s.len().saturating_sub(cap - (cap * 2 / 3)));
+    let head_budget = cap.saturating_mul(2) / 3;
+    let head = floor_boundary(s, head_budget);
+    let tail = ceil_boundary(s, s.len().saturating_sub(cap.saturating_sub(head_budget)));
     let omitted = tail.saturating_sub(head);
     let mut shaped = format!(
         "{}\n…[{} bytes elided]…\n{}",
@@ -79,18 +80,36 @@ fn artifact_uris(input: &str) -> Vec<&str> {
             .bytes()
             .take_while(u8::is_ascii_digit)
             .count();
-        if digits > 0 {
-            let uri = &input[start..digits_start + digits];
+        let end = digits_start.saturating_add(digits);
+        let id = &input[digits_start..end];
+        let canonical_id = id
+            .parse::<u64>()
+            .ok()
+            .is_some_and(|parsed| parsed.to_string() == id);
+        let has_token_boundary = input[end..]
+            .chars()
+            .next()
+            .is_none_or(is_artifact_uri_boundary);
+        if canonical_id && has_token_boundary {
+            let uri = &input[start..end];
             if !found.contains(&uri) {
                 found.push(uri);
             }
         }
-        offset = digits_start + digits.max(1);
+        offset = digits_start.saturating_add(digits.max(1));
         if offset >= input.len() {
             break;
         }
     }
     found
+}
+
+fn is_artifact_uri_boundary(value: char) -> bool {
+    value.is_whitespace()
+        || matches!(
+            value,
+            '"' | '\'' | '`' | ',' | ';' | '.' | '!' | ')' | ']' | '}' | '>'
+        )
 }
 
 fn floor_boundary(s: &str, mut idx: usize) -> usize {
@@ -170,5 +189,42 @@ mod tests {
         let shaped = shape_result_capped(&out, 128);
         assert!(shaped.contains("artifact://42"));
         assert!(shaped.contains("bytes elided"));
+    }
+
+    #[test]
+    fn artifact_reference_detection_rejects_noncanonical_or_partial_ids() {
+        for fake in [
+            "artifact://01",
+            "artifact://7evil",
+            "artifact://1/path",
+            "artifact://18446744073709551616",
+        ] {
+            let input = format!("{} {fake}", "x".repeat(900));
+            let shaped = cap_text(&input, 128);
+            assert!(
+                shaped.contains("without a readable artifact reference"),
+                "{fake}: {shaped}"
+            );
+        }
+
+        assert_eq!(
+            artifact_uris("see artifact://7, then artifact://42."),
+            ["artifact://7", "artifact://42"]
+        );
+    }
+
+    #[test]
+    fn oversized_fake_artifact_id_cannot_expand_the_shaped_result() {
+        let fake = format!("artifact://{}", "9".repeat(100_000));
+        let input = format!("{} {fake} {}", "a".repeat(512), "b".repeat(512));
+        let shaped = cap_text(&input, 128);
+
+        assert!(shaped.contains("without a readable artifact reference"));
+        assert!(
+            shaped.len() < 256,
+            "shaped result was {} bytes",
+            shaped.len()
+        );
+        assert!(!shaped.contains(&fake));
     }
 }

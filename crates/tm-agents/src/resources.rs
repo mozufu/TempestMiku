@@ -39,7 +39,7 @@ impl ResourceHandler for AgentResourceHandler {
         &self,
         uri: &str,
         _selector: Option<&str>,
-        _ctx: &InvocationCtx,
+        ctx: &InvocationCtx,
     ) -> Result<ResourceContent> {
         // uri = "agent://<id>"
         let id_str = uri
@@ -52,7 +52,7 @@ impl ResourceHandler for AgentResourceHandler {
 
         let record = self
             .roster
-            .get(&actor_id)
+            .get_for_session(&ctx.session_id, &actor_id)
             .await
             .ok_or_else(|| HostError::NotFound(format!("actor {id_str} not found")))?;
 
@@ -72,8 +72,8 @@ impl ResourceHandler for AgentResourceHandler {
         })
     }
 
-    async fn list(&self, _uri: Option<&str>, _ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
-        let records = self.roster.list().await;
+    async fn list(&self, _uri: Option<&str>, ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
+        let records = self.roster.list_for_session(&ctx.session_id).await;
         Ok(records
             .into_iter()
             .map(|r| ResourceEntry {
@@ -115,7 +115,7 @@ impl ResourceHandler for HistoryResourceHandler {
         &self,
         uri: &str,
         selector: Option<&str>,
-        _ctx: &InvocationCtx,
+        ctx: &InvocationCtx,
     ) -> Result<ResourceContent> {
         let id_str = uri
             .strip_prefix("history://")
@@ -128,13 +128,13 @@ impl ResourceHandler for HistoryResourceHandler {
         // Verify the actor exists.
         let record = self
             .roster
-            .get(&actor_id)
+            .get_for_session(&ctx.session_id, &actor_id)
             .await
             .ok_or_else(|| HostError::NotFound(format!("actor {id_str} not found")))?;
 
         let full = self
             .roster
-            .get_transcript(&actor_id)
+            .get_transcript_for_session(&ctx.session_id, &actor_id)
             .await
             .unwrap_or_else(|| {
                 format!(
@@ -168,10 +168,10 @@ impl ResourceHandler for HistoryResourceHandler {
         })
     }
 
-    async fn list(&self, _uri: Option<&str>, _ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
+    async fn list(&self, _uri: Option<&str>, ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
         let entries = self
             .roster
-            .list()
+            .list_for_session(&ctx.session_id)
             .await
             .into_iter()
             .filter(|rec| rec.history_uri.is_some())
@@ -221,6 +221,10 @@ mod tests {
         InvocationCtx::new(CapabilityGrants::default())
     }
 
+    fn ctx_for(session_id: &str) -> InvocationCtx {
+        InvocationCtx::new(CapabilityGrants::default()).with_session_id(session_id)
+    }
+
     fn test_record(id: &str, mode: Option<&str>, history_uri: Option<&str>) -> ActorRecord {
         ActorRecord {
             id: ActorId::new(id).expect("valid actor id"),
@@ -242,11 +246,13 @@ mod tests {
     async fn agent_resource_reads_record_json_and_lists_records() {
         let roster = Arc::new(MailboxRegistry::new());
         roster
-            .track(test_record("Worker", Some("researcher"), None))
-            .await;
+            .track_for_session("", test_record("Worker", Some("researcher"), None))
+            .await
+            .unwrap();
         roster
-            .track(test_record("Reviewer", Some("critic"), None))
-            .await;
+            .track_for_session("", test_record("Reviewer", Some("critic"), None))
+            .await
+            .unwrap();
         let handler = AgentResourceHandler::new(roster);
 
         assert_eq!(handler.scheme(), "agent");
@@ -304,17 +310,19 @@ mod tests {
         let roster = Arc::new(MailboxRegistry::new());
         let worker = ActorId::new("Worker").unwrap();
         roster
-            .track(test_record(
-                "Worker",
-                Some("researcher"),
-                Some("history://Worker"),
-            ))
-            .await;
+            .track_for_session(
+                "",
+                test_record("Worker", Some("researcher"), Some("history://Worker")),
+            )
+            .await
+            .unwrap();
         roster
-            .track(test_record("NoHistory", Some("observer"), None))
-            .await;
+            .track_for_session("", test_record("NoHistory", Some("observer"), None))
+            .await
+            .unwrap();
         roster
-            .store_transcript(
+            .store_transcript_for_session(
+                "",
                 &worker,
                 "line 1\nline 2\nline 3\nline 4\nline 5".to_string(),
             )
@@ -350,12 +358,12 @@ mod tests {
     async fn history_resource_falls_back_when_transcript_is_missing() {
         let roster = Arc::new(MailboxRegistry::new());
         roster
-            .track(test_record(
-                "Worker",
-                Some("researcher"),
-                Some("history://Worker"),
-            ))
-            .await;
+            .track_for_session(
+                "",
+                test_record("Worker", Some("researcher"), Some("history://Worker")),
+            )
+            .await
+            .unwrap();
         let handler = HistoryResourceHandler::new(roster);
 
         let content = handler
@@ -387,6 +395,57 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(missing, HostError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn actor_and_history_resources_are_exactly_session_scoped() {
+        let roster = Arc::new(MailboxRegistry::new());
+        let worker = ActorId::new("Worker").unwrap();
+        roster
+            .track_for_session(
+                "session-a",
+                test_record("Worker", Some("alpha"), Some("history://Worker")),
+            )
+            .await
+            .unwrap();
+        roster
+            .track_for_session(
+                "session-b",
+                test_record("Worker", Some("beta"), Some("history://Worker")),
+            )
+            .await
+            .unwrap();
+        roster
+            .track_for_session("session-b", test_record("OnlyB", Some("private"), None))
+            .await
+            .unwrap();
+        roster
+            .store_transcript_for_session("session-a", &worker, "alpha history".to_string())
+            .await;
+        roster
+            .store_transcript_for_session("session-b", &worker, "beta history".to_string())
+            .await;
+
+        let agents = AgentResourceHandler::new(Arc::clone(&roster));
+        let histories = HistoryResourceHandler::new(roster);
+        let alpha = ctx_for("session-a");
+
+        let actor = agents.read("agent://Worker", None, &alpha).await.unwrap();
+        let record: ActorRecord = serde_json::from_str(&actor.content).unwrap();
+        assert_eq!(record.mode.as_deref(), Some("alpha"));
+        assert_eq!(agents.list(None, &alpha).await.unwrap().len(), 1);
+        assert!(matches!(
+            agents.read("agent://OnlyB", None, &alpha).await,
+            Err(HostError::NotFound(_))
+        ));
+
+        let history = histories
+            .read("history://Worker", None, &alpha)
+            .await
+            .unwrap();
+        assert_eq!(history.content, "alpha history");
+        assert!(!history.content.contains("beta"));
+        assert_eq!(histories.list(None, &alpha).await.unwrap().len(), 1);
     }
 
     #[test]

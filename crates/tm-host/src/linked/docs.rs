@@ -18,7 +18,9 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
             description: format!("Allows the {name} capability."),
         }],
         sensitive,
-        approval: if sensitive { "policy" } else { "none" }.to_string(),
+        // Trace sensitivity and user approval are independent contracts. Individual capability
+        // docs below describe approval; `sensitive` only controls persistence/telemetry privacy.
+        approval: "none".to_string(),
         since: "P0".to_string(),
         stability: "experimental".to_string(),
     };
@@ -201,7 +203,7 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
                 "properties": {
                     "path": { "type": "string", "description": "Defaults to the first linked folder alias." },
                     "recursive": { "type": "boolean", "default": false },
-                    "limit": { "type": "integer", "minimum": 1, "default": 1000 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1000 },
                     "includeHidden": { "type": "boolean", "default": false }
                 }
             }),
@@ -231,12 +233,12 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
                 "properties": {
                     "patterns": {
                         "oneOf": [
-                            { "type": "string" },
-                            { "type": "array", "items": { "type": "string" } }
+                            { "type": "string", "maxLength": 4096 },
+                            { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string", "maxLength": 4096 } }
                         ]
                     },
                     "cwd": { "type": "string", "description": "Linked path to search from; defaults to the first linked folder." },
-                    "limit": { "type": "integer", "minimum": 1, "default": 1000 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1000 },
                     "includeHidden": { "type": "boolean", "default": false },
                     "respectGitignore": { "type": "boolean", "default": true }
                 }
@@ -265,12 +267,12 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
                 "required": ["pattern", "paths"],
                 "additionalProperties": false,
                 "properties": {
-                    "pattern": { "type": "string" },
-                    "paths": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+                    "pattern": { "type": "string", "maxLength": 16384 },
+                    "paths": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "string" } },
                     "caseSensitive": { "type": "boolean", "default": true },
                     "regex": { "type": "boolean", "default": true },
-                    "contextLines": { "type": "integer", "minimum": 0, "default": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "default": 1000 }
+                    "contextLines": { "type": "integer", "minimum": 0, "maximum": 20, "default": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1000 }
                 }
             }),
             result_schema: Some(json!({ "type": "array", "items": code_search_result_schema() })),
@@ -315,7 +317,7 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
             }],
             errors: vec![
                 tool_error("CapabilityDeniedError", "proc.run is not granted or the command is not allowlisted for the linked cwd.", false),
-                tool_error("ApprovalDeniedError", "The user denies a command outside safe argv prefixes.", false),
+                tool_error("ApprovalDeniedError", "The user denies process execution. All commands require approval until OS isolation is available.", false),
                 tool_error("ApprovalTimeoutError", "The approval request times out and defaults to deny.", true),
                 tool_error("InvalidArgsError", "cmd is not a bare executable, stdin is not a string or exceeds 1 MiB, or env/shell-style args are requested.", false),
                 tool_error("InvalidPathError", "cwd is outside the linked root or missing.", false),

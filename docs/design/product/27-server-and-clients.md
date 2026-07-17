@@ -72,7 +72,13 @@ deduplication; there is no named-event compatibility stream.
   running turns fail rather than replay possible side effects.
 - **History/runtime recovery.** A turn restores the newest 40 complete messages within 128 KiB into
   the sole core loop. tm interpreter state is thread-affine and not snapshotted: restart or TTL
-  eviction opens a clean session and emits `runtime_reset`, never re-executing old cells.
+  eviction opens a clean session and emits `runtime_reset`, never re-executing old cells. Structured
+  runtime events that guard state transitions wait for durable sink acknowledgement; any turn that
+  fails its event/storage boundary discards the cached interpreter so unconfirmed ephemeral state
+  cannot leak into a retry. A successful live interpreter is still quarantined until the exact
+  durable turn completes in the store. The dispatcher then explicitly promotes it; completion or
+  ownership-heartbeat failure cancels, awaits, and evicts that turn's shard state before a
+  same-session retry is eligible.
 - **Single-owner auth.** `auth_devices` stores revocable hashed credentials. Android sends bearer
   auth on every request/SSE; Web uses the same device through a Secure/HttpOnly/SameSite=Strict cookie
   plus origin-based CSRF checks. Pairing codes are hashed, single-use, random 256-bit values with a

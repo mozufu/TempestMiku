@@ -88,9 +88,9 @@ P3 ships the first concrete slice only:
 
 | P3 MVP call | Effect |
 |---|---|
-| `agents.run(role, task, opts)` | spawn one actor, await its result |
-| `agents.spawn(role, task) -> handle` | non-blocking; coordinate via the handle / messages |
-| `agents.parallel([{role, task, timeoutMs?, budget?}, …])` | fan-out, bounded pool, **one wave**, ordered results with optional per-child budget |
+| `agents.run(role, task, opts.capabilities?)` | spawn one actor, await its result; optionally delegate a bounded capability subset |
+| `agents.spawn(role, task, opts.capabilities?) -> handle` | non-blocking; optionally delegate a bounded capability subset, then coordinate via the handle / messages |
+| `agents.parallel([{role, task, timeoutMs?, budget?}, …], opts.capabilities?)` | fan-out, bounded pool, **one wave**, ordered results with optional per-child budget and shared delegated subset |
 | `agents.msg(handle, text, opts?)` | send to a spawned actor (request / reply or fire-and-forget) |
 
 > **P3-plus closeout update.** P3 shipped `agents.msg` as a one-shot compatibility primitive.
@@ -114,6 +114,29 @@ P3 ships the first concrete slice only:
 > typed parent `SessionEvent` actor/artifact/history links, and
 > `actor_resources_linked` provenance events are live.
 
+> **Runtime hardening bounds.** Actor identity is keyed by `(session_id, ActorId)` throughout the
+> roster, mailbox, cancellation, supervision, transcript, `agent://`, and `history://` paths. The
+> synthetic `Root` inbox is therefore session-local, and every list/read/send/wait/drain/cancel
+> operation supplies the exact caller session. A session may have at most 64 live actors; completed
+> actors do not consume that live quota. `parallel` and each pipeline wave accept at most 8 actors,
+> execute at most 4 concurrently, and own their child futures structurally so cancellation/drop
+> cancels the whole wave with no detached work. A pipeline accepts at most 4 stages. Role/task text
+> is capped at 128 bytes / 8 KiB, aggregate role+task text at 32 KiB per call, and initial pipeline
+> input at 32 KiB serialized.
+
+Child authority is deny-by-default. `agents.run`, `agents.spawn`, `agents.parallel`, and
+`agents.pipeline` accept `opts: {capabilities: [...]}`; omission delegates no parent capability.
+Every requested name must be both held by the parent and child-delegable. `backend.*` and `modes.*`
+are server control planes and are never delegable. The list accepts at most 32 names, each at most
+128 ASCII bytes and 2 KiB total. In particular, HTTP and artifact reads require explicit delegation:
+
+```tm
+let results = @agents.parallel {
+  tasks: [{role: "researcher", task: "Research and summarize the supplied artifact."}],
+  opts: {capabilities: ["http.get", "resources.read:artifact"]}
+};
+```
+
 The §23 full surface is now split between the P3 MVP calls and the P3-plus mailbox/supervision calls:
 
 | P3-plus call | Effect |
@@ -124,7 +147,7 @@ The §23 full surface is now split between the P3 MVP calls and the P3-plus mail
 | `agents.wait(from?, timeout)` | block for a message |
 | `agents.inbox()` | drain pending messages without blocking |
 | `agents.list()` | roster: peers, status, unread, last activity |
-| `agents.pipeline(items, …stages)` | staged map, **barrier between stages** |
+| `agents.pipeline(items, …stages, opts.capabilities?)` | staged map, **barrier between stages**, with one explicit delegated subset shared by every stage |
 
 Handles **wire the DAG by reference** — an upstream result feeds a downstream prompt as a compact digest
 reference (`agent://`, `history://`, artifact URI, and bounded summary), so the large transcript is never
@@ -155,8 +178,8 @@ flowchart TD
   in the supervisor, not smeared through every worker. Independent branches still finish when one aborts
   (a raising node aborts only its wave; wrap risky nodes so failure degrades only its dependent subtree).
 - **Budgets as supervision policy.** Per-actor wall / heap / egress caps; a **depth limit** bounds
-  recursion; cost accounting **rolls up** to the parent. Default conservative fan-out caps; measure before
-  loosening (§15).
+  recursion; cost accounting **rolls up** to the parent. The current conservative wave limits are 8
+  actors and 4 concurrent executions; measure before loosening (§15).
 - **Replayable** (principle #6): spawns, messages, and results are logged; supervision decisions re-run.
 
 ## 23.5 Context & memory discipline per actor (principle #3)
@@ -164,12 +187,14 @@ flowchart TD
 - **Own window.** Each actor has its **own** context; an N-way fan-out does **not** N× the parent window.
   Only the **digest the orchestrator code chooses** returns to context; full outputs land behind
   `agent://` / `history://` resources, with large payloads stored out of context as needed (§25).
+  Inline summaries are capped at 4 KiB and retained transcript previews at 64 KiB, with an explicit
+  truncation marker; larger durable output continues to travel by artifact/resource reference.
 - **No shared history.** Sub-agents start with no conversation history — everything needed is in the
   **assignment + shared context** (encapsulation). They coordinate by **messages**, not by reading each
   other's transcript.
-- **Memory scope is granted, late-bound.** A spawn may grant a read scope (global facts, or a linked-project
-  scope, §22); sub-agents are **ephemeral** and do **not** run the dreaming pipeline (§22) — the parent
-  persists a digest if it matters.
+- **Memory scope is granted, late-bound.** A spawn may explicitly delegate a read scope it already
+  holds (global facts, or a linked-project scope, §22); no read capability is ambient. Sub-agents are
+  **ephemeral** and do **not** run the dreaming pipeline (§22) — the parent persists a digest if it matters.
 
 ## 23.6 Late binding & capabilities (principle #9)
 
@@ -189,7 +214,8 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
   actor/artifact/history links, and parent-event resource provenance.
 - **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
   `history://<id>` (read-only transcript).
-  Roster listing is also exposed through `agents.list()`.
+  Both resolve only inside the caller's exact session-owned roster. Roster listing is also exposed
+  through the same session-scoped `agents.list()` path.
 
 ## 23.8 Crate layout (`tm-agents`, §28)
 
@@ -214,7 +240,10 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 - **Deadlock** (A waits on B waits on A) — forbidden by the **acyclic** rule; async messaging + `wait`
   timeouts prevent indefinite blocking.
 - **Runaway recursion / cost** — depth cap + per-actor budgets + rollup; conservative defaults (§15).
-- **Mailbox storm** — bounded mailbox + explicit drop/backpressure receipts; broadcast targets direct live children only.
+- **Mailbox storm** — messages are capped at 4 KiB; each inbox is bounded by both 64 messages and
+  64 KiB retained text; the global diagnostic log is oldest-first bounded by 1,000 messages and
+  512 KiB. Overflow returns explicit backpressure, and broadcast targets at most 8 direct live
+  children in the caller's session.
 
 ## 23.10 Mechanism provenance
 

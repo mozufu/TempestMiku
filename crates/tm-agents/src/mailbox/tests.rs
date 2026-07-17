@@ -170,7 +170,7 @@ async fn one_for_all_supervision_cancels_siblings_and_emits_decision() {
         .await
         .expect("tracked actor failure has a supervisor decision");
     registry
-        .emit_and_apply_supervision_decision("session-1", supervisor_id, decision.clone())
+        .emit_and_apply_supervision_decision("", supervisor_id, decision.clone())
         .await;
 
     assert_eq!(
@@ -481,4 +481,183 @@ async fn wait_for_message_filters_by_sender_without_losing_others() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].from, alpha);
     assert_eq!(remaining[0].text, "from alpha");
+}
+
+#[tokio::test]
+async fn session_ownership_isolates_same_actor_id_root_mailboxes_and_cancellation() {
+    let registry = MailboxRegistry::new();
+    let worker = ActorId::new("Worker").unwrap();
+    for session in ["session-a", "session-b"] {
+        registry
+            .track_for_session(session, test_record("Worker"))
+            .await
+            .unwrap();
+    }
+
+    registry
+        .send_message_for_session(
+            "session-a",
+            ActorMessage {
+                from: ActorId::new("Root").unwrap(),
+                to: worker.clone(),
+                text: "only a".to_string(),
+                reply_to: None,
+                sent_at: Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        registry
+            .drain_inbox_for_session("session-b", &worker, None)
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        registry
+            .drain_inbox_for_session("session-a", &worker, None)
+            .await[0]
+            .text,
+        "only a"
+    );
+
+    assert_eq!(
+        registry.cancel_actor("session-a", &worker).await,
+        CancelActorResult::Cancelled
+    );
+    assert!(
+        registry
+            .is_cancelled_for_session("session-a", &worker)
+            .await
+    );
+    assert!(
+        !registry
+            .is_cancelled_for_session("session-b", &worker)
+            .await
+    );
+    assert_eq!(
+        registry
+            .get_for_session("session-b", &worker)
+            .await
+            .unwrap()
+            .status,
+        ActorStatus::Running
+    );
+
+    for (session, text) in [("session-a", "root a"), ("session-b", "root b")] {
+        registry
+            .send_message_for_session(
+                session,
+                ActorMessage {
+                    from: worker.clone(),
+                    to: ActorId::new("Root").unwrap(),
+                    text: text.to_string(),
+                    reply_to: None,
+                    sent_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let root = ActorId::new("Root").unwrap();
+    assert_eq!(
+        registry
+            .drain_inbox_for_session("session-a", &root, None)
+            .await[0]
+            .text,
+        "root a"
+    );
+    assert_eq!(
+        registry
+            .drain_inbox_for_session("session-b", &root, None)
+            .await[0]
+            .text,
+        "root b"
+    );
+}
+
+#[tokio::test]
+async fn message_and_aggregate_mailbox_budgets_fail_closed() {
+    let registry = MailboxRegistry::new();
+    let worker = ActorId::new("Worker").unwrap();
+    registry
+        .track_for_session("bounded", test_record("Worker"))
+        .await
+        .unwrap();
+
+    let oversized = registry
+        .send_message_for_session(
+            "bounded",
+            ActorMessage {
+                from: ActorId::new("Root").unwrap(),
+                to: worker.clone(),
+                text: "x".repeat(crate::actor::MAX_ACTOR_MESSAGE_BYTES + 1),
+                reply_to: None,
+                sent_at: Utc::now(),
+            },
+        )
+        .await;
+    assert!(matches!(oversized, Err(RegistryError::InvalidText(_))));
+
+    let payload = "x".repeat(crate::actor::MAX_ACTOR_MESSAGE_BYTES);
+    let mut delivered = 0usize;
+    loop {
+        let receipt = registry
+            .send_message_for_session(
+                "bounded",
+                ActorMessage {
+                    from: ActorId::new("Root").unwrap(),
+                    to: worker.clone(),
+                    text: payload.clone(),
+                    reply_to: None,
+                    sent_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+        if receipt == Receipt::Backpressured {
+            break;
+        }
+        delivered += 1;
+    }
+    assert!(delivered < MAX_INBOX_MESSAGES);
+
+    for index in 0..200 {
+        registry
+            .record_message_for_session(
+                "log-budget",
+                ActorMessage {
+                    from: ActorId::new("Root").unwrap(),
+                    to: worker.clone(),
+                    text: format!("{index:03}{}", "y".repeat(4_000)),
+                    reply_to: None,
+                    sent_at: Utc::now(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let retained = registry.messages_for_session("log-budget").await;
+    assert!(retained.len() < 200);
+    assert!(
+        retained
+            .iter()
+            .map(ActorMessage::retained_bytes)
+            .sum::<usize>()
+            <= MAX_MESSAGE_LOG_BYTES
+    );
+    assert!(retained.last().unwrap().text.starts_with("199"));
+}
+
+#[tokio::test]
+async fn completed_actors_do_not_exhaust_the_live_session_limit() {
+    let registry = MailboxRegistry::new();
+    for index in 0..(MAX_ACTORS_PER_SESSION + 4) {
+        let id = ActorId::new(format!("Worker{index}")).unwrap();
+        registry
+            .track_for_session("long-lived", test_record(id.as_str()))
+            .await
+            .unwrap();
+        assert!(registry.mark_complete_for_session("long-lived", &id).await);
+    }
 }

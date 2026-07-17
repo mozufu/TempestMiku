@@ -1,14 +1,13 @@
 use std::{
     collections::BTreeMap,
-    fs::{self, File},
-    io::{self, BufRead, BufReader},
+    fs::File,
+    io::{BufRead, BufReader},
     path::{Component, Path, PathBuf},
     time::SystemTime,
 };
 
 use chrono::{DateTime, Utc};
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use ignore::WalkBuilder;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -18,8 +17,29 @@ use crate::{HostError, Result};
 
 use super::{
     config::{FsMode, FsPolicy, ParsedPath, ResolvedPath},
+    secure_fs::{
+        SecureKind, SecureWalkEntry, WalkControl, WalkOptions, open_entry_file, open_parent,
+        stat_entry, walk_secure,
+    },
     tools::{FsEntry, PatchHunk},
 };
+
+pub(super) const DEFAULT_FS_RESULT_LIMIT: usize = 1_000;
+pub(super) const MAX_FS_RESULT_LIMIT: usize = 10_000;
+pub(super) const MAX_FS_WALK_ENTRIES: usize = 100_000;
+pub(super) const MAX_FS_RESULT_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_GLOB_PATTERNS: usize = 64;
+pub(super) const MAX_GLOB_PATTERN_BYTES: usize = 4 * 1024;
+pub(super) const MAX_GLOB_TOTAL_BYTES: usize = 64 * 1024;
+pub(super) const MAX_SEARCH_PATHS: usize = 64;
+pub(super) const MAX_SEARCH_CONTEXT_LINES: usize = 20;
+pub(super) const MAX_SEARCH_PATTERN_BYTES: usize = 16 * 1024;
+pub(super) const MAX_SEARCH_FILE_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const MAX_SEARCH_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+pub(super) const MAX_SEARCH_RESULT_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_MUTATION_FILE_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_APPROVAL_ACTION_BYTES: usize = 4 * 1024;
+const MAX_GITIGNORE_BYTES: u64 = 1024 * 1024;
 
 pub(super) fn parse_args<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T> {
     serde_json::from_value(args).map_err(|err| HostError::InvalidArgs(err.to_string()))
@@ -128,32 +148,6 @@ pub(super) fn is_windows_drive(input: &str) -> bool {
         && (bytes.len() == 2 || bytes[2] == b'/' || bytes[2] == b'\\')
 }
 
-pub(super) fn ensure_under_root(path: &Path, root: &Path, display: &str) -> Result<()> {
-    if !path.starts_with(root) {
-        return Err(HostError::InvalidPath(format!(
-            "{display} resolves outside linked folder"
-        )));
-    }
-    Ok(())
-}
-
-pub(super) fn ensure_existing_ancestor_under_root(
-    parent: &Path,
-    root: &Path,
-    display: &str,
-) -> Result<()> {
-    let mut current = parent;
-    while !current.exists() {
-        current = current
-            .parent()
-            .ok_or_else(|| HostError::InvalidPath(format!("missing ancestor for {display}")))?;
-    }
-    let canonical = current
-        .canonicalize()
-        .map_err(|err| HostError::InvalidPath(format!("{display}: {err}")))?;
-    ensure_under_root(&canonical, root, display)
-}
-
 pub(super) fn ensure_rw(policy: &FsPolicy, display: &str) -> Result<()> {
     if policy.mode != FsMode::Rw {
         return Err(HostError::CapabilityDenied(format!(
@@ -196,10 +190,12 @@ const DEFAULT_READ_BYTES: usize = 64 * 1024;
 const MAX_READ_LINES: usize = 1_000;
 const MAX_READ_BYTES: usize = 256 * 1024;
 
-pub(super) fn read_text_page(path: &Path, selector: Option<&str>) -> Result<(String, bool)> {
+pub(super) fn read_text_page_from_file(
+    file: File,
+    selector: Option<&str>,
+) -> Result<(String, bool)> {
     let (start, end, byte_limit) = parse_text_selector(selector)?;
     let normalize_selected_lines = selector.is_some();
-    let file = File::open(path).map_err(|err| HostError::HostCall(err.to_string()))?;
     let mut reader = BufReader::new(file);
     for _ in 1..start {
         if reader
@@ -252,6 +248,78 @@ pub(super) fn read_text_page(path: &Path, selector: Option<&str>) -> Result<(Str
     let selected = String::from_utf8(selected)
         .map_err(|_| HostError::InvalidArgs("fs.read supports UTF-8 text only".to_string()))?;
     Ok((selected, has_more))
+}
+
+pub(super) fn approval_action(operation: &str, details: Value) -> String {
+    const MAX_FIELD_BYTES: usize = 512;
+    const MAX_COLLECTION_ENTRIES: usize = 64;
+
+    fn utf8_prefix(value: &str, limit: usize) -> &str {
+        let mut end = value.len().min(limit);
+        while end > 0 && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        &value[..end]
+    }
+
+    fn sanitize(value: Value) -> Value {
+        match value {
+            Value::String(value) => {
+                let redacted = tm_memory::redact_dream_text(&value).text;
+                if redacted.len() > MAX_FIELD_BYTES {
+                    Value::String(format!(
+                        "{}...[bounded:{} bytes]",
+                        utf8_prefix(&redacted, MAX_FIELD_BYTES),
+                        redacted.len()
+                    ))
+                } else {
+                    Value::String(redacted)
+                }
+            }
+            Value::Array(values) => {
+                let original_len = values.len();
+                let mut values = values
+                    .into_iter()
+                    .take(MAX_COLLECTION_ENTRIES)
+                    .map(sanitize)
+                    .collect::<Vec<_>>();
+                if original_len > MAX_COLLECTION_ENTRIES {
+                    values.push(serde_json::json!({
+                        "boundedRemainingEntries": original_len - MAX_COLLECTION_ENTRIES
+                    }));
+                }
+                Value::Array(values)
+            }
+            Value::Object(values) => Value::Object(
+                values
+                    .into_iter()
+                    .take(MAX_COLLECTION_ENTRIES)
+                    .map(|(key, value)| (key, sanitize(value)))
+                    .collect(),
+            ),
+            value => value,
+        }
+    }
+
+    let action = serde_json::json!({
+        "operation": operation,
+        "details": sanitize(details),
+    });
+    let encoded = serde_json::to_string(&action)
+        .unwrap_or_else(|_| format!(r#"{{"operation":"{operation}","details":"unavailable"}}"#));
+    if encoded.len() <= MAX_APPROVAL_ACTION_BYTES {
+        return encoded;
+    }
+    let digest = Sha256::digest(encoded.as_bytes());
+    serde_json::json!({
+        "operation": operation,
+        "details": {
+            "bounded": true,
+            "redactedSha256": hex::encode(digest),
+            "encodedBytes": encoded.len(),
+        }
+    })
+    .to_string()
 }
 
 fn parse_text_selector(selector: Option<&str>) -> Result<(usize, usize, usize)> {
@@ -323,84 +391,71 @@ pub(super) fn list_entries(
     include_hidden: bool,
 ) -> Result<Vec<FsEntry>> {
     let mut out = Vec::new();
-    if resolved.path.is_file() {
-        out.push(fs_entry(
-            &resolved.alias,
-            &resolved.relative,
-            &resolved.path,
-        )?);
-        return Ok(out);
-    }
-    visit_dir(
-        &resolved.alias,
-        &resolved.policy.root,
-        &resolved.path,
-        recursive,
-        limit,
-        include_hidden,
-        &mut out,
+    let mut visited = 0_usize;
+    let mut result_bytes = 2_usize;
+    walk_secure(
+        &resolved.policy,
+        resolved.root_identity,
+        &resolved.relative,
+        WalkOptions {
+            recursive,
+            include_hidden,
+            max_visited: MAX_FS_WALK_ENTRIES,
+        },
+        &mut visited,
+        &mut |entry| {
+            let entry = fs_entry_from_secure(&resolved.alias, entry);
+            if !push_bounded_fs_entry(&mut out, entry, limit, &mut result_bytes)? {
+                return Ok(WalkControl::Stop);
+            }
+            Ok(WalkControl::Continue)
+        },
     )?;
     out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
 
-pub(super) fn visit_dir(
-    alias: &str,
-    root: &Path,
-    dir: &Path,
-    recursive: bool,
-    limit: usize,
-    include_hidden: bool,
-    out: &mut Vec<FsEntry>,
-) -> Result<()> {
-    if out.len() >= limit {
-        return Ok(());
-    }
-    let mut entries = fs::read_dir(dir)
-        .map_err(|err| HostError::HostCall(err.to_string()))?
-        .collect::<std::result::Result<Vec<_>, io::Error>>()
-        .map_err(|err| HostError::HostCall(err.to_string()))?;
-    entries.sort_by_key(|entry| entry.path());
-    for entry in entries {
-        if out.len() >= limit {
-            break;
-        }
-        let path = entry.path();
-        let name = entry.file_name();
-        if !include_hidden && name.to_string_lossy().starts_with('.') {
-            continue;
-        }
-        let rel = path.strip_prefix(root).unwrap_or(path.as_path());
-        out.push(fs_entry(alias, rel, &path)?);
-        if recursive && path.is_dir() {
-            visit_dir(alias, root, &path, recursive, limit, include_hidden, out)?;
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn fs_entry(alias: &str, relative: &Path, path: &Path) -> Result<FsEntry> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|err| HostError::HostCall(err.to_string()))?;
-    let kind = if metadata.file_type().is_symlink() {
-        "symlink"
-    } else if metadata.is_dir() {
-        "dir"
-    } else {
-        "file"
+pub(super) fn fs_entry_from_secure(alias: &str, entry: SecureWalkEntry) -> FsEntry {
+    let kind = match entry.kind {
+        SecureKind::File => "file",
+        SecureKind::Directory => "dir",
+        SecureKind::Symlink => "symlink",
+        SecureKind::Other => "other",
     };
-    Ok(FsEntry {
-        path: display_path(alias, relative),
-        uri: linked_uri(alias, relative),
-        name: path
+    FsEntry {
+        path: display_path(alias, &entry.relative),
+        uri: linked_uri(alias, &entry.relative),
+        name: entry
+            .relative
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or(alias)
             .to_string(),
         kind: kind.to_string(),
-        size_bytes: metadata.is_file().then_some(metadata.len()),
-        modified_at: metadata.modified().ok().map(system_time_rfc3339),
-    })
+        size_bytes: entry.size_bytes,
+        modified_at: entry.modified_at.map(system_time_rfc3339),
+    }
+}
+
+pub(super) fn push_bounded_fs_entry(
+    entries: &mut Vec<FsEntry>,
+    entry: FsEntry,
+    limit: usize,
+    result_bytes: &mut usize,
+) -> Result<bool> {
+    if entries.len() >= limit {
+        return Ok(false);
+    }
+    let encoded = serde_json::to_vec(&entry).map_err(|err| HostError::HostCall(err.to_string()))?;
+    let extra = encoded
+        .len()
+        .saturating_add(usize::from(!entries.is_empty()));
+    if result_bytes.saturating_add(extra) > MAX_FS_RESULT_BYTES {
+        return Ok(false);
+    }
+    *result_bytes += extra;
+    entries.push(entry);
+    Ok(true)
 }
 
 pub(super) fn system_time_rfc3339(time: SystemTime) -> String {
@@ -408,6 +463,29 @@ pub(super) fn system_time_rfc3339(time: SystemTime) -> String {
 }
 
 pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
+    if patterns.is_empty() || patterns.len() > MAX_GLOB_PATTERNS {
+        return Err(HostError::InvalidArgs(format!(
+            "glob pattern count must be between 1 and {MAX_GLOB_PATTERNS}"
+        )));
+    }
+    let mut total_bytes = 0_usize;
+    for pattern in patterns {
+        if pattern.len() > MAX_GLOB_PATTERN_BYTES {
+            return Err(HostError::InvalidArgs(format!(
+                "glob patterns must not exceed {MAX_GLOB_PATTERN_BYTES} UTF-8 bytes"
+            )));
+        }
+        total_bytes = total_bytes.saturating_add(pattern.len());
+        if total_bytes > MAX_GLOB_TOTAL_BYTES {
+            return Err(HostError::InvalidArgs(format!(
+                "glob patterns must not exceed {MAX_GLOB_TOTAL_BYTES} aggregate UTF-8 bytes"
+            )));
+        }
+    }
+    build_globs(patterns)
+}
+
+fn build_globs(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         builder.add(Glob::new(pattern).map_err(|err| HostError::InvalidArgs(err.to_string()))?);
@@ -417,44 +495,79 @@ pub(super) fn compile_globs(patterns: &[String]) -> Result<GlobSet> {
         .map_err(|err| HostError::InvalidArgs(err.to_string()))
 }
 
-pub(super) fn load_simple_gitignore(root: &Path) -> Result<Option<GlobSet>> {
-    let path = root.join(".gitignore");
-    if !path.exists() {
+pub(super) fn load_simple_gitignore(
+    policy: &FsPolicy,
+    root_identity: super::secure_fs::FileIdentity,
+) -> Result<Option<GlobSet>> {
+    let relative = Path::new(".gitignore");
+    let display = display_path(&policy.alias, relative);
+    let parent = open_parent(policy, root_identity, relative, false, &display)?;
+    let Some(snapshot) = stat_entry(&parent, &display)? else {
         return Ok(None);
+    };
+    if snapshot.kind == SecureKind::Symlink {
+        return Err(HostError::InvalidPath(
+            ".gitignore must not be a symlink".to_string(),
+        ));
     }
-    let content = fs::read_to_string(&path).map_err(|err| HostError::HostCall(err.to_string()))?;
-    let patterns = content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('!'))
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    if snapshot.kind != SecureKind::File {
+        return Err(HostError::InvalidPath(
+            ".gitignore must be a regular file".to_string(),
+        ));
+    }
+    if snapshot
+        .size_bytes
+        .is_some_and(|size| size > MAX_GITIGNORE_BYTES)
+    {
+        return Err(HostError::InvalidArgs(format!(
+            ".gitignore exceeds {MAX_GITIGNORE_BYTES} bytes"
+        )));
+    }
+    let bytes = super::secure_fs::read_bounded(
+        open_entry_file(&parent, snapshot, &display)?,
+        MAX_GITIGNORE_BYTES as usize,
+        &display,
+    )?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| HostError::InvalidArgs(".gitignore must contain UTF-8 text".to_string()))?;
+    let mut patterns = Vec::new();
+    let mut total_pattern_bytes = 0_usize;
+    for pattern in content.lines().map(str::trim) {
+        if pattern.is_empty() || pattern.starts_with('#') || pattern.starts_with('!') {
+            continue;
+        }
+        if patterns.len() >= MAX_GLOB_PATTERNS {
+            return Err(HostError::InvalidArgs(format!(
+                ".gitignore pattern count must not exceed {MAX_GLOB_PATTERNS}"
+            )));
+        }
+        if pattern.len() > MAX_GLOB_PATTERN_BYTES {
+            return Err(HostError::InvalidArgs(format!(
+                ".gitignore patterns must not exceed {MAX_GLOB_PATTERN_BYTES} UTF-8 bytes"
+            )));
+        }
+        total_pattern_bytes = total_pattern_bytes.saturating_add(pattern.len());
+        if total_pattern_bytes > MAX_GLOB_TOTAL_BYTES {
+            return Err(HostError::InvalidArgs(format!(
+                ".gitignore patterns must not exceed {MAX_GLOB_TOTAL_BYTES} aggregate UTF-8 bytes"
+            )));
+        }
+        patterns.push(pattern.to_string());
+    }
     if patterns.is_empty() {
         return Ok(None);
     }
-    compile_globs(&patterns).map(Some)
+    build_globs(&patterns).map(Some)
 }
 
-pub(super) fn collect_files(resolved: &ResolvedPath, out: &mut Vec<ResolvedPath>) -> Result<()> {
-    for dent in WalkBuilder::new(&resolved.path).hidden(true).build() {
-        let dent = dent.map_err(|err| HostError::HostCall(err.to_string()))?;
-        let path = dent.path();
-        if path == resolved.path || !path.is_file() {
-            continue;
-        }
-        let relative = path
-            .strip_prefix(&resolved.policy.root)
-            .map_err(|err| HostError::HostCall(err.to_string()))?
-            .to_path_buf();
-        out.push(ResolvedPath {
-            alias: resolved.alias.clone(),
-            relative: relative.clone(),
-            display: display_path(&resolved.alias, &relative),
-            path: path.to_path_buf(),
-            policy: resolved.policy.clone(),
-        });
+pub(super) fn validate_result_limit(operation: &str, limit: Option<usize>) -> Result<usize> {
+    let limit = limit.unwrap_or(DEFAULT_FS_RESULT_LIMIT);
+    if !(1..=MAX_FS_RESULT_LIMIT).contains(&limit) {
+        return Err(HostError::InvalidArgs(format!(
+            "{operation} limit must be between 1 and {MAX_FS_RESULT_LIMIT}"
+        )));
     }
-    Ok(())
+    Ok(limit)
 }
 
 pub(super) fn file_tag(bytes: &[u8]) -> String {

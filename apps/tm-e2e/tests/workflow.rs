@@ -19,7 +19,7 @@ use tm_e2e::{
     WORKFLOW_RECORD_SCHEMA_VERSION, WorkflowOptions, run_actor_smoke, run_drive_smoke,
     run_record_api, run_record_native_coding, run_workflow, write_workflow_record,
 };
-use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
+use tm_host::{CapabilityGrants, FsMode, LinkedFolderConfig, LinkedFolders};
 use tm_lang::{TmSandbox, TmSandboxOptions};
 use tm_server::{
     AppState, ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig,
@@ -622,9 +622,10 @@ async fn assert_native_child_resources(client: &MikuClient, session_id: &str, li
         .await
         .unwrap();
     let history_content = history["content"].as_str().unwrap();
-    assert!(history_content.contains("agents.wait"));
+    assert!(history_content.contains("[tool_call] execute"));
+    assert!(history_content.contains("[cell_start] [redacted]"));
     assert!(history_content.contains("[cell_result]"));
-    assert!(history_content.contains(NATIVE_P3_BROADCAST_TEXT));
+    assert!(!history_content.contains("@agents.wait"));
 
     let agent_uri = format!("agent://{actor_id}");
     let agent = client
@@ -731,7 +732,7 @@ async fn start_native_actor_coordination_server()
                 opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
                 opts.grants =
-                    tm_lang::core_tm_grants().allow_many(grants.names().map(str::to_string));
+                    CapabilityGrants::default().allow_many(grants.names().map(str::to_string));
                 let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                     session_id,
                     Arc::clone(&executor_approval_roster),
@@ -941,8 +942,8 @@ fn test_linked_project(root: &std::path::Path) -> LinkedFolders {
 fn native_parent_coordination_code() -> String {
     format!(
         r#"
-let alpha = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
-let beta = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
+let alpha = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report.", opts: {{capabilities: ["agents.*"]}}}};
+let beta = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report.", opts: {{capabilities: ["agents.*"]}}}};
 let readyA = @agents.wait {{from: alpha, timeoutMs: 15000}};
 let readyB = @agents.wait {{from: beta, timeoutMs: 15000}};
 let receipts = @agents.broadcast {{text: "{broadcast}"}};
@@ -1126,15 +1127,20 @@ impl CodingBackend for ActorSmokeBackend {
         let actor_id =
             ActorId::new("Worker0").map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
         let actor_id_text = actor_id.to_string();
+        let actor_session_id = turn.session_id.to_string();
         self.roster
-            .track(actor_record(
-                actor_id.clone(),
-                "worker",
-                ActorStatus::Running,
-                false,
-                None,
-            ))
-            .await;
+            .track_for_session(
+                &actor_session_id,
+                actor_record(
+                    actor_id.clone(),
+                    "worker",
+                    ActorStatus::Running,
+                    false,
+                    None,
+                ),
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
         sink.emit(
             "actor_spawned",
             json!({
@@ -1185,13 +1191,15 @@ impl CodingBackend for ActorSmokeBackend {
             )
             .map_err(|err| ServerError::Store(err.to_string()))?;
         self.roster
-            .store_transcript(
+            .store_transcript_for_session(
+                &actor_session_id,
                 &actor_id,
                 "child smoke transcript\n[cell_result] artifact://0\n".to_string(),
             )
             .await;
         self.roster
-            .mark_complete_with_digest(
+            .mark_complete_with_digest_for_session(
+                &actor_session_id,
                 &actor_id,
                 "child smoke complete".to_string(),
                 Some("artifact://0".to_string()),
@@ -1232,14 +1240,18 @@ impl CodingBackend for ActorSmokeBackend {
             .map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
         let cancelled_actor_id_text = cancelled_actor_id.to_string();
         self.roster
-            .track(actor_record(
-                cancelled_actor_id,
-                "watcher",
-                ActorStatus::Terminated,
-                true,
-                Some(FailureReason::Cancelled),
-            ))
-            .await;
+            .track_for_session(
+                &actor_session_id,
+                actor_record(
+                    cancelled_actor_id,
+                    "watcher",
+                    ActorStatus::Terminated,
+                    true,
+                    Some(FailureReason::Cancelled),
+                ),
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
         sink.emit(
             "actor_cancelled",
             json!({

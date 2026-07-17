@@ -1,9 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::Cell as Counter,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use crate::{
     BinaryOp, CapabilityCatalog, Cell, Diagnostic, Expr, ExprKind, Form, FormKind, MatchArm,
-    Pattern, PatternKind, Result, TypeDecl, TypeTerm, UnaryOp, ValueType, parse,
+    Pattern, PatternKind, Result, Span, TypeDecl, TypeTerm, UnaryOp, ValueType, lexer::lex_bounded,
+    parser::parse_bounded,
 };
+
+const DEFAULT_MAX_SOURCE_BYTES: usize = 256 * 1024;
+const DEFAULT_MAX_SYNTAX_NODES: usize = 100_000;
+const DEFAULT_MAX_PARSE_DEPTH: usize = 256;
+const MAX_FUNCTION_ARITY: usize = 256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EffectRows {
@@ -35,7 +45,32 @@ struct Fact {
 }
 
 pub fn check(source: &str, cell: &Cell, catalog: &CapabilityCatalog) -> Result<CheckedCell> {
-    Checker::new(source, catalog).cell(cell)
+    check_bounded(
+        source,
+        cell,
+        catalog,
+        DEFAULT_MAX_SOURCE_BYTES,
+        DEFAULT_MAX_SYNTAX_NODES,
+        DEFAULT_MAX_PARSE_DEPTH,
+    )
+}
+
+pub fn check_bounded(
+    source: &str,
+    cell: &Cell,
+    catalog: &CapabilityCatalog,
+    max_source_bytes: usize,
+    max_syntax_nodes: usize,
+    max_parse_depth: usize,
+) -> Result<CheckedCell> {
+    Checker::new_bounded(
+        source,
+        catalog,
+        max_source_bytes,
+        max_syntax_nodes,
+        max_parse_depth,
+    )
+    .cell(cell)
 }
 
 pub fn check_with_bindings(
@@ -44,33 +79,257 @@ pub fn check_with_bindings(
     catalog: &CapabilityCatalog,
     bindings: impl IntoIterator<Item = String>,
 ) -> Result<CheckedCell> {
-    let mut checker = Checker::new(source, catalog);
+    check_with_bindings_bounded(
+        source,
+        cell,
+        catalog,
+        bindings,
+        DEFAULT_MAX_SOURCE_BYTES,
+        DEFAULT_MAX_SYNTAX_NODES,
+        DEFAULT_MAX_PARSE_DEPTH,
+    )
+}
+
+pub fn check_with_bindings_bounded(
+    source: &str,
+    cell: &Cell,
+    catalog: &CapabilityCatalog,
+    bindings: impl IntoIterator<Item = String>,
+    max_source_bytes: usize,
+    max_syntax_nodes: usize,
+    max_parse_depth: usize,
+) -> Result<CheckedCell> {
+    let mut checker = Checker::new_bounded(
+        source,
+        catalog,
+        max_source_bytes,
+        max_syntax_nodes,
+        max_parse_depth,
+    );
     checker
         .env
         .extend(bindings.into_iter().map(|name| (name, ValueType::Any)));
     checker.cell(cell)
 }
 
+/// Shared across the root checker and every recursively parsed interpolation fragment. The extra
+/// fragment allowance matches batch analysis: one source-sized byte budget, a bounded 2x token
+/// budget, and one combined AST/interpolation nesting counter.
+struct CheckContext {
+    remaining_fragment_bytes: Counter<usize>,
+    remaining_fragment_tokens: Counter<usize>,
+    max_fragment_tokens: usize,
+    check_depth: Counter<usize>,
+    max_parse_depth: usize,
+}
+
+impl CheckContext {
+    fn new(max_source_bytes: usize, max_syntax_nodes: usize, max_parse_depth: usize) -> Self {
+        Self {
+            remaining_fragment_bytes: Counter::new(max_source_bytes),
+            remaining_fragment_tokens: Counter::new(max_source_bytes.saturating_mul(2)),
+            max_fragment_tokens: max_syntax_nodes,
+            check_depth: Counter::new(0),
+            max_parse_depth,
+        }
+    }
+
+    fn enter_expr(&self, expr: &Expr, source: &str) -> Result<()> {
+        let depth = self.check_depth.get();
+        if depth >= self.max_parse_depth {
+            return Err(Diagnostic::new(
+                "TM2021",
+                "checker nesting budget exceeded",
+                expr.span,
+                source,
+            ));
+        }
+        self.check_depth.set(depth + 1);
+        Ok(())
+    }
+
+    fn exit_expr(&self) {
+        let depth = self.check_depth.get();
+        debug_assert!(depth > 0);
+        self.check_depth.set(depth.saturating_sub(1));
+    }
+
+    fn parse_interpolation(&self, source: &str) -> Result<Cell> {
+        let remaining_bytes = self.remaining_fragment_bytes.get();
+        if source.len() > remaining_bytes {
+            return Err(Diagnostic::new(
+                "TM2019",
+                "interpolation check source budget exceeded",
+                Span::new(0, source.len()),
+                source,
+            ));
+        }
+
+        let depth = self.check_depth.get();
+        if depth >= self.max_parse_depth {
+            return Err(Diagnostic::new(
+                "TM2021",
+                "interpolation check nesting budget exceeded",
+                Span::new(0, source.len()),
+                source,
+            ));
+        }
+
+        // Count before parsing so every recursive fragment consumes the same cumulative syntax
+        // allowance. `parse_bounded` re-lexes once, keeping this a fixed bounded-factor pass.
+        let remaining_tokens = self.remaining_fragment_tokens.get();
+        let tokens = lex_bounded(source, self.max_fragment_tokens.min(remaining_tokens))?;
+        let token_count = tokens.len();
+        self.remaining_fragment_bytes
+            .set(remaining_bytes - source.len());
+        self.remaining_fragment_tokens
+            .set(remaining_tokens - token_count);
+
+        parse_bounded(
+            source,
+            source.len(),
+            token_count,
+            self.max_parse_depth - depth,
+        )
+    }
+}
+
+/// A map with lexical checkpoints. Mutations made while a checkpoint is active are recorded as
+/// deltas and undone in reverse order when the scope exits. Persistent, top-level mutations do not
+/// accumulate undo history.
+struct ScopedMap<V> {
+    values: BTreeMap<String, V>,
+    undo: Vec<(String, Option<V>)>,
+    scopes: Vec<usize>,
+}
+
+impl<V> ScopedMap<V> {
+    fn new(values: BTreeMap<String, V>) -> Self {
+        Self {
+            values,
+            undo: Vec::new(),
+            scopes: Vec::new(),
+        }
+    }
+
+    fn begin_scope(&mut self) -> usize {
+        let checkpoint = self.undo.len();
+        self.scopes.push(checkpoint);
+        checkpoint
+    }
+
+    fn rollback_scope(&mut self, checkpoint: usize) {
+        debug_assert_eq!(self.scopes.pop(), Some(checkpoint));
+        while self.undo.len() > checkpoint {
+            let (name, previous) = self.undo.pop().expect("undo length checked");
+            if let Some(previous) = previous {
+                self.values.insert(name, previous);
+            } else {
+                self.values.remove(&name);
+            }
+        }
+    }
+
+    fn insert(&mut self, name: String, value: V) {
+        let previous = self.values.insert(name.clone(), value);
+        if self.scopes.is_empty() {
+            return;
+        }
+        self.undo.push((name, previous));
+    }
+
+    fn extend(&mut self, values: impl IntoIterator<Item = (String, V)>) {
+        for (name, value) in values {
+            self.insert(name, value);
+        }
+    }
+
+    fn contains_key(&self, name: &str) -> bool {
+        self.values.contains_key(name)
+    }
+
+    fn get(&self, name: &str) -> Option<&V> {
+        self.values.get(name)
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.values.keys()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ScopeCheckpoint {
+    env: usize,
+    local_types: usize,
+    constructors: usize,
+}
+
 struct Checker<'a> {
     source: &'a str,
     catalog: &'a CapabilityCatalog,
-    env: BTreeMap<String, ValueType>,
-    local_types: BTreeMap<String, BTreeMap<String, Option<ValueType>>>,
-    constructors: BTreeMap<String, (String, Option<ValueType>)>,
+    context: Rc<CheckContext>,
+    env: ScopedMap<ValueType>,
+    local_types: ScopedMap<BTreeMap<String, Option<ValueType>>>,
+    constructors: ScopedMap<(String, Option<ValueType>)>,
     row_context: bool,
+    rethrow_errors: Option<BTreeSet<String>>,
 }
 
 impl<'a> Checker<'a> {
-    fn new(source: &'a str, catalog: &'a CapabilityCatalog) -> Self {
-        let env = prelude_types();
+    fn new_bounded(
+        source: &'a str,
+        catalog: &'a CapabilityCatalog,
+        max_source_bytes: usize,
+        max_syntax_nodes: usize,
+        max_parse_depth: usize,
+    ) -> Self {
+        Self::with_context(
+            source,
+            catalog,
+            Rc::new(CheckContext::new(
+                max_source_bytes,
+                max_syntax_nodes,
+                max_parse_depth,
+            )),
+        )
+    }
+
+    fn with_context(
+        source: &'a str,
+        catalog: &'a CapabilityCatalog,
+        context: Rc<CheckContext>,
+    ) -> Self {
         Self {
             source,
             catalog,
-            env,
-            local_types: BTreeMap::new(),
-            constructors: BTreeMap::new(),
+            context,
+            env: ScopedMap::new(prelude_types()),
+            local_types: ScopedMap::new(BTreeMap::new()),
+            constructors: ScopedMap::new(BTreeMap::new()),
             row_context: false,
+            rethrow_errors: None,
         }
+    }
+
+    fn begin_scope(&mut self) -> ScopeCheckpoint {
+        ScopeCheckpoint {
+            env: self.env.begin_scope(),
+            local_types: self.local_types.begin_scope(),
+            constructors: self.constructors.begin_scope(),
+        }
+    }
+
+    fn rollback_scope(&mut self, checkpoint: ScopeCheckpoint) {
+        self.constructors.rollback_scope(checkpoint.constructors);
+        self.local_types.rollback_scope(checkpoint.local_types);
+        self.env.rollback_scope(checkpoint.env);
+    }
+
+    fn with_scope<T>(&mut self, body: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let checkpoint = self.begin_scope();
+        let result = body(self);
+        self.rollback_scope(checkpoint);
+        result
     }
 
     fn cell(mut self, cell: &Cell) -> Result<CheckedCell> {
@@ -136,15 +395,16 @@ impl<'a> Checker<'a> {
                 Ok(fact)
             }
             FormKind::Fun { name, params, body } => {
-                let old = self.env.clone();
-                self.env.insert(name.clone(), ValueType::Any);
-                for param in params {
-                    for name in pattern_names(self.source, param)? {
-                        self.env.insert(name, ValueType::Any);
+                self.ensure_function_arity(params.len(), form.span)?;
+                let body = self.with_scope(|checker| {
+                    checker.env.insert(name.clone(), ValueType::Any);
+                    for param in params {
+                        for name in pattern_names(checker.source, param)? {
+                            checker.env.insert(name, ValueType::Any);
+                        }
                     }
-                }
-                let body = self.expr(body)?;
-                self.env = old;
+                    checker.expr(body)
+                })?;
                 let mut ty = body.ty;
                 for _ in params.iter().rev() {
                     ty = ValueType::Function(Box::new(ValueType::Any), Box::new(ty));
@@ -180,14 +440,23 @@ impl<'a> Checker<'a> {
             }
             let payload = variant.payload.as_ref().map(type_from_term);
             variants.insert(variant.name.clone(), payload.clone());
+        }
+        for (name, payload) in &variants {
             self.constructors
-                .insert(variant.name.clone(), (decl.name.clone(), payload));
+                .insert(name.clone(), (decl.name.clone(), payload.clone()));
         }
         self.local_types.insert(decl.name.clone(), variants);
         Ok(())
     }
 
     fn expr(&mut self, expr: &Expr) -> Result<Fact> {
+        self.context.enter_expr(expr, self.source)?;
+        let result = self.expr_inner(expr);
+        self.context.exit_expr();
+        result
+    }
+
+    fn expr_inner(&mut self, expr: &Expr) -> Result<Fact> {
         match &expr.node {
             ExprKind::String(value) => {
                 let mut fact = pure(ValueType::String);
@@ -204,7 +473,7 @@ impl<'a> Checker<'a> {
                             }
                         }
                         Interpolation::Expression(source) => {
-                            let cell = parse(&source)?;
+                            let cell = self.context.parse_interpolation(&source)?;
                             if !matches!(
                                 cell.forms.as_slice(),
                                 [Form {
@@ -219,12 +488,15 @@ impl<'a> Checker<'a> {
                                     self.source,
                                 ));
                             }
-                            let checked = check_with_bindings(
+                            let mut checker = Checker::with_context(
                                 &source,
-                                &cell,
                                 self.catalog,
-                                self.env.keys().cloned(),
-                            )?;
+                                Rc::clone(&self.context),
+                            );
+                            checker.env.extend(
+                                self.env.keys().cloned().map(|name| (name, ValueType::Any)),
+                            );
+                            let checked = checker.cell(&cell)?;
                             fact.effects = fact.effects.union(checked.effects);
                         }
                     }
@@ -266,6 +538,12 @@ impl<'a> Checker<'a> {
                     fact.effects.presentation.insert("display".into());
                 } else if name == "print" {
                     fact.effects.errors.insert("ResourceLimitError".into());
+                } else if name == "rethrow" {
+                    fact.effects.errors.extend(
+                        self.rethrow_errors
+                            .clone()
+                            .unwrap_or_else(|| BTreeSet::from(["Rethrown".into()])),
+                    );
                 }
                 Ok(fact)
             }
@@ -352,14 +630,15 @@ impl<'a> Checker<'a> {
                 })
             }
             ExprKind::Lambda { params, body } => {
-                let old = self.env.clone();
-                for param in params {
-                    for name in pattern_names(self.source, param)? {
-                        self.env.insert(name, ValueType::Any);
+                self.ensure_function_arity(params.len(), expr.span)?;
+                let body = self.with_scope(|checker| {
+                    for param in params {
+                        for name in pattern_names(checker.source, param)? {
+                            checker.env.insert(name, ValueType::Any);
+                        }
                     }
-                }
-                let body = self.expr(body)?;
-                self.env = old;
+                    checker.expr(body)
+                })?;
                 let mut ty = body.ty;
                 for _ in params.iter().rev() {
                     ty = ValueType::Function(Box::new(ValueType::Any), Box::new(ty));
@@ -378,8 +657,9 @@ impl<'a> Checker<'a> {
                 let function = self.expr(function)?;
                 let previous_row_context = self.row_context;
                 self.row_context |= row_argument;
-                let argument = self.expr(argument)?;
+                let argument = self.expr(argument);
                 self.row_context = previous_row_context;
+                let argument = argument?;
                 let ty = match function.ty {
                     ValueType::Function(expected, result) => {
                         ensure_assignable(self.source, expr, &expected, &argument.ty)?;
@@ -472,25 +752,33 @@ impl<'a> Checker<'a> {
             ExprKind::Match { value, arms } => self.match_expr(expr, value, arms),
             ExprKind::Handle { value, arms } => {
                 let mut fact = self.expr(value)?;
+                let original_errors = fact.effects.errors.clone();
                 let mut arm_effects = EffectRows::default();
                 let mut ty = fact.ty.clone();
                 let mut handled = BTreeSet::new();
                 let mut catches_all = false;
                 for arm in arms {
                     self.check_pattern(&arm.pattern, &ValueType::Any)?;
-                    match &arm.pattern.node {
-                        PatternKind::Wildcard | PatternKind::Bind(_) => catches_all = true,
+                    let rethrow_errors = match &arm.pattern.node {
+                        PatternKind::Wildcard | PatternKind::Bind(_) => {
+                            catches_all = true;
+                            original_errors.clone()
+                        }
                         PatternKind::Constructor { name, .. } => {
                             handled.insert(name.clone());
+                            BTreeSet::from([name.clone()])
                         }
-                        _ => {}
-                    }
-                    let old = self.env.clone();
-                    for name in pattern_names(self.source, &arm.pattern)? {
-                        self.env.insert(name, ValueType::Any);
-                    }
-                    let arm = self.expr(&arm.value)?;
-                    self.env = old;
+                        _ => BTreeSet::new(),
+                    };
+                    let old_rethrow_errors = self.rethrow_errors.replace(rethrow_errors);
+                    let arm_result = self.with_scope(|checker| {
+                        for name in pattern_names(checker.source, &arm.pattern)? {
+                            checker.env.insert(name, ValueType::Any);
+                        }
+                        checker.expr(&arm.value)
+                    });
+                    self.rethrow_errors = old_rethrow_errors;
+                    let arm = arm_result?;
                     ty = unify(ty, arm.ty);
                     arm_effects = arm_effects.union(arm.effects);
                 }
@@ -504,23 +792,32 @@ impl<'a> Checker<'a> {
                     effects: fact.effects.union(arm_effects),
                 })
             }
-            ExprKind::Block(forms) => {
-                let old = self.env.clone();
-                let old_types = self.local_types.clone();
-                let old_constructors = self.constructors.clone();
+            ExprKind::Block(forms) => self.with_scope(|checker| {
                 let mut fact = pure(ValueType::Null);
                 for form in forms {
-                    let next = self.form(form, false)?;
+                    let next = checker.form(form, false)?;
                     fact = Fact {
                         ty: next.ty,
                         effects: fact.effects.union(next.effects),
                     };
                 }
-                self.env = old;
-                self.local_types = old_types;
-                self.constructors = old_constructors;
                 Ok(fact)
-            }
+            }),
+        }
+    }
+
+    fn ensure_function_arity(&self, arity: usize, span: Span) -> Result<()> {
+        if arity > MAX_FUNCTION_ARITY {
+            Err(Diagnostic::new(
+                "TM3023",
+                format!(
+                    "function arity budget exceeded: {arity} parameters exceeds {MAX_FUNCTION_ARITY}"
+                ),
+                span,
+                self.source,
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -603,12 +900,12 @@ impl<'a> Checker<'a> {
                 }
                 _ => {}
             }
-            let old = self.env.clone();
-            for (name, ty) in self.pattern_bindings(&arm.pattern, &value.ty)? {
-                self.env.insert(name, ty);
-            }
-            let arm = self.expr(&arm.value)?;
-            self.env = old;
+            let arm = self.with_scope(|checker| {
+                for (name, ty) in checker.pattern_bindings(&arm.pattern, &value.ty)? {
+                    checker.env.insert(name, ty);
+                }
+                checker.expr(&arm.value)
+            })?;
             ty = unify(ty, arm.ty);
             effects = effects.union(arm.effects);
         }
@@ -1131,6 +1428,20 @@ mod tests {
     }
 
     #[test]
+    fn rethrow_restores_the_handled_error_row() {
+        let source = "handle 1 / 0 with error { | DivisionByZero _ -> rethrow null }";
+        let checked = check(source, &parse(source).unwrap(), &catalog()).unwrap();
+        assert_eq!(
+            checked.effects.errors,
+            BTreeSet::from(["DivisionByZero".into()])
+        );
+
+        let source = "handle 1 / 0 with error { | error -> 0 }";
+        let checked = check(source, &parse(source).unwrap(), &catalog()).unwrap();
+        assert!(checked.effects.errors.is_empty());
+    }
+
+    #[test]
     fn rejects_local_sum_type_escape() {
         let source = "let escaped = do { type Local = | Only; Only }";
         let cell = parse(source).unwrap();
@@ -1212,5 +1523,116 @@ mod tests {
         let source = "[1, 2] |> map";
         let checked = check(source, &parse(source).unwrap(), &catalog()).unwrap();
         assert!(matches!(checked.result_type, ValueType::Function(_, _)));
+    }
+
+    #[test]
+    fn lexical_deltas_restore_shadowed_bindings_and_local_types() {
+        let source = "let value = 1; do { let value = true; value }; value + 1";
+        let checked = check(source, &parse(source).unwrap(), &catalog()).unwrap();
+        assert_eq!(checked.result_type, ValueType::Int);
+
+        let source = "do { type Local = | Only; Only }; Only";
+        let error = check(source, &parse(source).unwrap(), &catalog()).unwrap_err();
+        assert_eq!(error.code, "TM3007");
+    }
+
+    #[test]
+    fn lexical_deltas_are_rolled_back_when_a_scope_errors() {
+        let source = "do { type Local = | Only; let leaked = Only; missing }";
+        let cell = parse(source).unwrap();
+        let catalog = catalog();
+        let mut checker = Checker::new_bounded(
+            source,
+            &catalog,
+            DEFAULT_MAX_SOURCE_BYTES,
+            DEFAULT_MAX_SYNTAX_NODES,
+            DEFAULT_MAX_PARSE_DEPTH,
+        );
+
+        assert_eq!(
+            checker.form(&cell.forms[0], true).unwrap_err().code,
+            "TM3006"
+        );
+        assert!(!checker.env.contains_key("leaked"));
+        assert!(!checker.local_types.contains_key("Local"));
+        assert!(!checker.constructors.contains_key("Only"));
+        assert!(checker.env.undo.is_empty());
+        assert!(checker.local_types.undo.is_empty());
+        assert!(checker.constructors.undo.is_empty());
+        assert!(checker.env.scopes.is_empty());
+        assert!(checker.local_types.scopes.is_empty());
+        assert!(checker.constructors.scopes.is_empty());
+    }
+
+    #[test]
+    fn many_function_scopes_do_not_copy_the_accumulated_environment() {
+        let mut source = String::new();
+        for index in 0..2_000 {
+            source.push_str(&format!("fun f{index} item = item;"));
+        }
+        source.push_str("f1999 1");
+
+        let checked = check(&source, &parse(&source).unwrap(), &catalog()).unwrap();
+        assert_eq!(checked.bindings.len(), 2_000);
+        assert_eq!(checked.result_type, ValueType::Any);
+    }
+
+    #[test]
+    fn deeply_nested_scopes_restore_each_lexical_delta() {
+        let depth = 48;
+        let mut source = String::new();
+        for index in 0..depth {
+            let value = if index == 0 {
+                "1".into()
+            } else {
+                format!("v{}", index - 1)
+            };
+            source.push_str(&format!("do {{ let v{index} = {value}; "));
+        }
+        source.push_str(&format!("v{}", depth - 1));
+        for _ in 0..depth {
+            source.push_str(" }");
+        }
+
+        let checked = check(&source, &parse(&source).unwrap(), &catalog()).unwrap();
+        assert_eq!(checked.result_type, ValueType::Int);
+    }
+
+    #[test]
+    fn recursively_nested_interpolations_share_the_check_depth_budget() {
+        let mut source = "1".to_string();
+        for _ in 0..12 {
+            source = serde_json::to_string(&format!("#{{{source}}}")).unwrap();
+        }
+        let cell = parse(&source).unwrap();
+        let max_source_bytes = source.len().saturating_mul(4);
+
+        let error = check_with_bindings_bounded(
+            &source,
+            &cell,
+            &catalog(),
+            std::iter::empty::<String>(),
+            max_source_bytes,
+            1_024,
+            8,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "TM2021", "{error:?}");
+    }
+
+    #[test]
+    fn flat_function_arity_is_rejected_before_building_nested_function_types() {
+        let parameters = std::iter::repeat_n("_", 30_000)
+            .collect::<Vec<_>>()
+            .join(" ");
+        for source in [
+            format!("fun too_wide {parameters} = null"),
+            format!("let too_wide = fun {parameters} -> null"),
+        ] {
+            let cell = parse(&source).unwrap();
+            let error = check(&source, &cell, &catalog()).unwrap_err();
+            assert_eq!(error.code, "TM3023", "{error:?}");
+        }
     }
 }

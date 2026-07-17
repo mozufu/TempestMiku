@@ -75,8 +75,16 @@ impl HostFn for AgentsBroadcastFn {
         let text = parse_plain_prose_text(&args, "text")?;
         let from = caller_actor_id(ctx)?;
 
-        let mut targets = self.roster.live_direct_children(&from).await;
+        let mut targets = self
+            .roster
+            .live_direct_children_for_session(&ctx.session_id, &from)
+            .await;
         targets.sort_by(|a, b| a.id.cmp(&b.id));
+        if targets.len() > MAX_ACTORS_PER_CALL {
+            return Err(HostError::InvalidArgs(format!(
+                "broadcast has more than {MAX_ACTORS_PER_CALL} direct live children"
+            )));
+        }
 
         let mut receipts = Vec::with_capacity(targets.len());
         for target in targets {
@@ -87,7 +95,11 @@ impl HostFn for AgentsBroadcastFn {
                 reply_to: None,
                 sent_at: Utc::now(),
             };
-            let receipt = self.roster.send_message(message.clone()).await;
+            let receipt = self
+                .roster
+                .send_message_for_session(&ctx.session_id, message.clone())
+                .await
+                .map_err(registry_error)?;
             maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
             let mut receipt_value = receipt_json(receipt);
             if let Some(object) = receipt_value.as_object_mut() {
@@ -176,7 +188,7 @@ impl HostFn for AgentsCancelFn {
                 .ok_or_else(|| HostError::InvalidArgs("target is required".to_string()))?,
             "target",
         )?;
-        let Some(record) = self.roster.get(&target).await else {
+        let Some(record) = self.roster.get_for_session(&ctx.session_id, &target).await else {
             return Ok(json!({
                 "actorId": target.as_str(),
                 "status": "not_found",
@@ -291,7 +303,7 @@ impl HostFn for AgentsSendFn {
         let do_await = args["opts"]["await"].as_bool().unwrap_or(false);
         let from = caller_actor_id(ctx)?;
         if do_await {
-            reject_descendant_wait(&self.roster, &from, &to, "to").await?;
+            reject_descendant_wait(&self.roster, &ctx.session_id, &from, &to, "to").await?;
         }
 
         let message = ActorMessage {
@@ -301,7 +313,11 @@ impl HostFn for AgentsSendFn {
             reply_to: do_await.then_some(from.clone()),
             sent_at: Utc::now(),
         };
-        let receipt = self.roster.send_message(message.clone()).await;
+        let receipt = self
+            .roster
+            .send_message_for_session(&ctx.session_id, message.clone())
+            .await
+            .map_err(registry_error)?;
         maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
 
         if !do_await {
@@ -314,6 +330,7 @@ impl HostFn for AgentsSendFn {
         let timeout_ms = parse_timeout_ms(&args, 30_000)?;
         Ok(wait_for_actor_message_or_cancel(
             &self.roster,
+            &ctx.session_id,
             &from,
             Some(&to),
             Duration::from_millis(timeout_ms),
@@ -398,12 +415,13 @@ impl HostFn for AgentsWaitFn {
             None => None,
         };
         if let Some(from) = from.as_ref() {
-            reject_descendant_wait(&self.roster, &actor_id, from, "from").await?;
+            reject_descendant_wait(&self.roster, &ctx.session_id, &actor_id, from, "from").await?;
         }
         let timeout_ms = parse_timeout_ms(&args, 30_000)?;
 
         Ok(wait_for_actor_message_or_cancel(
             &self.roster,
+            &ctx.session_id,
             &actor_id,
             from.as_ref(),
             Duration::from_millis(timeout_ms),
@@ -469,7 +487,7 @@ impl HostFn for AgentsInboxFn {
         let actor_id = caller_actor_id(ctx)?;
         Ok(Value::Array(
             self.roster
-                .drain_inbox(&actor_id, None)
+                .drain_inbox_for_session(&ctx.session_id, &actor_id, None)
                 .await
                 .into_iter()
                 .map(message_json)
@@ -531,16 +549,16 @@ impl HostFn for AgentsListFn {
     async fn call(&self, _args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_LIST);
         let mut entries = Vec::new();
-        for record in self.roster.list().await {
+        for record in self.roster.list_for_session(&ctx.session_id).await {
             entries.push(json!({
                 "id": record.id.as_str(),
                 "parentId": record.parent.as_ref().map(|id| id.as_str().to_string()),
                 "status": record.status,
                 "mode": record.mode,
-                "unread": self.roster.unread_count(&record.id).await,
+                "unread": self.roster.unread_count_for_session(&ctx.session_id, &record.id).await,
                 "lastActivity": self
                     .roster
-                    .last_activity(&record.id)
+                    .last_activity_for_session(&ctx.session_id, &record.id)
                     .await
                     .map(|at| at.to_rfc3339()),
                 "artifactUri": record.artifact_uri,

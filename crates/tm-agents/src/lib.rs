@@ -21,8 +21,10 @@ pub mod resources;
 pub mod supervise;
 
 pub use actor::{
-    ActorBudget, ActorCancelToken, ActorDigest, ActorHandle, ActorId, ActorIdError,
-    ActorLifecycleEvent, ActorOutputLink, ActorRecord, ActorSpec, ActorStatus,
+    ACTOR_TEXT_TRUNCATED_MARKER, ActorBudget, ActorCancelToken, ActorDigest, ActorHandle, ActorId,
+    ActorIdError, ActorLifecycleEvent, ActorOutputLink, ActorRecord, ActorSpec, ActorStatus,
+    MAX_ACTOR_MESSAGE_BYTES, MAX_ACTOR_ROLE_BYTES, MAX_ACTOR_SUMMARY_BYTES, MAX_ACTOR_TASK_BYTES,
+    MAX_ACTOR_TRANSCRIPT_BYTES, truncate_utf8_with_marker,
 };
 pub use executor::{ActorError, ActorExecutor};
 pub use mailbox::{ActorMessage, MailboxRegistry, Receipt};

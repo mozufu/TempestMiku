@@ -49,6 +49,17 @@ pub trait Sandbox: Send + Sync {
 /// `reset` tears it down for a clean slate.
 #[async_trait(?Send)]
 pub trait Session {
+    /// Whether this session owns cooperative cancellation for `eval`/`eval_batch`.
+    ///
+    /// A `true` implementation promises that the session observes its configured cancellation
+    /// token and does not return until terminal events and any selected state commit/rollback are
+    /// complete. The agent loop must not race and drop such an evaluation from the outside.
+    /// Legacy sessions inherit `false` and remain protected by the agent's outer cancellation
+    /// race.
+    fn handles_cancellation(&self) -> bool {
+        false
+    }
+
     async fn eval(&mut self, code: &str, budget: CellBudget) -> Result<EvalOutput>;
     /// Evaluate an independent batch. Backends may run cells concurrently from the same
     /// pre-batch snapshot; the compatibility default preserves response-order sequencing.

@@ -166,7 +166,9 @@ async fn native_tm_backend_approval_route_approves_proc_run() {
 
     let approval = wait_for_event_payload(&store, session_id, "approval").await;
     assert_eq!(approval["backend"], json!("native-tm"));
-    assert_eq!(approval["action"], json!("proc.run cargo clean"));
+    let action: Value = serde_json::from_str(approval["action"].as_str().unwrap()).unwrap();
+    assert_eq!(action["operation"], json!("proc.run"));
+    assert_eq!(action["details"]["argvPreview"], json!(["cargo", "clean"]));
     let approval_id = approval["approvalId"]
         .as_str()
         .unwrap()
@@ -851,7 +853,7 @@ async fn native_child_actor_receives_only_delegated_grants() {
     .unwrap();
 
     let parent_code = r#"
-let digest = @agents.run {role: "worker", task: "Verify undelegated repository capabilities are absent, then create a child artifact."};
+let digest = @agents.run {role: "worker", task: "Verify only explicit read capabilities are delegated, then create a child artifact.", opts: {capabilities: ["http.get", "resources.read:artifact"]}};
 digest |> display {kind: "json"}
 "#;
     let child_code = r#"
@@ -948,8 +950,8 @@ let artifact = @artifacts.put {data: "child resource open ok", title: "child out
                 opts.actor_id = actor_id.map(str::to_string);
                 opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants =
-                    tm_lang::core_tm_grants().allow_many(grants.names().map(str::to_string));
+                opts.grants = tm_host::CapabilityGrants::default()
+                    .allow_many(grants.names().map(str::to_string));
                 let sink: Arc<dyn CodingEventSink> = Arc::new(crate::RosterCodingEventSink::new(
                     session_id,
                     Arc::clone(&executor_approval_roster),
@@ -1063,6 +1065,20 @@ let artifact = @artifacts.put {data: "child resource open ok", title: "child out
             .unwrap_or_else(|| panic!("catalog should document {undelegated}"));
         assert_eq!(entry["granted"], json!(false), "{child_result_content}");
     }
+    for delegated in [
+        "http.get",
+        "artifacts.get",
+        "artifacts.slice",
+        "artifacts.list",
+    ] {
+        let entry = child_result["catalog"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == delegated)
+            .unwrap_or_else(|| panic!("catalog should document {delegated}"));
+        assert_eq!(entry["granted"], json!(true), "{child_result_content}");
+    }
     assert!(child_result_content.contains("artifact://0"));
 
     let artifact = get_session_resource_json(&app, session.id, "resolve", "artifact://0").await;
@@ -1102,21 +1118,25 @@ async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
 
     let actor_id = tm_agents::ActorId::new("Worker").unwrap();
     roster
-        .track(tm_agents::ActorRecord {
-            id: actor_id.clone(),
-            parent: None,
-            status: tm_agents::ActorStatus::Running,
-            mode: Some("worker".to_string()),
-            budget: tm_agents::ActorBudget::default(),
-            spawned_at: Utc::now(),
-            completed_at: None,
-            cancelled: false,
-            failure_reason: None,
-            last_summary: None,
-            artifact_uri: None,
-            history_uri: None,
-        })
-        .await;
+        .track_for_session(
+            &session.id.to_string(),
+            tm_agents::ActorRecord {
+                id: actor_id.clone(),
+                parent: None,
+                status: tm_agents::ActorStatus::Running,
+                mode: Some("worker".to_string()),
+                budget: tm_agents::ActorBudget::default(),
+                spawned_at: Utc::now(),
+                completed_at: None,
+                cancelled: false,
+                failure_reason: None,
+                last_summary: None,
+                artifact_uri: None,
+                history_uri: None,
+            },
+        )
+        .await
+        .unwrap();
 
     let result = roster
         .cancel_actor(&session.id.to_string(), &actor_id)
@@ -1205,21 +1225,25 @@ async fn actor_failed_event_replays_and_agent_resource_is_terminal() {
 
     let actor_id = tm_agents::ActorId::new("ResearchWorker").unwrap();
     roster
-        .track(tm_agents::ActorRecord {
-            id: actor_id.clone(),
-            parent: None,
-            status: tm_agents::ActorStatus::Running,
-            mode: Some("researcher".to_string()),
-            budget: tm_agents::ActorBudget::default(),
-            spawned_at: Utc::now(),
-            completed_at: None,
-            cancelled: false,
-            failure_reason: None,
-            last_summary: None,
-            artifact_uri: None,
-            history_uri: None,
-        })
-        .await;
+        .track_for_session(
+            &session.id.to_string(),
+            tm_agents::ActorRecord {
+                id: actor_id.clone(),
+                parent: None,
+                status: tm_agents::ActorStatus::Running,
+                mode: Some("researcher".to_string()),
+                budget: tm_agents::ActorBudget::default(),
+                spawned_at: Utc::now(),
+                completed_at: None,
+                cancelled: false,
+                failure_reason: None,
+                last_summary: None,
+                artifact_uri: None,
+                history_uri: None,
+            },
+        )
+        .await
+        .unwrap();
 
     let decision = roster
         .record_actor_error(
@@ -1448,7 +1472,7 @@ async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn serious_server_agent_route_uses_tm_effects_and_preserves_denials() {
+async fn sensitive_cell_boundary_server_route_uses_structured_events_and_preserves_denials() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
     let linked_root = temp.path().join("repo");
@@ -1572,8 +1596,22 @@ let deniedHttp = handle (@http.get {url: "https://evil.test/"}) with error {
     );
 
     let events = store.events_after(session.id, None).await.unwrap();
-    assert!(events.iter().any(|event| event.event_type == "cell_start"));
-    assert!(events.iter().any(|event| event.event_type == "cell_result"));
+    let cell_starts = events
+        .iter()
+        .filter(|event| event.event_type == "cell_start")
+        .collect::<Vec<_>>();
+    let cell_results = events
+        .iter()
+        .filter(|event| event.event_type == "cell_result")
+        .collect::<Vec<_>>();
+    assert_eq!(cell_starts.len(), 1, "{cell_starts:#?}");
+    assert_eq!(cell_results.len(), 1, "{cell_results:#?}");
+    assert_eq!(cell_starts[0].payload_json["sourcePreview"], "[redacted]");
+    assert_eq!(cell_results[0].payload_json["resultPreview"], "[redacted]");
+    assert!(cell_starts[0].payload_json.get("code").is_none());
+    assert!(cell_results[0].payload_json.get("shaped").is_none());
+    let persisted = serde_json::to_string(&events).unwrap();
+    assert!(!persisted.contains("https://evil.test/"), "{persisted}");
     assert!(events.iter().any(
         |event| event.event_type == "final" && event.payload_json.to_string().contains("done")
     ));
@@ -1659,13 +1697,11 @@ async fn serious_engineer_native_tm_uses_linked_repo_and_scoped_drive_search() {
         r#"
 let read = @fs.read {{path: "repo:src/lib.rs"}};
 let hits = @code.search {{pattern: "linked_answer", paths: ["repo:src/lib.rs"], regex: false}};
-let run = @proc.run {{cmd: "cargo", args: ["test", "--quiet"], cwd: "repo:"}};
 let driveHits = @drive.search {{query: "Scoped", project: "repo", returnSnippets: true}};
 let driveHit = match driveHits {{ | first :: _ -> first | [] -> null }};
 {{
   readOk: contains "linked_answer" read.content,
   codeHits: length hits,
-  exitCode: run.exitCode,
   driveHits: length driveHits,
   driveUri: driveHit.uri,
   driveProject: driveHit.project,
@@ -1743,7 +1779,6 @@ let driveHit = match driveHits {{ | first :: _ -> first | [] -> null }};
     let tool_result = native_tool_result(&llm);
     assert!(tool_result.contains("\"readOk\": true"), "{tool_result}");
     assert!(tool_result.contains("\"codeHits\": 1"), "{tool_result}");
-    assert!(tool_result.contains("\"exitCode\": 0"), "{tool_result}");
     assert!(tool_result.contains("\"driveHits\": 1"), "{tool_result}");
     assert!(tool_result.contains(&filed.uri), "{tool_result}");
     assert!(

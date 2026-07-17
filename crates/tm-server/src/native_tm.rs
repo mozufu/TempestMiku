@@ -8,12 +8,14 @@ use std::{
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tm_core::{Agent, AgentConfig, EventSink, LlmClient, Sandbox, Session, SessionConfig};
-use tm_host::{
-    ApprovalDecision as HostApprovalDecision, ApprovalPolicy, DefaultDenyApprovalPolicy, HostError,
-    HostEventSink,
+use tm_core::{
+    Agent, AgentConfig, CancellationToken, EventSink, LlmClient, Sandbox, Session, SessionConfig,
 };
-use tm_lang::{TmSandbox, TmSandboxOptions, core_tm_grants};
+use tm_host::{
+    ApprovalDecision as HostApprovalDecision, ApprovalPolicy, CapabilityGrants,
+    DefaultDenyApprovalPolicy, HostError, HostEventSink,
+};
+use tm_lang::{TmSandbox, TmSandboxOptions};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -21,6 +23,7 @@ use crate::{
     ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, CodingBackend, CodingEventSink,
     CodingTurn, CodingTurnResult, DetailedApprovalOutcome, Result, ServerError, StoreEvent,
     session_shards::{ThreadAffineShardPool, evict_expired_sessions, session_sweep_interval},
+    turn_control::{ActiveTurnRegistry, CancellationProxy, CombinedCancellation, TurnCancellation},
 };
 
 #[cfg(test)]
@@ -49,7 +52,22 @@ impl NativeApprovalMode {
 struct NativeTmRequest {
     turn: CodingTurn,
     sink: Arc<dyn CodingEventSink>,
+    cancellation: Arc<TurnCancellation>,
     reply: tokio::sync::oneshot::Sender<Result<CodingTurnResult>>,
+}
+
+enum NativeRequest {
+    Run(NativeTmRequest),
+    Promote {
+        session_id: Uuid,
+        turn_id: Uuid,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    Abort {
+        session_id: Uuid,
+        turn_id: Uuid,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
 }
 
 struct NativeShardConfig {
@@ -62,7 +80,8 @@ struct NativeShardConfig {
 }
 
 pub struct NativeTmBackend {
-    shards: ThreadAffineShardPool<NativeTmRequest>,
+    shards: ThreadAffineShardPool<NativeRequest>,
+    active_turns: ActiveTurnRegistry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +126,8 @@ struct CachedNativeSession {
     profile: NativeSessionProfile,
     last_used: Instant,
     runtime_reset_pending: bool,
+    cancellation_proxy: Arc<CancellationProxy>,
+    pending_promotion: Option<Uuid>,
 }
 
 impl NativeTmBackend {
@@ -139,6 +160,7 @@ impl NativeTmBackend {
             backend_options.event_channel_capacity > 0,
             "event_channel_capacity must be non-zero"
         );
+        let active_turns = ActiveTurnRegistry::default();
         let shards = ThreadAffineShardPool::spawn(
             backend_options.shard_count,
             "tm-native-shard",
@@ -162,7 +184,10 @@ impl NativeTmBackend {
                 }
             },
         );
-        Self { shards }
+        Self {
+            shards,
+            active_turns,
+        }
     }
 }
 
@@ -175,16 +200,67 @@ impl CodingBackend for NativeTmBackend {
     ) -> Result<CodingTurnResult> {
         let (reply, response) = tokio::sync::oneshot::channel();
         let session_id = turn.session_id;
+        let guard = self.active_turns.register(session_id, turn.durable_turn_id);
+        let cancellation = guard.cancellation();
         self.shards
-            .send(session_id, NativeTmRequest { turn, sink, reply })
+            .send(
+                session_id,
+                NativeRequest::Run(NativeTmRequest {
+                    turn,
+                    sink,
+                    cancellation,
+                    reply,
+                }),
+            )
+            .map_err(|_| ServerError::Store("native coding shard stopped".to_string()))?;
+        let result = response
+            .await
+            .map_err(|_| ServerError::Store("native coding shard dropped response".to_string()))?;
+        guard.finish();
+        result
+    }
+
+    async fn promote_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.shards
+            .send(
+                session_id,
+                NativeRequest::Promote {
+                    session_id,
+                    turn_id,
+                    reply,
+                },
+            )
             .map_err(|_| ServerError::Store("native coding shard stopped".to_string()))?;
         response
             .await
-            .map_err(|_| ServerError::Store("native coding shard dropped response".to_string()))?
+            .map_err(|_| ServerError::Store("native coding shard dropped promotion".to_string()))?
+    }
+
+    async fn abort_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        self.cancel_turn(session_id, turn_id);
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.shards
+            .send(
+                session_id,
+                NativeRequest::Abort {
+                    session_id,
+                    turn_id,
+                    reply,
+                },
+            )
+            .map_err(|_| ServerError::Store("native coding shard stopped".to_string()))?;
+        response
+            .await
+            .map_err(|_| ServerError::Store("native coding shard dropped abort".to_string()))?
+    }
+
+    fn cancel_turn(&self, session_id: Uuid, turn_id: Uuid) {
+        self.active_turns.cancel(session_id, turn_id);
     }
 }
 
-fn run_native_shard(receiver: std_mpsc::Receiver<NativeTmRequest>, config: NativeShardConfig) {
+fn run_native_shard(receiver: std_mpsc::Receiver<NativeRequest>, config: NativeShardConfig) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -213,18 +289,57 @@ fn run_native_shard(receiver: std_mpsc::Receiver<NativeTmRequest>, config: Nativ
                 Instant::now(),
                 |cached| cached.last_used,
             );
-            let result = run_cached_native_turn(
-                &request,
-                &config.llm,
-                &config.agent,
-                &config.sandbox,
-                config.approval_mode,
-                &config.approval_broker,
-                config.backend.event_channel_capacity,
-                &mut sessions,
-            )
-            .await;
-            let _ = request.reply.send(result);
+            match request {
+                NativeRequest::Run(request) => {
+                    let result = run_cached_native_turn(
+                        &request,
+                        &config.llm,
+                        &config.agent,
+                        &config.sandbox,
+                        config.approval_mode,
+                        &config.approval_broker,
+                        config.backend.event_channel_capacity,
+                        &mut sessions,
+                    )
+                    .await;
+                    let _ = request.reply.send(result);
+                }
+                NativeRequest::Promote {
+                    session_id,
+                    turn_id,
+                    reply,
+                } => {
+                    let mut result = Ok(());
+                    if let Some(cached) = sessions.get_mut(&session_id) {
+                        match cached.pending_promotion {
+                            Some(pending) if pending == turn_id => {
+                                cached.pending_promotion = None;
+                                cached.last_used = Instant::now();
+                            }
+                            Some(pending) => {
+                                result = Err(ServerError::Conflict(format!(
+                                    "turn {turn_id} cannot promote native runtime pending for turn {pending}"
+                                )));
+                            }
+                            None => {}
+                        }
+                    }
+                    let _ = reply.send(result);
+                }
+                NativeRequest::Abort {
+                    session_id,
+                    turn_id,
+                    reply,
+                } => {
+                    if sessions
+                        .get(&session_id)
+                        .is_some_and(|cached| cached.pending_promotion == Some(turn_id))
+                    {
+                        sessions.remove(&session_id);
+                    }
+                    let _ = reply.send(Ok(()));
+                }
+            }
         }
     });
 }
@@ -244,17 +359,20 @@ async fn run_cached_native_turn(
     let profile = NativeSessionProfile::from(&request.turn);
     let reopened = sessions
         .get(&session_id)
-        .is_none_or(|cached| cached.profile != profile);
+        .is_none_or(|cached| cached.profile != profile || cached.pending_promotion.is_some());
     if reopened {
         sessions.remove(&session_id);
         let event_proxy = Arc::new(SwappableCodingSink::default());
         event_proxy.bind(Arc::clone(&request.sink));
         let proxy_sink: Arc<dyn CodingEventSink> = event_proxy.clone();
         let host_event_proxy = Arc::new(SwappableHostEventSink::default());
+        let cancellation_proxy = Arc::new(CancellationProxy::new());
+        cancellation_proxy.bind(Arc::clone(&request.cancellation));
         let mut options = base_options.clone();
         options.session_id = session_id.to_string();
         options.session_scope = Some(request.turn.scope.clone());
-        options.grants = core_tm_grants().allow_many(request.turn.capabilities.iter().cloned());
+        options.grants =
+            CapabilityGrants::default().allow_many(request.turn.capabilities.iter().cloned());
         options.approval_policy = match approval_mode {
             NativeApprovalMode::Deny => Arc::new(DefaultDenyApprovalPolicy),
             NativeApprovalMode::Manual => Arc::new(HttpApprovalPolicy::new(
@@ -264,6 +382,15 @@ async fn run_cached_native_turn(
             )),
         };
         options.host_event_sink = host_event_proxy.clone();
+        let request_cancellation: Arc<dyn CancellationToken> = cancellation_proxy.clone();
+        let cancellation: Arc<dyn CancellationToken> = match options.cancellation.take() {
+            Some(application_cancellation) => Arc::new(CombinedCancellation::new(
+                application_cancellation,
+                request_cancellation,
+            )),
+            None => request_cancellation,
+        };
+        options.cancellation = Some(cancellation);
         let sandbox: Arc<dyn Sandbox> = Arc::new(TmSandbox::new(options));
         let session = sandbox
             .open(SessionConfig::default())
@@ -279,54 +406,81 @@ async fn run_cached_native_turn(
                 profile,
                 last_used: Instant::now(),
                 runtime_reset_pending: !request.turn.prior_messages.is_empty(),
+                cancellation_proxy,
+                pending_promotion: None,
             },
         );
     }
 
-    let cached = sessions
-        .get_mut(&session_id)
-        .expect("native session exists after open");
-    cached.event_proxy.bind(Arc::clone(&request.sink));
-    let mut cfg = base_cfg.clone();
-    cfg.system_prompt = request.turn.system_prompt.clone();
-    let agent = Agent::new(Arc::clone(llm), Arc::clone(&cached.sandbox), cfg);
-    let (event_tx, event_rx) = mpsc::channel(event_channel_capacity);
-    let event_sink = Arc::new(ForwardingEventSink { sender: event_tx });
-    let host_event_sink: Arc<dyn HostEventSink> = event_sink.clone();
-    cached.host_event_proxy.bind(host_event_sink);
-    let forwarder = tokio::spawn(forward_events(event_rx, Arc::clone(&request.sink)));
-    let run_result = async {
-        if cached.runtime_reset_pending {
-            event_sink.try_on_runtime_reset_confirmed().await?;
-            cached.runtime_reset_pending = false;
+    let result = {
+        let cached = sessions
+            .get_mut(&session_id)
+            .expect("native session exists after open");
+        cached.event_proxy.bind(Arc::clone(&request.sink));
+        cached
+            .cancellation_proxy
+            .bind(Arc::clone(&request.cancellation));
+        let mut cfg = base_cfg.clone();
+        cfg.system_prompt = request.turn.system_prompt.clone();
+        let agent = Agent::new(Arc::clone(llm), Arc::clone(&cached.sandbox), cfg);
+        let (event_tx, event_rx) = mpsc::channel(event_channel_capacity);
+        let event_sink = Arc::new(ForwardingEventSink { sender: event_tx });
+        let host_event_sink: Arc<dyn HostEventSink> = event_sink.clone();
+        cached.host_event_proxy.bind(host_event_sink);
+        let forwarder = tokio::spawn(forward_events(event_rx, Arc::clone(&request.sink)));
+        let run_result = async {
+            if cached.runtime_reset_pending {
+                event_sink.try_on_runtime_reset_confirmed().await?;
+                cached.runtime_reset_pending = false;
+            }
+            agent
+                .run_with_session_and_controls(
+                    &request.turn.user_prompt,
+                    &request.turn.prior_messages,
+                    cached.session.as_mut(),
+                    event_sink.as_ref(),
+                    None,
+                    Some(request.cancellation.as_ref()),
+                )
+                .await
         }
-        agent
-            .run_with_session_and_controls(
-                &request.turn.user_prompt,
-                &request.turn.prior_messages,
-                cached.session.as_mut(),
-                event_sink.as_ref(),
-                None,
-                None,
-            )
-            .await
-    }
-    .await
-    .map_err(|err| ServerError::Store(err.to_string()));
-    cached.host_event_proxy.clear();
-    drop(event_sink);
-    let forward_result = forwarder
         .await
-        .map_err(|err| ServerError::Store(format!("native coding event forwarder failed: {err}")));
-    cached.event_proxy.clear();
-    cached.last_used = Instant::now();
+        .map_err(|err| ServerError::Store(err.to_string()));
+        cached.host_event_proxy.clear();
+        cached.cancellation_proxy.clear();
+        drop(event_sink);
+        let forward_result = forwarder.await.map_err(|err| {
+            ServerError::Store(format!("native coding event forwarder failed: {err}"))
+        });
+        cached.event_proxy.clear();
+        cached.last_used = Instant::now();
 
-    let final_text = run_result?;
-    forward_result??;
-    Ok(CodingTurnResult {
-        final_text,
-        transcript_artifact: None,
-    })
+        // A durable sink failure can close the forwarding channel while the producer is still
+        // emitting. Prefer that original persistence error over the producer's secondary
+        // "forwarder stopped" error so callers see the actual failed boundary.
+        let result = match forward_result {
+            Err(error) | Ok(Err(error)) => Err(error),
+            Ok(Ok(())) => match run_result {
+                Err(error) => Err(error),
+                Ok(_) if request.cancellation.is_cancelled() => {
+                    Err(ServerError::Store(tm_core::Error::Cancelled.to_string()))
+                }
+                Ok(final_text) => Ok(CodingTurnResult {
+                    final_text,
+                    transcript_artifact: None,
+                }),
+            },
+        };
+        cached.pending_promotion = result.as_ref().ok().and(request.turn.durable_turn_id);
+        result
+    };
+
+    if result.is_err() {
+        // Keep native and chat backends on the same transaction boundary: any failed turn drops
+        // ephemeral state that may have advanced beyond its last confirmed durable event.
+        sessions.remove(&session_id);
+    }
+    result
 }
 
 #[derive(Default)]
@@ -509,8 +663,6 @@ enum NativeEvent {
     Reasoning(String),
     Text(String),
     ToolCall(String),
-    CellStart(String),
-    CellResult(String),
     RuntimeReset {
         persisted: Option<tokio::sync::oneshot::Sender<std::result::Result<(), String>>>,
     },
@@ -567,20 +719,14 @@ impl EventSink for ForwardingEventSink {
         self.send(NativeEvent::ToolCall(name.to_string()))
     }
 
-    fn on_cell_start(&self, code: &str) {
-        let _ = self.try_on_cell_start(code);
+    // Structured tm-lang events carry the bounded/redacted cell previews. Do not forward the
+    // legacy core callbacks, which contain complete source and shaped results.
+    fn try_on_cell_start(&self, _code: &str) -> tm_core::Result<()> {
+        Ok(())
     }
 
-    fn try_on_cell_start(&self, code: &str) -> tm_core::Result<()> {
-        self.send(NativeEvent::CellStart(code.to_string()))
-    }
-
-    fn on_cell_result(&self, shaped: &str) {
-        let _ = self.try_on_cell_result(shaped);
-    }
-
-    fn try_on_cell_result(&self, shaped: &str) -> tm_core::Result<()> {
-        self.send(NativeEvent::CellResult(shaped.to_string()))
+    fn try_on_cell_result(&self, _shaped: &str) -> tm_core::Result<()> {
+        Ok(())
     }
 
     fn on_runtime_reset(&self) {
@@ -647,8 +793,6 @@ async fn forward_events(
                     .map_err(|err| ServerError::Store(err.to_string()))?,
             ),
             NativeEvent::ToolCall(name) => ("tool_call", json!({ "name": name })),
-            NativeEvent::CellStart(code) => ("cell_start", json!({ "code": code })),
-            NativeEvent::CellResult(shaped) => ("cell_result", json!({ "shaped": shaped })),
             NativeEvent::RuntimeReset { persisted } => {
                 match sink
                     .emit(
@@ -819,6 +963,8 @@ mod tests {
         events: ParkingMutex<Vec<(String, Value)>>,
         next_seq: AtomicI64,
         delay: Duration,
+        event_to_fail: Option<&'static str>,
+        event_failures: AtomicUsize,
         runtime_reset_failures: AtomicUsize,
         runtime_reset_attempts: AtomicUsize,
     }
@@ -838,6 +984,14 @@ mod tests {
             }
         }
 
+        fn fail_binding_once() -> Self {
+            Self {
+                event_to_fail: Some("binding_committed"),
+                event_failures: AtomicUsize::new(1),
+                ..Self::default()
+            }
+        }
+
         fn event_types(&self) -> Vec<String> {
             self.events
                 .lock()
@@ -850,6 +1004,18 @@ mod tests {
     #[async_trait]
     impl CodingEventSink for RecordingCodingSink {
         async fn emit(&self, event_type: &str, payload_json: Value) -> Result<crate::SessionEvent> {
+            let should_fail_event = self.event_to_fail == Some(event_type)
+                && self
+                    .event_failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_ok();
+            if should_fail_event {
+                return Err(ServerError::Store(format!(
+                    "{event_type} persistence failed"
+                )));
+            }
             if event_type == "runtime_reset" {
                 self.runtime_reset_attempts.fetch_add(1, Ordering::SeqCst);
                 let should_fail = self
@@ -883,6 +1049,7 @@ mod tests {
     fn coding_turn(session_id: Uuid) -> CodingTurn {
         CodingTurn {
             session_id,
+            durable_turn_id: None,
             user_prompt: "advance native state".to_string(),
             system_prompt: "native test system".to_string(),
             mode: tm_modes::ModeId::from("serious_engineer"),
@@ -931,6 +1098,54 @@ mod tests {
         backend.run_turn(turn, sink).await
     }
 
+    #[tokio::test]
+    async fn sensitive_cell_boundary_forwards_only_structured_previews() {
+        let (sender, receiver) = mpsc::channel(8);
+        let forwarding = Arc::new(ForwardingEventSink { sender });
+        let recorded = Arc::new(RecordingCodingSink::default());
+        let target: Arc<dyn CodingEventSink> = recorded.clone();
+        let writer = tokio::spawn(forward_events(receiver, target));
+
+        forwarding
+            .try_on_cell_start("@fs.patch {patch: \"secret-source-value\"}")
+            .unwrap();
+        forwarding
+            .try_on_cell_result("diff:\n+secret-result-value")
+            .unwrap();
+        HostEventSink::emit(
+            forwarding.as_ref(),
+            "cell_start",
+            json!({"cellId":"cell-1","sourcePreview":"[redacted]"}),
+        )
+        .await
+        .unwrap();
+        HostEventSink::emit(
+            forwarding.as_ref(),
+            "cell_result",
+            json!({"cellId":"cell-1","status":"completed","resultPreview":"[redacted]"}),
+        )
+        .await
+        .unwrap();
+        drop(forwarding);
+        writer.await.unwrap().unwrap();
+
+        let events = recorded.events.lock();
+        assert_eq!(
+            events
+                .iter()
+                .map(|(event_type, _)| event_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cell_start", "cell_result"]
+        );
+        assert_eq!(events[0].1["sourcePreview"], "[redacted]");
+        assert_eq!(events[1].1["resultPreview"], "[redacted]");
+        let encoded = serde_json::to_string(&*events).unwrap();
+        assert!(!encoded.contains("secret-source-value"), "{encoded}");
+        assert!(!encoded.contains("secret-result-value"), "{encoded}");
+        assert!(!encoded.contains("\"code\""), "{encoded}");
+        assert!(!encoded.contains("\"shaped\""), "{encoded}");
+    }
+
     #[serial_test::serial]
     #[tokio::test]
     async fn native_sessions_reuse_state_isolate_sessions_and_reset_on_profile_change() {
@@ -955,7 +1170,9 @@ mod tests {
             let first_events = first_sink.events.lock();
             let agent_start = first_events
                 .iter()
-                .position(|(event, payload)| event == "cell_start" && payload.get("code").is_some())
+                .position(|(event, payload)| {
+                    event == "cell_start" && payload.get("sourcePreview").is_some()
+                })
                 .unwrap();
             let binding = first_events
                 .iter()
@@ -964,7 +1181,9 @@ mod tests {
             let agent_result = first_events
                 .iter()
                 .position(|(event, payload)| {
-                    event == "cell_result" && payload.get("shaped").is_some()
+                    event == "cell_result"
+                        && payload.get("status") == Some(&json!("completed"))
+                        && payload.get("resultPreview").is_some()
                 })
                 .unwrap();
             (agent_start, binding, agent_result)
@@ -1018,6 +1237,90 @@ mod tests {
             "{}",
             tool_results[3]
         );
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn native_failed_runtime_event_discards_cached_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let llm = Arc::new(StatefulLlm::new());
+        let llm_client: Arc<dyn LlmClient> = llm.clone();
+        let backend = backend(
+            llm_client,
+            temp.path(),
+            options(Duration::from_secs(60), 64),
+        );
+        let session_id = Uuid::from_u128(15);
+        let sink = Arc::new(RecordingCodingSink::fail_binding_once());
+
+        let error = run_turn(&backend, coding_turn(session_id), Arc::clone(&sink))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("binding_committed persistence failed"),
+            "{error}"
+        );
+
+        let mut retry = coding_turn(session_id);
+        retry.prior_messages = vec![Message::user("persisted earlier turn")];
+        run_turn(&backend, retry, Arc::clone(&sink)).await.unwrap();
+
+        assert_eq!(sink.runtime_reset_attempts.load(Ordering::SeqCst), 1);
+        assert!(sink.event_types().contains(&"runtime_reset".to_string()));
+        let tool_results = llm.tool_results();
+        assert_eq!(tool_results.len(), 1);
+        assert!(
+            tool_results[0].contains("result:\n1"),
+            "{}",
+            tool_results[0]
+        );
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn native_durable_abort_evicts_quarantined_runtime_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let llm = Arc::new(StatefulLlm::new());
+        let llm_client: Arc<dyn LlmClient> = llm.clone();
+        let backend = backend(
+            llm_client,
+            temp.path(),
+            options(Duration::from_secs(60), 64),
+        );
+        let session_id = Uuid::from_u128(25);
+        let committed_id = Uuid::from_u128(2501);
+        let aborted_id = Uuid::from_u128(2502);
+        let sink = Arc::new(RecordingCodingSink::default());
+
+        let mut committed = coding_turn(session_id);
+        committed.durable_turn_id = Some(committed_id);
+        run_turn(&backend, committed, Arc::clone(&sink))
+            .await
+            .unwrap();
+        backend
+            .promote_session(session_id, committed_id)
+            .await
+            .unwrap();
+
+        let mut aborted = coding_turn(session_id);
+        aborted.durable_turn_id = Some(aborted_id);
+        aborted.user_prompt = "increment native state".to_string();
+        run_turn(&backend, aborted, Arc::clone(&sink))
+            .await
+            .unwrap();
+        backend.abort_session(session_id, aborted_id).await.unwrap();
+
+        run_turn(&backend, coding_turn(session_id), sink)
+            .await
+            .unwrap();
+
+        let tool_results = llm.tool_results();
+        assert_eq!(tool_results.len(), 3);
+        assert!(tool_results[0].contains("result:\n1"));
+        assert!(tool_results[1].contains("result:\n2"));
+        assert!(tool_results[2].contains("result:\n1"));
     }
 
     #[serial_test::serial]

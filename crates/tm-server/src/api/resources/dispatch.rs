@@ -41,8 +41,8 @@ where
         Some("skill") if state.persona.managed_skills_path().is_some() => {
             read_skill_resource(state, uri, selector).await
         }
-        Some("agent") => read_agent_resource(state, uri, selector).await,
-        Some("history") => read_history_resource(state, uri, selector).await,
+        Some("agent") => read_agent_resource(state, session_id, uri, selector).await,
+        Some("history") => read_history_resource(state, session_id, uri, selector).await,
         Some("cron") => read_cron_resource(state, uri).await,
         Some("drive") => read_drive_resource(state, session_id, uri, selector).await,
         Some(scheme) => Err(ServerError::Policy(format!(
@@ -124,7 +124,7 @@ where
         Some("skill") if state.persona.managed_skills_path().is_some() => {
             list_skill_resources(state, uri).await
         }
-        Some("agent") => list_agent_resources(state, uri).await,
+        Some("agent") => list_agent_resources(state, session_id, uri).await,
         Some("history") => Err(ServerError::Policy(
             "history:// listing not supported — read a specific history://<id>".to_string(),
         )),

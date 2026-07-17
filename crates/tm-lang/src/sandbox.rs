@@ -1,12 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::{self, Write as _},
+    future::Future,
     path::PathBuf,
     sync::Arc,
     time::Duration,
 };
 
 use async_trait::async_trait;
-use futures::future::join_all;
+use futures::StreamExt;
 use serde_json::{Value, json};
 use tm_artifacts::ArtifactStore;
 use tm_core::{CancellationToken, CellBudget, EvalOutput, Result, Sandbox, Session, SessionConfig};
@@ -17,13 +19,10 @@ use tm_host::{
     NoopHostEventSink, ResourceRegistry, ToolDocs, register_p0_linked_folder_functions,
 };
 
-use crate::{Interpreter, RuntimeLimits, batch::binding_usage, catalog_from_registry};
-
-pub const CORE_TM_CAPABILITIES: &[&str] = &["http.get", "resources.read:artifact"];
-
-pub fn core_tm_grants() -> CapabilityGrants {
-    CapabilityGrants::default().allow_many(CORE_TM_CAPABILITIES.iter().copied())
-}
+use crate::{
+    Interpreter, RuntimeError, RuntimeLimits, RuntimeOutput, RuntimeResult,
+    batch::binding_usage_bounded, catalog_from_registry,
+};
 
 #[derive(Clone)]
 pub struct TmSandboxOptions {
@@ -55,7 +54,9 @@ impl Default for TmSandboxOptions {
             http_allowlist: BTreeMap::new(),
             host_registry: HostRegistry::new(),
             resource_registry: ResourceRegistry::new(),
-            grants: core_tm_grants(),
+            // Registration and sandbox construction never grant model authority. Callers must
+            // supply every externally authoritative capability for this exact turn/actor.
+            grants: CapabilityGrants::default(),
             linked_folders: None,
             drive_store: None,
             approval_policy: Arc::new(DefaultDenyApprovalPolicy),
@@ -81,8 +82,14 @@ impl TmSandbox {
 #[async_trait]
 impl Sandbox for TmSandbox {
     async fn open(&self, _cfg: SessionConfig) -> Result<Box<dyn Session>> {
-        let artifacts = ArtifactStore::open(&self.options.artifact_root, &self.options.session_id)
-            .map_err(|error| tm_core::Error::Sandbox(error.to_string()))?;
+        let artifact_root = self.options.artifact_root.clone();
+        let artifact_session_id = self.options.session_id.clone();
+        let artifacts = tokio::task::spawn_blocking(move || {
+            ArtifactStore::open(artifact_root, artifact_session_id)
+        })
+        .await
+        .map_err(|error| tm_core::Error::Sandbox(format!("artifact open task failed: {error}")))?
+        .map_err(|error| tm_core::Error::Sandbox(error.to_string()))?;
         let mut registry = self.options.host_registry.clone();
         registry.register(Arc::new(HttpGetFn::new(
             self.options.http_allowlist.clone(),
@@ -109,7 +116,7 @@ impl Sandbox for TmSandbox {
                 &mut registry,
                 &mut resources,
                 drive_store,
-                linked_folders,
+                linked_folders.clone(),
             );
         }
         let mut invocation = InvocationCtx::with_approvals(
@@ -123,7 +130,7 @@ impl Sandbox for TmSandbox {
         if let Some(scope) = self.options.session_scope.clone() {
             invocation = invocation.with_session_scope(scope);
         }
-        let mut resource_schemes = resources
+        let resource_schemes = resources
             .capabilities()
             .into_iter()
             .filter_map(|(scheme, capability)| {
@@ -137,6 +144,20 @@ impl Sandbox for TmSandbox {
                 "resources.list",
             ]);
         }
+        let mut catalog_schemes = resource_schemes;
+        // `alias:path` is tm's compact linked-folder literal. It is not a ResourceRegistry
+        // scheme, so admit only aliases that this server-authoritative session scope can use.
+        if let Some(linked_folders) = &linked_folders {
+            catalog_schemes.extend(
+                linked_folders
+                    .policies()
+                    .into_iter()
+                    .map(|policy| policy.alias)
+                    .filter(|alias| invocation.require_linked_alias(alias).is_ok()),
+            );
+        }
+        catalog_schemes.sort();
+        catalog_schemes.dedup();
         for operation in [
             ResourceOperation::Read,
             ResourceOperation::Preview,
@@ -152,17 +173,21 @@ impl Sandbox for TmSandbox {
         ] {
             registry.register(Arc::new(ArtifactFn::new(operation, artifacts.clone())));
         }
-        invocation.grants = invocation
-            .grants
-            .clone()
-            .allow_many(["artifacts.put", "artifacts.list"]);
-        if invocation.grants.permits("resources.read:artifact") {
-            invocation.grants = invocation
+        // Session-local output spilling and granted-catalog inspection are intrinsic tm runtime
+        // operations. They do not add host, resource-read, network, or child authority.
+        invocation.grants =
+            invocation
                 .grants
                 .clone()
-                .allow_many(["artifacts.get", "artifacts.slice"]);
-            if !resource_schemes.iter().any(|scheme| scheme == "artifact") {
-                resource_schemes.push("artifact".into());
+                .allow_many(["artifacts.put", "tools.search", "tools.docs"]);
+        if invocation.grants.permits("resources.read:artifact") {
+            invocation.grants = invocation.grants.clone().allow_many([
+                "artifacts.get",
+                "artifacts.slice",
+                "artifacts.list",
+            ]);
+            if !catalog_schemes.iter().any(|scheme| scheme == "artifact") {
+                catalog_schemes.push("artifact".into());
             }
         }
         let catalog_registry = Arc::new(registry.clone());
@@ -172,12 +197,8 @@ impl Sandbox for TmSandbox {
                 Arc::clone(&catalog_registry),
             )));
         }
-        invocation.grants = invocation
-            .grants
-            .clone()
-            .allow_many(["tools.search", "tools.docs"]);
         let registry = Arc::new(registry);
-        let catalog = catalog_from_registry(&registry, &invocation, resource_schemes);
+        let catalog = catalog_from_registry(&registry, &invocation, catalog_schemes);
         Ok(Box::new(TmSession {
             interpreter: Interpreter::new(
                 catalog,
@@ -186,6 +207,7 @@ impl Sandbox for TmSandbox {
                 self.options.limits.clone(),
             ),
             cancellation: self.options.cancellation.clone(),
+            limits: self.options.limits.clone(),
         }))
     }
 }
@@ -268,11 +290,23 @@ impl ArtifactFn {
     fn new(operation: ArtifactOperation, store: ArtifactStore) -> Self {
         let (name, summary, sensitive) = match operation {
             ArtifactOperation::Put => ("artifacts.put", "Store a session artifact", true),
-            ArtifactOperation::Get => ("artifacts.get", "Read a session artifact", false),
-            ArtifactOperation::Slice => {
-                ("artifacts.slice", "Read a selected artifact slice", false)
-            }
-            ArtifactOperation::List => ("artifacts.list", "List session artifacts", false),
+            ArtifactOperation::Get => ("artifacts.get", "Read a session artifact", true),
+            ArtifactOperation::Slice => ("artifacts.slice", "Read a selected artifact slice", true),
+            ArtifactOperation::List => ("artifacts.list", "List session artifacts", true),
+        };
+        let (signature, args_schema) = match operation {
+            ArtifactOperation::List => (
+                "artifacts.list({offset?: number, limit?: number})".into(),
+                json!({
+                    "type": ["object", "null"],
+                    "properties": {
+                        "offset": { "type": "integer", "minimum": 0 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 256 }
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+            _ => (format!("{name}(args)"), json!({})),
         };
         Self {
             operation,
@@ -282,17 +316,17 @@ impl ArtifactFn {
                 namespace: "artifacts".into(),
                 summary: summary.into(),
                 description: None,
-                signature: format!("{name}(args)"),
-                args_schema: json!({}),
+                signature,
+                args_schema,
                 result_schema: None,
                 examples: Vec::new(),
                 errors: Vec::new(),
                 grants: vec![GrantDoc {
                     kind: "artifact".into(),
                     description: match operation {
-                        ArtifactOperation::Get | ArtifactOperation::Slice => {
-                            "Reads require resources.read:artifact"
-                        }
+                        ArtifactOperation::Get
+                        | ArtifactOperation::Slice
+                        | ArtifactOperation::List => "Reads require resources.read:artifact",
                         _ => "Session-local artifact operation",
                     }
                     .into(),
@@ -337,12 +371,16 @@ impl HostFn for ArtifactFn {
                 };
                 let content = tm_memory::redact_dream_text(&content).text;
                 let title = title.map(|title| tm_memory::redact_dream_text(&title).text);
-                serde_json::to_value(
-                    self.store
-                        .put_text(content, title, &mime)
-                        .map_err(|error| HostError::HostCall(error.to_string()))?,
-                )
-                .map_err(|error| HostError::HostCall(error.to_string()))
+                let store = self.store.clone();
+                let artifact =
+                    tokio::task::spawn_blocking(move || store.put_text(content, title, &mime))
+                        .await
+                        .map_err(|error| {
+                            HostError::HostCall(format!("artifact write task failed: {error}"))
+                        })?
+                        .map_err(|error| HostError::HostCall(error.to_string()))?;
+                serde_json::to_value(artifact)
+                    .map_err(|error| HostError::HostCall(error.to_string()))
             }
             ArtifactOperation::Get | ArtifactOperation::Slice => {
                 if !ctx.grants.permits("resources.read:artifact") {
@@ -351,17 +389,81 @@ impl HostFn for ArtifactFn {
                     ));
                 }
                 let (uri, selector) = artifact_read_args(&args, self.operation)?;
-                serde_json::to_value(
-                    self.store
-                        .read(&uri, selector.as_deref())
-                        .map_err(|error| HostError::NotFound(error.to_string()))?,
-                )
-                .map_err(|error| HostError::HostCall(error.to_string()))
+                let store = self.store.clone();
+                let content =
+                    tokio::task::spawn_blocking(move || store.read(&uri, selector.as_deref()))
+                        .await
+                        .map_err(|error| {
+                            HostError::HostCall(format!("artifact read task failed: {error}"))
+                        })?
+                        .map_err(|error| HostError::NotFound(error.to_string()))?;
+                serde_json::to_value(content)
+                    .map_err(|error| HostError::HostCall(error.to_string()))
             }
-            ArtifactOperation::List => serde_json::to_value(self.store.list())
-                .map_err(|error| HostError::HostCall(error.to_string())),
+            ArtifactOperation::List => {
+                if !ctx.grants.permits("resources.read:artifact") {
+                    return Err(HostError::CapabilityDenied(
+                        "resources.read:artifact".into(),
+                    ));
+                }
+                let (offset, limit) = artifact_list_args(&args)?;
+                let store = self.store.clone();
+                let (items, has_more) =
+                    tokio::task::spawn_blocking(move || store.list_page(offset, limit))
+                        .await
+                        .map_err(|error| {
+                            HostError::HostCall(format!("artifact list task failed: {error}"))
+                        })?
+                        .map_err(|error| HostError::HostCall(error.to_string()))?;
+                let next_offset = has_more.then(|| offset.saturating_add(items.len()));
+                Ok(json!({
+                    "items": items,
+                    "offset": offset,
+                    "nextOffset": next_offset,
+                    "hasMore": has_more,
+                }))
+            }
         }
     }
+}
+
+fn artifact_list_args(args: &Value) -> tm_host::Result<(usize, usize)> {
+    const DEFAULT_LIMIT: usize = 100;
+    const MAX_LIMIT: usize = 256;
+    if args.is_null() {
+        return Ok((0, DEFAULT_LIMIT));
+    }
+    let fields = args
+        .as_object()
+        .ok_or_else(|| HostError::InvalidArgs("artifact list requires an object or null".into()))?;
+    if fields
+        .keys()
+        .any(|key| !matches!(key.as_str(), "offset" | "limit"))
+    {
+        return Err(HostError::InvalidArgs(
+            "artifact list accepts only offset and limit".into(),
+        ));
+    }
+    let parse = |name: &str, default: usize| -> tm_host::Result<usize> {
+        let Some(value) = fields.get(name) else {
+            return Ok(default);
+        };
+        let value = value.as_u64().ok_or_else(|| {
+            HostError::InvalidArgs(format!(
+                "artifact list {name} must be a non-negative integer"
+            ))
+        })?;
+        usize::try_from(value)
+            .map_err(|_| HostError::InvalidArgs(format!("artifact list {name} is too large")))
+    };
+    let offset = parse("offset", 0)?;
+    let limit = parse("limit", DEFAULT_LIMIT)?;
+    if !(1..=MAX_LIMIT).contains(&limit) {
+        return Err(HostError::InvalidArgs(format!(
+            "artifact list limit must be in 1..={MAX_LIMIT}"
+        )));
+    }
+    Ok((offset, limit))
 }
 
 fn artifact_read_args(
@@ -584,7 +686,9 @@ impl ResourceFn {
                     kind: "capability".into(),
                     description: name.into(),
                 }],
-                sensitive: false,
+                // Resource content and even URI listings may expose private session/user data.
+                // This controls trace redaction only; reads remain non-approval operations.
+                sensitive: true,
                 approval: "none".into(),
                 since: "0.1".into(),
                 stability: "stable".into(),
@@ -646,52 +750,231 @@ impl HostFn for ResourceFn {
 pub struct TmSession {
     interpreter: Interpreter,
     cancellation: Option<Arc<dyn CancellationToken>>,
+    limits: RuntimeLimits,
+}
+
+enum EvaluationRace {
+    Completed(RuntimeResult<RuntimeOutput>),
+    Cancelled,
+    TimedOut,
+    TerminalPersistenceTimedOut,
+}
+
+const TERMINAL_PERSISTENCE_GRACE: Duration = Duration::from_secs(1);
+
+struct BoundedFormatter {
+    text: String,
+    max_bytes: usize,
+}
+
+impl BoundedFormatter {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            text: String::with_capacity(max_bytes.min(1024)),
+            max_bytes,
+        }
+    }
+}
+
+impl fmt::Write for BoundedFormatter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let remaining = self.max_bytes.saturating_sub(self.text.len());
+        if remaining == 0 {
+            return Err(fmt::Error);
+        }
+        let mut end = remaining.min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.text.push_str(&value[..end]);
+        if end == value.len() {
+            Ok(())
+        } else {
+            Err(fmt::Error)
+        }
+    }
+}
+
+fn bounded_display(value: &impl fmt::Display, max_bytes: usize) -> String {
+    let mut output = BoundedFormatter::new(max_bytes);
+    let _ = write!(&mut output, "{value}");
+    output.text
+}
+
+async fn race_evaluation(
+    interpreter: &mut Interpreter,
+    code: &str,
+    budget: CellBudget,
+    cancellation: Option<&dyn CancellationToken>,
+) -> EvaluationRace {
+    let terminal_selected = interpreter.terminal_selected_handle();
+    terminal_selected.store(false, std::sync::atomic::Ordering::Release);
+    let evaluation = interpreter.eval(code, budget.output_bytes);
+    tokio::pin!(evaluation);
+    let wall = tokio::time::sleep(Duration::from_millis(budget.wall_ms));
+    tokio::pin!(wall);
+    if let Some(token) = cancellation {
+        tokio::select! {
+            result = &mut evaluation => EvaluationRace::Completed(result),
+            _ = token.cancelled() => {
+                if terminal_selected.load(std::sync::atomic::Ordering::Acquire) {
+                    match tokio::time::timeout(TERMINAL_PERSISTENCE_GRACE, &mut evaluation).await {
+                        Ok(result) => EvaluationRace::Completed(result),
+                        Err(_) => EvaluationRace::TerminalPersistenceTimedOut,
+                    }
+                } else {
+                    EvaluationRace::Cancelled
+                }
+            },
+            _ = &mut wall => {
+                if terminal_selected.load(std::sync::atomic::Ordering::Acquire) {
+                    match tokio::time::timeout(TERMINAL_PERSISTENCE_GRACE, &mut evaluation).await {
+                        Ok(result) => EvaluationRace::Completed(result),
+                        Err(_) => EvaluationRace::TerminalPersistenceTimedOut,
+                    }
+                } else {
+                    EvaluationRace::TimedOut
+                }
+            },
+        }
+    } else {
+        tokio::select! {
+            result = &mut evaluation => EvaluationRace::Completed(result),
+            _ = &mut wall => {
+                if terminal_selected.load(std::sync::atomic::Ordering::Acquire) {
+                    match tokio::time::timeout(TERMINAL_PERSISTENCE_GRACE, &mut evaluation).await {
+                        Ok(result) => EvaluationRace::Completed(result),
+                        Err(_) => EvaluationRace::TerminalPersistenceTimedOut,
+                    }
+                } else {
+                    EvaluationRace::TimedOut
+                }
+            },
+        }
+    }
+}
+
+async fn cancel_active_bounded(
+    interpreter: &mut Interpreter,
+    status: &str,
+    reason: &str,
+) -> Result<()> {
+    match tokio::time::timeout(
+        TERMINAL_PERSISTENCE_GRACE,
+        interpreter.cancel_active_eval(status, reason),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|error| tm_core::Error::Sandbox(error.to_string())),
+        Err(_) => {
+            interpreter.abandon_active_eval();
+            Err(tm_core::Error::Sandbox(
+                "terminal event persistence deadline exceeded".into(),
+            ))
+        }
+    }
+}
+
+async fn emit_immediate_bounded(
+    interpreter: &mut Interpreter,
+    code: &str,
+    status: &str,
+    reason: &str,
+) -> Result<()> {
+    persist_terminal_bounded(interpreter.emit_immediate_terminal(code, status, reason)).await
+}
+
+async fn emit_dependency_failure_bounded(
+    interpreter: &mut Interpreter,
+    code: &str,
+    reason: &str,
+) -> Result<()> {
+    persist_terminal_bounded(interpreter.emit_dependency_failure(code, reason)).await
+}
+
+async fn persist_terminal_bounded(
+    persistence: impl Future<Output = RuntimeResult<()>>,
+) -> Result<()> {
+    match tokio::time::timeout(TERMINAL_PERSISTENCE_GRACE, persistence).await {
+        Ok(result) => result.map_err(|error| tm_core::Error::Sandbox(error.to_string())),
+        Err(_) => Err(tm_core::Error::Sandbox(
+            "terminal event persistence deadline exceeded".into(),
+        )),
+    }
 }
 
 #[async_trait(?Send)]
 impl Session for TmSession {
+    fn handles_cancellation(&self) -> bool {
+        self.cancellation.is_some()
+    }
+
     async fn eval(&mut self, code: &str, budget: CellBudget) -> Result<EvalOutput> {
         if budget.wall_ms == 0 {
-            return Ok(EvalOutput {
-                error: Some("TimeoutError: cell exceeded wall-clock budget".into()),
-                ..EvalOutput::default()
-            });
+            emit_immediate_bounded(
+                &mut self.interpreter,
+                code,
+                "timed_out",
+                "cell exceeded wall-clock budget",
+            )
+            .await?;
+            return Ok(timeout_output(budget.output_bytes));
         }
         if self
             .cancellation
             .as_ref()
             .is_some_and(|token| token.is_cancelled())
         {
-            return Ok(cancelled_output());
+            emit_immediate_bounded(&mut self.interpreter, code, "cancelled", "cell cancelled")
+                .await?;
+            return Ok(cancelled_output(budget.output_bytes));
         }
-        let evaluation = tokio::time::timeout(
-            std::time::Duration::from_millis(budget.wall_ms),
-            self.interpreter.eval(code, budget.output_bytes),
-        );
-        let result = if let Some(token) = &self.cancellation {
-            tokio::select! {
-                _ = token.cancelled() => return Ok(cancelled_output()),
-                result = evaluation => result,
-            }
-        } else {
-            evaluation.await
-        };
+        let result = race_evaluation(
+            &mut self.interpreter,
+            code,
+            budget,
+            self.cancellation.as_deref(),
+        )
+        .await;
         match result {
-            Ok(Ok(output)) => Ok(EvalOutput {
+            EvaluationRace::Completed(Ok(output)) => Ok(EvalOutput {
                 stdout: output.stdout,
                 result: Some(output.value.to_json()),
                 error: None,
             }),
-            Ok(Err(error)) => Ok(EvalOutput {
+            EvaluationRace::Completed(Err(RuntimeError::Persistence(error))) => {
+                self.interpreter.abandon_active_eval();
+                Err(tm_core::Error::Sandbox(error))
+            }
+            EvaluationRace::Completed(Err(error)) => Ok(EvalOutput {
                 stdout: String::new(),
                 result: None,
-                error: Some(error.to_string()),
+                error: Some(bounded_display(&error, budget.output_bytes)),
             }),
-            Err(_) => Ok(EvalOutput {
-                stdout: String::new(),
-                result: None,
-                error: Some("TimeoutError: cell exceeded wall-clock budget".into()),
-            }),
+            EvaluationRace::Cancelled => {
+                cancel_active_bounded(&mut self.interpreter, "cancelled", "cell cancelled").await?;
+                Ok(cancelled_output(budget.output_bytes))
+            }
+            EvaluationRace::TimedOut => {
+                cancel_active_bounded(
+                    &mut self.interpreter,
+                    "timed_out",
+                    "cell exceeded wall-clock budget",
+                )
+                .await?;
+                Ok(timeout_output(budget.output_bytes))
+            }
+            EvaluationRace::TerminalPersistenceTimedOut => {
+                let _ = cancel_active_bounded(
+                    &mut self.interpreter,
+                    "failed",
+                    "terminal event persistence deadline exceeded",
+                )
+                .await;
+                Err(tm_core::Error::Sandbox(
+                    "terminal event persistence deadline exceeded".into(),
+                ))
+            }
         }
     }
 
@@ -700,12 +983,64 @@ impl Session for TmSession {
         codes: &[String],
         budget: CellBudget,
     ) -> Result<Vec<EvalOutput>> {
-        let base = self.interpreter.clone();
         let usages = codes
             .iter()
-            .map(|code| binding_usage(code).ok())
+            .map(|code| {
+                binding_usage_bounded(
+                    code,
+                    self.limits.source_bytes,
+                    self.limits.syntax_nodes,
+                    self.limits.parse_depth,
+                )
+                .ok()
+            })
             .collect::<Vec<_>>();
         let dependencies = batch_dependencies(&usages);
+        let state_writing = usages
+            .iter()
+            .any(|usage| usage.as_ref().is_none_or(|usage| !usage.writes.is_empty()));
+        if state_writing {
+            // A fork emits `binding_committed` inside its own commit shield. The coordinator
+            // cannot make that fork's private environment visible atomically if the outer batch
+            // future is dropped, so state-writing (or unanalyzable) batches run directly on the
+            // owning interpreter. Read/effect-only batches retain bounded parallel execution.
+            let mut outputs = Vec::with_capacity(codes.len());
+            let mut committed_by_cell = Vec::<Option<BTreeSet<String>>>::with_capacity(codes.len());
+            for (index, code) in codes.iter().enumerate() {
+                if let Some((dependency, names)) =
+                    dependencies[index].iter().find_map(|(dependency, names)| {
+                        committed_by_cell[*dependency]
+                            .is_none()
+                            .then_some((*dependency, names))
+                    })
+                {
+                    let bindings = names.iter().cloned().collect::<Vec<_>>().join(", ");
+                    let message = format!(
+                        "BatchDependencyError: execute call {} requires binding(s) [{}] from failed execute call {}",
+                        index + 1,
+                        bindings,
+                        dependency + 1
+                    );
+                    emit_dependency_failure_bounded(&mut self.interpreter, code, &message).await?;
+                    let error = bounded_display(&message, budget.output_bytes);
+                    outputs.push(EvalOutput {
+                        error: Some(error),
+                        ..EvalOutput::default()
+                    });
+                    committed_by_cell.push(None);
+                    continue;
+                }
+                let cancellation = self.cancellation.clone();
+                let (output, committed) =
+                    eval_interpreter(&mut self.interpreter, code, budget, cancellation.as_deref())
+                        .await?;
+                outputs.push(output);
+                committed_by_cell.push(committed);
+            }
+            return Ok(outputs);
+        }
+
+        let base = self.interpreter.clone();
         let mut pending = (0..codes.len()).collect::<BTreeSet<_>>();
         let mut results: Vec<Option<(Interpreter, EvalOutput, Option<BTreeSet<String>>)>> =
             vec![None; codes.len()];
@@ -731,42 +1066,54 @@ impl Session for TmSession {
                 let failed = dependencies[index].iter().find_map(|(dependency, names)| {
                     results[*dependency]
                         .as_ref()
-                        .and_then(|(_, _, committed)| committed.is_none().then_some((*dependency, names)))
+                        .and_then(|(_, _, committed)| {
+                            committed
+                                .is_none()
+                                .then_some((*dependency, names.iter().cloned().collect::<Vec<_>>()))
+                        })
                 });
                 let successful_dependencies = dependencies[index]
                     .keys()
                     .filter_map(|dependency| {
                         results[*dependency].as_ref().and_then(
-                            |(fork, _, committed)| committed.as_ref().map(|names| (fork, names)),
+                            |(fork, _, committed)| {
+                                committed
+                                    .as_ref()
+                                    .map(|names| (fork.clone(), names.clone()))
+                            },
                         )
                     })
                     .collect::<Vec<_>>();
                 for (fork, committed) in successful_dependencies {
-                    interpreter.merge_committed_from(fork, committed);
+                    interpreter.merge_committed_from(&fork, &committed);
                 }
                 let cancellation = self.cancellation.clone();
                 let code = &codes[index];
                 async move {
                     let output = if let Some((dependency, names)) = failed {
-                        let bindings = names.iter().cloned().collect::<Vec<_>>().join(", ");
+                        let bindings = names.join(", ");
                         let message = format!(
                             "BatchDependencyError: execute call {} requires binding(s) [{}] from failed execute call {}",
                             index + 1,
                             bindings,
                             dependency + 1
                         );
-                        let error = interpreter
-                            .emit_dependency_failure(code, &message)
-                            .await
-                            .err()
-                            .map_or(message, |error| error.to_string());
-                        (
-                            EvalOutput {
-                                error: Some(error),
-                                ..EvalOutput::default()
-                            },
-                            None,
+                        match emit_dependency_failure_bounded(
+                            &mut interpreter,
+                            code,
+                            &message,
                         )
+                        .await
+                        {
+                            Ok(()) => Ok((
+                                EvalOutput {
+                                    error: Some(bounded_display(&message, budget.output_bytes)),
+                                    ..EvalOutput::default()
+                                },
+                                None,
+                            )),
+                            Err(error) => Err(error),
+                        }
                     } else {
                         eval_interpreter(
                             &mut interpreter,
@@ -778,11 +1125,31 @@ impl Session for TmSession {
                     };
                     (index, interpreter, output)
                 }
-            });
+            }).collect::<Vec<_>>();
 
-            for (index, interpreter, (output, committed)) in join_all(evaluations).await {
+            let mut evaluations =
+                futures::stream::iter(evaluations).buffer_unordered(self.limits.parallelism.max(1));
+            let mut wave_error = None;
+            while let Some(evaluation) = evaluations.next().await {
+                let (index, interpreter, evaluation) = evaluation;
                 pending.remove(&index);
-                results[index] = Some((interpreter, output, committed));
+                match evaluation {
+                    Ok((output, committed)) => {
+                        results[index] = Some((interpreter, output, committed));
+                    }
+                    Err(error) if wave_error.is_none() => wave_error = Some(error),
+                    Err(_) => {}
+                }
+            }
+            if let Some(error) = wave_error {
+                // Some siblings may already have durably emitted `binding_committed`. Merge every
+                // successful fork in response order before surfacing a later sink/runtime error.
+                for (fork, _, committed) in results.iter().flatten() {
+                    if let Some(committed) = committed {
+                        self.interpreter.merge_committed_from(fork, committed);
+                    }
+                }
+                return Err(error);
             }
         }
 
@@ -839,66 +1206,87 @@ async fn eval_interpreter(
     code: &str,
     budget: CellBudget,
     cancellation: Option<&dyn CancellationToken>,
-) -> (EvalOutput, Option<BTreeSet<String>>) {
+) -> Result<(EvalOutput, Option<BTreeSet<String>>)> {
     if budget.wall_ms == 0 {
-        return (
-            EvalOutput {
-                error: Some("TimeoutError: cell exceeded wall-clock budget".into()),
-                ..EvalOutput::default()
-            },
-            None,
-        );
+        emit_immediate_bounded(
+            interpreter,
+            code,
+            "timed_out",
+            "cell exceeded wall-clock budget",
+        )
+        .await?;
+        return Ok((timeout_output(budget.output_bytes), None));
     }
     if cancellation.is_some_and(CancellationToken::is_cancelled) {
-        return (cancelled_output(), None);
+        emit_immediate_bounded(interpreter, code, "cancelled", "cell cancelled").await?;
+        return Ok((cancelled_output(budget.output_bytes), None));
     }
-    let evaluation = tokio::time::timeout(
-        std::time::Duration::from_millis(budget.wall_ms),
-        interpreter.eval(code, budget.output_bytes),
-    );
-    let result = if let Some(token) = cancellation {
-        tokio::select! {
-            _ = token.cancelled() => return (cancelled_output(), None),
-            result = evaluation => result,
-        }
-    } else {
-        evaluation.await
-    };
+    let result = race_evaluation(interpreter, code, budget, cancellation).await;
     match result {
-        Ok(Ok(output)) => {
+        EvaluationRace::Completed(Ok(output)) => {
             let committed = output.committed.clone();
-            (
+            Ok((
                 EvalOutput {
                     stdout: output.stdout,
                     result: Some(output.value.to_json()),
                     error: None,
                 },
                 Some(committed),
-            )
+            ))
         }
-        Ok(Err(error)) => (
+        EvaluationRace::Completed(Err(RuntimeError::Persistence(error))) => {
+            interpreter.abandon_active_eval();
+            Err(tm_core::Error::Sandbox(error))
+        }
+        EvaluationRace::Completed(Err(error)) => Ok((
             EvalOutput {
                 stdout: String::new(),
                 result: None,
-                error: Some(error.to_string()),
+                error: Some(bounded_display(&error, budget.output_bytes)),
             },
             None,
-        ),
-        Err(_) => (
-            EvalOutput {
-                stdout: String::new(),
-                result: None,
-                error: Some("TimeoutError: cell exceeded wall-clock budget".into()),
-            },
-            None,
-        ),
+        )),
+        EvaluationRace::Cancelled => {
+            cancel_active_bounded(interpreter, "cancelled", "cell cancelled").await?;
+            Ok((cancelled_output(budget.output_bytes), None))
+        }
+        EvaluationRace::TimedOut => {
+            cancel_active_bounded(interpreter, "timed_out", "cell exceeded wall-clock budget")
+                .await?;
+            Ok((timeout_output(budget.output_bytes), None))
+        }
+        EvaluationRace::TerminalPersistenceTimedOut => {
+            let _ = cancel_active_bounded(
+                interpreter,
+                "failed",
+                "terminal event persistence deadline exceeded",
+            )
+            .await;
+            Err(tm_core::Error::Sandbox(
+                "terminal event persistence deadline exceeded".into(),
+            ))
+        }
     }
 }
 
-fn cancelled_output() -> EvalOutput {
+fn cancelled_output(output_bytes: usize) -> EvalOutput {
     EvalOutput {
         stdout: String::new(),
         result: None,
-        error: Some("CancellationError: cell cancelled".into()),
+        error: Some(bounded_display(
+            &"CancellationError: cell cancelled",
+            output_bytes,
+        )),
+    }
+}
+
+fn timeout_output(output_bytes: usize) -> EvalOutput {
+    EvalOutput {
+        stdout: String::new(),
+        result: None,
+        error: Some(bounded_display(
+            &"TimeoutError: cell exceeded wall-clock budget",
+            output_bytes,
+        )),
     }
 }

@@ -30,10 +30,49 @@ type RawEventFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type RawEventHook =
     dyn Fn(String, String, serde_json::Value) -> RawEventFuture + Send + Sync + 'static;
 
-/// Maximum number of messages retained in the in-memory log.
-/// Older messages are dropped (oldest-first) once this limit is exceeded.
+/// Maximum number and aggregate bytes retained in the cross-actor debug log.
+/// Older messages are dropped oldest-first when either bound is exceeded.
 const MAX_MESSAGES: usize = 1000;
+const MAX_MESSAGE_LOG_BYTES: usize = 512 * 1024;
 const MAX_INBOX_MESSAGES: usize = 64;
+const MAX_INBOX_BYTES: usize = 64 * 1024;
+/// Maximum concurrently live actors retained by one session.
+pub const MAX_ACTORS_PER_SESSION: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ActorKey {
+    session_id: String,
+    actor_id: ActorId,
+}
+
+impl ActorKey {
+    fn new(session_id: &str, actor_id: &ActorId) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            actor_id: actor_id.clone(),
+        }
+    }
+}
+
+struct LoggedMessage {
+    session_id: String,
+    message: ActorMessage,
+    retained_bytes: usize,
+}
+
+#[derive(Default)]
+struct MessageLog {
+    entries: VecDeque<LoggedMessage>,
+    retained_bytes: usize,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum RegistryError {
+    #[error("session actor limit of {0} reached")]
+    SessionActorLimit(usize),
+    #[error("actor text invalid: {0}")]
+    InvalidText(String),
+}
 
 /// Concurrent roster of live actors, plus the injected executor for `agents.run` (P3.1).
 ///
@@ -41,19 +80,19 @@ const MAX_INBOX_MESSAGES: usize = 64;
 /// Completed actors retain their last digest summary so `agents.msg` can still use the
 /// P3 compatibility seeded-continuation path when a target is no longer running.
 pub struct MailboxRegistry {
-    actors: RwLock<HashMap<ActorId, ActorRecord>>,
-    inboxes: RwLock<HashMap<ActorId, Arc<ActorInbox>>>,
-    cancel_tokens: RwLock<HashMap<ActorId, ActorCancelToken>>,
+    actors: RwLock<HashMap<ActorKey, ActorRecord>>,
+    inboxes: RwLock<HashMap<ActorKey, Arc<ActorInbox>>>,
+    cancel_tokens: RwLock<HashMap<ActorKey, ActorCancelToken>>,
     executor: std::sync::OnceLock<Arc<dyn ActorExecutor>>,
     next_seq: AtomicU64,
     next_supervisor_seq: AtomicU64,
-    messages: RwLock<Vec<ActorMessage>>,
+    messages: RwLock<MessageLog>,
     /// In-memory actor transcripts keyed by actor id (P3.3).
     /// Populated by ChatActorExecutor after each run; served by HistoryResourceHandler.
-    transcripts: RwLock<HashMap<ActorId, String>>,
-    restart_templates: RwLock<HashMap<ActorId, ActorRestartTemplate>>,
-    actor_supervisors: RwLock<HashMap<ActorId, ActorId>>,
-    supervisors: RwLock<HashMap<ActorId, Supervisor>>,
+    transcripts: RwLock<HashMap<ActorKey, String>>,
+    restart_templates: RwLock<HashMap<ActorKey, ActorRestartTemplate>>,
+    actor_supervisors: RwLock<HashMap<ActorKey, ActorId>>,
+    supervisors: RwLock<HashMap<ActorKey, Supervisor>>,
     /// Optional lifecycle event hook (P3.5).
     ///
     /// Set once at server startup via `set_lifecycle_hook`. When set, `emit_lifecycle` calls
@@ -76,7 +115,7 @@ impl MailboxRegistry {
             executor: std::sync::OnceLock::new(),
             next_seq: AtomicU64::new(0),
             next_supervisor_seq: AtomicU64::new(0),
-            messages: RwLock::new(Vec::new()),
+            messages: RwLock::new(MessageLog::default()),
             transcripts: RwLock::new(HashMap::new()),
             restart_templates: RwLock::new(HashMap::new()),
             actor_supervisors: RwLock::new(HashMap::new()),
@@ -174,75 +213,142 @@ impl MailboxRegistry {
     }
 
     /// Register an actor in the roster.
-    pub async fn track(&self, record: ActorRecord) {
+    pub async fn track_for_session(
+        &self,
+        session_id: &str,
+        record: ActorRecord,
+    ) -> Result<(), RegistryError> {
         let supervisor_id = record
             .parent
             .clone()
             .unwrap_or_else(root_supervisor_actor_id);
-        self.track_with_supervisor(record, supervisor_id).await;
+        self.track_with_supervisor_for_session(session_id, record, supervisor_id)
+            .await
     }
 
-    pub async fn track_with_supervisor(&self, record: ActorRecord, supervisor_id: ActorId) {
-        let actor_id = record.id.clone();
-        self.ensure_inbox(&record.id).await;
-        self.ensure_cancel_token(&record.id).await;
-        self.actors.write().await.insert(record.id.clone(), record);
-        self.actor_supervisors
-            .write()
+    pub async fn track_with_supervisor_for_session(
+        &self,
+        session_id: &str,
+        record: ActorRecord,
+        supervisor_id: ActorId,
+    ) -> Result<(), RegistryError> {
+        self.track_batch_for_session(session_id, vec![(record, supervisor_id)])
             .await
-            .insert(actor_id.clone(), supervisor_id.clone());
-        self.supervisors
-            .write()
-            .await
-            .entry(supervisor_id)
-            .or_default()
-            .track(actor_id);
+    }
+
+    /// Atomically reserve and register a wave of actors for one exact session.
+    pub async fn track_batch_for_session(
+        &self,
+        session_id: &str,
+        records: Vec<(ActorRecord, ActorId)>,
+    ) -> Result<(), RegistryError> {
+        for (record, _) in &records {
+            if let Some(mode) = record.mode.as_deref() {
+                crate::actor::validate_text_bytes("mode", mode, crate::actor::MAX_ACTOR_ROLE_BYTES)
+                    .map_err(RegistryError::InvalidText)?;
+            }
+        }
+        // Acquire every affected shard before mutating any of them. Cancellation while waiting for
+        // locks leaves no half-registered wave; after the last await, commit is synchronous.
+        let mut actors = self.actors.write().await;
+        let mut inboxes = self.inboxes.write().await;
+        let mut cancel_tokens = self.cancel_tokens.write().await;
+        let mut actor_supervisors = self.actor_supervisors.write().await;
+        let mut supervisors = self.supervisors.write().await;
+        let live_count = actors
+            .iter()
+            .filter(|(candidate, record)| {
+                candidate.session_id == session_id && Self::is_live_status(record.status)
+            })
+            .count();
+        let new_live_count = records
+            .iter()
+            .filter(|(record, _)| Self::is_live_status(record.status))
+            .filter(|(record, _)| !actors.contains_key(&ActorKey::new(session_id, &record.id)))
+            .count();
+        if live_count.saturating_add(new_live_count) > MAX_ACTORS_PER_SESSION {
+            return Err(RegistryError::SessionActorLimit(MAX_ACTORS_PER_SESSION));
+        }
+        for (record, supervisor_id) in records {
+            let actor_id = record.id.clone();
+            let key = ActorKey::new(session_id, &actor_id);
+            actors.insert(key.clone(), record);
+            inboxes.entry(key.clone()).or_insert_with(ActorInbox::new);
+            cancel_tokens.entry(key.clone()).or_default();
+            actor_supervisors.insert(key, supervisor_id.clone());
+            supervisors
+                .entry(ActorKey::new(session_id, &supervisor_id))
+                .or_default()
+                .track(actor_id);
+        }
+        Ok(())
     }
 
     pub async fn remember_restart_spec(&self, spec: &ActorSpec) {
         let supervisor_id = self
-            .supervisor_id_for_actor(&spec.id, spec.parent.clone())
+            .supervisor_id_for_actor(&spec.session_id, &spec.id, spec.parent.clone())
             .await;
         self.restart_templates.write().await.insert(
-            spec.id.clone(),
+            ActorKey::new(&spec.session_id, &spec.id),
             ActorRestartTemplate::from_spec(spec, supervisor_id),
         );
     }
 
     /// Look up a single actor record by id.
-    pub async fn get(&self, id: &ActorId) -> Option<ActorRecord> {
-        self.actors.read().await.get(id).cloned()
+    pub async fn get_for_session(&self, session_id: &str, id: &ActorId) -> Option<ActorRecord> {
+        self.actors
+            .read()
+            .await
+            .get(&ActorKey::new(session_id, id))
+            .cloned()
     }
 
     /// Update an actor's status in place.
-    pub async fn update_status(&self, id: &ActorId, status: ActorStatus) {
-        if let Some(rec) = self.actors.write().await.get_mut(id) {
+    pub async fn update_status_for_session(
+        &self,
+        session_id: &str,
+        id: &ActorId,
+        status: ActorStatus,
+    ) {
+        if let Some(rec) = self
+            .actors
+            .write()
+            .await
+            .get_mut(&ActorKey::new(session_id, id))
+        {
             rec.status = status;
         }
     }
 
-    pub async fn set_supervision_policy(&self, supervisor_id: ActorId, policy: SupervisionPolicy) {
+    pub async fn set_supervision_policy_for_session(
+        &self,
+        session_id: &str,
+        supervisor_id: ActorId,
+        policy: SupervisionPolicy,
+    ) {
         let mut supervisors = self.supervisors.write().await;
         let supervisor = supervisors
-            .entry(supervisor_id)
+            .entry(ActorKey::new(session_id, &supervisor_id))
             .or_insert_with(|| Supervisor::new(policy.clone()));
         supervisor.policy = policy;
     }
 
     /// Mark an actor as successfully terminated.
-    pub async fn mark_complete(&self, id: &ActorId) -> bool {
-        let Some(supervisor_id) = self.mark_complete_record(id, None).await else {
+    pub async fn mark_complete_for_session(&self, session_id: &str, id: &ActorId) -> bool {
+        let Some(supervisor_id) = self.mark_complete_record(session_id, id, None).await else {
             return false;
         };
-        self.record_supervised_success(&supervisor_id, id).await;
+        self.record_supervised_success(session_id, &supervisor_id, id)
+            .await;
         true
     }
 
     /// Mark an actor as successfully terminated and store its full digest (P3.3).
     ///
     /// Stores summary (seeds `agents.msg` continuations), artifact URI, and history URI.
-    pub async fn mark_complete_with_digest(
+    pub async fn mark_complete_with_digest_for_session(
         &self,
+        session_id: &str,
         id: &ActorId,
         summary: String,
         artifact_uri: Option<String>,
@@ -250,12 +356,13 @@ impl MailboxRegistry {
     ) -> bool {
         let summary = tm_memory::redact_dream_text(&summary).text;
         let Some(supervisor_id) = self
-            .mark_complete_record(id, Some((summary, artifact_uri, history_uri)))
+            .mark_complete_record(session_id, id, Some((summary, artifact_uri, history_uri)))
             .await
         else {
             return false;
         };
-        self.record_supervised_success(&supervisor_id, id).await;
+        self.record_supervised_success(session_id, &supervisor_id, id)
+            .await;
         true
     }
 
@@ -263,28 +370,62 @@ impl MailboxRegistry {
     ///
     /// Called by the orchestrator after `run_to_digest` returns `history_content`.
     /// Served by `HistoryResourceHandler`.
-    pub async fn store_transcript(&self, id: &ActorId, content: String) {
-        self.transcripts
-            .write()
-            .await
-            .insert(id.clone(), tm_memory::redact_dream_text(&content).text);
+    pub async fn store_transcript_for_session(
+        &self,
+        session_id: &str,
+        id: &ActorId,
+        content: String,
+    ) {
+        self.transcripts.write().await.insert(
+            ActorKey::new(session_id, id),
+            tm_memory::redact_dream_text(&content).text,
+        );
     }
 
     /// Retrieve the stored transcript for an actor, if any.
-    pub async fn get_transcript(&self, id: &ActorId) -> Option<String> {
-        self.transcripts.read().await.get(id).cloned()
+    pub async fn get_transcript_for_session(
+        &self,
+        session_id: &str,
+        id: &ActorId,
+    ) -> Option<String> {
+        self.transcripts
+            .read()
+            .await
+            .get(&ActorKey::new(session_id, id))
+            .cloned()
     }
 
     /// Append a message to the bounded in-memory log.
     ///
     /// Oldest messages are dropped once the log exceeds [`MAX_MESSAGES`].
-    pub async fn record_message(&self, msg: ActorMessage) {
-        let mut msgs = self.messages.write().await;
-        if msgs.len() >= MAX_MESSAGES {
-            let excess = msgs.len() - MAX_MESSAGES + 1;
-            msgs.drain(0..excess);
+    pub async fn record_message_for_session(
+        &self,
+        session_id: &str,
+        msg: ActorMessage,
+    ) -> Result<(), RegistryError> {
+        msg.validate().map_err(RegistryError::InvalidText)?;
+        let retained_bytes = msg.retained_bytes().saturating_add(session_id.len());
+        let mut log = self.messages.write().await;
+        while !log.entries.is_empty()
+            && (log.entries.len() >= MAX_MESSAGES
+                || log.retained_bytes.saturating_add(retained_bytes) > MAX_MESSAGE_LOG_BYTES)
+        {
+            if let Some(oldest) = log.entries.pop_front() {
+                log.retained_bytes = log.retained_bytes.saturating_sub(oldest.retained_bytes);
+            }
         }
-        msgs.push(msg);
+        if retained_bytes > MAX_MESSAGE_LOG_BYTES {
+            return Err(RegistryError::InvalidText(
+                "message exceeds aggregate log budget".to_string(),
+            ));
+        }
+        log.retained_bytes = log.retained_bytes.saturating_add(retained_bytes);
+        log.entries.push_back(LoggedMessage {
+            session_id: session_id.to_string(),
+            message: msg,
+            retained_bytes,
+        });
+        Ok(())
     }
 
     /// Deliver a message to the recipient's live inbox and append it to the bounded log.
@@ -292,77 +433,128 @@ impl MailboxRegistry {
     /// Unknown or terminated actors return [`Receipt::Unreachable`]. Full inboxes return
     /// [`Receipt::Backpressured`] and drop the message. The synthetic `Root`
     /// actor is always reachable so child actors can reply to the top-level orchestrator.
-    pub async fn send_message(&self, msg: ActorMessage) -> Receipt {
-        if !self.is_reachable(&msg.to).await {
-            return Receipt::Unreachable;
+    pub async fn send_message_for_session(
+        &self,
+        session_id: &str,
+        msg: ActorMessage,
+    ) -> Result<Receipt, RegistryError> {
+        msg.validate().map_err(RegistryError::InvalidText)?;
+        if !self.is_reachable(session_id, &msg.to).await {
+            return Ok(Receipt::Unreachable);
         }
 
-        let inbox = self.ensure_inbox(&msg.to).await;
+        let inbox = self.ensure_inbox(session_id, &msg.to).await;
+        let retained_bytes = msg.retained_bytes();
+        if !inbox.try_reserve(retained_bytes) {
+            return Ok(Receipt::Backpressured);
+        }
         match inbox.sender.try_send(msg.clone()) {
             Ok(()) => {
                 inbox.mark_delivered_to_inbox();
                 inbox.touch(msg.sent_at).await;
-                self.record_message(msg).await;
-                Receipt::Delivered
+                if let Err(error) = self.record_message_for_session(session_id, msg).await {
+                    tracing::warn!(%error, "message delivered but debug log rejected it");
+                }
+                Ok(Receipt::Delivered)
             }
-            Err(mpsc::error::TrySendError::Full(_)) => Receipt::Backpressured,
-            Err(mpsc::error::TrySendError::Closed(_)) => Receipt::Unreachable,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                inbox.release(retained_bytes);
+                Ok(Receipt::Backpressured)
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                inbox.release(retained_bytes);
+                Ok(Receipt::Unreachable)
+            }
         }
     }
 
     /// Drain all pending messages for `actor_id`, optionally filtering by sender.
-    pub async fn drain_inbox(
+    pub async fn drain_inbox_for_session(
         &self,
+        session_id: &str,
         actor_id: &ActorId,
         from: Option<&ActorId>,
     ) -> Vec<ActorMessage> {
-        let inbox = self.ensure_inbox(actor_id).await;
+        let inbox = self.ensure_inbox(session_id, actor_id).await;
         inbox.drain(from).await
     }
 
     /// Wait for the next matching message for `actor_id` until `timeout` elapses.
-    pub async fn wait_for_message(
+    pub async fn wait_for_message_for_session(
         &self,
+        session_id: &str,
         actor_id: &ActorId,
         from: Option<&ActorId>,
         timeout: Duration,
     ) -> Option<ActorMessage> {
-        let inbox = self.ensure_inbox(actor_id).await;
+        let inbox = self.ensure_inbox(session_id, actor_id).await;
         inbox.wait(from, timeout).await
     }
 
-    pub async fn unread_count(&self, actor_id: &ActorId) -> usize {
-        let Some(inbox) = self.inboxes.read().await.get(actor_id).cloned() else {
+    pub async fn unread_count_for_session(&self, session_id: &str, actor_id: &ActorId) -> usize {
+        let Some(inbox) = self
+            .inboxes
+            .read()
+            .await
+            .get(&ActorKey::new(session_id, actor_id))
+            .cloned()
+        else {
             return 0;
         };
         inbox.unread()
     }
 
-    pub async fn last_activity(&self, actor_id: &ActorId) -> Option<DateTime<Utc>> {
-        let inbox = self.inboxes.read().await.get(actor_id).cloned()?;
+    pub async fn last_activity_for_session(
+        &self,
+        session_id: &str,
+        actor_id: &ActorId,
+    ) -> Option<DateTime<Utc>> {
+        let inbox = self
+            .inboxes
+            .read()
+            .await
+            .get(&ActorKey::new(session_id, actor_id))
+            .cloned()?;
         inbox.last_activity().await
     }
 
     /// Snapshot of all messages in the log (oldest-first).
-    pub async fn messages(&self) -> Vec<ActorMessage> {
-        self.messages.read().await.clone()
+    pub async fn messages_for_session(&self, session_id: &str) -> Vec<ActorMessage> {
+        self.messages
+            .read()
+            .await
+            .entries
+            .iter()
+            .filter(|logged| logged.session_id == session_id)
+            .map(|logged| logged.message.clone())
+            .collect()
     }
 
     /// Mark an actor as terminated due to a failure.
-    pub async fn mark_failed(&self, id: &ActorId, reason: FailureReason) -> bool {
-        self.mark_failed_record(id, reason).await.is_some()
+    pub async fn mark_failed_for_session(
+        &self,
+        session_id: &str,
+        id: &ActorId,
+        reason: FailureReason,
+    ) -> bool {
+        self.mark_failed_record(session_id, id, reason)
+            .await
+            .is_some()
     }
 
-    pub async fn mark_failed_with_supervision(
+    pub async fn mark_failed_with_supervision_for_session(
         &self,
+        session_id: &str,
         id: &ActorId,
         reason: FailureReason,
     ) -> Option<(ActorId, SupervisionDecision)> {
-        let supervisor_id = self.mark_failed_record(id, reason.clone()).await?;
+        let supervisor_id = self
+            .mark_failed_record(session_id, id, reason.clone())
+            .await?;
         let decision = {
             let mut supervisors = self.supervisors.write().await;
             supervisors
-                .entry(supervisor_id.clone())
+                .entry(ActorKey::new(session_id, &supervisor_id))
                 .or_default()
                 .record_failure(id, reason)
         };
@@ -377,7 +569,7 @@ impl MailboxRegistry {
         reason: FailureReason,
     ) -> Option<SupervisionDecision> {
         let (supervisor_id, decision) = self
-            .mark_failed_with_supervision(actor_id, reason.clone())
+            .mark_failed_with_supervision_for_session(session_id, actor_id, reason.clone())
             .await?;
 
         self.emit_lifecycle(
@@ -432,43 +624,46 @@ impl MailboxRegistry {
         }
     }
 
-    pub async fn prepare_actor_restart(&self, actor_id: &ActorId) -> Option<ActorSpec> {
-        let template = self.restart_templates.read().await.get(actor_id).cloned()?;
+    pub async fn prepare_actor_restart_for_session(
+        &self,
+        session_id: &str,
+        actor_id: &ActorId,
+    ) -> Option<ActorSpec> {
+        let key = ActorKey::new(session_id, actor_id);
+        let template = self.restart_templates.read().await.get(&key).cloned()?;
         let cancellation = ActorCancelToken::default();
         {
             self.cancel_tokens
                 .write()
                 .await
-                .insert(actor_id.clone(), cancellation.clone());
+                .insert(key.clone(), cancellation.clone());
             self.actor_supervisors
                 .write()
                 .await
-                .insert(actor_id.clone(), template.supervisor_id.clone());
+                .insert(key.clone(), template.supervisor_id.clone());
             self.inboxes
                 .write()
                 .await
-                .insert(actor_id.clone(), ActorInbox::new());
+                .insert(key.clone(), ActorInbox::new());
         }
 
         let spawned_at = Utc::now();
         {
             let mut actors = self.actors.write().await;
-            let record = actors
-                .entry(actor_id.clone())
-                .or_insert_with(|| ActorRecord {
-                    id: actor_id.clone(),
-                    parent: template.parent.clone(),
-                    status: ActorStatus::Running,
-                    mode: Some(template.role.clone()),
-                    budget: template.budget.clone(),
-                    spawned_at,
-                    completed_at: None,
-                    cancelled: false,
-                    failure_reason: None,
-                    last_summary: None,
-                    artifact_uri: None,
-                    history_uri: None,
-                });
+            let record = actors.entry(key).or_insert_with(|| ActorRecord {
+                id: actor_id.clone(),
+                parent: template.parent.clone(),
+                status: ActorStatus::Running,
+                mode: Some(template.role.clone()),
+                budget: template.budget.clone(),
+                spawned_at,
+                completed_at: None,
+                cancelled: false,
+                failure_reason: None,
+                last_summary: None,
+                artifact_uri: None,
+                history_uri: None,
+            });
             record.parent = template.parent.clone();
             record.status = ActorStatus::Running;
             record.mode = Some(template.role.clone());
@@ -485,7 +680,7 @@ impl MailboxRegistry {
         self.supervisors
             .write()
             .await
-            .entry(template.supervisor_id.clone())
+            .entry(ActorKey::new(session_id, &template.supervisor_id))
             .or_default()
             .track(actor_id.clone());
 
@@ -517,7 +712,7 @@ impl MailboxRegistry {
         let cancelled_at = Utc::now();
         let result = {
             let mut actors = self.actors.write().await;
-            match actors.get_mut(id) {
+            match actors.get_mut(&ActorKey::new(session_id, id)) {
                 Some(rec) if rec.cancelled => CancelActorResult::AlreadyCancelled,
                 Some(rec) if rec.status == ActorStatus::Terminated => {
                     CancelActorResult::AlreadyTerminated
@@ -537,7 +732,7 @@ impl MailboxRegistry {
             result,
             CancelActorResult::Cancelled | CancelActorResult::AlreadyCancelled
         ) {
-            self.cancel_token(id).await.cancel();
+            self.cancel_token_for_session(session_id, id).await.cancel();
         }
         if result == CancelActorResult::Cancelled {
             self.emit_lifecycle(
@@ -564,7 +759,7 @@ impl MailboxRegistry {
         session_id: &str,
         root: &ActorId,
     ) -> Vec<(ActorId, CancelActorResult)> {
-        let actor_ids = self.actor_subtree_ids(root).await;
+        let actor_ids = self.actor_subtree_ids(session_id, root).await;
         let mut results = Vec::with_capacity(actor_ids.len());
         for actor_id in actor_ids {
             let result = self.cancel_actor(session_id, &actor_id).await;
@@ -573,15 +768,19 @@ impl MailboxRegistry {
         results
     }
 
-    pub async fn cancel_token(&self, actor_id: &ActorId) -> ActorCancelToken {
-        self.ensure_cancel_token(actor_id).await
+    pub async fn cancel_token_for_session(
+        &self,
+        session_id: &str,
+        actor_id: &ActorId,
+    ) -> ActorCancelToken {
+        self.ensure_cancel_token(session_id, actor_id).await
     }
 
-    pub async fn is_cancelled(&self, actor_id: &ActorId) -> bool {
+    pub async fn is_cancelled_for_session(&self, session_id: &str, actor_id: &ActorId) -> bool {
         self.cancel_tokens
             .read()
             .await
-            .get(actor_id)
+            .get(&ActorKey::new(session_id, actor_id))
             .is_some_and(ActorCancelToken::is_cancelled)
     }
 
@@ -590,24 +789,35 @@ impl MailboxRegistry {
     /// The synthetic top-level Root actor is intentionally exempt: top-level
     /// orchestrator code must be able to await root-level workers. Real actor
     /// descendants are checked through the tracked parent chain.
-    pub async fn would_wait_on_descendant(&self, waiter: &ActorId, target: &ActorId) -> bool {
+    pub async fn would_wait_on_descendant_for_session(
+        &self,
+        session_id: &str,
+        waiter: &ActorId,
+        target: &ActorId,
+    ) -> bool {
         if waiter.as_str() == "Root" {
             return false;
         }
         if waiter == target {
             return true;
         }
-        self.is_descendant_of(target, waiter).await
+        self.is_descendant_of_for_session(session_id, target, waiter)
+            .await
     }
 
     /// Return true when `actor_id` has `ancestor_id` in its tracked parent chain.
-    pub async fn is_descendant_of(&self, actor_id: &ActorId, ancestor_id: &ActorId) -> bool {
+    pub async fn is_descendant_of_for_session(
+        &self,
+        session_id: &str,
+        actor_id: &ActorId,
+        ancestor_id: &ActorId,
+    ) -> bool {
         let actors = self.actors.read().await;
         let mut current = actor_id.clone();
         let mut seen = HashSet::new();
 
         while seen.insert(current.clone()) {
-            let Some(record) = actors.get(&current) else {
+            let Some(record) = actors.get(&ActorKey::new(session_id, &current)) else {
                 return false;
             };
             let Some(parent) = record.parent.as_ref() else {
@@ -623,14 +833,26 @@ impl MailboxRegistry {
     }
 
     /// Snapshot of all tracked actor records.
-    pub async fn list(&self) -> Vec<ActorRecord> {
-        self.actors.read().await.values().cloned().collect()
+    pub async fn list_for_session(&self, session_id: &str) -> Vec<ActorRecord> {
+        self.actors
+            .read()
+            .await
+            .iter()
+            .filter(|(key, _)| key.session_id == session_id)
+            .map(|(_, record)| record.clone())
+            .collect()
     }
 
-    pub async fn live_direct_children(&self, parent_id: &ActorId) -> Vec<ActorRecord> {
+    pub async fn live_direct_children_for_session(
+        &self,
+        session_id: &str,
+        parent_id: &ActorId,
+    ) -> Vec<ActorRecord> {
         let actors = self.actors.read().await;
         actors
-            .values()
+            .iter()
+            .filter(|(key, _)| key.session_id == session_id)
+            .map(|(_, record)| record)
             .filter(|record| Self::is_live_status(record.status))
             .filter(|record| match record.parent.as_ref() {
                 Some(parent) => parent == parent_id,
@@ -644,43 +866,43 @@ impl MailboxRegistry {
         status != ActorStatus::Terminated
     }
 
-    async fn ensure_inbox(&self, actor_id: &ActorId) -> Arc<ActorInbox> {
-        if let Some(inbox) = self.inboxes.read().await.get(actor_id).cloned() {
+    async fn ensure_inbox(&self, session_id: &str, actor_id: &ActorId) -> Arc<ActorInbox> {
+        let key = ActorKey::new(session_id, actor_id);
+        if let Some(inbox) = self.inboxes.read().await.get(&key).cloned() {
             return inbox;
         }
         let mut inboxes = self.inboxes.write().await;
-        inboxes
-            .entry(actor_id.clone())
-            .or_insert_with(ActorInbox::new)
-            .clone()
+        inboxes.entry(key).or_insert_with(ActorInbox::new).clone()
     }
 
-    async fn ensure_cancel_token(&self, actor_id: &ActorId) -> ActorCancelToken {
-        if let Some(token) = self.cancel_tokens.read().await.get(actor_id).cloned() {
+    async fn ensure_cancel_token(&self, session_id: &str, actor_id: &ActorId) -> ActorCancelToken {
+        let key = ActorKey::new(session_id, actor_id);
+        if let Some(token) = self.cancel_tokens.read().await.get(&key).cloned() {
             return token;
         }
         let mut tokens = self.cancel_tokens.write().await;
-        tokens.entry(actor_id.clone()).or_default().clone()
+        tokens.entry(key).or_default().clone()
     }
 
-    async fn is_reachable(&self, actor_id: &ActorId) -> bool {
+    async fn is_reachable(&self, session_id: &str, actor_id: &ActorId) -> bool {
         if actor_id.as_str() == "Root" {
             return true;
         }
         self.actors
             .read()
             .await
-            .get(actor_id)
+            .get(&ActorKey::new(session_id, actor_id))
             .is_some_and(|record| Self::is_live_status(record.status))
     }
 
     async fn mark_complete_record(
         &self,
+        session_id: &str,
         id: &ActorId,
         digest: Option<(String, Option<String>, Option<String>)>,
     ) -> Option<ActorId> {
         let mut actors = self.actors.write().await;
-        let rec = actors.get_mut(id)?;
+        let rec = actors.get_mut(&ActorKey::new(session_id, id))?;
         if rec.cancelled || rec.failure_reason.is_some() {
             return None;
         }
@@ -693,13 +915,18 @@ impl MailboxRegistry {
         }
         let fallback = rec.parent.clone();
         drop(actors);
-        Some(self.supervisor_id_for_actor(id, fallback).await)
+        Some(self.supervisor_id_for_actor(session_id, id, fallback).await)
     }
 
-    async fn mark_failed_record(&self, id: &ActorId, reason: FailureReason) -> Option<ActorId> {
+    async fn mark_failed_record(
+        &self,
+        session_id: &str,
+        id: &ActorId,
+        reason: FailureReason,
+    ) -> Option<ActorId> {
         let (fallback_supervisor, should_cancel_token) = {
             let mut actors = self.actors.write().await;
-            let rec = actors.get_mut(id)?;
+            let rec = actors.get_mut(&ActorKey::new(session_id, id))?;
             if rec.cancelled {
                 return None;
             }
@@ -710,13 +937,26 @@ impl MailboxRegistry {
             (rec.parent.clone(), rec.cancelled)
         };
         if should_cancel_token {
-            self.cancel_token(id).await.cancel();
+            self.cancel_token_for_session(session_id, id).await.cancel();
         }
-        Some(self.supervisor_id_for_actor(id, fallback_supervisor).await)
+        Some(
+            self.supervisor_id_for_actor(session_id, id, fallback_supervisor)
+                .await,
+        )
     }
 
-    async fn record_supervised_success(&self, supervisor_id: &ActorId, id: &ActorId) {
-        if let Some(supervisor) = self.supervisors.write().await.get_mut(supervisor_id) {
+    async fn record_supervised_success(
+        &self,
+        session_id: &str,
+        supervisor_id: &ActorId,
+        id: &ActorId,
+    ) {
+        if let Some(supervisor) = self
+            .supervisors
+            .write()
+            .await
+            .get_mut(&ActorKey::new(session_id, supervisor_id))
+        {
             supervisor.record_success(id);
         }
     }
@@ -729,9 +969,9 @@ impl MailboxRegistry {
         }
     }
 
-    async fn actor_subtree_ids(&self, root: &ActorId) -> Vec<ActorId> {
+    async fn actor_subtree_ids(&self, session_id: &str, root: &ActorId) -> Vec<ActorId> {
         let actors = self.actors.read().await;
-        if !actors.contains_key(root) {
+        if !actors.contains_key(&ActorKey::new(session_id, root)) {
             return vec![root.clone()];
         }
 
@@ -747,7 +987,9 @@ impl MailboxRegistry {
             ordered.push(current.clone());
 
             let mut children = actors
-                .values()
+                .iter()
+                .filter(|(key, _)| key.session_id == session_id)
+                .map(|(_, record)| record)
                 .filter(|record| record.parent.as_ref() == Some(&current))
                 .map(|record| (record.spawned_at, record.id.clone()))
                 .collect::<Vec<_>>();
@@ -762,16 +1004,171 @@ impl MailboxRegistry {
 
     async fn supervisor_id_for_actor(
         &self,
+        session_id: &str,
         actor_id: &ActorId,
         fallback_parent: Option<ActorId>,
     ) -> ActorId {
         self.actor_supervisors
             .read()
             .await
-            .get(actor_id)
+            .get(&ActorKey::new(session_id, actor_id))
             .cloned()
             .or(fallback_parent)
             .unwrap_or_else(root_supervisor_actor_id)
+    }
+
+    // Unit tests written before session ownership use one isolated synthetic session. Keep these
+    // compatibility helpers test-only so production callers must always supply exact ownership.
+    #[cfg(test)]
+    pub async fn track(&self, record: ActorRecord) {
+        self.track_for_session("", record).await.unwrap();
+    }
+
+    #[cfg(test)]
+    pub async fn track_with_supervisor(&self, record: ActorRecord, supervisor_id: ActorId) {
+        self.track_with_supervisor_for_session("", record, supervisor_id)
+            .await
+            .unwrap();
+    }
+
+    #[cfg(test)]
+    pub async fn get(&self, id: &ActorId) -> Option<ActorRecord> {
+        self.get_for_session("", id).await
+    }
+
+    #[cfg(test)]
+    pub async fn update_status(&self, id: &ActorId, status: ActorStatus) {
+        self.update_status_for_session("", id, status).await;
+    }
+
+    #[cfg(test)]
+    pub async fn set_supervision_policy(&self, supervisor_id: ActorId, policy: SupervisionPolicy) {
+        self.set_supervision_policy_for_session("", supervisor_id, policy)
+            .await;
+    }
+
+    #[cfg(test)]
+    pub async fn mark_complete(&self, id: &ActorId) -> bool {
+        self.mark_complete_for_session("", id).await
+    }
+
+    #[cfg(test)]
+    pub async fn mark_complete_with_digest(
+        &self,
+        id: &ActorId,
+        summary: String,
+        artifact_uri: Option<String>,
+        history_uri: Option<String>,
+    ) -> bool {
+        self.mark_complete_with_digest_for_session("", id, summary, artifact_uri, history_uri)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn store_transcript(&self, id: &ActorId, content: String) {
+        self.store_transcript_for_session("", id, content).await;
+    }
+
+    #[cfg(test)]
+    pub async fn get_transcript(&self, id: &ActorId) -> Option<String> {
+        self.get_transcript_for_session("", id).await
+    }
+
+    #[cfg(test)]
+    pub async fn record_message(&self, message: ActorMessage) {
+        self.record_message_for_session("", message).await.unwrap();
+    }
+
+    #[cfg(test)]
+    pub async fn send_message(&self, message: ActorMessage) -> Receipt {
+        self.send_message_for_session("", message).await.unwrap()
+    }
+
+    #[cfg(test)]
+    pub async fn drain_inbox(
+        &self,
+        actor_id: &ActorId,
+        from: Option<&ActorId>,
+    ) -> Vec<ActorMessage> {
+        self.drain_inbox_for_session("", actor_id, from).await
+    }
+
+    #[cfg(test)]
+    pub async fn wait_for_message(
+        &self,
+        actor_id: &ActorId,
+        from: Option<&ActorId>,
+        timeout: Duration,
+    ) -> Option<ActorMessage> {
+        self.wait_for_message_for_session("", actor_id, from, timeout)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn unread_count(&self, actor_id: &ActorId) -> usize {
+        self.unread_count_for_session("", actor_id).await
+    }
+
+    #[cfg(test)]
+    pub async fn last_activity(&self, actor_id: &ActorId) -> Option<DateTime<Utc>> {
+        self.last_activity_for_session("", actor_id).await
+    }
+
+    #[cfg(test)]
+    pub async fn messages(&self) -> Vec<ActorMessage> {
+        self.messages_for_session("").await
+    }
+
+    #[cfg(test)]
+    pub async fn mark_failed(&self, id: &ActorId, reason: FailureReason) -> bool {
+        self.mark_failed_for_session("", id, reason).await
+    }
+
+    #[cfg(test)]
+    pub async fn mark_failed_with_supervision(
+        &self,
+        id: &ActorId,
+        reason: FailureReason,
+    ) -> Option<(ActorId, SupervisionDecision)> {
+        self.mark_failed_with_supervision_for_session("", id, reason)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn prepare_actor_restart(&self, actor_id: &ActorId) -> Option<ActorSpec> {
+        self.prepare_actor_restart_for_session("", actor_id).await
+    }
+
+    #[cfg(test)]
+    pub async fn cancel_token(&self, actor_id: &ActorId) -> ActorCancelToken {
+        self.cancel_token_for_session("", actor_id).await
+    }
+
+    #[cfg(test)]
+    pub async fn is_cancelled(&self, actor_id: &ActorId) -> bool {
+        self.is_cancelled_for_session("", actor_id).await
+    }
+
+    #[cfg(test)]
+    pub async fn would_wait_on_descendant(&self, waiter: &ActorId, target: &ActorId) -> bool {
+        self.would_wait_on_descendant_for_session("", waiter, target)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn is_descendant_of(&self, actor_id: &ActorId, ancestor_id: &ActorId) -> bool {
+        self.is_descendant_of_for_session("", actor_id, ancestor_id)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn list(&self) -> Vec<ActorRecord> {
+        self.list_for_session("").await
+    }
+
+    #[cfg(test)]
+    pub async fn live_direct_children(&self, parent_id: &ActorId) -> Vec<ActorRecord> {
+        self.live_direct_children_for_session("", parent_id).await
     }
 }
 

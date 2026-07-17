@@ -259,7 +259,7 @@ class ScriptedMikuClient implements MikuSessionClient {
           type: 'cell_start',
           id: _eventId(),
           data: const {
-            'code':
+            'sourcePreview':
                 'const worker = await agents.spawn("worker", "scripted actor smoke");\n'
                 'display(await agents.wait(worker, 5000));',
           },
@@ -317,8 +317,8 @@ class ScriptedMikuClient implements MikuSessionClient {
           type: 'cell_result',
           id: _eventId(),
           data: const {
-            'shaped':
-                'stdout:\ndisplay: scripted actor complete\n\nresult:\nnull',
+            'status': 'completed',
+            'resultPreview': 'scripted actor complete',
           },
         ),
       );

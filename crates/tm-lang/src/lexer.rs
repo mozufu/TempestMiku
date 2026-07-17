@@ -1,12 +1,22 @@
 use crate::{Diagnostic, Result, Span, Spanned, SpannedToken, Token};
 
 pub fn lex(source: &str) -> Result<Vec<SpannedToken>> {
-    Lexer { source, offset: 0 }.run()
+    lex_bounded(source, usize::MAX)
+}
+
+pub(crate) fn lex_bounded(source: &str, max_tokens: usize) -> Result<Vec<SpannedToken>> {
+    Lexer {
+        source,
+        offset: 0,
+        max_tokens,
+    }
+    .run()
 }
 
 struct Lexer<'a> {
     source: &'a str,
     offset: usize,
+    max_tokens: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -32,7 +42,8 @@ impl<'a> Lexer<'a> {
             let start = self.offset;
             if self.peek() == Some('"') {
                 self.bump();
-                tokens.push(self.string(start)?);
+                let token = self.string(start)?;
+                self.push_token(&mut tokens, token)?;
                 continue;
             }
             let record_field_position = delimiters.last() == Some(&'{')
@@ -117,17 +128,31 @@ impl<'a> Lexer<'a> {
                 }
                 _ => {}
             }
-            tokens.push(Spanned::new(token, Span::new(start, self.offset)));
+            let token = Spanned::new(token, Span::new(start, self.offset));
+            self.push_token(&mut tokens, token)?;
         }
         self.finish(tokens)
     }
 
     fn finish(&self, mut tokens: Vec<SpannedToken>) -> Result<Vec<SpannedToken>> {
-        tokens.push(Spanned::new(
-            Token::Eof,
-            Span::new(self.source.len(), self.source.len()),
-        ));
+        let eof = Spanned::new(Token::Eof, Span::new(self.source.len(), self.source.len()));
+        self.push_token(&mut tokens, eof)?;
         Ok(tokens)
+    }
+
+    fn push_token(&self, tokens: &mut Vec<SpannedToken>, token: SpannedToken) -> Result<()> {
+        if tokens.len() >= self.max_tokens {
+            return Err(self.error(
+                "TM1007",
+                format!(
+                    "syntax budget exceeded: more than {} tokens",
+                    self.max_tokens
+                ),
+                token.span,
+            ));
+        }
+        tokens.push(token);
+        Ok(())
     }
 
     fn string(&mut self, start: usize) -> Result<SpannedToken> {
@@ -203,7 +228,11 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        if !record_field_position && self.peek() == Some(':') && self.uri_tail_follows() {
+        if !record_field_position && let Some(bytes) = self.hyphenated_scheme_suffix_bytes() {
+            text.push_str(&self.rest()[..bytes]);
+            self.offset += bytes;
+        }
+        if !record_field_position && self.peek() == Some(':') {
             text.push(':');
             self.bump();
             while let Some(ch) = self.peek() {
@@ -221,11 +250,22 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn uri_tail_follows(&self) -> bool {
-        self.rest()
-            .chars()
-            .nth(1)
-            .is_some_and(|ch| !ch.is_whitespace() && ch != '"')
+    fn hyphenated_scheme_suffix_bytes(&self) -> Option<usize> {
+        let rest = self.rest();
+        if !rest.starts_with('-') {
+            return None;
+        }
+        let mut bytes = 0;
+        for ch in rest.chars() {
+            if ch == ':' {
+                return Some(bytes);
+            }
+            if !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+                return None;
+            }
+            bytes += ch.len_utf8();
+        }
+        None
     }
 
     fn legacy_separator_here(&self) -> bool {
@@ -307,6 +347,31 @@ mod tests {
         assert!(!tokens.iter().any(|token| {
             matches!(&token.node, Token::Uri(uri) if uri == "line:42" || uri == "value:Int")
         }));
+    }
+
+    #[test]
+    fn hyphenated_and_root_alias_uris_preserve_subtraction() {
+        let tokens = lex("my-repo:src/lib.rs my-repo:; a - b").unwrap();
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.node == Token::Uri("my-repo:src/lib.rs".into()))
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.node == Token::Uri("my-repo:".into()))
+        );
+        assert!(tokens.iter().any(|token| token.node == Token::Minus));
+    }
+
+    #[test]
+    fn token_budget_stops_lexing_before_collecting_the_whole_source() {
+        let source = std::iter::repeat_n("x", 10_000)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let error = lex_bounded(&source, 8).unwrap_err();
+        assert_eq!(error.code, "TM1007");
     }
 
     #[test]

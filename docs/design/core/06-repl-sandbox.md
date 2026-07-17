@@ -37,13 +37,22 @@ decision; denial, timeout, cancellation, stale resume, and duplicate completion 
 
 The runtime emits bounded `effect_start`, `effect_suspended`, `effect_resumed`, `effect_result`,
 scope, display, binding, cell-result, and runtime-reset events through the existing event sink.
+Durable source/result/display/error content is redacted for every cell, including pure cells;
+events retain only structural ids, status/counts, capability names, and approved references.
 
 ## 6.4 Runtime ownership
 
 tm sessions are `!Send`. Server chat and native coding backends shard sessions onto owning
 single-thread Tokio runtimes, preserve session affinity, and destroy cached sessions on their owner
-thread. Runtime loss creates a fresh interpreter and emits the existing reset/replay contract;
-ephemeral bindings are not reconstructed from durable events.
+thread. Runtime loss or a failed durable event handoff creates a fresh interpreter and emits the
+existing reset/replay contract when persisted history is present; ephemeral bindings are not
+reconstructed from durable events.
+
+A durable turn's successful cell state remains quarantined on its owner shard until the server's
+fenced `complete_turn` write succeeds for that exact turn id. Only then does an explicit promotion
+make the interpreter reusable. Completion failure, heartbeat ownership loss, or cancellation sends
+an exact-turn abort, cooperatively terminates the cell, waits for the shard response, and evicts the
+quarantined interpreter before another same-session turn can run.
 
 ## 6.5 Ambient authority
 

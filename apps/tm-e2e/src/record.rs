@@ -20,7 +20,7 @@ use tm_core::{
     AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Message,
     Result as CoreResult, StreamEvent, ToolChoice,
 };
-use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
+use tm_host::{CapabilityGrants, FsMode, LinkedFolderConfig, LinkedFolders};
 use tm_lang::{TmSandbox, TmSandboxOptions};
 use tm_llm::OpenAiClient;
 use tm_server::{
@@ -1007,10 +1007,11 @@ async fn ensure_native_child_resource_contents(
         .as_str()
         .context("history content string")?;
     ensure!(
-        history_content.contains("agents.wait")
+        history_content.contains("[tool_call] execute")
+            && history_content.contains("[cell_start] [redacted]")
             && history_content.contains("[cell_result]")
-            && history_content.contains(NATIVE_P3_BROADCAST_TEXT),
-        "history {history_uri} did not contain expected native actor transcript markers"
+            && !history_content.contains("@agents.wait"),
+        "history {history_uri} did not preserve content-blind native actor transcript markers"
     );
 
     let agent = client
@@ -1380,7 +1381,7 @@ impl NativeActorRecordingServer {
                     opts.session_scope = session_scope.map(str::to_string);
                     opts.cancellation = cancellation;
                     opts.grants =
-                        tm_lang::core_tm_grants().allow_many(grants.names().map(str::to_string));
+                        CapabilityGrants::default().allow_many(grants.names().map(str::to_string));
                     let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                         session_id,
                         Arc::clone(&executor_approval_roster),
@@ -1437,8 +1438,8 @@ impl Drop for NativeActorRecordingServer {
 fn native_parent_coordination_code() -> String {
     format!(
         r#"
-let alpha = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
-let beta = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
+let alpha = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report.", opts: {{capabilities: ["agents.*"]}}}};
+let beta = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report.", opts: {{capabilities: ["agents.*"]}}}};
 let readyA = @agents.wait {{from: alpha, timeoutMs: 15000}};
 let readyB = @agents.wait {{from: beta, timeoutMs: 15000}};
 let receipts = @agents.broadcast {{text: "{broadcast}"}};
@@ -1737,15 +1738,20 @@ impl RecordingBackend {
         let actor_id =
             ActorId::new("Worker0").map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
         let actor_id_text = actor_id.to_string();
+        let actor_session_id = turn.session_id.to_string();
         self.roster
-            .track(actor_record(
-                actor_id.clone(),
-                "worker",
-                ActorStatus::Running,
-                false,
-                None,
-            ))
-            .await;
+            .track_for_session(
+                &actor_session_id,
+                actor_record(
+                    actor_id.clone(),
+                    "worker",
+                    ActorStatus::Running,
+                    false,
+                    None,
+                ),
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
         sink.emit(
             "actor_spawned",
             json!({
@@ -1788,14 +1794,18 @@ impl RecordingBackend {
             let cancelled_actor_id = ActorId::new("CancelledWorker")
                 .map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
             self.roster
-                .track(actor_record(
-                    cancelled_actor_id,
-                    "watcher",
-                    ActorStatus::Terminated,
-                    true,
-                    Some(FailureReason::ApprovalDenied),
-                ))
-                .await;
+                .track_for_session(
+                    &actor_session_id,
+                    actor_record(
+                        cancelled_actor_id,
+                        "watcher",
+                        ActorStatus::Terminated,
+                        true,
+                        Some(FailureReason::ApprovalDenied),
+                    ),
+                )
+                .await
+                .map_err(|err| ServerError::Store(err.to_string()))?;
             let final_text = "Actor smoke approval denied".to_string();
             sink.emit(
                 "final",
@@ -1820,13 +1830,15 @@ impl RecordingBackend {
             )
             .map_err(|err| ServerError::Store(err.to_string()))?;
         self.roster
-            .store_transcript(
+            .store_transcript_for_session(
+                &actor_session_id,
                 &actor_id,
                 "child smoke transcript\n[cell_result] artifact://0\n".to_string(),
             )
             .await;
         self.roster
-            .mark_complete_with_digest(
+            .mark_complete_with_digest_for_session(
+                &actor_session_id,
                 &actor_id,
                 "child smoke complete".to_string(),
                 Some("artifact://0".to_string()),
@@ -1867,14 +1879,18 @@ impl RecordingBackend {
             .map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
         let cancelled_actor_id_text = cancelled_actor_id.to_string();
         self.roster
-            .track(actor_record(
-                cancelled_actor_id,
-                "watcher",
-                ActorStatus::Terminated,
-                true,
-                Some(FailureReason::Cancelled),
-            ))
-            .await;
+            .track_for_session(
+                &actor_session_id,
+                actor_record(
+                    cancelled_actor_id,
+                    "watcher",
+                    ActorStatus::Terminated,
+                    true,
+                    Some(FailureReason::Cancelled),
+                ),
+            )
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
         sink.emit(
             "actor_cancelled",
             json!({

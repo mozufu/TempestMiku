@@ -11,9 +11,10 @@ use tm_agents::MailboxRegistry;
 use tm_artifacts::{ArtifactStore, default_root};
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
 use tm_host::{
-    ApprovalPolicy, DefaultDenyApprovalPolicy, FsMode, FsPolicy, LinkedFolders, P0HostConfig,
+    ApprovalPolicy, CapabilityGrants, DefaultDenyApprovalPolicy, FsMode, FsPolicy, LinkedFolders,
+    P0HostConfig,
 };
-use tm_lang::{TmSandbox, TmSandboxOptions, core_tm_grants};
+use tm_lang::{TmSandbox, TmSandboxOptions};
 use tm_llm::OpenAiClient;
 use tm_modes::ModesConfig;
 
@@ -414,7 +415,8 @@ fn build_runtime(
                 opts.actor_id = actor_id.map(str::to_string);
                 opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants = core_tm_grants().allow_many(grants.names().map(str::to_string));
+                opts.grants =
+                    CapabilityGrants::default().allow_many(grants.names().map(str::to_string));
                 if matches!(approval_mode, NativeApprovalMode::Manual) {
                     let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                         session_id,

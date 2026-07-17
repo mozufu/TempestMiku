@@ -59,7 +59,7 @@ async fn gated_postgres_tm_runtime_events_survive_restart_and_cursor_replay() {
         ),
         (
             "binding_committed",
-            json!({"cellId":"cell-1","names":["result"]}),
+            json!({"cellId":"cell-1","bindingCount":1,"namesRedacted":true}),
         ),
     ] {
         tm_core::EventSink::try_on_runtime_event(&sink, kind, &payload).unwrap();

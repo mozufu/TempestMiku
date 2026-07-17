@@ -24,10 +24,15 @@ pub struct PersistingEventSink<S> {
 }
 
 #[derive(Debug)]
-struct PendingEvent {
-    event_type: String,
-    payload: serde_json::Value,
-    confirmation: Option<oneshot::Sender<std::result::Result<(), String>>>,
+enum PendingEvent {
+    Event {
+        event_type: String,
+        payload: serde_json::Value,
+        confirmation: Option<oneshot::Sender<std::result::Result<(), String>>>,
+    },
+    Barrier {
+        confirmation: oneshot::Sender<std::result::Result<(), String>>,
+    },
 }
 
 const EVENT_WRITER_CAPACITY: usize = 4_096;
@@ -80,6 +85,14 @@ where
         payload: serde_json::Value,
         confirmation: Option<oneshot::Sender<std::result::Result<(), String>>>,
     ) -> tm_core::Result<()> {
+        self.push_pending(PendingEvent::Event {
+            event_type: event_type.to_string(),
+            payload,
+            confirmation,
+        })
+    }
+
+    fn push_pending(&self, pending: PendingEvent) -> tm_core::Result<()> {
         if let Some(error) = self
             .failure
             .lock()
@@ -94,24 +107,18 @@ where
             .expect("event writer sender lock poisoned")
             .clone()
             .ok_or_else(|| CoreError::EventSink("event writer is closed".to_string()))?;
-        let result = sender
-            .try_send(PendingEvent {
-                event_type: event_type.to_string(),
-                payload,
-                confirmation,
-            })
-            .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => {
-                    CoreError::EventSink("bounded event writer is full".to_string())
-                }
-                mpsc::error::TrySendError::Closed(_) => CoreError::EventSink(
-                    self.failure
-                        .lock()
-                        .expect("event writer failure lock poisoned")
-                        .clone()
-                        .unwrap_or_else(|| "event writer stopped".to_string()),
-                ),
-            });
+        let result = sender.try_send(pending).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => {
+                CoreError::EventSink("bounded event writer is full".to_string())
+            }
+            mpsc::error::TrySendError::Closed(_) => CoreError::EventSink(
+                self.failure
+                    .lock()
+                    .expect("event writer failure lock poisoned")
+                    .clone()
+                    .unwrap_or_else(|| "event writer stopped".to_string()),
+            ),
+        });
         if let Err(error) = &result {
             *self
                 .failure
@@ -165,20 +172,15 @@ where
         self.push_event("tool_call", json!({ "name": name }))
     }
 
-    fn on_cell_start(&self, code: &str) {
-        self.preserve_legacy_result(self.try_on_cell_start(code));
+    // The core callbacks contain the complete model-authored source and shaped result. tm-lang
+    // emits bounded, redacted events with the same event names through `try_on_runtime_event`, so
+    // persisting these legacy payloads would both duplicate the cell and bypass that boundary.
+    fn try_on_cell_start(&self, _code: &str) -> tm_core::Result<()> {
+        Ok(())
     }
 
-    fn try_on_cell_start(&self, code: &str) -> tm_core::Result<()> {
-        self.push_event("cell_start", json!({ "code": code }))
-    }
-
-    fn on_cell_result(&self, shaped: &str) {
-        self.preserve_legacy_result(self.try_on_cell_result(shaped));
-    }
-
-    fn try_on_cell_result(&self, shaped: &str) -> tm_core::Result<()> {
-        self.push_event("cell_result", json!({ "shaped": shaped }))
+    fn try_on_cell_result(&self, _shaped: &str) -> tm_core::Result<()> {
+        Ok(())
     }
 
     fn on_runtime_reset(&self) {
@@ -229,6 +231,50 @@ where
         self.push_event(event_type, payload.clone())
     }
 
+    fn try_on_runtime_event_confirmed<'a>(
+        &'a self,
+        event_type: &'a str,
+        payload: &'a serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = tm_core::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let (confirmation, response) = oneshot::channel();
+            self.push_event_with_confirmation(event_type, payload.clone(), Some(confirmation))?;
+            response
+                .await
+                .map_err(|_| {
+                    CoreError::EventSink(
+                        self.failure
+                            .lock()
+                            .expect("event writer failure lock poisoned")
+                            .clone()
+                            .unwrap_or_else(|| "event writer stopped".to_string()),
+                    )
+                })?
+                .map_err(CoreError::EventSink)
+        })
+    }
+
+    fn try_on_event_barrier_confirmed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = tm_core::Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let (confirmation, response) = oneshot::channel();
+            self.push_pending(PendingEvent::Barrier { confirmation })?;
+            response
+                .await
+                .map_err(|_| {
+                    CoreError::EventSink(
+                        self.failure
+                            .lock()
+                            .expect("event writer failure lock poisoned")
+                            .clone()
+                            .unwrap_or_else(|| "event writer stopped".to_string()),
+                    )
+                })?
+                .map_err(CoreError::EventSink)
+        })
+    }
+
     fn on_final(&self, text: &str) {
         self.preserve_legacy_result(self.try_on_final(text));
     }
@@ -262,7 +308,8 @@ where
             writer.await.map_err(|error| {
                 ServerError::Store(format!("event writer task failed: {error}"))
             })??;
-        } else if let Some(error) = self
+        }
+        if let Some(error) = self
             .failure
             .lock()
             .expect("event writer failure lock poisoned")
@@ -287,35 +334,29 @@ async fn write_events<S: Store>(
             Some(event) => Some(event),
             None => events.recv().await,
         };
-        let Some(mut pending) = next else {
+        let Some(pending) = next else {
             break;
         };
-        if pending.event_type == "text" {
+        let (event_type, mut payload, confirmation) = match pending {
+            PendingEvent::Barrier { confirmation } => {
+                let _ = confirmation.send(Ok(()));
+                continue;
+            }
+            PendingEvent::Event {
+                event_type,
+                payload,
+                confirmation,
+            } => (event_type, payload, confirmation),
+        };
+        if event_type == "text" && confirmation.is_none() {
             while let Ok(next) = events.try_recv() {
-                if next.event_type != "text" {
-                    deferred = Some(next);
-                    break;
+                if merge_unconfirmed_text(&mut payload, &next) {
+                    continue;
                 }
-                if let (Some(delta), Some(next_delta)) = (
-                    pending
-                        .payload
-                        .get_mut("delta")
-                        .and_then(|value| value.as_str()),
-                    next.payload
-                        .get("delta")
-                        .and_then(serde_json::Value::as_str),
-                ) {
-                    let mut combined = delta.to_string();
-                    combined.push_str(next_delta);
-                    pending.payload["delta"] = serde_json::Value::String(combined);
-                }
+                deferred = Some(next);
+                break;
             }
         }
-        let PendingEvent {
-            event_type,
-            payload,
-            confirmation,
-        } = pending;
         match store
             .append_event_for_turn(session_id, &event_type, payload, turn_id)
             .await
@@ -335,6 +376,33 @@ async fn write_events<S: Store>(
         }
     }
     Ok(())
+}
+
+fn merge_unconfirmed_text(payload: &mut serde_json::Value, next: &PendingEvent) -> bool {
+    let PendingEvent::Event {
+        event_type,
+        payload: next_payload,
+        confirmation: None,
+    } = next
+    else {
+        return false;
+    };
+    if event_type != "text" {
+        return false;
+    }
+    let (Some(delta), Some(next_delta)) = (
+        payload.get("delta").and_then(serde_json::Value::as_str),
+        next_payload
+            .get("delta")
+            .and_then(serde_json::Value::as_str),
+    ) else {
+        return false;
+    };
+    let mut combined = String::with_capacity(delta.len().saturating_add(next_delta.len()));
+    combined.push_str(delta);
+    combined.push_str(next_delta);
+    payload["delta"] = serde_json::Value::String(combined);
+    true
 }
 
 // ─── RosterCodingEventSink ───────────────────────────────────────────────────
@@ -467,5 +535,137 @@ mod tests {
         );
         assert!(events.windows(2).all(|pair| pair[0].seq + 1 == pair[1].seq));
         assert_eq!(events[0].payload_json["argsPreview"], "[redacted]");
+    }
+
+    #[tokio::test]
+    async fn confirmed_runtime_event_reports_store_failure_after_enqueue() {
+        let store = Arc::new(InMemoryStore::default());
+        let (sender, _receiver) = tokio::sync::broadcast::channel(8);
+        let sink = PersistingEventSink::new(Uuid::nil(), store, sender);
+
+        let error = sink
+            .try_on_runtime_event_confirmed(
+                "binding_committed",
+                &json!({"cellId":"cell-1","bindingCount":1}),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("session"), "{error}");
+        assert!(sink.flush().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn event_barrier_reports_prior_unconfirmed_store_failure() {
+        let store = Arc::new(InMemoryStore::default());
+        let (sender, _receiver) = tokio::sync::broadcast::channel(8);
+        let sink = PersistingEventSink::new(Uuid::nil(), store, sender);
+
+        sink.try_on_final("not durable yet").unwrap();
+        let error = sink.try_on_event_barrier_confirmed().await.unwrap_err();
+
+        assert!(error.to_string().contains("session"), "{error}");
+        assert!(sink.flush().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn text_batching_preserves_confirmations_and_malformed_events() {
+        let store = Arc::new(InMemoryStore::default());
+        let session = store
+            .create_session(NewSession {
+                mode: ModeId::from("general"),
+                persona_status: AssetStatus::Degraded {
+                    warning: "test assets".into(),
+                },
+            })
+            .await
+            .unwrap();
+        let (sender, _receiver) = tokio::sync::broadcast::channel(8);
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (confirmation, response) = oneshot::channel();
+        for pending in [
+            PendingEvent::Event {
+                event_type: "text".to_string(),
+                payload: json!({"delta":"a"}),
+                confirmation: None,
+            },
+            PendingEvent::Event {
+                event_type: "text".to_string(),
+                payload: json!({"delta":"b"}),
+                confirmation: Some(confirmation),
+            },
+            PendingEvent::Event {
+                event_type: "text".to_string(),
+                payload: json!({"malformed":true}),
+                confirmation: None,
+            },
+            PendingEvent::Event {
+                event_type: "text".to_string(),
+                payload: json!({"delta":"c"}),
+                confirmation: None,
+            },
+        ] {
+            event_tx.try_send(pending).unwrap();
+        }
+        drop(event_tx);
+
+        write_events(session.id, None, Arc::clone(&store), sender, event_rx)
+            .await
+            .unwrap();
+        response.await.unwrap().unwrap();
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].payload_json["delta"], "a");
+        assert_eq!(events[1].payload_json["delta"], "b");
+        assert_eq!(events[2].payload_json["malformed"], true);
+        assert_eq!(events[3].payload_json["delta"], "c");
+    }
+
+    #[tokio::test]
+    async fn sensitive_cell_boundary_persists_only_structured_previews() {
+        let store = Arc::new(InMemoryStore::default());
+        let session = store
+            .create_session(NewSession {
+                mode: ModeId::from("general"),
+                persona_status: AssetStatus::Degraded {
+                    warning: "test assets".into(),
+                },
+            })
+            .await
+            .unwrap();
+        let (sender, _receiver) = tokio::sync::broadcast::channel(8);
+        let sink = PersistingEventSink::new(session.id, Arc::clone(&store), sender);
+
+        sink.try_on_cell_start("@fs.patch {patch: \"secret-source-value\"}")
+            .unwrap();
+        sink.try_on_cell_result("diff:\n+secret-result-value")
+            .unwrap();
+        sink.try_on_runtime_event(
+            "cell_start",
+            &json!({"cellId":"cell-1","sourcePreview":"[redacted]"}),
+        )
+        .unwrap();
+        sink.try_on_runtime_event(
+            "cell_result",
+            &json!({"cellId":"cell-1","status":"completed","resultPreview":"[redacted]"}),
+        )
+        .unwrap();
+        sink.flush().await.unwrap();
+
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cell_start", "cell_result"]
+        );
+        assert_eq!(events[0].payload_json["sourcePreview"], "[redacted]");
+        assert_eq!(events[1].payload_json["resultPreview"], "[redacted]");
+        let encoded = serde_json::to_string(&events).unwrap();
+        assert!(!encoded.contains("secret-source-value"), "{encoded}");
+        assert!(!encoded.contains("secret-result-value"), "{encoded}");
+        assert!(!encoded.contains("\"code\""), "{encoded}");
+        assert!(!encoded.contains("\"shaped\""), "{encoded}");
     }
 }

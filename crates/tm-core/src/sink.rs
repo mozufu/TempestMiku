@@ -28,12 +28,18 @@ pub trait EventSink: Send + Sync {
         Ok(())
     }
     /// The sandbox is about to evaluate this code.
+    ///
+    /// This legacy callback contains the complete model-authored source. Durable sinks must not
+    /// persist it when a sandbox provides bounded/redacted structured runtime events instead.
     fn on_cell_start(&self, _code: &str) {}
     fn try_on_cell_start(&self, code: &str) -> crate::Result<()> {
         self.on_cell_start(code);
         Ok(())
     }
     /// The shaped cell result that will be fed back to the model.
+    ///
+    /// This legacy callback contains the complete model-visible result. Durable sinks must not
+    /// persist it when a sandbox provides bounded/redacted structured runtime events instead.
     fn on_cell_result(&self, _shaped: &str) {}
     fn try_on_cell_result(&self, shaped: &str) -> crate::Result<()> {
         self.on_cell_result(shaped);
@@ -67,6 +73,28 @@ pub trait EventSink: Send + Sync {
     ) -> crate::Result<()> {
         self.on_runtime_event(event_type, payload);
         Ok(())
+    }
+    /// Emits a structured runtime event and completes only once the sink can confirm delivery.
+    ///
+    /// Runtime state machines use this path for events whose durable publication is part of the
+    /// state transition. In-memory and synchronous sinks inherit the callback-based default;
+    /// durable sinks should override it and wait for storage acknowledgement.
+    fn try_on_runtime_event_confirmed<'a>(
+        &'a self,
+        event_type: &'a str,
+        payload: &'a serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>> {
+        Box::pin(async { self.try_on_runtime_event(event_type, payload) })
+    }
+    /// Waits until every event accepted before this call has reached the sink's durable boundary.
+    ///
+    /// This is a non-closing barrier: cached runtimes use it before retaining in-memory state after
+    /// a successful turn. Synchronous and in-memory sinks have no pending work and inherit the
+    /// immediate default.
+    fn try_on_event_barrier_confirmed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
     }
     /// The model produced a final answer (no tool call).
     fn on_final(&self, _text: &str) {}

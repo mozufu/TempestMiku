@@ -10,13 +10,14 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 
 use crate::actor::ActorId;
 
-use super::{ActorMessage, MAX_INBOX_MESSAGES};
+use super::{ActorMessage, MAX_INBOX_BYTES, MAX_INBOX_MESSAGES};
 
 pub(super) struct ActorInbox {
     pub(super) sender: mpsc::Sender<ActorMessage>,
     receiver: Mutex<mpsc::Receiver<ActorMessage>>,
     backlog: Mutex<VecDeque<ActorMessage>>,
     unread: AtomicU64,
+    retained_bytes: AtomicU64,
     last_activity: RwLock<Option<DateTime<Utc>>>,
 }
 
@@ -28,6 +29,7 @@ impl ActorInbox {
             receiver: Mutex::new(receiver),
             backlog: Mutex::new(VecDeque::new()),
             unread: AtomicU64::new(0),
+            retained_bytes: AtomicU64::new(0),
             last_activity: RwLock::new(None),
         })
     }
@@ -48,12 +50,38 @@ impl ActorInbox {
         self.unread.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(super) fn try_reserve(&self, bytes: usize) -> bool {
+        let Ok(bytes) = u64::try_from(bytes) else {
+            return false;
+        };
+        self.retained_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                let next = current.checked_add(bytes)?;
+                (next <= MAX_INBOX_BYTES as u64).then_some(next)
+            })
+            .is_ok()
+    }
+
+    pub(super) fn release(&self, bytes: usize) {
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        let _ = self
+            .retained_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_sub(bytes))
+            });
+    }
+
     fn mark_taken_by_actor(&self) {
         let _ = self
             .unread
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(1))
             });
+    }
+
+    fn mark_message_taken(&self, message: &ActorMessage) {
+        self.mark_taken_by_actor();
+        self.release(message.retained_bytes());
     }
 
     pub(super) async fn drain(&self, from: Option<&ActorId>) -> Vec<ActorMessage> {
@@ -64,7 +92,7 @@ impl ActorInbox {
             let mut retained = VecDeque::new();
             while let Some(message) = backlog.pop_front() {
                 if message_matches_from(&message, from) {
-                    self.mark_taken_by_actor();
+                    self.mark_message_taken(&message);
                     drained.push(message);
                 } else {
                     retained.push_back(message);
@@ -77,7 +105,7 @@ impl ActorInbox {
         loop {
             match receiver.try_recv() {
                 Ok(message) if message_matches_from(&message, from) => {
-                    self.mark_taken_by_actor();
+                    self.mark_message_taken(&message);
                     drained.push(message);
                 }
                 Ok(message) => {
@@ -114,7 +142,7 @@ impl ActorInbox {
             };
             match received {
                 Ok(Some(message)) if message_matches_from(&message, from) => {
-                    self.mark_taken_by_actor();
+                    self.mark_message_taken(&message);
                     return Some(message);
                 }
                 Ok(Some(message)) => {
@@ -132,7 +160,7 @@ impl ActorInbox {
             .position(|message| message_matches_from(message, from))?;
         let message = backlog.remove(index)?;
         drop(backlog);
-        self.mark_taken_by_actor();
+        self.mark_message_taken(&message);
         Some(message)
     }
 }

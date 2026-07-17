@@ -419,6 +419,7 @@ where
     let turn = state.chat.run_turn(
         ChatTurn {
             session_id: session.id,
+            durable_turn_id: None,
             user_prompt: prompt_text.to_string(),
             mode,
             scope: profile.default_scope,

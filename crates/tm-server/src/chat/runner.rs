@@ -5,15 +5,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use tm_core::{Agent, AgentConfig, EventSink, LlmClient, Message, Sandbox, Session};
-use tm_host::{DefaultDenyApprovalPolicy, HostEventSink, HostFn};
-use tm_lang::{TmSandbox, TmSandboxOptions, core_tm_grants};
+use tm_core::{
+    Agent, AgentConfig, CancellationToken, EventSink, LlmClient, Message, Sandbox, Session,
+};
+use tm_host::{CapabilityGrants, DefaultDenyApprovalPolicy, HostEventSink, HostFn};
+use tm_lang::{TmSandbox, TmSandboxOptions};
 use tm_modes::ModeId;
 use uuid::Uuid;
 
 use crate::{
     Result, ServerError,
     session_shards::{ThreadAffineShardPool, evict_expired_sessions, session_sweep_interval},
+    turn_control::{ActiveTurnRegistry, CancellationProxy, TurnCancellation},
 };
 
 #[cfg(test)]
@@ -22,6 +25,9 @@ use crate::session_shards::shard_index;
 #[derive(Clone)]
 pub struct ChatTurn {
     pub session_id: Uuid,
+    /// Durable queue identity. `Some` keeps successful runtime state quarantined until the
+    /// dispatcher confirms the matching store commit; non-durable callers use `None`.
+    pub durable_turn_id: Option<Uuid>,
     pub user_prompt: String,
     pub mode: ModeId,
     pub scope: String,
@@ -39,6 +45,7 @@ impl std::fmt::Debug for ChatTurn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChatTurn")
             .field("session_id", &self.session_id)
+            .field("durable_turn_id", &self.durable_turn_id)
             .field("user_prompt", &self.user_prompt)
             .field("mode", &self.mode)
             .field("scope", &self.scope)
@@ -72,6 +79,19 @@ pub trait ChatRunner: Send + Sync + 'static {
         turn: ChatTurn,
         sink: Arc<dyn EventSink + Send + Sync>,
     ) -> Result<String>;
+
+    /// Promote a successful turn's pending runtime state after its durable turn commit succeeds.
+    async fn promote_session(&self, _session_id: Uuid, _turn_id: Uuid) -> Result<()> {
+        Ok(())
+    }
+
+    /// Discard pending or previously promoted ephemeral state after a durable turn aborts.
+    async fn abort_session(&self, _session_id: Uuid, _turn_id: Uuid) -> Result<()> {
+        Ok(())
+    }
+
+    /// Request cooperative termination of every active/queued turn for this session.
+    fn cancel_turn(&self, _session_id: Uuid, _turn_id: Uuid) {}
 }
 
 #[async_trait]
@@ -83,16 +103,44 @@ impl<T: ChatRunner + ?Sized> ChatRunner for Arc<T> {
     ) -> Result<String> {
         (**self).run_turn(turn, sink).await
     }
+
+    async fn promote_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        (**self).promote_session(session_id, turn_id).await
+    }
+
+    async fn abort_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        (**self).abort_session(session_id, turn_id).await
+    }
+
+    fn cancel_turn(&self, session_id: Uuid, turn_id: Uuid) {
+        (**self).cancel_turn(session_id, turn_id);
+    }
 }
 
-struct AgentRequest {
+struct AgentTurnRequest {
     turn: ChatTurn,
     sink: Arc<dyn EventSink + Send + Sync>,
+    cancellation: Arc<TurnCancellation>,
     reply: tokio::sync::oneshot::Sender<Result<String>>,
+}
+
+enum AgentRequest {
+    Run(Box<AgentTurnRequest>),
+    Promote {
+        session_id: Uuid,
+        turn_id: Uuid,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
+    Abort {
+        session_id: Uuid,
+        turn_id: Uuid,
+        reply: tokio::sync::oneshot::Sender<Result<()>>,
+    },
 }
 
 pub struct AgentChatRunner {
     shards: ThreadAffineShardPool<AgentRequest>,
+    active_turns: ActiveTurnRegistry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,8 +158,10 @@ impl Default for AgentChatRunnerOptions {
     }
 }
 
-type SandboxFactory =
-    dyn Fn(&ChatTurn, Arc<dyn HostEventSink>) -> Arc<dyn Sandbox> + Send + Sync + 'static;
+type SandboxFactory = dyn Fn(&ChatTurn, Arc<dyn HostEventSink>, Arc<dyn CancellationToken>) -> Arc<dyn Sandbox>
+    + Send
+    + Sync
+    + 'static;
 
 #[derive(Clone, PartialEq, Eq)]
 struct SandboxProfile {
@@ -144,7 +194,9 @@ struct CachedSession {
     profile: SandboxProfile,
     last_used: Instant,
     event_proxy: Arc<SwappableHostEventSink>,
+    cancellation_proxy: Arc<CancellationProxy>,
     runtime_reset_pending: bool,
+    pending_promotion: Option<Uuid>,
 }
 
 #[derive(Default)]
@@ -173,37 +225,19 @@ impl HostEventSink for SwappableHostEventSink {
             .lock()
             .expect("host event proxy lock poisoned")
             .clone();
-        sink.as_ref().map_or(Ok(()), |sink| {
-            sink.try_on_runtime_event(event_type, &payload_json)
-                .map_err(|error| tm_host::HostError::HostCall(error.to_string()))
-        })
+        let sink = sink.ok_or_else(|| {
+            tm_host::HostError::HostCall(
+                "runtime event emitted without an active turn sink".to_string(),
+            )
+        })?;
+        sink.try_on_runtime_event_confirmed(event_type, &payload_json)
+            .await
+            .map_err(|error| tm_host::HostError::HostCall(error.to_string()))?;
+        Ok(())
     }
 }
 
 impl AgentChatRunner {
-    pub fn new(agent: Agent) -> Self {
-        let shards: ThreadAffineShardPool<AgentRequest> =
-            ThreadAffineShardPool::<AgentRequest>::spawn_one("tm-agent-worker", move |receiver| {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("agent worker runtime builds");
-                for request in receiver {
-                    let result = runtime
-                        .block_on(agent.run_with_prior_messages_and_controls(
-                            &request.turn.user_prompt,
-                            &request.turn.prior_messages,
-                            request.sink.as_ref(),
-                            None,
-                            None,
-                        ))
-                        .map_err(|err| ServerError::Store(err.to_string()));
-                    let _ = request.reply.send(result);
-                }
-            });
-        Self { shards }
-    }
-
     pub fn tm(llm: Arc<dyn LlmClient>, cfg: AgentConfig, base_options: TmSandboxOptions) -> Self {
         Self::tm_with_options(llm, cfg, base_options, AgentChatRunnerOptions::default())
     }
@@ -218,11 +252,12 @@ impl AgentChatRunner {
             llm,
             cfg,
             runner_options,
-            move |turn, host_events| {
+            move |turn, host_events, cancellation| {
                 let mut options = base_options.clone();
                 options.session_id = turn.session_id.to_string();
                 options.session_scope = Some(turn.scope.clone());
-                options.grants = core_tm_grants().allow_many(turn.capabilities.iter().cloned());
+                options.grants =
+                    CapabilityGrants::default().allow_many(turn.capabilities.iter().cloned());
                 for function in &turn.host_functions {
                     options.host_registry.register(Arc::clone(function));
                 }
@@ -230,25 +265,14 @@ impl AgentChatRunner {
                     options.approval_policy = Arc::new(DefaultDenyApprovalPolicy);
                 }
                 options.host_event_sink = host_events;
+                options.cancellation = Some(cancellation);
                 Arc::new(TmSandbox::new(options))
             },
         )
     }
 
-    pub fn new_with_sandbox_factory(
-        llm: Arc<dyn LlmClient>,
-        cfg: AgentConfig,
-        sandbox_factory: impl Fn(&ChatTurn) -> Arc<dyn Sandbox> + Send + Sync + 'static,
-    ) -> Self {
-        Self::new_with_sandbox_factory_and_options(
-            llm,
-            cfg,
-            AgentChatRunnerOptions::default(),
-            sandbox_factory,
-        )
-    }
-
-    pub fn new_with_sandbox_factory_and_options(
+    #[cfg(test)]
+    fn new_with_sandbox_factory_and_options(
         llm: Arc<dyn LlmClient>,
         cfg: AgentConfig,
         runner_options: AgentChatRunnerOptions,
@@ -258,7 +282,7 @@ impl AgentChatRunner {
             llm,
             cfg,
             runner_options,
-            move |turn, _host_events| sandbox_factory(turn),
+            move |turn, _host_events, _cancellation| sandbox_factory(turn),
         )
     }
 
@@ -266,12 +290,17 @@ impl AgentChatRunner {
         llm: Arc<dyn LlmClient>,
         cfg: AgentConfig,
         runner_options: AgentChatRunnerOptions,
-        sandbox_factory: impl Fn(&ChatTurn, Arc<dyn HostEventSink>) -> Arc<dyn Sandbox>
+        sandbox_factory: impl Fn(
+            &ChatTurn,
+            Arc<dyn HostEventSink>,
+            Arc<dyn CancellationToken>,
+        ) -> Arc<dyn Sandbox>
         + Send
         + Sync
         + 'static,
     ) -> Self {
         let sandbox_factory: Arc<SandboxFactory> = Arc::new(sandbox_factory);
+        let active_turns = ActiveTurnRegistry::default();
         let shards =
             ThreadAffineShardPool::spawn(runner_options.shard_count, "tm-agent-shard", move |_| {
                 let llm = Arc::clone(&llm);
@@ -287,7 +316,10 @@ impl AgentChatRunner {
                     );
                 }
             });
-        Self { shards }
+        Self {
+            shards,
+            active_turns,
+        }
     }
 }
 
@@ -319,19 +351,58 @@ fn run_agent_shard(
         evict_expired_sessions(&mut sessions, session_ttl, Instant::now(), |cached| {
             cached.last_used
         });
-        let result = runtime.block_on(run_cached_turn(
-            &request,
-            &llm,
-            &cfg,
-            sandbox_factory.as_ref(),
-            &mut sessions,
-        ));
-        let _ = request.reply.send(result);
+        match request {
+            AgentRequest::Run(request) => {
+                let result = runtime.block_on(run_cached_turn(
+                    &request,
+                    &llm,
+                    &cfg,
+                    sandbox_factory.as_ref(),
+                    &mut sessions,
+                ));
+                let _ = request.reply.send(result);
+            }
+            AgentRequest::Promote {
+                session_id,
+                turn_id,
+                reply,
+            } => {
+                let mut result = Ok(());
+                if let Some(cached) = sessions.get_mut(&session_id) {
+                    match cached.pending_promotion {
+                        Some(pending) if pending == turn_id => {
+                            cached.pending_promotion = None;
+                            cached.last_used = Instant::now();
+                        }
+                        Some(pending) => {
+                            result = Err(ServerError::Conflict(format!(
+                                "turn {turn_id} cannot promote runtime pending for turn {pending}"
+                            )));
+                        }
+                        None => {}
+                    }
+                }
+                let _ = reply.send(result);
+            }
+            AgentRequest::Abort {
+                session_id,
+                turn_id,
+                reply,
+            } => {
+                if sessions
+                    .get(&session_id)
+                    .is_some_and(|cached| cached.pending_promotion == Some(turn_id))
+                {
+                    sessions.remove(&session_id);
+                }
+                let _ = reply.send(Ok(()));
+            }
+        }
     }
 }
 
 async fn run_cached_turn(
-    request: &AgentRequest,
+    request: &AgentTurnRequest,
     llm: &Arc<dyn LlmClient>,
     base_cfg: &AgentConfig,
     sandbox_factory: &SandboxFactory,
@@ -341,12 +412,16 @@ async fn run_cached_turn(
     let profile = SandboxProfile::from(&request.turn);
     let replace_session = sessions
         .get(&session_id)
-        .is_none_or(|cached| cached.profile != profile);
+        .is_none_or(|cached| cached.profile != profile || cached.pending_promotion.is_some());
     if replace_session {
+        sessions.remove(&session_id);
         let event_proxy = Arc::new(SwappableHostEventSink::default());
         event_proxy.bind(Arc::clone(&request.sink));
         let host_events: Arc<dyn HostEventSink> = event_proxy.clone();
-        let sandbox = sandbox_factory(&request.turn, host_events);
+        let cancellation_proxy = Arc::new(CancellationProxy::new());
+        cancellation_proxy.bind(Arc::clone(&request.cancellation));
+        let cancellation: Arc<dyn CancellationToken> = cancellation_proxy.clone();
+        let sandbox = sandbox_factory(&request.turn, host_events, cancellation);
         let session = sandbox
             .open(tm_core::SessionConfig::default())
             .await
@@ -359,39 +434,64 @@ async fn run_cached_turn(
                 profile,
                 last_used: Instant::now(),
                 event_proxy,
+                cancellation_proxy,
                 runtime_reset_pending: !request.turn.prior_messages.is_empty(),
+                pending_promotion: None,
             },
         );
     }
 
-    let cached = sessions
-        .get_mut(&session_id)
-        .expect("cached session exists after open");
-    cached.event_proxy.bind(Arc::clone(&request.sink));
-    let mut cfg = base_cfg.clone();
-    cfg.system_prompt = request.turn.system_prompt.clone();
-    apply_turn_limits(&mut cfg, request.turn.limits);
-    let agent = Agent::new(Arc::clone(llm), Arc::clone(&cached.sandbox), cfg);
-    let result = async {
-        if cached.runtime_reset_pending {
-            request.sink.try_on_runtime_reset_confirmed().await?;
-            cached.runtime_reset_pending = false;
+    let result = {
+        let cached = sessions
+            .get_mut(&session_id)
+            .expect("cached session exists after open");
+        cached.event_proxy.bind(Arc::clone(&request.sink));
+        cached
+            .cancellation_proxy
+            .bind(Arc::clone(&request.cancellation));
+        let mut cfg = base_cfg.clone();
+        cfg.system_prompt = request.turn.system_prompt.clone();
+        apply_turn_limits(&mut cfg, request.turn.limits);
+        let agent = Agent::new(Arc::clone(llm), Arc::clone(&cached.sandbox), cfg);
+        let result = async {
+            if cached.runtime_reset_pending {
+                request.sink.try_on_runtime_reset_confirmed().await?;
+                cached.runtime_reset_pending = false;
+            }
+            let response = agent
+                .run_with_session_and_controls(
+                    &request.turn.user_prompt,
+                    &request.turn.prior_messages,
+                    cached.session.as_mut(),
+                    request.sink.as_ref(),
+                    None,
+                    Some(request.cancellation.as_ref()),
+                )
+                .await?;
+            // Runtime state is reusable only after every earlier streaming/final callback has
+            // crossed the sink's durable boundary. This non-closing barrier lets the API perform
+            // its later ownership/flush step without leaving a failed turn cached in the meantime.
+            request.sink.try_on_event_barrier_confirmed().await?;
+            if request.cancellation.is_cancelled() {
+                return Err(tm_core::Error::Cancelled);
+            }
+            Ok::<String, tm_core::Error>(response)
         }
-        agent
-            .run_with_session_and_controls(
-                &request.turn.user_prompt,
-                &request.turn.prior_messages,
-                cached.session.as_mut(),
-                request.sink.as_ref(),
-                None,
-                None,
-            )
-            .await
+        .await
+        .map_err(|err| ServerError::Store(err.to_string()));
+        cached.event_proxy.clear();
+        cached.cancellation_proxy.clear();
+        cached.last_used = Instant::now();
+        cached.pending_promotion = result.as_ref().ok().and(request.turn.durable_turn_id);
+        result
+    };
+
+    if result.is_err() {
+        // A failed turn can leave a backend-specific session between an in-memory mutation and
+        // its durable event. Reopening is the conservative boundary: persisted conversation
+        // history survives, while unconfirmed ephemeral runtime state cannot leak into a retry.
+        sessions.remove(&session_id);
     }
-    .await
-    .map_err(|err| ServerError::Store(err.to_string()));
-    cached.event_proxy.clear();
-    cached.last_used = Instant::now();
     result
 }
 
@@ -413,12 +513,63 @@ impl ChatRunner for AgentChatRunner {
     ) -> Result<String> {
         let (reply, response) = tokio::sync::oneshot::channel();
         let session_id = turn.session_id;
+        let guard = self.active_turns.register(session_id, turn.durable_turn_id);
+        let cancellation = guard.cancellation();
         self.shards
-            .send(session_id, AgentRequest { turn, sink, reply })
+            .send(
+                session_id,
+                AgentRequest::Run(Box::new(AgentTurnRequest {
+                    turn,
+                    sink,
+                    cancellation,
+                    reply,
+                })),
+            )
+            .map_err(|_| ServerError::Store("agent shard stopped".to_string()))?;
+        let result = response
+            .await
+            .map_err(|_| ServerError::Store("agent shard dropped response".to_string()))?;
+        guard.finish();
+        result
+    }
+
+    async fn promote_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.shards
+            .send(
+                session_id,
+                AgentRequest::Promote {
+                    session_id,
+                    turn_id,
+                    reply,
+                },
+            )
             .map_err(|_| ServerError::Store("agent shard stopped".to_string()))?;
         response
             .await
-            .map_err(|_| ServerError::Store("agent shard dropped response".to_string()))?
+            .map_err(|_| ServerError::Store("agent shard dropped promotion".to_string()))?
+    }
+
+    async fn abort_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        self.cancel_turn(session_id, turn_id);
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.shards
+            .send(
+                session_id,
+                AgentRequest::Abort {
+                    session_id,
+                    turn_id,
+                    reply,
+                },
+            )
+            .map_err(|_| ServerError::Store("agent shard stopped".to_string()))?;
+        response
+            .await
+            .map_err(|_| ServerError::Store("agent shard dropped abort".to_string()))?
+    }
+
+    fn cancel_turn(&self, session_id: Uuid, turn_id: Uuid) {
+        self.active_turns.cancel(session_id, turn_id);
     }
 }
 
@@ -457,6 +608,27 @@ impl ChatRunner for ServerChatRunner {
         match self {
             Self::Echo(r) => r.run_turn(turn, sink).await,
             Self::Agent(r) => r.run_turn(turn, sink).await,
+        }
+    }
+
+    async fn promote_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        match self {
+            Self::Echo(r) => r.promote_session(session_id, turn_id).await,
+            Self::Agent(r) => r.promote_session(session_id, turn_id).await,
+        }
+    }
+
+    async fn abort_session(&self, session_id: Uuid, turn_id: Uuid) -> Result<()> {
+        match self {
+            Self::Echo(r) => r.abort_session(session_id, turn_id).await,
+            Self::Agent(r) => r.abort_session(session_id, turn_id).await,
+        }
+    }
+
+    fn cancel_turn(&self, session_id: Uuid, turn_id: Uuid) {
+        match self {
+            Self::Echo(r) => r.cancel_turn(session_id, turn_id),
+            Self::Agent(r) => r.cancel_turn(session_id, turn_id),
         }
     }
 }
@@ -758,6 +930,57 @@ mod tests {
         }
     }
 
+    struct FailingCellResultSink;
+
+    impl EventSink for FailingCellResultSink {
+        fn try_on_cell_result(&self, _shaped: &str) -> tm_core::Result<()> {
+            Err(Error::EventSink(
+                "cell result persistence failed".to_string(),
+            ))
+        }
+    }
+
+    struct FailingBarrierSink;
+
+    impl EventSink for FailingBarrierSink {
+        fn try_on_event_barrier_confirmed(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = tm_core::Result<()>> + Send + '_>>
+        {
+            Box::pin(async {
+                Err(Error::EventSink(
+                    "event persistence barrier failed".to_string(),
+                ))
+            })
+        }
+    }
+
+    struct AsyncConfirmedFailureSink;
+
+    impl EventSink for AsyncConfirmedFailureSink {
+        fn try_on_runtime_event(
+            &self,
+            _event_type: &str,
+            _payload: &serde_json::Value,
+        ) -> tm_core::Result<()> {
+            Ok(())
+        }
+
+        fn try_on_runtime_event_confirmed<'a>(
+            &'a self,
+            _event_type: &'a str,
+            _payload: &'a serde_json::Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = tm_core::Result<()>> + Send + 'a>>
+        {
+            Box::pin(async {
+                tokio::task::yield_now().await;
+                Err(Error::EventSink(
+                    "async runtime persistence failed".to_string(),
+                ))
+            })
+        }
+    }
+
     #[derive(Default)]
     struct RuntimeSink(Mutex<Vec<(String, serde_json::Value)>>);
 
@@ -773,6 +996,7 @@ mod tests {
     fn chat_turn(session_id: Uuid) -> ChatTurn {
         ChatTurn {
             session_id,
+            durable_turn_id: None,
             user_prompt: "advance state".to_string(),
             mode: ModeId::from("general"),
             scope: "global".to_string(),
@@ -855,10 +1079,11 @@ mod tests {
             .unwrap();
 
         proxy.clear();
-        proxy
+        let error = proxy
             .emit("between_turns", serde_json::json!({"ignored": true}))
             .await
-            .unwrap();
+            .unwrap_err();
+        assert!(error.to_string().contains("without an active turn sink"));
 
         let second = Arc::new(RuntimeSink::default());
         let second_sink: Arc<dyn EventSink + Send + Sync> = second.clone();
@@ -875,6 +1100,24 @@ mod tests {
         assert_eq!(
             *second.0.lock().unwrap(),
             vec![("second".to_string(), serde_json::json!({"turn": 2}))]
+        );
+    }
+
+    #[tokio::test]
+    async fn host_event_proxy_awaits_async_confirmed_delivery() {
+        let proxy = SwappableHostEventSink::default();
+        let sink: Arc<dyn EventSink + Send + Sync> = Arc::new(AsyncConfirmedFailureSink);
+        proxy.bind(sink);
+
+        let error = proxy
+            .emit("binding_committed", serde_json::json!({"cellId": "cell-1"}))
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("async runtime persistence failed")
         );
     }
 
@@ -899,6 +1142,127 @@ mod tests {
             vec![(session_id, 1), (session_id, 2)]
         );
         assert_eq!(harness.opens.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn durable_state_is_reused_only_after_matching_promotion() {
+        let harness = Harness::new();
+        let runner = harness.runner(options(1, Duration::from_secs(60)), Duration::ZERO);
+        let session_id = Uuid::from_u128(31);
+        let committed_id = Uuid::from_u128(3101);
+        let aborted_id = Uuid::from_u128(3102);
+
+        let mut committed = chat_turn(session_id);
+        committed.durable_turn_id = Some(committed_id);
+        run(&runner, committed).await;
+        runner
+            .promote_session(session_id, committed_id)
+            .await
+            .unwrap();
+
+        let mut aborted = chat_turn(session_id);
+        aborted.durable_turn_id = Some(aborted_id);
+        run(&runner, aborted).await;
+        runner.abort_session(session_id, aborted_id).await.unwrap();
+
+        run(&runner, chat_turn(session_id)).await;
+
+        assert_eq!(
+            *harness.evaluations.lock().unwrap(),
+            vec![(session_id, 1), (session_id, 2), (session_id, 1)],
+            "the committed state may advance once, but the aborted mutation must be evicted"
+        );
+        assert_eq!(harness.opens.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn unpromoted_durable_state_is_never_observed_by_the_next_turn() {
+        let harness = Harness::new();
+        let runner = harness.runner(options(1, Duration::from_secs(60)), Duration::ZERO);
+        let session_id = Uuid::from_u128(32);
+        let mut uncommitted = chat_turn(session_id);
+        uncommitted.durable_turn_id = Some(Uuid::from_u128(3201));
+
+        run(&runner, uncommitted).await;
+        run(&runner, chat_turn(session_id)).await;
+
+        assert_eq!(
+            *harness.evaluations.lock().unwrap(),
+            vec![(session_id, 1), (session_id, 1)]
+        );
+        assert_eq!(harness.opens.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn capability_downgrade_reopens_session_without_prior_authority_or_state() {
+        let harness = Harness::new();
+        let runner = harness.runner(options(1, Duration::from_secs(60)), Duration::ZERO);
+        let session_id = Uuid::from_u128(23);
+        let mut elevated = chat_turn(session_id);
+        elevated.capabilities = vec![
+            "http.get".to_string(),
+            "resources.read:artifact".to_string(),
+        ];
+
+        run(&runner, elevated).await;
+        run(&runner, chat_turn(session_id)).await;
+
+        assert_eq!(
+            *harness.evaluations.lock().unwrap(),
+            vec![(session_id, 1), (session_id, 1)],
+            "a downgraded turn must not reuse the elevated interpreter"
+        );
+        assert_eq!(harness.opens.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_turn_discards_unconfirmed_cached_session_state() {
+        let harness = Harness::new();
+        let runner = harness.runner(options(1, Duration::from_secs(60)), Duration::ZERO);
+        let session_id = Uuid::from_u128(21);
+        let failing_sink: Arc<dyn EventSink + Send + Sync> = Arc::new(FailingCellResultSink);
+
+        let error = runner
+            .run_turn(chat_turn(session_id), failing_sink)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("cell result persistence failed"));
+
+        run(&runner, chat_turn(session_id)).await;
+
+        assert_eq!(
+            *harness.evaluations.lock().unwrap(),
+            vec![(session_id, 1), (session_id, 1)],
+            "the failed turn's mutated live session must not survive a retry"
+        );
+        assert_eq!(harness.opens.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_persistence_barrier_discards_cached_session_state() {
+        let harness = Harness::new();
+        let runner = harness.runner(options(1, Duration::from_secs(60)), Duration::ZERO);
+        let session_id = Uuid::from_u128(22);
+        let failing_sink: Arc<dyn EventSink + Send + Sync> = Arc::new(FailingBarrierSink);
+
+        let error = runner
+            .run_turn(chat_turn(session_id), failing_sink)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("event persistence barrier failed")
+        );
+
+        run(&runner, chat_turn(session_id)).await;
+
+        assert_eq!(
+            *harness.evaluations.lock().unwrap(),
+            vec![(session_id, 1), (session_id, 1)],
+            "a turn that fails its final event barrier must not retain runtime state"
+        );
+        assert_eq!(harness.opens.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

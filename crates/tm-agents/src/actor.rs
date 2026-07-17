@@ -13,6 +13,18 @@ use tokio::sync::Notify;
 
 use crate::supervise::{FailureReason, SupervisionDecision};
 
+/// Maximum UTF-8 bytes accepted for an actor role or mode label.
+pub const MAX_ACTOR_ROLE_BYTES: usize = 128;
+/// Maximum UTF-8 bytes accepted for one actor task.
+pub const MAX_ACTOR_TASK_BYTES: usize = 8 * 1024;
+/// Maximum UTF-8 bytes accepted for one mailbox message.
+pub const MAX_ACTOR_MESSAGE_BYTES: usize = 4 * 1024;
+/// Maximum UTF-8 bytes returned to a parent as the inline actor digest summary.
+pub const MAX_ACTOR_SUMMARY_BYTES: usize = 4 * 1024;
+/// Maximum UTF-8 bytes retained for an in-memory actor transcript/history resource.
+pub const MAX_ACTOR_TRANSCRIPT_BYTES: usize = 64 * 1024;
+pub const ACTOR_TEXT_TRUNCATED_MARKER: &str = "\n[actor output truncated]";
+
 /// Shareable cancellation token for a single actor run.
 #[derive(Debug, Clone, Default)]
 pub struct ActorCancelToken {
@@ -145,6 +157,28 @@ pub struct ActorSpec {
     pub cancellation: ActorCancelToken,
 }
 
+impl ActorSpec {
+    /// Validate all model-controlled text before an executor allocates a prompt or worker.
+    pub fn validate_text_limits(&self) -> Result<(), String> {
+        validate_text_bytes("role", &self.role, MAX_ACTOR_ROLE_BYTES)?;
+        validate_text_bytes("task", &self.task, MAX_ACTOR_TASK_BYTES)?;
+        if let Some(mode) = self.mode.as_deref() {
+            validate_text_bytes("mode", mode, MAX_ACTOR_ROLE_BYTES)?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_text_bytes(field: &str, text: &str, max_bytes: usize) -> Result<(), String> {
+    if text.len() > max_bytes {
+        return Err(format!(
+            "{field} must be at most {max_bytes} UTF-8 bytes, got {}",
+            text.len()
+        ));
+    }
+    Ok(())
+}
+
 /// Full lifecycle record persisted in the session event log (§23.4, P3.1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActorRecord {
@@ -190,6 +224,34 @@ pub struct ActorDigest {
     /// Stripped before the digest JSON is sent to the model; stored in MailboxRegistry.transcripts.
     #[serde(skip)]
     pub history_content: Option<String>,
+}
+
+impl ActorDigest {
+    pub fn enforce_text_limits(&mut self) {
+        self.summary = truncate_utf8_with_marker(&self.summary, MAX_ACTOR_SUMMARY_BYTES);
+        self.history_content = self
+            .history_content
+            .take()
+            .map(|content| truncate_utf8_with_marker(&content, MAX_ACTOR_TRANSCRIPT_BYTES));
+    }
+}
+
+pub fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    if max_bytes <= ACTOR_TEXT_TRUNCATED_MARKER.len() {
+        return ACTOR_TEXT_TRUNCATED_MARKER[..max_bytes].to_string();
+    }
+    let content_limit = max_bytes - ACTOR_TEXT_TRUNCATED_MARKER.len();
+    let mut end = content_limit.min(value.len());
+    while !value.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    let mut bounded = String::with_capacity(max_bytes);
+    bounded.push_str(&value[..end]);
+    bounded.push_str(ACTOR_TEXT_TRUNCATED_MARKER);
+    bounded
 }
 
 /// Actor lifecycle events for the session event log (§23.4, P3.1).
@@ -357,5 +419,24 @@ mod tests {
             ActorId::new(""),
             Err(ActorIdError::InvalidFormat(_))
         ));
+    }
+
+    #[test]
+    fn actor_digest_limits_are_utf8_safe_and_mark_truncation() {
+        let mut digest = ActorDigest {
+            actor_id: ActorId::new("Worker").unwrap(),
+            summary: "好".repeat(MAX_ACTOR_SUMMARY_BYTES),
+            artifact_uri: None,
+            history_uri: Some("history://Worker".to_string()),
+            history_content: Some("界".repeat(MAX_ACTOR_TRANSCRIPT_BYTES)),
+        };
+
+        digest.enforce_text_limits();
+
+        assert!(digest.summary.len() <= MAX_ACTOR_SUMMARY_BYTES);
+        assert!(digest.summary.ends_with(ACTOR_TEXT_TRUNCATED_MARKER));
+        let history = digest.history_content.unwrap();
+        assert!(history.len() <= MAX_ACTOR_TRANSCRIPT_BYTES);
+        assert!(history.ends_with(ACTOR_TEXT_TRUNCATED_MARKER));
     }
 }

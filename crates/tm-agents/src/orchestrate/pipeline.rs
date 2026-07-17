@@ -1,4 +1,5 @@
 use super::*;
+use futures::{StreamExt, stream};
 
 #[derive(Debug, Clone)]
 struct PipelineStage {
@@ -29,7 +30,9 @@ impl AgentsPipelineFn {
                      handles plus a bounded summary, never a transcript re-inline. Stage specs \
                      provide a role plus either one task applied to each input or a tasks array \
                      matching the current wave length. Returns one ordered digest array per \
-                     stage. Requires agents.pipeline grant."
+                     stage. Children receive no parent capabilities unless opts.capabilities \
+                     explicitly delegates a held, delegable subset shared by every stage. \
+                     Requires agents.pipeline grant."
                         .to_string(),
                 ),
                 signature:
@@ -57,6 +60,18 @@ impl AgentsPipelineFn {
                                     }
                                 }
                             }
+                        },
+                        "opts": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "description": "Optional child authority delegation shared by every stage. Absent means no delegated capabilities; at most 32 names, each at most 128 ASCII bytes and 2 KiB total.",
+                            "properties": {
+                                "capabilities": {
+                                    "type": "array",
+                                    "maxItems": 32,
+                                    "items": { "type": "string", "maxLength": 128 }
+                                }
+                            }
                         }
                     }
                 }),
@@ -69,10 +84,10 @@ impl AgentsPipelineFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Research then summarize".to_string()),
-                    code: "let waves = @agents.pipeline {items: [\"§21\", \"§22\"], stages: [\n  {role: \"researcher\", task: \"Find the important points for this input.\"},\n  {role: \"writer\", task: \"Turn this digest into a concise summary.\"}\n]};\nwaves |> display {kind: \"json\"}"
+                    code: "let waves = @agents.pipeline {items: [\"§21\", \"§22\"], stages: [\n  {role: \"researcher\", task: \"Find the important points for this input.\"},\n  {role: \"writer\", task: \"Turn this digest into a concise summary.\"}\n], opts: {capabilities: [\"http.get\", \"resources.read:artifact\"]}};\nwaves |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some(
-                        "Each stage waits for all actors in the previous stage; downstream prompts receive actor/resource references plus bounded summaries, not transcripts."
+                        "The parent must hold every explicitly delegated capability. Each stage waits for all actors in the previous stage; downstream prompts receive actor/resource references plus bounded summaries, not transcripts."
                             .to_string(),
                     ),
                 }],
@@ -95,11 +110,27 @@ impl HostFn for AgentsPipelineFn {
 
     async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_PIPELINE);
+        let grants = child_agent_grants(ctx, args.get("opts"))?;
 
         let mut current_inputs = args["items"]
             .as_array()
             .ok_or_else(|| HostError::InvalidArgs("items must be an array".to_string()))?
             .clone();
+        if current_inputs.len() > MAX_ACTORS_PER_CALL {
+            return Err(HostError::InvalidArgs(format!(
+                "items must contain at most {MAX_ACTORS_PER_CALL} entries"
+            )));
+        }
+        let input_bytes = serde_json::to_string(&current_inputs)
+            .map_err(|error| {
+                HostError::InvalidArgs(format!("items are not serializable: {error}"))
+            })?
+            .len();
+        if input_bytes > MAX_PIPELINE_INPUT_BYTES {
+            return Err(HostError::InvalidArgs(format!(
+                "items must total at most {MAX_PIPELINE_INPUT_BYTES} serialized bytes, got {input_bytes}"
+            )));
+        }
         let stages = parse_pipeline_stages(&args)?;
         let executor = self.roster.executor().ok_or_else(|| {
             HostError::NotImplemented("agents.pipeline — executor not configured".to_string())
@@ -107,7 +138,6 @@ impl HostFn for AgentsPipelineFn {
 
         let session_id = ctx.session_id.clone();
         let parent_id = caller_parent_id(ctx)?;
-        let grants = child_agent_grants(ctx);
         let session_scope = ctx.session_scope.clone();
         let mut stage_outputs = Vec::with_capacity(stages.len());
 
@@ -140,24 +170,25 @@ fn parse_pipeline_stages(args: &Value) -> Result<Vec<PipelineStage>> {
             "stages must contain at least one stage".to_string(),
         ));
     }
+    if stages.len() > MAX_PIPELINE_STAGES {
+        return Err(HostError::InvalidArgs(format!(
+            "stages must contain at most {MAX_PIPELINE_STAGES} entries"
+        )));
+    }
 
-    stages
+    let parsed = stages
         .iter()
         .enumerate()
         .map(|(index, stage)| {
-            let role = stage["role"]
-                .as_str()
-                .ok_or_else(|| {
-                    HostError::InvalidArgs(format!("stages[{index}].role must be a string"))
-                })?
-                .to_string();
+            let role = parse_actor_role(
+                &stage["role"],
+                &format!("stages[{index}].role"),
+            )?;
             let task = stage
                 .get("task")
                 .filter(|value| !value.is_null())
                 .map(|value| {
-                    value.as_str().map(str::to_string).ok_or_else(|| {
-                        HostError::InvalidArgs(format!("stages[{index}].task must be a string"))
-                    })
+                    parse_actor_task(value, &format!("stages[{index}].task"))
                 })
                 .transpose()?;
             let tasks = stage
@@ -167,15 +198,19 @@ fn parse_pipeline_stages(args: &Value) -> Result<Vec<PipelineStage>> {
                     let items = value.as_array().ok_or_else(|| {
                         HostError::InvalidArgs(format!("stages[{index}].tasks must be an array"))
                     })?;
+                    if items.len() > MAX_ACTORS_PER_CALL {
+                        return Err(HostError::InvalidArgs(format!(
+                            "stages[{index}].tasks must contain at most {MAX_ACTORS_PER_CALL} entries"
+                        )));
+                    }
                     items
                         .iter()
                         .enumerate()
                         .map(|(task_index, item)| {
-                            item.as_str().map(str::to_string).ok_or_else(|| {
-                                HostError::InvalidArgs(format!(
-                                    "stages[{index}].tasks[{task_index}] must be a string"
-                                ))
-                            })
+                            parse_actor_task(
+                                item,
+                                &format!("stages[{index}].tasks[{task_index}]"),
+                            )
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -189,7 +224,16 @@ fn parse_pipeline_stages(args: &Value) -> Result<Vec<PipelineStage>> {
 
             Ok(PipelineStage { role, task, tasks })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    validate_aggregate_text_bytes(
+        parsed.iter().flat_map(|stage| {
+            std::iter::once(stage.role.as_str())
+                .chain(stage.task.as_deref())
+                .chain(stage.tasks.iter().flatten().map(String::as_str))
+        }),
+        "pipeline role/task text",
+    )?;
+    Ok(parsed)
 }
 
 fn pipeline_wave_tasks(
@@ -213,18 +257,21 @@ fn pipeline_wave_tasks(
         .task
         .as_ref()
         .expect("parse_pipeline_stages requires task or tasks");
-    Ok(inputs
+    inputs
         .iter()
         .map(|input| {
-            (
-                stage.role.clone(),
-                format!(
-                    "{task}\n\nPipeline input: {}",
-                    compact_pipeline_input(input)
-                ),
-            )
+            let composed = format!(
+                "{task}\n\nPipeline input: {}",
+                compact_pipeline_input(input)
+            );
+            validate_bounded_text(
+                &composed,
+                &format!("stages[{stage_index}].task"),
+                MAX_ACTOR_TASK_BYTES,
+            )?;
+            Ok((stage.role.clone(), composed))
         })
-        .collect())
+        .collect()
 }
 
 fn compact_pipeline_input(input: &Value) -> String {
@@ -264,9 +311,15 @@ async fn run_pipeline_wave(
     session_scope: Option<String>,
     tasks: Vec<(String, String)>,
 ) -> Result<Vec<Value>> {
+    if tasks.len() > MAX_ACTORS_PER_CALL {
+        return Err(HostError::InvalidArgs(format!(
+            "pipeline wave must contain at most {MAX_ACTORS_PER_CALL} actors"
+        )));
+    }
     let supervisor_id = roster.next_supervisor_id("PipelineWave");
     roster
-        .set_supervision_policy(
+        .set_supervision_policy_for_session(
+            &session_id,
             supervisor_id.clone(),
             SupervisionPolicy {
                 strategy: RestartStrategy::OneForAll,
@@ -274,30 +327,44 @@ async fn run_pipeline_wave(
             },
         )
         .await;
-    let mut actor_specs = Vec::with_capacity(tasks.len());
-    for (role, task) in tasks {
-        let actor_id = roster.next_actor_id(&role);
-        let budget = ActorBudget::default();
-        let spawned_at = Utc::now();
-        roster
-            .track_with_supervisor(
-                ActorRecord {
-                    id: actor_id.clone(),
-                    parent: parent_id.clone(),
-                    status: ActorStatus::Running,
-                    mode: Some(role.clone()),
-                    budget: budget.clone(),
-                    spawned_at,
-                    completed_at: None,
-                    cancelled: false,
-                    failure_reason: None,
-                    last_summary: None,
-                    artifact_uri: None,
-                    history_uri: None,
-                },
-                supervisor_id.clone(),
-            )
-            .await;
+    let planned = tasks
+        .into_iter()
+        .map(|(role, task)| {
+            let actor_id = roster.next_actor_id(&role);
+            (actor_id, role, task, ActorBudget::default(), Utc::now())
+        })
+        .collect::<Vec<_>>();
+    roster
+        .track_batch_for_session(
+            &session_id,
+            planned
+                .iter()
+                .map(|(actor_id, role, _, budget, spawned_at)| {
+                    (
+                        ActorRecord {
+                            id: actor_id.clone(),
+                            parent: parent_id.clone(),
+                            status: ActorStatus::Running,
+                            mode: Some(role.clone()),
+                            budget: budget.clone(),
+                            spawned_at: *spawned_at,
+                            completed_at: None,
+                            cancelled: false,
+                            failure_reason: None,
+                            last_summary: None,
+                            artifact_uri: None,
+                            history_uri: None,
+                        },
+                        supervisor_id.clone(),
+                    )
+                })
+                .collect(),
+        )
+        .await
+        .map_err(registry_error)?;
+
+    let mut actor_specs = Vec::with_capacity(planned.len());
+    for (actor_id, role, task, budget, spawned_at) in planned {
         roster.emit_lifecycle(
             &session_id,
             ActorLifecycleEvent::Spawned {
@@ -321,56 +388,62 @@ async fn run_pipeline_wave(
             budget,
             parent: parent_id.clone(),
             depth: 0,
-            cancellation: roster.cancel_token(&actor_id).await,
+            cancellation: roster
+                .cancel_token_for_session(&session_id, &actor_id)
+                .await,
         };
         roster.remember_restart_spec(&spec).await;
         actor_specs.push((actor_id.clone(), spec));
     }
 
-    let handles: Vec<tokio::task::JoinHandle<Result<Value>>> = actor_specs
-        .into_iter()
-        .map(|(actor_id, spec)| {
-            let executor = Arc::clone(&executor);
-            let roster = Arc::clone(&roster);
-            let session_id = session_id.clone();
-            tokio::spawn(async move {
-                match run_actor_to_digest(executor, spec).await {
-                    Ok(digest) => {
-                        let summary = digest.summary.clone();
-                        let artifact_uri = digest.artifact_uri.clone();
-                        let history_uri = digest.history_uri.clone();
-                        if mark_actor_completed(&roster, &session_id, &actor_id, digest).await {
-                            tracing::debug!(actor_id = %actor_id, "pipeline actor completed");
-                        }
-                        Ok(json!({
-                            "actorId": actor_id.as_str(),
-                            "summary": summary,
-                            "artifactUri": artifact_uri,
-                            "historyUri": history_uri,
-                        }))
+    let mut batch_cancel = CancelActorsOnDrop::new(
+        actor_specs
+            .iter()
+            .map(|(_, spec)| spec.cancellation.clone())
+            .collect(),
+    );
+    let results = stream::iter(actor_specs.into_iter().map(|(actor_id, spec)| {
+        let executor = Arc::clone(&executor);
+        let roster = Arc::clone(&roster);
+        let session_id = session_id.clone();
+        async move {
+            let mut cancel_on_drop = CancelActorOnDrop::new(spec.cancellation.clone());
+            let result = match run_actor_to_digest(executor, spec).await {
+                Ok(digest) => {
+                    let summary = digest.summary.clone();
+                    let artifact_uri = digest.artifact_uri.clone();
+                    let history_uri = digest.history_uri.clone();
+                    if mark_actor_completed(&roster, &session_id, &actor_id, digest).await {
+                        tracing::debug!(actor_id = %actor_id, "pipeline actor completed");
                     }
-                    Err(err) => {
-                        let reason = failure_reason_for_error(&err);
-                        let error = redact_actor_diagnostic(&err);
-                        tracing::warn!(actor_id = %actor_id, %error, "pipeline actor failed");
-                        mark_actor_error(&roster, &session_id, &actor_id, reason).await;
-                        Err(HostError::HostCall(format!(
-                            "actor {actor_id} failed: {error}"
-                        )))
-                    }
+                    Ok(json!({
+                        "actorId": actor_id.as_str(),
+                        "summary": summary,
+                        "artifactUri": artifact_uri,
+                        "historyUri": history_uri,
+                    }))
                 }
-            })
-        })
-        .collect();
+                Err(err) => {
+                    let reason = failure_reason_for_error(&err);
+                    let error = redact_actor_diagnostic(&err);
+                    tracing::warn!(actor_id = %actor_id, %error, "pipeline actor failed");
+                    mark_actor_error(&roster, &session_id, &actor_id, reason).await;
+                    Err(HostError::HostCall(format!(
+                        "actor {actor_id} failed: {error}"
+                    )))
+                }
+            };
+            cancel_on_drop.disarm();
+            result
+        }
+    }))
+    .buffered(MAX_CONCURRENT_ACTORS)
+    .collect::<Vec<_>>()
+    .await;
+    batch_cancel.disarm();
 
-    let mut digests = Vec::with_capacity(handles.len());
-    for handle in handles {
-        let result = handle.await.map_err(|error| {
-            HostError::HostCall(format!(
-                "pipeline actor panicked: {}",
-                redact_actor_diagnostic(error)
-            ))
-        })?;
+    let mut digests = Vec::with_capacity(results.len());
+    for result in results {
         match result {
             Ok(digest) => digests.push(digest),
             Err(err) => return Err(err),

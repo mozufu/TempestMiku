@@ -98,7 +98,11 @@ impl HostFn for AgentsMsgFn {
 
         // ── Resolve target ────────────────────────────────────────────────────
         // Not found → unreachable receipt (§23.9): return null, do not error.
-        let target_record = match self.roster.get(&target_id).await {
+        let target_record = match self
+            .roster
+            .get_for_session(&ctx.session_id, &target_id)
+            .await
+        {
             Some(rec) => rec,
             None => return Ok(Value::Null),
         };
@@ -114,7 +118,11 @@ impl HostFn for AgentsMsgFn {
                 reply_to: None,
                 sent_at: Utc::now(),
             };
-            let receipt = self.roster.send_message(message.clone()).await;
+            let receipt = self
+                .roster
+                .send_message_for_session(&ctx.session_id, message.clone())
+                .await
+                .map_err(registry_error)?;
             maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
             return Ok(receipt_json(receipt));
         }
@@ -122,7 +130,14 @@ impl HostFn for AgentsMsgFn {
         // Live request/reply for running actors: deliver to the target inbox, then
         // wait for a plain-prose reply back to the caller inbox.
         if MailboxRegistry::is_live_status(target_record.status) {
-            reject_descendant_wait(&self.roster, &from_id, &target_id, "handle").await?;
+            reject_descendant_wait(
+                &self.roster,
+                &ctx.session_id,
+                &from_id,
+                &target_id,
+                "handle",
+            )
+            .await?;
             let timeout_ms = parse_timeout_ms(&args, 30_000)?;
             let message = ActorMessage {
                 from: from_id.clone(),
@@ -131,13 +146,18 @@ impl HostFn for AgentsMsgFn {
                 reply_to: Some(from_id.clone()),
                 sent_at: Utc::now(),
             };
-            let receipt = self.roster.send_message(message.clone()).await;
+            let receipt = self
+                .roster
+                .send_message_for_session(&ctx.session_id, message.clone())
+                .await
+                .map_err(registry_error)?;
             maybe_emit_message(&self.roster, &ctx.session_id, &message, receipt);
             if receipt.is_failed() {
                 return Ok(receipt_json(receipt));
             }
             return Ok(wait_for_actor_message_or_cancel(
                 &self.roster,
+                &ctx.session_id,
                 &from_id,
                 Some(&target_id),
                 Duration::from_millis(timeout_ms),
@@ -157,14 +177,18 @@ impl HostFn for AgentsMsgFn {
         // is already terminated, so this is a compatibility log row rather than a
         // live inbox delivery.
         self.roster
-            .record_message(ActorMessage {
-                from: from_id,
-                to: target_id.clone(),
-                text: text.clone(),
-                reply_to: None,
-                sent_at: Utc::now(),
-            })
-            .await;
+            .record_message_for_session(
+                &ctx.session_id,
+                ActorMessage {
+                    from: from_id,
+                    to: target_id.clone(),
+                    text: text.clone(),
+                    reply_to: None,
+                    sent_at: Utc::now(),
+                },
+            )
+            .await
+            .map_err(registry_error)?;
 
         // Seed the continuation from the target's stored summary (one-shot model).
         // Each await call is stateless: re-seeds from the original summary, not prior replies.
@@ -178,6 +202,7 @@ impl HostFn for AgentsMsgFn {
             .unwrap_or("worker")
             .to_string();
         let seeded_task = format!("Prior context: {prior_context}\n\nNew message: {text}");
+        validate_bounded_text(&seeded_task, "continuation task", MAX_ACTOR_TASK_BYTES)?;
 
         let continuation_id = self.roster.next_actor_id(&continuation_role);
         let budget = ActorBudget::default();
@@ -188,7 +213,10 @@ impl HostFn for AgentsMsgFn {
             role: continuation_role,
             task: seeded_task,
             mode: None,
-            grants: child_agent_grants(ctx),
+            // A compatibility continuation is not a new delegation boundary. It receives only
+            // intrinsic tm runtime operations; callers that need authority should spawn a child
+            // explicitly with opts.capabilities.
+            grants: CapabilityGrants::default(),
             budget,
             parent: Some(target_id),
             depth: 0,
@@ -197,10 +225,11 @@ impl HostFn for AgentsMsgFn {
 
         // Continuation actors are ephemeral — NOT tracked in the roster.
         // Tracking them would let repeated top-level msgs grow the roster unboundedly.
-        let digest = executor
+        let mut digest = executor
             .run_to_digest(spec)
             .await
             .map_err(|e| HostError::HostCall(e.to_string()))?;
+        digest.enforce_text_limits();
 
         Ok(Value::String(digest.summary))
     }

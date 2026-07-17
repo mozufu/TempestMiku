@@ -77,7 +77,7 @@ fn cli_tm_host_ops_run_on_current_thread_runtime() {
 }
 
 #[test]
-fn cli_native_cutover_edits_runs_artifacts_and_denies_unsafe_proc() {
+fn cli_native_cutover_edits_artifacts_and_denies_all_proc_without_approval() {
     let repo = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(repo.path().join("src")).unwrap();
     std::fs::write(
@@ -145,7 +145,7 @@ fn cli_native_cutover_edits_runs_artifacts_and_denies_unsafe_proc() {
     assert_eq!(refs[0].title.as_deref(), Some("cli-cutover-transcript"));
     let transcript = store.read("artifact://0", None).unwrap();
     assert!(transcript.content.contains("ApprovalTimeoutError"));
-    assert!(transcript.content.contains("\"testExit\":0"));
+    assert!(transcript.content.contains("configuredSafeProcDenied"));
     assert!(transcript.content.contains("\"changed\":true"));
 }
 
@@ -362,9 +362,12 @@ let edit = @fs.patch {
   }]
 };
 let after = @fs.read {path: "repo:src/lib.rs"};
-let tests = @proc.run {cmd: "cargo", args: ["test"],
+let tests = handle (@proc.run {cmd: "cargo", args: ["test"],
   cwd: "repo:",
   outputBytes: 20000
+}) with error {
+  | ApprovalTimeoutError {message, ...} -> {name: "ApprovalTimeoutError", message: message}
+  | other -> rethrow other
 };
 let denied = handle (@proc.run {cmd: "cargo", args: ["clean"], cwd: "repo:"}) with error {
   | ApprovalTimeoutError {message, ...} -> {name: "ApprovalTimeoutError", message: message}
@@ -374,8 +377,7 @@ let summary = {
   beforeHadOld: contains "\"old\"" before.content,
   changed: contains "\"native\"" after.content,
   editChanged: edit.changed,
-  testExit: tests.exitCode,
-  testStdoutHasOk: contains "test result: ok" tests.stdout,
+  configuredSafeProcDenied: tests,
   denied: denied
 };
 let artifact = @artifacts.put {data: "#{summary}",
@@ -386,8 +388,7 @@ let artifact = @artifacts.put {data: "#{summary}",
   beforeHadOld: summary.beforeHadOld,
   changed: summary.changed,
   editChanged: summary.editChanged,
-  testExit: summary.testExit,
-  testStdoutHasOk: summary.testStdoutHasOk,
+  configuredSafeProcDenied: summary.configuredSafeProcDenied,
   denied: summary.denied,
   artifact: artifact.uri
 } |> display {kind: "json"}
@@ -421,9 +422,8 @@ let artifact = @artifacts.put {data: "#{summary}",
                 tool_content.contains("ApprovalTimeoutError"),
                 "{tool_content}"
             );
-            assert!(tool_content.contains("\"testExit\": 0"), "{tool_content}");
             assert!(
-                tool_content.contains("\"testStdoutHasOk\": true"),
+                tool_content.contains("configuredSafeProcDenied"),
                 "{tool_content}"
             );
             let final_chunk = json!({

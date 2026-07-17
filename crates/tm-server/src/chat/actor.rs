@@ -5,7 +5,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use tm_agents::{ActorDigest, ActorError, ActorExecutor, ActorSpec};
+use tm_agents::{
+    ActorDigest, ActorError, ActorExecutor, ActorSpec, MAX_ACTOR_SUMMARY_BYTES,
+    MAX_ACTOR_TRANSCRIPT_BYTES, truncate_utf8_with_marker,
+};
 use tm_artifacts::ArtifactStore;
 use tm_core::{Agent, AgentConfig, CancellationToken, EventSink, InboxDrain, LlmClient, Sandbox};
 use tm_host::CapabilityGrants;
@@ -24,33 +27,9 @@ type ActorSandboxFactory = dyn Fn(
     + Sync;
 
 impl ChatActorExecutor {
-    pub fn new(
-        llm: Arc<dyn LlmClient>,
-        cfg: AgentConfig,
-        sandbox_factory: impl Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync + 'static,
-    ) -> Self {
-        Self::with_artifact_root(llm, cfg, sandbox_factory, None)
-    }
-
-    pub fn with_artifact_root(
-        llm: Arc<dyn LlmClient>,
-        cfg: AgentConfig,
-        sandbox_factory: impl Fn(Uuid) -> Arc<dyn Sandbox> + Send + Sync + 'static,
-        artifact_root: Option<PathBuf>,
-    ) -> Self {
-        Self {
-            llm,
-            cfg,
-            sandbox_factory: Arc::new(
-                move |session_id, _actor_id, _grants, _scope, _cancellation| {
-                    sandbox_factory(session_id)
-                },
-            ),
-            artifact_root,
-            actor_roster: None,
-        }
-    }
-
+    /// Builds an actor executor whose sandbox factory consumes the complete delegated context.
+    /// There is deliberately no session-id-only constructor: silently discarding grants, scope,
+    /// actor identity, or cancellation would reintroduce ambient child authority.
     pub fn with_actor_context(
         llm: Arc<dyn LlmClient>,
         cfg: AgentConfig,
@@ -72,7 +51,7 @@ impl ChatActorExecutor {
             cfg,
             sandbox_factory: Arc::new(sandbox_factory),
             artifact_root,
-            actor_roster: Some(actor_roster),
+            actor_roster,
         }
     }
 }
@@ -82,43 +61,64 @@ impl ChatActorExecutor {
 /// Captures all agent events as a plain-text transcript (P3.3).
 ///
 /// Used by `ChatActorExecutor` to record sub-agent output for `history://` resources.
-struct CollectingSink(Mutex<Vec<String>>);
+#[derive(Default)]
+struct TranscriptBuffer {
+    text: String,
+    truncated: bool,
+}
+
+struct CollectingSink(Mutex<TranscriptBuffer>);
 
 impl CollectingSink {
     fn new() -> Self {
-        Self(Mutex::new(Vec::new()))
+        Self(Mutex::new(TranscriptBuffer::default()))
     }
 
-    fn push(&self, line: String) {
-        self.0
-            .lock()
-            .expect("collecting sink lock")
-            .push(tm_memory::redact_dream_text(&line).text);
+    fn push(&self, line: &str) {
+        let bounded_input = truncate_utf8_with_marker(line, MAX_ACTOR_TRANSCRIPT_BYTES);
+        let redacted = tm_memory::redact_dream_text(&bounded_input).text;
+        let mut buffer = self.0.lock().expect("collecting sink lock");
+        if buffer.truncated {
+            return;
+        }
+        let separator = if buffer.text.is_empty() { "" } else { "\n" };
+        let mut combined = String::with_capacity(
+            buffer
+                .text
+                .len()
+                .saturating_add(separator.len())
+                .saturating_add(redacted.len())
+                .min(MAX_ACTOR_TRANSCRIPT_BYTES.saturating_mul(2)),
+        );
+        combined.push_str(&buffer.text);
+        combined.push_str(separator);
+        combined.push_str(&redacted);
+        buffer.truncated = combined.len() > MAX_ACTOR_TRANSCRIPT_BYTES;
+        buffer.text = truncate_utf8_with_marker(&combined, MAX_ACTOR_TRANSCRIPT_BYTES);
     }
 
     fn into_transcript(self) -> String {
-        self.0
-            .into_inner()
-            .expect("collecting sink lock")
-            .join("\n")
+        self.0.into_inner().expect("collecting sink lock").text
     }
 }
 
 impl EventSink for CollectingSink {
     fn on_text(&self, delta: &str) {
-        self.push(format!("[text] {delta}"));
+        self.push(&format!("[text] {delta}"));
     }
     fn on_tool_call(&self, name: &str) {
-        self.push(format!("[tool_call] {name}"));
+        self.push(&format!("[tool_call] {name}"));
     }
-    fn on_cell_start(&self, code: &str) {
-        self.push(format!("[cell_start] {code}"));
+    fn on_cell_start(&self, _code: &str) {
+        self.push("[cell_start] [redacted]");
     }
     fn on_cell_result(&self, shaped: &str) {
-        self.push(format!("[cell_result] {shaped}"));
+        let safe_reference =
+            last_artifact_uri_in_text(shaped).unwrap_or_else(|| "[redacted]".to_string());
+        self.push(&format!("[cell_result] {safe_reference}"));
     }
     fn on_final(&self, text: &str) {
-        self.push(format!("[final] {text}"));
+        self.push(&format!("[final] {text}"));
     }
 }
 
@@ -136,11 +136,12 @@ pub struct ChatActorExecutor {
     sandbox_factory: Arc<ActorSandboxFactory>,
     /// Artifact root for reading child cell-spills and writing transcripts (P3.3).
     artifact_root: Option<PathBuf>,
-    actor_roster: Option<Arc<tm_agents::MailboxRegistry>>,
+    actor_roster: Arc<tm_agents::MailboxRegistry>,
 }
 
 struct ActorMailboxDrain {
     roster: Arc<tm_agents::MailboxRegistry>,
+    session_id: String,
     actor_id: tm_agents::ActorId,
 }
 
@@ -149,7 +150,7 @@ impl InboxDrain for ActorMailboxDrain {
     async fn drain(&self) -> tm_core::Result<Vec<String>> {
         Ok(self
             .roster
-            .drain_inbox(&self.actor_id, None)
+            .drain_inbox_for_session(&self.session_id, &self.actor_id, None)
             .await
             .into_iter()
             .map(|message| {
@@ -219,10 +220,11 @@ impl ActorExecutor for ChatActorExecutor {
             spec.session_scope.as_deref(),
             Some(Arc::clone(&cancellation)),
         );
-        let inbox = self.actor_roster.as_ref().map(|roster| ActorMailboxDrain {
-            roster: Arc::clone(roster),
+        let inbox = ActorMailboxDrain {
+            roster: Arc::clone(&self.actor_roster),
+            session_id: spec.session_id.clone(),
             actor_id: actor_id.clone(),
-        });
+        };
         let cancellation_for_loop = Arc::clone(&cancellation);
 
         let (tx, rx) =
@@ -238,7 +240,7 @@ impl ActorExecutor for ChatActorExecutor {
                 .block_on(agent.run_with_controls(
                     &task,
                     &sink,
-                    inbox.as_ref().map(|inbox| inbox as &dyn InboxDrain),
+                    Some(&inbox as &dyn InboxDrain),
                     Some(cancellation_for_loop.as_ref()),
                 ))
                 .map_err(|e| match e {
@@ -252,7 +254,9 @@ impl ActorExecutor for ChatActorExecutor {
         let (summary, transcript) = rx
             .await
             .map_err(|_| ActorError::Execution("actor worker dropped response".to_string()))??;
+        let summary = truncate_utf8_with_marker(&summary, MAX_ACTOR_SUMMARY_BYTES);
         let summary = tm_memory::redact_dream_text(&summary).text;
+        let summary = truncate_utf8_with_marker(&summary, MAX_ACTOR_SUMMARY_BYTES);
         let transcript = tm_memory::redact_dream_text(&transcript).text;
 
         // Populate artifact_uri from this child's own transcript first; concurrent child actors
@@ -284,12 +288,58 @@ impl ActorExecutor for ChatActorExecutor {
             Some(transcript)
         };
 
-        Ok(ActorDigest {
+        let mut digest = ActorDigest {
             actor_id,
             summary,
             artifact_uri,
             history_uri,
             history_content,
-        })
+        };
+        digest.enforce_text_limits();
+        Ok(digest)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sensitive_cell_boundary_redacts_actor_cells_but_preserves_artifact_reference() {
+        let sink = CollectingSink::new();
+        sink.try_on_cell_start("@fs.patch {patch: \"secret-source-value\"}")
+            .unwrap();
+        sink.try_on_cell_result(
+            "diff:\n+secret-result-value\nresult:\n{\"uri\":\"artifact://12\"}",
+        )
+        .unwrap();
+
+        let transcript = sink.into_transcript();
+        assert!(!transcript.contains("secret-source-value"), "{transcript}");
+        assert!(!transcript.contains("secret-result-value"), "{transcript}");
+        assert!(transcript.contains("[cell_start] [redacted]"));
+        assert!(transcript.contains("[cell_result] artifact://12"));
+    }
+
+    #[test]
+    fn sensitive_cell_boundary_rejects_noncanonical_artifact_reference() {
+        let sink = CollectingSink::new();
+        sink.try_on_cell_result("result:\n{\"uri\":\"artifact://SECRET\"}")
+            .unwrap();
+
+        let transcript = sink.into_transcript();
+        assert_eq!(transcript, "[cell_result] [redacted]");
+        assert!(!transcript.contains("SECRET"), "{transcript}");
+    }
+
+    #[test]
+    fn collecting_sink_bounds_aggregate_transcript_bytes() {
+        let sink = CollectingSink::new();
+        sink.on_text(&"x".repeat(MAX_ACTOR_TRANSCRIPT_BYTES * 2));
+        sink.on_final("this must not grow the retained buffer");
+
+        let transcript = sink.into_transcript();
+        assert!(transcript.len() <= MAX_ACTOR_TRANSCRIPT_BYTES);
+        assert!(transcript.ends_with(tm_agents::ACTOR_TEXT_TRUNCATED_MARKER));
     }
 }

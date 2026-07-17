@@ -1,13 +1,12 @@
 use std::{
     collections::BTreeMap,
-    env, fs,
+    env,
     process::Stdio,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
-use ignore::WalkBuilder;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,10 +17,18 @@ use crate::{
     ResourceRegistry, Result, ToolDocs,
 };
 
+use super::secure_fs::{
+    SecureKind, WalkControl, WalkOptions, atomic_replace, create_file, open_entry_file,
+    open_existing, open_parent, read_bounded, read_entry_bounded, remove_entry, rename_entry,
+    stat_entry, walk_secure,
+};
 use super::util::{
-    apply_line_hunks, collect_files, compile_globs, display_path, ensure_rw, file_tag, fs_entry,
-    linked_uri, list_entries, load_simple_gitignore, parse_args, parse_linked_path, simple_diff,
-    validate_command_name,
+    MAX_FS_RESULT_LIMIT, MAX_FS_WALK_ENTRIES, MAX_MUTATION_FILE_BYTES, MAX_SEARCH_CONTEXT_LINES,
+    MAX_SEARCH_FILE_BYTES, MAX_SEARCH_PATHS, MAX_SEARCH_PATTERN_BYTES, MAX_SEARCH_RESULT_BYTES,
+    MAX_SEARCH_TOTAL_BYTES, apply_line_hunks, approval_action, compile_globs, display_path,
+    ensure_rw, file_tag, fs_entry_from_secure, linked_uri, list_entries, load_simple_gitignore,
+    parse_args, parse_linked_path, push_bounded_fs_entry, simple_diff, validate_command_name,
+    validate_result_limit,
 };
 use super::{LinkedFolders, docs::docs};
 

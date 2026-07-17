@@ -296,11 +296,18 @@ impl Agent {
                 .iter()
                 .map(|call| call.code.clone())
                 .collect::<Vec<_>>();
-            let outputs = await_cancellable(
-                session.eval_batch(&codes, self.cfg.cell_budget),
-                cancellation,
-            )
-            .await??;
+            let outputs = if session.handles_cancellation() {
+                // Stateful runtimes must finish their own cancellation/terminal-event protocol.
+                // Racing this future from the outside could drop it between an in-memory commit
+                // and its durable event (or vice versa).
+                session.eval_batch(&codes, self.cfg.cell_budget).await?
+            } else {
+                await_cancellable(
+                    session.eval_batch(&codes, self.cfg.cell_budget),
+                    cancellation,
+                )
+                .await??
+            };
             if outputs.len() != calls.len() {
                 return Err(Error::Sandbox(format!(
                     "session returned {} results for {} execute calls",

@@ -105,8 +105,8 @@ pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
         "drive_put should preserve drop source provenance"
     );
     ensure!(
-        final_events.iter().any(research_result_event),
-        "native turn should display search/research result; events: {final_events:#?}"
+        has_redacted_research_trace(&final_events),
+        "native turn should prove search/research execution without leaking results; events: {final_events:#?}"
     );
 
     let preview = client.preview_resource(&session.id, &filed_uri).await?;
@@ -160,27 +160,19 @@ pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
     })
 }
 
-fn research_result_event(event: &E2eEvent) -> bool {
-    if event.event_type == "display" {
-        let display = &event.data["value"];
-        return display["searchHits"] == 1
-            && display["researchCitations"] == 1
-            && display["sourceKind"] == "drive";
-    }
-    if event.event_type == "cell_result" {
-        return event.data["shaped"]
-            .as_str()
-            .and_then(|shaped| {
-                shaped
-                    .lines()
-                    .find_map(|line| line.strip_prefix("display: "))
-            })
-            .and_then(|display| serde_json::from_str::<serde_json::Value>(display).ok())
-            .is_some_and(|display| {
-                display["searchHits"] == 1
-                    && display["researchCitations"] == 1
-                    && display["sourceKind"] == "drive"
-            });
-    }
-    false
+fn has_redacted_research_trace(events: &[E2eEvent]) -> bool {
+    let started = |capability: &str| {
+        events.iter().any(|event| {
+            event.event_type == "effect_start"
+                && event.data["capability"] == json!(capability)
+                && event.data["argsPreview"] == json!("[redacted]")
+        })
+    };
+    started("drive.search")
+        && started("research.drive")
+        && events.iter().any(|event| {
+            event.event_type == "display"
+                && event.data["value"] == json!("[redacted]")
+                && event.data["spec"] == json!("[redacted]")
+        })
 }

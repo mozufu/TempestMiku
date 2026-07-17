@@ -466,6 +466,7 @@ where
 
 pub(super) async fn read_agent_resource<S, M, C>(
     state: &AppState<S, M, C>,
+    session_id: Uuid,
     uri: &str,
     selector: Option<&str>,
 ) -> Result<ResourceContent>
@@ -478,7 +479,8 @@ where
     registry.register(Arc::new(AgentResourceHandler::new(Arc::clone(
         &state.actor_roster,
     ))));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"))
+        .with_session_id(session_id.to_string());
     registry
         .read(uri, selector, &ctx)
         .await
@@ -487,6 +489,7 @@ where
 
 pub(super) async fn read_history_resource<S, M, C>(
     state: &AppState<S, M, C>,
+    session_id: Uuid,
     uri: &str,
     selector: Option<&str>,
 ) -> Result<ResourceContent>
@@ -499,7 +502,8 @@ where
     registry.register(Arc::new(HistoryResourceHandler::new(Arc::clone(
         &state.actor_roster,
     ))));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:history"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:history"))
+        .with_session_id(session_id.to_string());
     registry
         .read(uri, selector, &ctx)
         .await
@@ -508,6 +512,7 @@ where
 
 pub(super) async fn list_agent_resources<S, M, C>(
     state: &AppState<S, M, C>,
+    session_id: Uuid,
     uri: &str,
 ) -> Result<Vec<ResourceEntry>>
 where
@@ -519,7 +524,8 @@ where
     registry.register(Arc::new(AgentResourceHandler::new(Arc::clone(
         &state.actor_roster,
     ))));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"));
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:agent"))
+        .with_session_id(session_id.to_string());
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 

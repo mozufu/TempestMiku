@@ -18,7 +18,9 @@ impl AgentsRunFn {
                 description: Some(
                     "Spawns a child actor, runs it to completion, and returns a bounded digest. \
                      Full output spills to artifact://; transcript is at history://<id>. \
-                     The agent DAG must be acyclic. Requires agents.run grant."
+                     Children receive no parent capabilities unless opts.capabilities explicitly \
+                     delegates a held, delegable subset. The agent DAG must be acyclic. Requires \
+                     agents.run grant."
                         .to_string(),
                 ),
                 signature: "@agents.run AgentRunArgs -> AgentDigest".to_string(),
@@ -29,7 +31,18 @@ impl AgentsRunFn {
                     "properties": {
                         "role": { "type": "string", "description": "Mode/role for the child actor." },
                         "task": { "type": "string", "description": "Plain-prose task description." },
-                        "opts": { "type": "object", "description": "Optional spawn options." }
+                        "opts": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "description": "Optional child authority delegation. Absent means no delegated capabilities; at most 32 names, each at most 128 ASCII bytes and 2 KiB total.",
+                            "properties": {
+                                "capabilities": {
+                                    "type": "array",
+                                    "maxItems": 32,
+                                    "items": { "type": "string", "maxLength": 128 }
+                                }
+                            }
+                        }
                     }
                 }),
                 result_schema: Some(json!({
@@ -43,10 +56,10 @@ impl AgentsRunFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Run a one-shot research subtask".to_string()),
-                    code: "let d = @agents.run {role: \"researcher\", task: \"Summarize §23\"};\nd.summary |> display {kind: \"text\"}"
+                    code: "let d = @agents.run {role: \"researcher\", task: \"Research and summarize §23\", opts: {capabilities: [\"http.get\", \"resources.read:artifact\"]}};\nd.summary |> display {kind: \"text\"}"
                         .to_string(),
                     notes: Some(
-                        "Only the digest returns to parent context; full output is at d.historyUri."
+                        "The parent must hold every explicitly delegated capability. Only the digest returns to parent context; full output is at d.historyUri."
                             .to_string(),
                     ),
                 }],
@@ -70,14 +83,9 @@ impl HostFn for AgentsRunFn {
     async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_RUN);
 
-        let role = args["role"]
-            .as_str()
-            .ok_or_else(|| HostError::InvalidArgs("role must be a string".to_string()))?
-            .to_string();
-        let task = args["task"]
-            .as_str()
-            .ok_or_else(|| HostError::InvalidArgs("task must be a string".to_string()))?
-            .to_string();
+        let role = parse_actor_role(&args["role"], "role")?;
+        let task = parse_actor_task(&args["task"], "task")?;
+        let grants = child_agent_grants(ctx, args.get("opts"))?;
 
         let executor = self.roster.executor().ok_or_else(|| {
             HostError::NotImplemented("agents.run — executor not configured".to_string())
@@ -103,7 +111,10 @@ impl HostFn for AgentsRunFn {
             artifact_uri: None,
             history_uri: None,
         };
-        self.roster.track(record).await;
+        self.roster
+            .track_for_session(&session_id, record)
+            .await
+            .map_err(registry_error)?;
         self.roster.emit_lifecycle(
             &session_id,
             ActorLifecycleEvent::Spawned {
@@ -126,11 +137,14 @@ impl HostFn for AgentsRunFn {
             role,
             task,
             mode: None,
-            grants: child_agent_grants(ctx),
+            grants,
             budget,
             parent: parent_id,
             depth: 0,
-            cancellation: self.roster.cancel_token(&actor_id).await,
+            cancellation: self
+                .roster
+                .cancel_token_for_session(&session_id, &actor_id)
+                .await,
         };
         self.roster.remember_restart_spec(&spec).await;
 

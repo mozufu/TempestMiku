@@ -1,14 +1,49 @@
 use crate::{
     BinaryOp, Cell, Diagnostic, Expr, ExprKind, Form, FormKind, MatchArm, Pattern, PatternKind,
-    Result, Span, Spanned, SpannedToken, Token, TypeDecl, TypeTerm, UnaryOp, VariantDecl, lex,
+    Result, Span, Spanned, SpannedToken, Token, TypeDecl, TypeTerm, UnaryOp, VariantDecl,
+    lexer::lex_bounded,
 };
 
+const DEFAULT_MAX_SOURCE_BYTES: usize = 256 * 1024;
+const DEFAULT_MAX_SYNTAX_NODES: usize = 100_000;
+const DEFAULT_MAX_PARSE_DEPTH: usize = 256;
+
 pub fn parse(source: &str) -> Result<Cell> {
+    parse_bounded(
+        source,
+        DEFAULT_MAX_SOURCE_BYTES,
+        DEFAULT_MAX_SYNTAX_NODES,
+        DEFAULT_MAX_PARSE_DEPTH,
+    )
+}
+
+pub(crate) fn parse_bounded(
+    source: &str,
+    max_source_bytes: usize,
+    max_syntax_nodes: usize,
+    max_depth: usize,
+) -> Result<Cell> {
+    if source.len() > max_source_bytes {
+        return Err(Diagnostic::new(
+            "TM2019",
+            format!(
+                "source budget exceeded: {} bytes exceeds {max_source_bytes}",
+                source.len()
+            ),
+            Span::new(0, source.len()),
+            source,
+        ));
+    }
+    let tokens = lex_bounded(source, max_syntax_nodes)?;
     Parser {
         source,
-        tokens: lex(source)?,
+        tokens,
         cursor: 0,
         stop_before_lbrace: false,
+        depth: 0,
+        max_depth,
+        last_expr_depth: 0,
+        last_form_expr_depth: 0,
     }
     .cell()
 }
@@ -18,6 +53,10 @@ struct Parser<'a> {
     tokens: Vec<SpannedToken>,
     cursor: usize,
     stop_before_lbrace: bool,
+    depth: usize,
+    max_depth: usize,
+    last_expr_depth: usize,
+    last_form_expr_depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -49,14 +88,15 @@ impl<'a> Parser<'a> {
 
     fn form(&mut self, in_block: bool) -> Result<Form> {
         let start = self.span().start;
-        let node = if self.keyword("type") {
-            FormKind::Type(self.type_decl()?)
+        let (node, expression_depth) = if self.keyword("type") {
+            (FormKind::Type(self.type_decl()?), 0)
         } else if self.keyword("let") {
             self.bump();
             let pattern = self.pattern()?;
             self.expect(Token::Eq, "= after let pattern")?;
             let value = self.expr()?;
-            FormKind::Let { pattern, value }
+            let depth = self.last_expr_depth;
+            (FormKind::Let { pattern, value }, depth)
         } else if self.keyword("fun") && self.peek_is_named_function() {
             self.bump();
             let name = self.lower_name("function name")?;
@@ -69,13 +109,17 @@ impl<'a> Parser<'a> {
             }
             self.bump();
             let body = self.expr()?;
-            FormKind::Fun { name, params, body }
+            let depth = self.last_expr_depth;
+            (FormKind::Fun { name, params, body }, depth)
         } else {
-            FormKind::Expr(self.expr()?)
+            let expression = self.expr()?;
+            let depth = self.last_expr_depth;
+            (FormKind::Expr(expression), depth)
         };
         if !in_block && !self.at(&Token::Semicolon) && !self.at(&Token::Eof) {
             return Err(self.error("TM2004", "top-level forms must be separated by `;`"));
         }
+        self.last_form_expr_depth = expression_depth;
         Ok(Spanned::new(
             node,
             Span::new(start, self.previous_span().end),
@@ -126,6 +170,16 @@ impl<'a> Parser<'a> {
     }
 
     fn type_term(&mut self) -> Result<TypeTerm> {
+        if self.depth >= self.max_depth {
+            return Err(self.error("TM2021", "parser nesting budget exceeded"));
+        }
+        self.depth += 1;
+        let result = self.type_term_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn type_term_inner(&mut self) -> Result<TypeTerm> {
         if self.keyword("List") || self.upper_is("List") {
             self.bump();
             return Ok(TypeTerm::List(Box::new(self.type_atom()?)));
@@ -154,9 +208,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_bp(&mut self, min_bp: u8) -> Result<Expr> {
+        if self.depth >= self.max_depth {
+            return Err(self.error("TM2021", "parser nesting budget exceeded"));
+        }
+        self.depth += 1;
+        let result = self.parse_bp_inner(min_bp);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_bp_inner(&mut self, min_bp: u8) -> Result<Expr> {
         let mut left = if self.keyword("not") {
             let start = self.bump().span;
             let value = self.parse_bp(80)?;
+            let depth = self.parent_expr_depth(self.last_expr_depth)?;
+            self.last_expr_depth = depth;
             Spanned::new(
                 ExprKind::Unary {
                     op: UnaryOp::Not,
@@ -167,6 +233,8 @@ impl<'a> Parser<'a> {
         } else if self.take(&Token::Minus).is_some() {
             let start = self.previous_span();
             let value = self.parse_bp(80)?;
+            let depth = self.parent_expr_depth(self.last_expr_depth)?;
+            self.last_expr_depth = depth;
             Spanned::new(
                 ExprKind::Unary {
                     op: UnaryOp::Negate,
@@ -177,6 +245,7 @@ impl<'a> Parser<'a> {
         } else {
             self.atom()?
         };
+        let mut left_depth = self.last_expr_depth;
 
         loop {
             if self.at(&Token::Dot) && 100 >= min_bp {
@@ -190,10 +259,12 @@ impl<'a> Parser<'a> {
                     },
                     span,
                 );
+                left_depth = self.parent_expr_depth(left_depth)?;
                 continue;
             }
             if self.starts_atom() && 90 >= min_bp {
                 let argument = self.parse_bp(91)?;
+                let argument_depth = self.last_expr_depth;
                 let span = left.span.merge(argument.span);
                 left = Spanned::new(
                     ExprKind::Apply {
@@ -202,6 +273,7 @@ impl<'a> Parser<'a> {
                     },
                     span,
                 );
+                left_depth = self.parent_expr_depth(left_depth.max(argument_depth))?;
                 continue;
             }
             let Some((left_bp, right_bp, operator)) = self.infix_binding() else {
@@ -212,6 +284,7 @@ impl<'a> Parser<'a> {
             }
             self.bump();
             let right = self.parse_bp(right_bp)?;
+            let right_depth = self.last_expr_depth;
             let span = left.span.merge(right.span);
             left = match operator {
                 Infix::Pipe => Spanned::new(
@@ -230,7 +303,9 @@ impl<'a> Parser<'a> {
                     span,
                 ),
             };
+            left_depth = self.parent_expr_depth(left_depth.max(right_depth))?;
         }
+        self.last_expr_depth = left_depth;
         Ok(left)
     }
 
@@ -269,7 +344,9 @@ impl<'a> Parser<'a> {
                 let value = self.expr();
                 self.stop_before_lbrace = stop_before_lbrace;
                 let value = value?;
+                let depth = self.last_expr_depth;
                 self.expect(Token::RParen, ") after expression")?;
+                self.last_expr_depth = depth;
                 return Ok(Spanned::new(value.node, start.merge(self.previous_span())));
             }
             Token::LBracket => return self.list(start.start),
@@ -283,17 +360,23 @@ impl<'a> Parser<'a> {
                 ));
             }
         };
+        self.last_expr_depth = 1;
         Ok(Spanned::new(node, token.span))
     }
 
     fn if_expr(&mut self) -> Result<Expr> {
         let start = self.bump().span;
         let condition = self.expr()?;
+        let condition_depth = self.last_expr_depth;
         self.expect_keyword("then")?;
         let then_value = self.expr()?;
+        let then_depth = self.last_expr_depth;
         self.expect_keyword("else")?;
         let else_value = self.expr()?;
+        let else_depth = self.last_expr_depth;
         let span = start.merge(else_value.span);
+        self.last_expr_depth =
+            self.parent_expr_depth(condition_depth.max(then_depth).max(else_depth))?;
         Ok(Spanned::new(
             ExprKind::If {
                 condition: Box::new(condition),
@@ -308,6 +391,7 @@ impl<'a> Parser<'a> {
         let start = self.bump().span;
         self.stop_before_lbrace = true;
         let value = self.expr()?;
+        let mut child_depth = self.last_expr_depth;
         self.stop_before_lbrace = false;
         if handle {
             self.expect_keyword("with")?;
@@ -319,10 +403,9 @@ impl<'a> Parser<'a> {
             self.expect(Token::Pipe, "| before match arm")?;
             let pattern = self.pattern()?;
             self.expect(Token::Arrow, "-> in match arm")?;
-            arms.push(MatchArm {
-                pattern,
-                value: self.expr()?,
-            });
+            let value = self.expr()?;
+            child_depth = child_depth.max(self.last_expr_depth);
+            arms.push(MatchArm { pattern, value });
         }
         self.expect(Token::RBrace, "} after match arms")?;
         if arms.is_empty() {
@@ -340,6 +423,7 @@ impl<'a> Parser<'a> {
                 arms,
             }
         };
+        self.last_expr_depth = self.parent_expr_depth(child_depth)?;
         Ok(Spanned::new(node, span))
     }
 
@@ -347,9 +431,11 @@ impl<'a> Parser<'a> {
         let start = self.bump().span;
         self.expect(Token::LBrace, "{ after do")?;
         let mut forms = Vec::new();
+        let mut child_depth = 0;
         if !self.at(&Token::RBrace) {
             loop {
                 forms.push(self.form(true)?);
+                child_depth = child_depth.max(self.last_form_expr_depth);
                 if self.take(&Token::Semicolon).is_none() {
                     break;
                 }
@@ -362,6 +448,7 @@ impl<'a> Parser<'a> {
         if forms.is_empty() {
             return Err(self.error("TM2008", "do block cannot be empty"));
         }
+        self.last_expr_depth = self.parent_expr_depth(child_depth)?;
         Ok(Spanned::new(
             ExprKind::Block(forms),
             start.merge(self.previous_span()),
@@ -379,7 +466,9 @@ impl<'a> Parser<'a> {
         }
         self.bump();
         let body = self.expr()?;
+        let body_depth = self.last_expr_depth;
         let span = start.merge(body.span);
+        self.last_expr_depth = self.parent_expr_depth(body_depth)?;
         Ok(Spanned::new(
             ExprKind::Lambda {
                 params,
@@ -394,6 +483,7 @@ impl<'a> Parser<'a> {
         while self.take(&Token::Dot).is_some() {
             parts.push(self.lower_name("capability segment")?);
         }
+        self.last_expr_depth = 1;
         Ok(Spanned::new(
             ExprKind::Capability(parts.join(".")),
             Span::new(start, self.previous_span().end),
@@ -402,15 +492,18 @@ impl<'a> Parser<'a> {
 
     fn list(&mut self, start: usize) -> Result<Expr> {
         let mut values = Vec::new();
+        let mut child_depth = 0;
         if !self.at(&Token::RBracket) {
             loop {
                 values.push(self.expr()?);
+                child_depth = child_depth.max(self.last_expr_depth);
                 if self.take(&Token::Comma).is_none() {
                     break;
                 }
             }
         }
         self.expect(Token::RBracket, "] after list")?;
+        self.last_expr_depth = self.parent_expr_depth(child_depth)?;
         Ok(Spanned::new(
             ExprKind::List(values),
             Span::new(start, self.previous_span().end),
@@ -419,12 +512,16 @@ impl<'a> Parser<'a> {
 
     fn record(&mut self, start: usize) -> Result<Expr> {
         let mut fields = Vec::new();
+        let mut child_depth = 0;
         if !self.at(&Token::RBrace) {
             loop {
                 let name = self.lower_name("record field")?;
                 let value = if self.take(&Token::Colon).is_some() {
-                    self.expr()?
+                    let value = self.expr()?;
+                    child_depth = child_depth.max(self.last_expr_depth);
+                    value
                 } else {
+                    child_depth = child_depth.max(1);
                     Spanned::new(ExprKind::Name(name.clone()), self.previous_span())
                 };
                 fields.push((name, value));
@@ -434,6 +531,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(Token::RBrace, "} after record")?;
+        self.last_expr_depth = self.parent_expr_depth(child_depth)?;
         Ok(Spanned::new(
             ExprKind::Record(fields),
             Span::new(start, self.previous_span().end),
@@ -441,6 +539,16 @@ impl<'a> Parser<'a> {
     }
 
     fn pattern(&mut self) -> Result<Pattern> {
+        if self.depth >= self.max_depth {
+            return Err(self.error("TM2021", "parser nesting budget exceeded"));
+        }
+        self.depth += 1;
+        let result = self.pattern_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn pattern_inner(&mut self) -> Result<Pattern> {
         let mut left = self.pattern_atom()?;
         if self.take(&Token::Cons).is_some() {
             let right = self.pattern()?;
@@ -457,6 +565,16 @@ impl<'a> Parser<'a> {
     }
 
     fn pattern_atom(&mut self) -> Result<Pattern> {
+        if self.depth >= self.max_depth {
+            return Err(self.error("TM2021", "parser nesting budget exceeded"));
+        }
+        self.depth += 1;
+        let result = self.pattern_atom_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn pattern_atom_inner(&mut self) -> Result<Pattern> {
         let token = self.bump().clone();
         let node = match token.node {
             Token::Ident(name) if name == "_" => PatternKind::Wildcard,
@@ -660,6 +778,14 @@ impl<'a> Parser<'a> {
     fn previous_span(&self) -> Span {
         self.tokens[self.cursor.saturating_sub(1)].span
     }
+    fn parent_expr_depth(&self, child_depth: usize) -> Result<usize> {
+        let depth = child_depth.saturating_add(1);
+        if depth > self.max_depth {
+            Err(self.error("TM2021", "parser nesting budget exceeded"))
+        } else {
+            Ok(depth)
+        }
+    }
     fn error(&self, code: &'static str, message: impl Into<String>) -> Diagnostic {
         Diagnostic::new(code, message, self.span(), self.source)
     }
@@ -705,5 +831,38 @@ mod tests {
     fn rejects_implicit_top_level_sequence() {
         let error = parse("let x = 1 let y = 2").unwrap_err();
         assert_eq!(error.code, "TM2004");
+    }
+
+    #[test]
+    fn nesting_budget_covers_every_recursive_pattern_form() {
+        let nested_parens = format!("let {}x{} = null", "(".repeat(16), ")".repeat(16));
+        let nested_lists = format!("let {}x{} = null", "[".repeat(16), "]".repeat(16));
+        let nested_constructors = format!("let {}x = null", "Some ".repeat(16));
+        let nested_cons = format!("let {}x = null", "x :: ".repeat(16));
+
+        for source in [
+            nested_parens,
+            nested_lists,
+            nested_constructors,
+            nested_cons,
+        ] {
+            let error = parse_bounded(&source, 4096, 4096, 8).unwrap_err();
+            assert_eq!(error.code, "TM2021", "{source}");
+        }
+    }
+
+    #[test]
+    fn nesting_budget_covers_flat_left_associative_expression_chains() {
+        let fields = format!("value{}", ".field".repeat(32));
+        let applications = format!("function{}", " argument".repeat(32));
+        let infix = std::iter::repeat_n("1", 32).collect::<Vec<_>>().join(" + ");
+        let pipes = std::iter::repeat_n("value", 32)
+            .collect::<Vec<_>>()
+            .join(" |> ");
+
+        for source in [fields, applications, infix, pipes] {
+            let error = parse_bounded(&source, 4096, 4096, 8).unwrap_err();
+            assert_eq!(error.code, "TM2021", "{source}");
+        }
     }
 }

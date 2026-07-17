@@ -18,7 +18,8 @@ impl AgentsSpawnFn {
                 description: Some(
                     "Non-blocking spawn; returns a handle for later coordination via agents.msg. \
                      The actor runs in the background and is tracked through the agent:// roster. \
-                     Requires agents.spawn grant."
+                     Children receive no parent capabilities unless opts.capabilities explicitly \
+                     delegates a held, delegable subset. Requires agents.spawn grant."
                         .to_string(),
                 ),
                 signature: "@agents.spawn AgentSpawnArgs -> AgentHandle"
@@ -32,7 +33,14 @@ impl AgentsSpawnFn {
                         "task": { "type": "string" },
                         "opts": {
                             "type": "object",
+                            "additionalProperties": false,
+                            "description": "Optional child authority delegation. Absent means no delegated capabilities; at most 32 names, each at most 128 ASCII bytes and 2 KiB total.",
                             "properties": {
+                                "capabilities": {
+                                    "type": "array",
+                                    "maxItems": 32,
+                                    "items": { "type": "string", "maxLength": 128 }
+                                },
                                 "supervision": {
                                     "type": "object",
                                     "properties": {
@@ -54,9 +62,12 @@ impl AgentsSpawnFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Spawn a background worker".to_string()),
-                    code: "let h = @agents.spawn {role: \"worker\", task: \"Process the batch\"};\nlet reply = @agents.msg {handle: h, text: \"Status?\", opts: {await: true}};\nreply |> display {kind: \"json\"}"
+                    code: "let h = @agents.spawn {role: \"worker\", task: \"Process the batch and reply to parent messages\", opts: {capabilities: [\"agents.*\"]}};\nlet reply = @agents.msg {handle: h, text: \"Status?\", opts: {await: true}};\nreply |> display {kind: \"json\"}"
                         .to_string(),
-                    notes: None,
+                    notes: Some(
+                        "The parent must hold agents.* before explicitly delegating it to the child."
+                            .to_string(),
+                    ),
                 }],
                 errors: vec![denied_error_doc()],
                 grants: vec![agents_grant_doc()],
@@ -78,18 +89,10 @@ impl HostFn for AgentsSpawnFn {
     async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value> {
         check_grant!(ctx, caps::AGENTS_SPAWN);
 
-        let role = args["role"]
-            .as_str()
-            .ok_or_else(|| HostError::InvalidArgs("role must be a string".to_string()))?
-            .to_string();
-        let task = args["task"]
-            .as_str()
-            .ok_or_else(|| HostError::InvalidArgs("task must be a string".to_string()))?
-            .to_string();
+        let role = parse_actor_role(&args["role"], "role")?;
+        let task = parse_actor_task(&args["task"], "task")?;
         let opts = args.get("opts");
-        if opts.is_some_and(|opts| !opts.is_object()) {
-            return Err(HostError::InvalidArgs("opts must be an object".to_string()));
-        }
+        let grants = child_agent_grants(ctx, opts)?;
 
         let executor = self.roster.executor().ok_or_else(|| {
             HostError::NotImplemented("agents.spawn — executor not configured".to_string())
@@ -99,7 +102,8 @@ impl HostFn for AgentsSpawnFn {
         let actor_id = self.roster.next_actor_id(&role);
         let parent_id = caller_parent_id(ctx)?;
         let supervisor_id =
-            configure_supervision_from_opts(&self.roster, parent_id.as_ref(), opts).await?;
+            configure_supervision_from_opts(&self.roster, &session_id, parent_id.as_ref(), opts)
+                .await?;
         let budget = ActorBudget::default();
         let spawned_at = Utc::now();
 
@@ -118,12 +122,16 @@ impl HostFn for AgentsSpawnFn {
             history_uri: None,
         };
         match supervisor_id {
-            Some(supervisor_id) => {
-                self.roster
-                    .track_with_supervisor(record, supervisor_id)
-                    .await
-            }
-            None => self.roster.track(record).await,
+            Some(supervisor_id) => self
+                .roster
+                .track_with_supervisor_for_session(&session_id, record, supervisor_id)
+                .await
+                .map_err(registry_error)?,
+            None => self
+                .roster
+                .track_for_session(&session_id, record)
+                .await
+                .map_err(registry_error)?,
         }
         self.roster.emit_lifecycle(
             &session_id,
@@ -145,11 +153,14 @@ impl HostFn for AgentsSpawnFn {
             role,
             task,
             mode: None,
-            grants: child_agent_grants(ctx),
+            grants,
             budget,
             parent: parent_id,
             depth: 0,
-            cancellation: self.roster.cancel_token(&actor_id).await,
+            cancellation: self
+                .roster
+                .cancel_token_for_session(&session_id, &actor_id)
+                .await,
         };
         self.roster.remember_restart_spec(&spec).await;
 

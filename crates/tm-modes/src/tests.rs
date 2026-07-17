@@ -326,6 +326,8 @@ fn mode_profiles_map_expected_skills_voice_and_scope() {
     assert_eq!(assistant.voice_cap, "medium");
     assert_eq!(assistant.default_scope, "global");
     assert!(assistant.captures_personal_state());
+    assert!(assistant.has_capability("http.get"));
+    assert!(assistant.has_capability("resources.read:artifact"));
 
     let serious = assets
         .modes
@@ -337,6 +339,8 @@ fn mode_profiles_map_expected_skills_voice_and_scope() {
     assert!(serious.has_capability("fs.move"));
     assert!(serious.has_capability("fs.remove"));
     assert!(serious.has_capability("proc.run"));
+    assert!(serious.has_capability("http.get"));
+    assert!(serious.has_capability("resources.read:artifact"));
     assert!(serious.has_capability("resources.read:linked"));
     assert!(serious.has_capability("backend.coding"));
     assert_eq!(serious.capability_class, "engineering");
@@ -347,6 +351,10 @@ fn mode_profiles_map_expected_skills_voice_and_scope() {
         .modes
         .profile(&ModeId::from("handoff"))
         .expect("handoff profile");
+    assert!(handoff.has_capability("http.get"));
+    assert!(handoff.has_capability("resources.read:agent"));
+    assert!(handoff.has_capability("resources.read:artifact"));
+    assert!(handoff.has_capability("resources.read:history"));
     for capability in [
         "fs.read",
         "code.search",

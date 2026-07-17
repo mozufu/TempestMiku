@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::actor::ActorId;
+use crate::actor::{ActorId, MAX_ACTOR_MESSAGE_BYTES, validate_text_bytes};
 
 /// A plain-prose message between actors (§23.2).
 ///
@@ -18,6 +18,24 @@ pub struct ActorMessage {
     /// Set for request/reply; recipient echoes this in its reply.
     pub reply_to: Option<ActorId>,
     pub sent_at: DateTime<Utc>,
+}
+
+impl ActorMessage {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_text_bytes("message text", &self.text, MAX_ACTOR_MESSAGE_BYTES)
+    }
+
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.text
+            .len()
+            .saturating_add(self.from.as_str().len())
+            .saturating_add(self.to.as_str().len())
+            .saturating_add(
+                self.reply_to
+                    .as_ref()
+                    .map_or(0, |actor_id| actor_id.as_str().len()),
+            )
+    }
 }
 
 /// Delivery confirmation for a sent message (§23.2).

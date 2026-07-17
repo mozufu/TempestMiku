@@ -1187,8 +1187,9 @@ void main() {
         type: 'cell_result',
         id: 'cell-result-drive-uri',
         data: {
-          'shaped':
-              'stdout:\ndisplay: {"filedUri":"drive://projects/tempestmiku/research/p5-drive-workspace.md"}\n\nresult:\nnull',
+          'status': 'completed',
+          'resultPreview':
+              '{"filedUri":"drive://projects/tempestmiku/research/p5-drive-workspace.md"}',
         },
       ),
     );
@@ -1208,6 +1209,52 @@ void main() {
 
     expect(find.text('Scripted drive note'), findsOneWidget);
     expect(find.textContaining('# Scripted drive note'), findsOneWidget);
+  });
+
+  testWidgets('renders structured runtime cell failures', (
+    WidgetTester tester,
+  ) async {
+    final client = ScriptedMikuClient(pauseBeforeFinal: true);
+    final session = await client.createSession();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(find.byType(EditableText), 'start failed runtime');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    client.emitEvent(
+      session.id,
+      const MikuEvent(
+        type: 'cell_start',
+        id: 'cell-start-failed',
+        data: {'cellId': 'cell-1', 'sourcePreview': '[redacted]'},
+      ),
+    );
+    client.emitEvent(
+      session.id,
+      const MikuEvent(
+        type: 'cell_result',
+        id: 'cell-result-failed',
+        data: {
+          'cellId': 'cell-1',
+          'status': 'failed',
+          'error': 'CapabilityDeniedError: [redacted]',
+        },
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    await _openActivitySheet(tester);
+    expect(find.text('執行程式'), findsOneWidget);
+    expect(find.text('程式失敗'), findsWidgets);
+    expect(find.text('[redacted]'), findsWidgets);
+    expect(
+      find.textContaining('CapabilityDeniedError: [redacted]'),
+      findsWidgets,
+    );
   });
 
   testWidgets('opens drive uri surfaced by a direct activity payload', (
@@ -1591,6 +1638,7 @@ void main() {
     expect(toolCall, findsOneWidget);
     expect(cellStart, findsOneWidget);
     expect(actorCompleted, findsOneWidget);
+    expect(find.textContaining('agents.spawn'), findsWidgets);
     expect(
       tester.getTopLeft(toolCall).dy,
       lessThan(tester.getTopLeft(cellStart).dy),

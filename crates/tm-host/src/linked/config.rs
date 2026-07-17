@@ -2,17 +2,21 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use serde::{Deserialize, Serialize};
 use tm_artifacts::{ResourceContent, preview};
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{HostError, Result, SelfEvolutionConfig};
 
+use super::secure_fs::{FileIdentity, SecureKind, open_existing, pin_root_identity};
 use super::util::{
-    ensure_existing_ancestor_under_root, ensure_under_root, linked_uri, parse_linked_path,
-    read_text_page, validate_alias, validate_command_name,
+    linked_uri, parse_linked_path, read_text_page_from_file, validate_alias, validate_command_name,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,7 +108,7 @@ pub fn default_proc_run_timeout_ms() -> u64 {
     180_000
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FsPolicy {
     pub alias: String,
     pub root: PathBuf,
@@ -115,7 +119,19 @@ pub struct FsPolicy {
 
 #[derive(Debug, Clone, Default)]
 pub struct LinkedFolders {
-    policies: Arc<RwLock<BTreeMap<String, FsPolicy>>>,
+    policies: Arc<RwLock<BTreeMap<String, RegisteredPolicy>>>,
+    /// Orders policy replacement/removal against the final filesystem commit or process spawn.
+    /// Readers hold this only for a bounded synchronous filesystem operation; approval waits never
+    /// retain it.
+    policy_gate: Arc<RwLock<()>>,
+    mutations: Arc<Mutex<()>>,
+    revision: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RegisteredPolicy {
+    policy: FsPolicy,
+    root_identity: FileIdentity,
 }
 
 impl LinkedFolders {
@@ -129,10 +145,20 @@ impl LinkedFolders {
                 )));
             }
             let policy = policy_from_config(config)?;
-            policies.insert(policy.alias.clone(), policy);
+            let root_identity = pin_root_identity(&policy.root, &policy.alias)?;
+            policies.insert(
+                policy.alias.clone(),
+                RegisteredPolicy {
+                    policy,
+                    root_identity,
+                },
+            );
         }
         Ok(Self {
             policies: Arc::new(RwLock::new(policies)),
+            policy_gate: Arc::new(RwLock::new(())),
+            mutations: Arc::new(Mutex::new(())),
+            revision: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -153,11 +179,58 @@ impl LinkedFolders {
     pub fn policies(&self) -> Vec<FsPolicy> {
         self.policies
             .read()
-            .map(|policies| policies.values().cloned().collect())
+            .map(|policies| {
+                policies
+                    .values()
+                    .map(|registered| registered.policy.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
+    pub(super) async fn lock_mutations(&self) -> MutexGuard<'_, ()> {
+        self.mutations.lock().await
+    }
+
+    pub(super) fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
+    }
+
+    pub(super) fn ensure_revision(&self, expected: u64) -> Result<()> {
+        if self.revision() != expected {
+            return Err(HostError::CapabilityDenied(
+                "linked-folder policy changed while the operation was pending; retry".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Runs one bounded read, final mutation commit, or process validation+spawn against a stable
+    /// policy revision. `insert_policy` and `remove_policy` take the write side, so they cannot
+    /// slip between the revision check/policy resolution performed by `operation` and its final
+    /// syscall.
+    pub(super) fn with_stable_policy_snapshot<T>(
+        &self,
+        expected_revision: u64,
+        operation: impl FnOnce(&Self) -> Result<T>,
+    ) -> Result<T> {
+        let _gate = self.policy_gate.read().map_err(|err| {
+            HostError::HostCall(format!("linked folder policy gate poisoned: {err}"))
+        })?;
+        self.ensure_revision(expected_revision)?;
+        operation(self)
+    }
+
     pub fn policy(&self, alias: &str) -> Result<FsPolicy> {
+        self.policies
+            .read()
+            .map_err(|err| HostError::HostCall(format!("linked folder registry poisoned: {err}")))?
+            .get(alias)
+            .map(|registered| registered.policy.clone())
+            .ok_or_else(|| HostError::InvalidPath(format!("unknown linked folder alias {alias}")))
+    }
+
+    fn registered_policy(&self, alias: &str) -> Result<RegisteredPolicy> {
         self.policies
             .read()
             .map_err(|err| HostError::HostCall(format!("linked folder registry poisoned: {err}")))?
@@ -168,15 +241,26 @@ impl LinkedFolders {
 
     pub fn insert_policy(&self, policy: FsPolicy) -> Result<FsPolicy> {
         let policy = validate_policy(policy)?;
+        let root_identity = pin_root_identity(&policy.root, &policy.alias)?;
+        let _gate = self.policy_gate.write().map_err(|err| {
+            HostError::HostCall(format!("linked folder policy gate poisoned: {err}"))
+        })?;
         let mut policies = self.policies.write().map_err(|err| {
             HostError::HostCall(format!("linked folder registry poisoned: {err}"))
         })?;
         if let Some(existing) = policies.get(&policy.alias) {
-            if existing.root == policy.root && existing.mode == policy.mode {
-                return Ok(existing.clone());
+            if existing.policy == policy && existing.root_identity == root_identity {
+                return Ok(existing.policy.clone());
             }
-            if existing.root == policy.root {
-                policies.insert(policy.alias.clone(), policy.clone());
+            if existing.policy.root == policy.root {
+                policies.insert(
+                    policy.alias.clone(),
+                    RegisteredPolicy {
+                        policy: policy.clone(),
+                        root_identity,
+                    },
+                );
+                self.revision.fetch_add(1, Ordering::AcqRel);
                 return Ok(policy);
             }
             return Err(HostError::InvalidArgs(format!(
@@ -184,80 +268,43 @@ impl LinkedFolders {
                 policy.alias
             )));
         }
-        policies.insert(policy.alias.clone(), policy.clone());
+        policies.insert(
+            policy.alias.clone(),
+            RegisteredPolicy {
+                policy: policy.clone(),
+                root_identity,
+            },
+        );
+        self.revision.fetch_add(1, Ordering::AcqRel);
         Ok(policy)
     }
 
     pub fn remove_policy(&self, alias: &str) -> Result<FsPolicy> {
         validate_alias(alias)?;
-        self.policies
+        let _gate = self.policy_gate.write().map_err(|err| {
+            HostError::HostCall(format!("linked folder policy gate poisoned: {err}"))
+        })?;
+        let removed = self
+            .policies
             .write()
             .map_err(|err| HostError::HostCall(format!("linked folder registry poisoned: {err}")))?
             .remove(alias)
-            .ok_or_else(|| HostError::InvalidPath(format!("unknown linked folder alias {alias}")))
+            .ok_or_else(|| {
+                HostError::InvalidPath(format!("unknown linked folder alias {alias}"))
+            })?;
+        self.revision.fetch_add(1, Ordering::AcqRel);
+        Ok(removed.policy)
     }
 
-    pub(super) fn resolve_existing(&self, input: Option<&str>) -> Result<ResolvedPath> {
+    pub(super) fn resolve_spec(&self, input: Option<&str>) -> Result<ResolvedPath> {
         let parsed = self.parse_path(input)?;
-        let policy = self.policy(&parsed.alias)?;
-        let joined = policy.root.join(&parsed.relative);
-        let path = joined
-            .canonicalize()
-            .map_err(|err| HostError::InvalidPath(format!("{}: {err}", parsed.display)))?;
-        ensure_under_root(&path, &policy.root, &parsed.display)?;
+        let registered = self.registered_policy(&parsed.alias)?;
         Ok(ResolvedPath {
             alias: parsed.alias,
-            relative: parsed.relative,
+            relative: parsed.relative.clone(),
             display: parsed.display,
-            path,
-            policy,
-        })
-    }
-
-    pub(super) fn resolve_for_create(
-        &self,
-        input: &str,
-        create_parents: bool,
-    ) -> Result<ResolvedPath> {
-        let parsed = self.parse_path(Some(input))?;
-        let policy = self.policy(&parsed.alias)?;
-        let target = policy.root.join(&parsed.relative);
-        if target.exists() {
-            let path = target
-                .canonicalize()
-                .map_err(|err| HostError::InvalidPath(format!("{}: {err}", parsed.display)))?;
-            ensure_under_root(&path, &policy.root, &parsed.display)?;
-            return Ok(ResolvedPath {
-                alias: parsed.alias,
-                relative: parsed.relative,
-                display: parsed.display,
-                path,
-                policy,
-            });
-        }
-        let parent = target.parent().ok_or_else(|| {
-            HostError::InvalidPath(format!("missing parent for {}", parsed.display))
-        })?;
-        ensure_existing_ancestor_under_root(parent, &policy.root, &parsed.display)?;
-        if !parent.exists() {
-            if !create_parents {
-                return Err(HostError::InvalidPath(format!(
-                    "parent does not exist for {}",
-                    parsed.display
-                )));
-            }
-            fs::create_dir_all(parent).map_err(|err| HostError::HostCall(err.to_string()))?;
-        }
-        let canonical_parent = parent
-            .canonicalize()
-            .map_err(|err| HostError::InvalidPath(format!("{}: {err}", parsed.display)))?;
-        ensure_under_root(&canonical_parent, &policy.root, &parsed.display)?;
-        Ok(ResolvedPath {
-            alias: parsed.alias,
-            relative: parsed.relative,
-            display: parsed.display,
-            path: target,
-            policy,
+            policy: registered.policy,
+            root_identity: registered.root_identity,
         })
     }
 
@@ -283,27 +330,44 @@ impl LinkedFolders {
         path: &str,
         selector: Option<&str>,
     ) -> Result<ResourceContent> {
-        let resolved = self.resolve_existing(Some(path))?;
-        let size_bytes = fs::metadata(&resolved.path)
-            .map_err(|err| HostError::HostCall(err.to_string()))?
-            .len()
-            .try_into()
-            .map_err(|_| HostError::HostCall("linked file is too large".to_string()))?;
-        let (selected, has_more) = read_text_page(&resolved.path, selector)?;
-        Ok(ResourceContent {
-            uri: linked_uri(&resolved.alias, &resolved.relative),
-            kind: "text".to_string(),
-            mime: "text/plain".to_string(),
-            title: resolved
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_string),
-            size_bytes,
-            selector: selector.map(str::to_string),
-            has_more,
-            preview: preview(&selected, 1024),
-            content: selected,
+        let revision = self.revision();
+        self.with_stable_policy_snapshot(revision, |linked| {
+            let resolved = linked.resolve_spec(Some(path))?;
+            let handle = open_existing(
+                &resolved.policy,
+                resolved.root_identity,
+                &resolved.relative,
+                &resolved.display,
+            )?;
+            if handle.kind != SecureKind::File {
+                return Err(HostError::InvalidPath(format!(
+                    "{} is not a regular file",
+                    resolved.display
+                )));
+            }
+            let size_bytes = handle
+                .size_bytes
+                .ok_or_else(|| {
+                    HostError::InvalidPath(format!("{} is not a file", resolved.display))
+                })?
+                .try_into()
+                .map_err(|_| HostError::HostCall("linked file is too large".to_string()))?;
+            let (selected, has_more) = read_text_page_from_file(handle.file, selector)?;
+            Ok(ResourceContent {
+                uri: linked_uri(&resolved.alias, &resolved.relative),
+                kind: "text".to_string(),
+                mime: "text/plain".to_string(),
+                title: resolved
+                    .relative
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string),
+                size_bytes,
+                selector: selector.map(str::to_string),
+                has_more,
+                preview: preview(&selected, 1024),
+                content: selected,
+            })
         })
     }
 }
@@ -367,6 +431,6 @@ pub(super) struct ResolvedPath {
     pub(super) alias: String,
     pub(super) relative: PathBuf,
     pub(super) display: String,
-    pub(super) path: PathBuf,
     pub(super) policy: FsPolicy,
+    pub(super) root_identity: FileIdentity,
 }

@@ -42,18 +42,6 @@ impl<R: Send + 'static> ThreadAffineShardPool<R> {
         pool
     }
 
-    pub(crate) fn spawn_one(
-        thread_name: &str,
-        worker: impl FnOnce(mpsc::Receiver<R>) + Send + 'static,
-    ) -> Self {
-        let mut pool = Self {
-            senders: Vec::with_capacity(1),
-            workers: Vec::with_capacity(1),
-        };
-        pool.push_worker(thread_name.to_string(), worker);
-        pool
-    }
-
     fn push_worker(
         &mut self,
         thread_name: String,

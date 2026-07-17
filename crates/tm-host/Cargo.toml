@@ -23,6 +23,7 @@ chrono.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 libc.workspace = true
+rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 tokio.workspace = true

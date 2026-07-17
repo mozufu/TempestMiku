@@ -8,6 +8,8 @@ use super::{
     registry::{ResourceEntry, ResourceHandler},
 };
 
+const ARTIFACT_RESOURCE_LIST_LIMIT: usize = 256;
+
 pub struct ArtifactResourceHandler {
     store: ArtifactStore,
 }
@@ -34,15 +36,23 @@ impl ResourceHandler for ArtifactResourceHandler {
         selector: Option<&str>,
         _ctx: &InvocationCtx,
     ) -> Result<ResourceContent> {
-        self.store
-            .read(uri, selector)
+        let store = self.store.clone();
+        let uri = uri.to_string();
+        let selector = selector.map(str::to_string);
+        tokio::task::spawn_blocking(move || store.read(&uri, selector.as_deref()))
+            .await
+            .map_err(|err| HostError::HostCall(format!("artifact read task failed: {err}")))?
             .map_err(|err| HostError::NotFound(err.to_string()))
     }
 
     async fn list(&self, _uri: Option<&str>, _ctx: &InvocationCtx) -> Result<Vec<ResourceEntry>> {
-        Ok(self
-            .store
-            .list()
+        let store = self.store.clone();
+        let (artifacts, _) =
+            tokio::task::spawn_blocking(move || store.list_page(0, ARTIFACT_RESOURCE_LIST_LIMIT))
+                .await
+                .map_err(|err| HostError::HostCall(format!("artifact list task failed: {err}")))?
+                .map_err(|err| HostError::HostCall(err.to_string()))?;
+        Ok(artifacts
             .into_iter()
             .map(|artifact| ResourceEntry {
                 uri: artifact.uri,

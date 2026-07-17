@@ -90,9 +90,10 @@ honoring principle #8 (no generic shell / escape hatch):
   CWE-88) — and OWASP's **MCP05:2025** names exactly this risk: an agent translating input into
   system commands.
 - **Allowlisted** commands only (the project's `cargo` / `pnpm` / `pytest`, etc.), scoped to a
-  **linked** folder (restricted cwd, §24.4), least-privilege. P0's coding-agent slice defaults to
-  Pi-style **yolo within configured grants**: safe build/test/check commands and normal writes run
-  without per-action approval once config grants them; destructive, external, or out-of-grant actions still require approval or fail closed.
+  **linked** folder (restricted cwd, §24.4), least-privilege. New-file writes can run within exact
+  configured grants, while overwrites and destructive actions require approval. Because an
+  allowlisted build/test command can still execute repository-controlled code, every `proc.run`
+  invocation requires approval until the host adds OS-level filesystem and network isolation.
 - The in-sandbox package ecosystem stays the long-tail safety net; `proc.run` is the narrow, audited
   door to real-repo build / test.
 - **Behavioral parity is kept** (build / test still work); the escape hatch is not. One of the
@@ -112,23 +113,20 @@ name = "tempestmiku"
 path = "/path/to/repo"
 mode = "rw"
 commands = ["cargo", "pnpm"]
-safe_args = [
-  ["cargo", "test"],
-  ["cargo", "fmt"],
-  ["cargo", "clippy"],
-  ["pnpm", "test"],
-  ["pnpm", "playwright", "test"],
-]
+# Accepted for config compatibility, but not an approval bypass before OS isolation.
+safe_args = []
 ```
 
 The exact config format may be TOML/YAML/JSON, but the semantics are fixed: linked root, project
-alias, `ro` / `rw` attenuation, command allowlist, and safe argv prefixes. `proc.run(cmd, args)`
-matches command + argv prefix structurally; it never parses a shell string.
+alias, `ro` / `rw` attenuation, and a command allowlist. `proc.run(cmd, args)` never parses a shell
+string. Until it has OS-level filesystem and network isolation, every invocation requires manual
+approval; legacy `safe_args` config entries are retained only for compatibility and auditing.
 
 Model-visible paths should prefer linked-folder aliases (`tempestmiku:crates/...`) over raw host
-absolute paths. The adaptor resolves aliases, canonicalizes paths under the linked root, enforces
-`ro` / `rw` and command grants, emits audit events, and fails closed on traversal, missing grants, or
-unknown capabilities.
+absolute paths. On Unix the adaptor opens every linked path component relative to a held root/parent
+descriptor with no-follow semantics, including recursive list/find/search; platforms without those
+APIs fail closed. It enforces `ro` / `rw` and command grants, emits audit events, and fails closed on
+traversal, symlink substitution, missing grants, or unknown capabilities.
 
 Each linked folder also registers a `linked://<alias>/` resource root (§9.3). `linked://` is the
 read/list/preview route for UI and model inspection; writes and commands stay on the explicit SDK paths
@@ -170,8 +168,12 @@ Product-layer scope is intentionally narrower than the full translation map:
 - **Filesystem mutation shape:** new files use `fs.write`; file moves and removals use `fs.move`
   and approval-gated `fs.remove`, never patch hunks.
 - **Process shape:** `proc.run(cmd, args, opts)` is argv-vector only. Shell strings, pipes, redirects,
-  and command concatenation are not accepted. Timeout and cancellation terminate the command's
-  complete process group on Unix rather than leaving descendant compilers or test workers alive.
+  and command concatenation are not accepted. Empty/relative `PATH` entries are removed; approval
+  names a redacted argv preview, exact argv digest, resolved absolute executable identity, and
+  descriptor-pinned cwd. Timeout and cancellation terminate the command's process group and ordinary
+  descendants on Unix. A child that deliberately detaches with `setsid(2)` can escape portable
+  process-group containment, so `proc.run` remains always-approved until platform sandboxing closes
+  that residual.
   The host config owns a bounded default/maximum timeout (180 seconds by default, at most 900
   seconds); benchmark profiles may opt into a larger value without changing production defaults.
 - **Approval shape:** in the native server Serious Engineer backend, `fs.write` overwrites,
@@ -179,6 +181,15 @@ Product-layer scope is intentionally narrower than the full translation map:
   `approval` SSE event and
   `POST /sessions/:id/approvals/:approval_id` route as ACP permissions. `manual` mode waits for that
   route; `deny` and timeouts fail closed.
+- **Mutation commit shape:** host mutations serialize per linked registry, bound file reads, and
+  recheck policy revision, content tag, and device/inode identity through held parent descriptors.
+  A shared policy gate holds the final policy re-resolution and commit syscall; linked reads and
+  process validation/spawn use the same stable-snapshot contract, while policy replacement/removal
+  takes the exclusive side. Revocation therefore either precedes and rejects an old-revision
+  operation or returns only after the already-validated syscall/spawn has completed.
+  Portable POSIX rename/unlink has no inode-CAS operand, so an unrelated host process can still race
+  the final identity check; this residual cannot escape the linked root but can invalidate strict
+  cross-process compare-and-swap semantics.
 
 ## 25.3 Artifact handler — two tiers (adopt OMP model into §09)
 

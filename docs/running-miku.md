@@ -467,8 +467,7 @@ Minimal repo-linked config:
       "name": "repo",
       "path": ".",
       "mode": "rw",
-      "commands": ["cargo"],
-      "safe_args": [["cargo", "test"]]
+      "commands": ["cargo"]
     }
   ],
   "approvals": {
@@ -488,16 +487,41 @@ Notes:
 - `path` must resolve to an existing directory.
 - `mode` is `ro` or `rw`.
 - `commands` is an allowlist of executable names for `proc.run`.
-- `safe_args` entries are argv prefixes that can run without approval.
+- `safe_args` remains accepted for config compatibility, but does not bypass approval while
+  `proc.run` lacks OS-level filesystem and network isolation. Every command requires approval.
+- Child processes receive only a small explicit environment allowlist for tool discovery,
+  temporary files, locale, Rust/Nix toolchains, and macOS SDK selection. Arbitrary server
+  environment variables are not inherited. Empty and relative `PATH` entries are dropped; the
+  absolute executable path and filesystem identity are resolved before approval and rechecked after
+  it. On Unix the child re-stats that device/inode in an allocation-free final `pre_exec` hook.
+  Path-based exec still has a narrow stat-to-exec race on platforms without fd-based exec, so this
+  check does not replace manual approval or OS isolation. Approval actions are bounded redacted JSON
+  with an exact argv digest and descriptor-pinned cwd.
 - `proc.run.stdin` accepts an optional UTF-8 string capped at 1 MiB. It shares the command timeout
   with process execution and output collection; non-string or oversized input fails before spawn.
+  The approval binds stdin presence, raw byte count and SHA-256, plus a redacted preview capped at
+  256 bytes with an explicit truncation marker.
 - `proc_run_timeout_ms` sets both the default and maximum per-command timeout. It defaults to
   180000 and must stay between 1 and 900000; benchmark adapters may opt into a larger bounded value.
-- On Unix, each `proc.run` command owns a fresh process group. Timeout or turn cancellation kills
-  the full descendant tree before returning, so compiler/test grandchildren cannot leak into later
-  gates.
-- Approval mode `deny` is the default. Approval mode `manual` asks before non-safe writes or
-  commands.
+- On Unix, each `proc.run` command owns a fresh process group and enters its linked cwd through a
+  no-follow directory descriptor. Timeout or turn cancellation kills that group and ordinary
+  descendants. A process that deliberately calls `setsid(2)` can escape portable group containment;
+  every `proc.run` therefore remains approval-gated until stronger platform isolation exists.
+- Linked roots pin their device/inode identity; replacing the configured path with another real
+  directory fails until it is explicitly relinked. Reads, recursive list/find/search, and mutation
+  commits use descriptor-relative no-follow traversal on Unix and fail closed elsewhere. Mutation
+  reads are byte-bounded; recursive walks reject trees deeper than 128 directory levels and stop
+  after 100,000 visited entries. List/find/search results are capped at 4 MiB using exact serialized
+  JSON accounting, including escaped content and array framing. Policy revision, tag, and
+  device/inode identity are rechecked after approval and before commit. A shared policy gate orders
+  reads, final mutation
+  syscalls, and process validation/spawn against policy replacement/removal: either revocation lands
+  first and the old revision fails, or the already-validated operation finishes before revocation
+  returns. POSIX exposes no portable inode-conditional rename/unlink, so an unrelated host process
+  can still race the final check, although held parent descriptors keep the operation inside the
+  linked root.
+- Approval mode `deny` is the default. Approval mode `manual` asks before overwrites, removals,
+  and every process command.
 - `self_evolution.tier` accepts `off`, `conservative` (the compatibility-preserving default), or
   `moderate`. Existing `approvals.mode` and timeout settings remain orthogonal and still gate
   reachable writes; selecting a tier does not grant a capability or bypass approval. P7.0 rejects

@@ -17,9 +17,23 @@
   helper, not ambient `fetch()` and not the production egress policy. Production live egress remains
   deferred until it has configured destinations, per-domain byte/request caps, redirect policy,
   auditing, and secret-broker integration.
-- **Filesystem jail.** All `fs.*` resolved against a workspace root; path traversal rejected.
+- **Filesystem jail.** Linked-folder reads, walks, searches, and mutations traverse from an opened
+  root descriptor with no-follow component opens on Unix; traversal and symlink substitution fail
+  closed. Platforms without the required descriptor-relative APIs receive no linked-folder reach.
+  Recursive walks reject more than 128 directory levels and stop after 100,000 visited entries;
+  list/find/search responses use exact serialized-JSON accounting and are capped at 4 MiB.
+  A shared policy gate orders bounded reads, final mutation syscalls, and process spawn against
+  policy replacement/removal, so revocation cannot land between final revalidation and the syscall.
 - **Resource limits** (§6.3) enforced by the isolate + host.
-- **Approval gates.** Capabilities flagged `sensitive` pause for human approval before execution.
+- **Approval gates.** Each capability declares an explicit approval contract (`none`, conditional,
+  or always); approval is independent of its `sensitive` trace-privacy flag. Linked reads/list/find
+  and code search are sensitive so raw paths/content previews are not persisted, but do not prompt.
+  Overwrites, removal, and every unsandboxed `proc.run` use bounded redacted JSON approval actions.
+  Process approvals bind exact argv/executable/cwd identity and optional stdin presence, byte count,
+  raw SHA-256, and a redacted 256-byte preview with explicit truncation. Unix children re-stat the
+  executable device/inode in the final `pre_exec` hook; path exec still leaves a narrow final
+  stat-to-exec race where fd-based exec is unavailable, so this is defense in depth rather than OS
+  isolation. Timeouts and unsupported flows deny by default.
   Postgres persists requests and an idempotent effect outbox; resolution is compare-and-swap with its
   event in the same transaction. Durable proposal effects resume exactly once, while ACP/native-runtime waits are
   non-resumable and become cancelled after origin loss. P7.0 memory, skill, and review-only
@@ -28,9 +42,9 @@
   its owner/epoch lease before mutation, so forged, downgraded, or stale work fails before a write.
   The append-only evolution audit projection is written transactionally with proposal/effect state,
   uses idempotency keys for retry/replay, and persists only redacted provenance, typed targets, and
-  digests. Full candidates require the existing `resources.read:memory` capability. Timeout and
-  unsupported flows deny by default. Moderate review effects persist only status: they recheck the
-  live persona/mode base digest after approval and have no file-write or catalog-reload dispatch.
+  digests. Full candidates require the existing `resources.read:memory` capability. Moderate review
+  effects persist only status: they recheck the live persona/mode base digest after approval and
+  have no file-write or catalog-reload dispatch.
 - **Untrusted-content discipline.** Data fetched from the world is treated as data, never as
   instructions; the runtime never auto-promotes tool output into the system/instruction channel.
 

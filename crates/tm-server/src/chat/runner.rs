@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, mpsc},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -12,7 +11,13 @@ use tm_lang::{TmSandbox, TmSandboxOptions, core_tm_grants};
 use tm_modes::ModeId;
 use uuid::Uuid;
 
-use crate::{Result, ServerError};
+use crate::{
+    Result, ServerError,
+    session_shards::{ThreadAffineShardPool, evict_expired_sessions, session_sweep_interval},
+};
+
+#[cfg(test)]
+use crate::session_shards::shard_index;
 
 #[derive(Clone)]
 pub struct ChatTurn {
@@ -87,8 +92,7 @@ struct AgentRequest {
 }
 
 pub struct AgentChatRunner {
-    senders: Vec<mpsc::Sender<AgentRequest>>,
-    workers: Vec<thread::JoinHandle<()>>,
+    shards: ThreadAffineShardPool<AgentRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,47 +155,52 @@ impl SwappableHostEventSink {
     fn bind(&self, sink: Arc<dyn EventSink + Send + Sync>) {
         *self.sink.lock().expect("host event proxy lock poisoned") = Some(sink);
     }
+
+    fn clear(&self) {
+        self.sink
+            .lock()
+            .expect("host event proxy lock poisoned")
+            .take();
+    }
 }
 
 #[async_trait]
 impl HostEventSink for SwappableHostEventSink {
     async fn emit(&self, event_type: &str, payload_json: serde_json::Value) -> tm_host::Result<()> {
-        self.sink
+        let sink = self
+            .sink
             .lock()
             .expect("host event proxy lock poisoned")
-            .as_ref()
-            .map_or(Ok(()), |sink| {
-                sink.try_on_runtime_event(event_type, &payload_json)
-                    .map_err(|error| tm_host::HostError::HostCall(error.to_string()))
-            })
+            .clone();
+        sink.as_ref().map_or(Ok(()), |sink| {
+            sink.try_on_runtime_event(event_type, &payload_json)
+                .map_err(|error| tm_host::HostError::HostCall(error.to_string()))
+        })
     }
 }
 
 impl AgentChatRunner {
     pub fn new(agent: Agent) -> Self {
-        let (sender, receiver) = mpsc::channel::<AgentRequest>();
-        let worker = thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("agent worker runtime builds");
-            for request in receiver {
-                let result = runtime
-                    .block_on(agent.run_with_prior_messages_and_controls(
-                        &request.turn.user_prompt,
-                        &request.turn.prior_messages,
-                        request.sink.as_ref(),
-                        None,
-                        None,
-                    ))
-                    .map_err(|err| ServerError::Store(err.to_string()));
-                let _ = request.reply.send(result);
-            }
-        });
-        Self {
-            senders: vec![sender],
-            workers: vec![worker],
-        }
+        let shards: ThreadAffineShardPool<AgentRequest> =
+            ThreadAffineShardPool::<AgentRequest>::spawn_one("tm-agent-worker", move |receiver| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("agent worker runtime builds");
+                for request in receiver {
+                    let result = runtime
+                        .block_on(agent.run_with_prior_messages_and_controls(
+                            &request.turn.user_prompt,
+                            &request.turn.prior_messages,
+                            request.sink.as_ref(),
+                            None,
+                            None,
+                        ))
+                        .map_err(|err| ServerError::Store(err.to_string()));
+                    let _ = request.reply.send(result);
+                }
+            });
+        Self { shards }
     }
 
     pub fn tm(llm: Arc<dyn LlmClient>, cfg: AgentConfig, base_options: TmSandboxOptions) -> Self {
@@ -261,22 +270,13 @@ impl AgentChatRunner {
         + Sync
         + 'static,
     ) -> Self {
-        assert!(
-            runner_options.shard_count > 0,
-            "shard_count must be non-zero"
-        );
         let sandbox_factory: Arc<SandboxFactory> = Arc::new(sandbox_factory);
-        let mut senders = Vec::with_capacity(runner_options.shard_count);
-        let mut workers = Vec::with_capacity(runner_options.shard_count);
-        for shard_id in 0..runner_options.shard_count {
-            let (sender, receiver) = mpsc::channel::<AgentRequest>();
-            senders.push(sender);
-            let llm = Arc::clone(&llm);
-            let cfg = cfg.clone();
-            let sandbox_factory = Arc::clone(&sandbox_factory);
-            let worker = thread::Builder::new()
-                .name(format!("tm-agent-shard-{shard_id}"))
-                .spawn(move || {
+        let shards =
+            ThreadAffineShardPool::spawn(runner_options.shard_count, "tm-agent-shard", move |_| {
+                let llm = Arc::clone(&llm);
+                let cfg = cfg.clone();
+                let sandbox_factory = Arc::clone(&sandbox_factory);
+                move |receiver| {
                     run_agent_shard(
                         receiver,
                         llm,
@@ -284,22 +284,9 @@ impl AgentChatRunner {
                         sandbox_factory,
                         runner_options.session_ttl,
                     );
-                })
-                .expect("agent shard thread starts");
-            workers.push(worker);
-        }
-        Self { senders, workers }
-    }
-}
-
-impl Drop for AgentChatRunner {
-    fn drop(&mut self) {
-        // Disconnect every shard before joining so its receive loop exits and cached
-        // !Send sessions are destroyed on their owning thread.
-        self.senders.clear();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
+                }
+            });
+        Self { shards }
     }
 }
 
@@ -315,20 +302,22 @@ fn run_agent_shard(
         .build()
         .expect("agent shard runtime builds");
     let mut sessions = HashMap::<Uuid, CachedSession>::new();
-    let sweep_interval = session_ttl
-        .max(Duration::from_millis(1))
-        .min(Duration::from_secs(60));
+    let sweep_interval = session_sweep_interval(session_ttl);
 
     loop {
         let request = match receiver.recv_timeout(sweep_interval) {
             Ok(request) => request,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                evict_inactive_sessions(&mut sessions, session_ttl, Instant::now());
+                evict_expired_sessions(&mut sessions, session_ttl, Instant::now(), |cached| {
+                    cached.last_used
+                });
                 continue;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        evict_inactive_sessions(&mut sessions, session_ttl, Instant::now());
+        evict_expired_sessions(&mut sessions, session_ttl, Instant::now(), |cached| {
+            cached.last_used
+        });
         let result = runtime.block_on(run_cached_turn(
             &request,
             &llm,
@@ -371,12 +360,6 @@ async fn run_cached_turn(
                 event_proxy,
             },
         );
-        if !request.turn.prior_messages.is_empty() {
-            request
-                .sink
-                .try_on_runtime_reset()
-                .map_err(|err| ServerError::Store(err.to_string()))?;
-        }
     }
 
     let cached = sessions
@@ -387,27 +370,26 @@ async fn run_cached_turn(
     cfg.system_prompt = request.turn.system_prompt.clone();
     apply_turn_limits(&mut cfg, request.turn.limits);
     let agent = Agent::new(Arc::clone(llm), Arc::clone(&cached.sandbox), cfg);
-    let result = agent
-        .run_with_session_and_controls(
-            &request.turn.user_prompt,
-            &request.turn.prior_messages,
-            cached.session.as_mut(),
-            request.sink.as_ref(),
-            None,
-            None,
-        )
-        .await
-        .map_err(|err| ServerError::Store(err.to_string()));
+    let result = async {
+        if replace_session && !request.turn.prior_messages.is_empty() {
+            request.sink.try_on_runtime_reset()?;
+        }
+        agent
+            .run_with_session_and_controls(
+                &request.turn.user_prompt,
+                &request.turn.prior_messages,
+                cached.session.as_mut(),
+                request.sink.as_ref(),
+                None,
+                None,
+            )
+            .await
+    }
+    .await
+    .map_err(|err| ServerError::Store(err.to_string()));
+    cached.event_proxy.clear();
     cached.last_used = Instant::now();
     result
-}
-
-fn evict_inactive_sessions(
-    sessions: &mut HashMap<Uuid, CachedSession>,
-    session_ttl: Duration,
-    now: Instant,
-) {
-    sessions.retain(|_, cached| now.saturating_duration_since(cached.last_used) < session_ttl);
 }
 
 fn apply_turn_limits(cfg: &mut AgentConfig, limits: ChatRunLimits) {
@@ -419,10 +401,6 @@ fn apply_turn_limits(cfg: &mut AgentConfig, limits: ChatRunLimits) {
     }
 }
 
-fn shard_index(session_id: Uuid, shard_count: usize) -> usize {
-    (session_id.as_u128() % shard_count as u128) as usize
-}
-
 #[async_trait]
 impl ChatRunner for AgentChatRunner {
     async fn run_turn(
@@ -431,9 +409,9 @@ impl ChatRunner for AgentChatRunner {
         sink: Arc<dyn EventSink + Send + Sync>,
     ) -> Result<String> {
         let (reply, response) = tokio::sync::oneshot::channel();
-        let shard = shard_index(turn.session_id, self.senders.len());
-        self.senders[shard]
-            .send(AgentRequest { turn, sink, reply })
+        let session_id = turn.session_id;
+        self.shards
+            .send(session_id, AgentRequest { turn, sink, reply })
             .map_err(|_| ServerError::Store("agent shard stopped".to_string()))?;
         response
             .await
@@ -488,6 +466,7 @@ mod tests {
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
+        thread,
         time::Duration,
     };
 
@@ -858,6 +837,41 @@ mod tests {
             .find(|(kind, _)| kind == "effect_start")
             .unwrap();
         assert_eq!(effect_start.1["argsPreview"], "[redacted]");
+    }
+
+    #[tokio::test]
+    async fn host_event_proxy_routes_only_while_a_turn_is_bound() {
+        let proxy = SwappableHostEventSink::default();
+        let first = Arc::new(RuntimeSink::default());
+        let first_sink: Arc<dyn EventSink + Send + Sync> = first.clone();
+        proxy.bind(first_sink);
+        proxy
+            .emit("first", serde_json::json!({"turn": 1}))
+            .await
+            .unwrap();
+
+        proxy.clear();
+        proxy
+            .emit("between_turns", serde_json::json!({"ignored": true}))
+            .await
+            .unwrap();
+
+        let second = Arc::new(RuntimeSink::default());
+        let second_sink: Arc<dyn EventSink + Send + Sync> = second.clone();
+        proxy.bind(second_sink);
+        proxy
+            .emit("second", serde_json::json!({"turn": 2}))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *first.0.lock().unwrap(),
+            vec![("first".to_string(), serde_json::json!({"turn": 1}))]
+        );
+        assert_eq!(
+            *second.0.lock().unwrap(),
+            vec![("second".to_string(), serde_json::json!({"turn": 2}))]
+        );
     }
 
     fn options(shard_count: usize, session_ttl: Duration) -> AgentChatRunnerOptions {

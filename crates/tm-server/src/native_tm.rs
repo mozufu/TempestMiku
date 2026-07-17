@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, mpsc as std_mpsc},
-    thread,
     time::{Duration, Instant},
 };
 
@@ -19,7 +18,11 @@ use uuid::Uuid;
 use crate::{
     ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, CodingBackend, CodingEventSink,
     CodingTurn, CodingTurnResult, DetailedApprovalOutcome, Result, ServerError, StoreEvent,
+    session_shards::{ThreadAffineShardPool, evict_expired_sessions, session_sweep_interval},
 };
+
+#[cfg(test)]
+use crate::session_shards::shard_index as native_shard_index;
 
 const NATIVE_TM_BACKEND: &str = "native-tm";
 
@@ -57,8 +60,7 @@ struct NativeShardConfig {
 }
 
 pub struct NativeTmBackend {
-    senders: Vec<std_mpsc::Sender<NativeTmRequest>>,
-    workers: Vec<thread::JoinHandle<()>>,
+    shards: ThreadAffineShardPool<NativeTmRequest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,25 +133,18 @@ impl NativeTmBackend {
         backend_options: NativeTmBackendOptions,
     ) -> Self {
         assert!(
-            backend_options.shard_count > 0,
-            "shard_count must be non-zero"
-        );
-        assert!(
             backend_options.event_channel_capacity > 0,
             "event_channel_capacity must be non-zero"
         );
-        let mut senders = Vec::with_capacity(backend_options.shard_count);
-        let mut workers = Vec::with_capacity(backend_options.shard_count);
-        for shard_id in 0..backend_options.shard_count {
-            let (sender, receiver) = std_mpsc::channel::<NativeTmRequest>();
-            senders.push(sender);
-            let llm = Arc::clone(&llm);
-            let cfg = cfg.clone();
-            let base_options = base_options.clone();
-            let approval_broker = Arc::clone(&approval_broker);
-            let worker = thread::Builder::new()
-                .name(format!("tm-native-shard-{shard_id}"))
-                .spawn(move || {
+        let shards = ThreadAffineShardPool::spawn(
+            backend_options.shard_count,
+            "tm-native-shard",
+            move |_| {
+                let llm = Arc::clone(&llm);
+                let cfg = cfg.clone();
+                let base_options = base_options.clone();
+                let approval_broker = Arc::clone(&approval_broker);
+                move |receiver| {
                     run_native_shard(
                         receiver,
                         NativeShardConfig {
@@ -161,20 +156,10 @@ impl NativeTmBackend {
                             backend: backend_options,
                         },
                     );
-                })
-                .expect("native tm shard thread starts");
-            workers.push(worker);
-        }
-        Self { senders, workers }
-    }
-}
-
-impl Drop for NativeTmBackend {
-    fn drop(&mut self) {
-        self.senders.clear();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
+                }
+            },
+        );
+        Self { shards }
     }
 }
 
@@ -186,9 +171,9 @@ impl CodingBackend for NativeTmBackend {
         sink: Arc<dyn CodingEventSink>,
     ) -> Result<CodingTurnResult> {
         let (reply, response) = tokio::sync::oneshot::channel();
-        let shard = native_shard_index(turn.session_id, self.senders.len());
-        self.senders[shard]
-            .send(NativeTmRequest { turn, sink, reply })
+        let session_id = turn.session_id;
+        self.shards
+            .send(session_id, NativeTmRequest { turn, sink, reply })
             .map_err(|_| ServerError::Store("native coding shard stopped".to_string()))?;
         response
             .await
@@ -201,11 +186,7 @@ fn run_native_shard(receiver: std_mpsc::Receiver<NativeTmRequest>, config: Nativ
         .enable_all()
         .build()
         .expect("native tm shard runtime builds");
-    let sweep_interval = config
-        .backend
-        .session_ttl
-        .max(Duration::from_millis(1))
-        .min(Duration::from_secs(60));
+    let sweep_interval = session_sweep_interval(config.backend.session_ttl);
 
     runtime.block_on(async move {
         let mut sessions = HashMap::<Uuid, CachedNativeSession>::new();
@@ -213,16 +194,22 @@ fn run_native_shard(receiver: std_mpsc::Receiver<NativeTmRequest>, config: Nativ
             let request = match receiver.recv_timeout(sweep_interval) {
                 Ok(request) => request,
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                    evict_native_sessions(
+                    evict_expired_sessions(
                         &mut sessions,
                         config.backend.session_ttl,
                         Instant::now(),
+                        |cached| cached.last_used,
                     );
                     continue;
                 }
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            evict_native_sessions(&mut sessions, config.backend.session_ttl, Instant::now());
+            evict_expired_sessions(
+                &mut sessions,
+                config.backend.session_ttl,
+                Instant::now(),
+                |cached| cached.last_used,
+            );
             let result = run_cached_native_turn(
                 &request,
                 &config.llm,
@@ -337,18 +324,6 @@ async fn run_cached_native_turn(
     })
 }
 
-fn evict_native_sessions(
-    sessions: &mut HashMap<Uuid, CachedNativeSession>,
-    session_ttl: Duration,
-    now: Instant,
-) {
-    sessions.retain(|_, cached| now.saturating_duration_since(cached.last_used) < session_ttl);
-}
-
-fn native_shard_index(session_id: Uuid, shard_count: usize) -> usize {
-    (session_id.as_u128() % shard_count as u128) as usize
-}
-
 #[derive(Default)]
 struct SwappableCodingSink {
     target: Mutex<Option<Arc<dyn CodingEventSink>>>,
@@ -394,11 +369,12 @@ impl CodingEventSink for SwappableCodingSink {
     }
 
     fn turn_id(&self) -> Option<Uuid> {
-        self.target
+        let target = self
+            .target
             .lock()
             .expect("coding sink proxy lock poisoned")
-            .as_ref()
-            .and_then(|target| target.turn_id())
+            .clone();
+        target.and_then(|target| target.turn_id())
     }
 }
 

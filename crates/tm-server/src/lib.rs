@@ -17,6 +17,7 @@ pub mod omp_acp;
 pub mod push;
 pub mod runtime;
 pub mod scheduler;
+mod session_shards;
 pub mod store;
 pub mod webui;
 

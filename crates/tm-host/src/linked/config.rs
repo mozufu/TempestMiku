@@ -24,6 +24,8 @@ pub struct P0HostConfig {
     pub approvals: ApprovalConfig,
     #[serde(default)]
     pub artifact_root: Option<PathBuf>,
+    #[serde(default = "default_proc_run_timeout_ms")]
+    pub proc_run_timeout_ms: u64,
     #[serde(default)]
     pub self_evolution: SelfEvolutionConfig,
 }
@@ -40,6 +42,11 @@ impl P0HostConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if !(1..=900_000).contains(&self.proc_run_timeout_ms) {
+            return Err(HostError::InvalidArgs(
+                "proc_run_timeout_ms must be between 1 and 900000".to_string(),
+            ));
+        }
         LinkedFolders::from_configs(self.linked_folders.clone()).map(|_| ())
     }
 
@@ -91,6 +98,10 @@ pub fn default_approval_mode() -> String {
 
 pub fn default_approval_timeout_ms() -> u64 {
     60_000
+}
+
+pub fn default_proc_run_timeout_ms() -> u64 {
+    180_000
 }
 
 #[derive(Debug, Clone)]

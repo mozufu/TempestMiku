@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc, task::Poll};
+use std::{collections::HashSet, future::Future, sync::Arc, task::Poll};
 
 use async_trait::async_trait;
 use futures::{
@@ -9,7 +9,8 @@ use futures::{
 use crate::{
     Accumulator, CellBudget, ChatRequest, Error, EventSink, ExecuteCall, LlmClient, Message,
     Result, Sandbox, SessionConfig, StreamEvent, ToolChoice, ToolSpec,
-    prompt::DEFAULT_SYSTEM_PROMPT, shape::shape_result_capped,
+    prompt::{DEFAULT_SYSTEM_PROMPT, TM_RUNTIME_BOOT_CONTRACT},
+    shape::shape_result_capped,
 };
 
 /// Optional source of actor inbox messages for the agent loop.
@@ -90,9 +91,11 @@ EXACTLY ONE fenced block:\n```run\n<your code>\n```\nThe runtime executes it and
 result as the next message. Emit no fenced block when you have the final answer.";
 
 enum TurnAction {
-    Execute(ExecuteCall),
+    Execute(Vec<ExecuteCall>),
     Final,
 }
+
+const MAX_NATIVE_EXECUTE_CALLS_PER_TURN: usize = 16;
 
 /// The orchestrator: owns the message list and runs the streaming loop.
 pub struct Agent {
@@ -111,7 +114,11 @@ impl Agent {
     }
 
     fn system_message(&self) -> Message {
-        let mut prompt = self.cfg.system_prompt.clone();
+        let mut prompt = String::from(TM_RUNTIME_BOOT_CONTRACT);
+        if !self.cfg.system_prompt.trim().is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&self.cfg.system_prompt);
+        }
         if self.cfg.protocol == Protocol::FencedBlock {
             prompt.push_str(FENCED_INSTRUCTIONS);
         }
@@ -263,43 +270,54 @@ impl Agent {
                         ));
                     }
                     match parse_fenced(&turn.text)? {
-                        Some(code) => TurnAction::Execute(ExecuteCall {
+                        Some(code) => TurnAction::Execute(vec![ExecuteCall {
                             id: String::new(),
                             code,
-                        }),
+                        }]),
                         None => TurnAction::Final,
                     }
                 }
             };
             messages.push(turn.to_message());
 
-            let call = match action {
+            let calls = match action {
                 TurnAction::Final => {
                     sink.try_on_final(&turn.text)?;
                     return Ok(turn.text);
                 }
-                TurnAction::Execute(call) => call,
+                TurnAction::Execute(calls) => calls,
             };
 
-            if call.id.is_empty() && self.cfg.protocol == Protocol::NativeTool {
-                return Err(Error::Protocol(
-                    "execute tool call is missing an id".to_string(),
-                ));
+            for call in &calls {
+                check_cancelled(cancellation)?;
+                sink.try_on_cell_start(&call.code)?;
             }
+            let codes = calls
+                .iter()
+                .map(|call| call.code.clone())
+                .collect::<Vec<_>>();
+            let outputs = await_cancellable(
+                session.eval_batch(&codes, self.cfg.cell_budget),
+                cancellation,
+            )
+            .await??;
+            if outputs.len() != calls.len() {
+                return Err(Error::Sandbox(format!(
+                    "session returned {} results for {} execute calls",
+                    outputs.len(),
+                    calls.len()
+                )));
+            }
+            for (call, out) in calls.into_iter().zip(outputs) {
+                check_cancelled(cancellation)?;
+                let shaped = shape_result_capped(&out, self.cfg.cell_budget.output_bytes);
+                sink.try_on_cell_result(&shaped)?;
 
-            check_cancelled(cancellation)?;
-            sink.try_on_cell_start(&call.code)?;
-            let out =
-                await_cancellable(session.eval(&call.code, self.cfg.cell_budget), cancellation)
-                    .await??;
-            check_cancelled(cancellation)?;
-            let shaped = shape_result_capped(&out, self.cfg.cell_budget.output_bytes);
-            sink.try_on_cell_result(&shaped)?;
-
-            match self.cfg.protocol {
-                Protocol::NativeTool => messages.push(Message::tool_result(&call.id, shaped)),
-                Protocol::FencedBlock => {
-                    messages.push(Message::user(format!("[execution result]\n{shaped}")))
+                match self.cfg.protocol {
+                    Protocol::NativeTool => messages.push(Message::tool_result(&call.id, shaped)),
+                    Protocol::FencedBlock => {
+                        messages.push(Message::user(format!("[execution result]\n{shaped}")))
+                    }
                 }
             }
         }
@@ -360,33 +378,48 @@ fn validate_completion_state(turn: &crate::AssistantTurn) -> Result<()> {
 
 fn validate_native_turn(turn: &crate::AssistantTurn) -> Result<TurnAction> {
     validate_completion_state(turn)?;
-    if turn.tool_calls.len() > 1 {
+    if turn.tool_calls.len() > MAX_NATIVE_EXECUTE_CALLS_PER_TURN {
         return Err(Error::Protocol(format!(
-            "expected at most one tool call, received {}",
+            "expected at most {MAX_NATIVE_EXECUTE_CALLS_PER_TURN} execute tool calls, received {}",
             turn.tool_calls.len()
         )));
     }
-    let Some(call) = turn.tool_calls.first() else {
+    if turn.tool_calls.is_empty() {
         if turn.finish_reason.as_deref() == Some("tool_calls") {
             return Err(Error::Protocol(
                 "completion reported tool_calls without a complete tool call".to_string(),
             ));
         }
         return Ok(TurnAction::Final);
-    };
-    if call.id.trim().is_empty() {
-        return Err(Error::Protocol(format!(
-            "tool {} is missing a call id",
-            call.name
-        )));
     }
-    let arguments = call.arguments.as_object().ok_or_else(|| {
-        Error::Protocol(format!(
-            "tool {} arguments are not a JSON object",
-            call.name
-        ))
-    })?;
-    if call.name == "execute" {
+
+    let mut ids = HashSet::with_capacity(turn.tool_calls.len());
+    let mut calls = Vec::with_capacity(turn.tool_calls.len());
+    for call in &turn.tool_calls {
+        if call.id.trim().is_empty() {
+            return Err(Error::Protocol(format!(
+                "tool {} is missing a call id",
+                call.name
+            )));
+        }
+        if !ids.insert(call.id.as_str()) {
+            return Err(Error::Protocol(format!(
+                "duplicate tool call id {}",
+                call.id
+            )));
+        }
+        if call.name != "execute" {
+            return Err(Error::Protocol(format!(
+                "model returned non-execute tool {}",
+                call.name
+            )));
+        }
+        let arguments = call.arguments.as_object().ok_or_else(|| {
+            Error::Protocol(format!(
+                "tool {} arguments are not a JSON object",
+                call.name
+            ))
+        })?;
         if arguments.len() != 1 || !arguments.contains_key("code") {
             return Err(Error::Protocol(
                 "execute accepts exactly one code argument".to_string(),
@@ -403,15 +436,12 @@ fn validate_native_turn(turn: &crate::AssistantTurn) -> Result<TurnAction> {
                 "execute requires non-empty code".to_string(),
             ));
         }
-        return Ok(TurnAction::Execute(ExecuteCall {
+        calls.push(ExecuteCall {
             id: call.id.clone(),
             code: code.to_string(),
-        }));
+        });
     }
-    Err(Error::Protocol(format!(
-        "model returned non-execute tool {}",
-        call.name
-    )))
+    Ok(TurnAction::Execute(calls))
 }
 
 /// Extract one explicitly executable `run` fence only when it is the response's sole complete

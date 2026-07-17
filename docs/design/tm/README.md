@@ -1,15 +1,21 @@
 # `tm` — an agent-first language for `execute(code)`
 
-> Status: **experimental / fun**. This is a design exploration, not a committed milestone.
-> It does **not** change §6.1's decision (TypeScript on `deno_core` is the shipping sandbox
-> language). `tm` is a possible *third* `Sandbox` backend that turns the runtime policies
+> Status: **implemented and sole runtime as of 2026-07-16**. `tm` is the `Sandbox` language that turns the runtime policies
 > TempestMiku already needs — capability gating, approval, provenance, fail-closed — into
 > language primitives, so the code the model writes *is itself* the auditable artifact.
 
-The pitch in one line: **if every host interaction is an algebraic effect, every approval is
+The active source contract is frozen as `tm-conformance-v2`; syntax not present in §7 or its
+versioned accept corpus is unsupported and must be rejected rather than guessed. The frozen v1
+corpus remains historical evidence only. The pitch in one line:
+**if every host interaction is an algebraic effect, every approval is
 a resumable runtime state, and every cell emits a structured trace, then the host's capability
 registry *is* the language's type system and the same execution record can drive both replay
 and UI.**
+
+T0-T7 are implemented and verified through the public HTTP/SSE, approval, runtime-loss, real
+Postgres reconnect, affected-client, and frozen 20-prompt x 50-run comparative fluency paths.
+The historical two-language system prompts were calibrated together and frozen as
+`tm-fluency-prompt-v2`; that comparator runner is now retired.
 
 `tm` is a **persistent effectful REPL with declarative presentation and an observable execution
 model**. It is not a generally declarative or reactive language: cells evaluate immediately,

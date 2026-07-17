@@ -57,10 +57,10 @@ Capability-checked at the boundary like every host fn (§07/§08).
 
 ### 24.2.1 Implemented P5 v1 contract
 
-The first Rust slice lives in `tm-drive` and is wired into `tm-sandbox` and `tm-server` through the
-`DriveOperations` boundary. The Deno SDK exposes `drive.put`, `drive.get`, `drive.ls`,
-`drive.move`, `drive.search`, `drive.tag`, `drive.link`, `drive.unlink`, and `drive.organize`; each
-wrapper forwards through `tools.call`, so the model still has one chat-native tool.
+The first Rust slice lives in `tm-drive` and is wired into `tm-lang` and `tm-server` through the
+`DriveOperations` boundary. tm effects expose `drive.put`, `drive.get`, `drive.ls`, `drive.move`,
+`drive.search`, `drive.tag`, `drive.link`, `drive.unlink`, and `drive.organize`; every call resolves
+through the host registry, so the model still has one chat-native tool.
 With `TM_DATABASE_URL`, `tm-server` uses a Postgres-backed metadata store over `drive_entries`,
 `drive_attributes`, `drive_tags`, `drive_proposals`, `drive_organizer_runs`, `drive_corrections`,
 `drive_entry_tombstones`, and `drive_links`, with optimistic record versions and path, hash, project,
@@ -126,21 +126,17 @@ the existing pending-events transcript shape. Organizer apply uses the same `Inv
 policy path as `fs.*`, `code.*`, `proc.*`, and other drive writes rather than a drive-only approval
 channel. Broader drag/drop browser UI remains a client slice.
 
-The first local research workspace is the SDK helper `research.drive(query, opts)`, implemented as
-composition rather than a new host tool: it calls `drive.search`, reads bounded `drive://` selectors
-through `resources.read`, and, when `agents.parallel` is available, fans out one digest worker per
-selected document. The returned corpus contains only resource refs, selectors, snippets, content
-hashes, digests, and citations; full document text stays inside the worker/local summarization step.
+The local research workspace is the Rust host capability `@research.drive {query, ...}`. It searches
+the authorized drive scope, reads bounded `drive://` selectors, and returns deterministic local
+digests. The returned corpus contains only resource refs, selectors, snippets, content hashes,
+digests, and citations; full document text stays inside the bounded host operation.
 Local citations and corpus refs carry `sourceKind: "drive"` so later external/fetched research can be
 distinguished without changing the result envelope.
-`maxDocs`, `maxSnippets`, `maxBytesPerDoc`, `maxDigestBytes`, and `maxWorkers` are clamped in the SDK
-helper, and the result reports the effective budget. `workerTimeoutMs` and `totalTimeoutMs` are
-clamped there too; `research.drive` passes the effective per-worker limit into `agents.parallel`
-child task budgets, capped by the remaining total run budget.
-If child fan-out fails or is cancelled, the helper records bounded `workerFailures`, falls back to local
-digests for the affected corpus, and leaves drive state untouched; the underlying `agents.parallel`
-lifecycle remains responsible for replayable `actor_failed` / `actor_cancelled` session events. Normal
-tests use the deterministic local fallback without network or live LLM access. External/network
+`maxDocs`, `maxSnippets`, `maxBytesPerDoc`, `maxDigestBytes`, and `maxWorkers` are clamped by the
+handler, and the result reports the effective budget. `workerTimeoutMs` and `totalTimeoutMs` remain
+in the result contract for bounded compatibility, but the tm-only implementation reports zero
+agent documents and an empty `workerFailures` list. Explicit actor research can still be composed
+with `agents.*` by tm code when a turn holds those grants. External/network
 research, publishing, and sending remain deferred to the future live-egress slice; P5 only has
 default-deny/allowlisted `http.get`, absent publish/send namespaces, and the existing approval gates
 for destructive local mutations.

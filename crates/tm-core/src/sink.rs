@@ -46,6 +46,16 @@ pub trait EventSink: Send + Sync {
         self.on_runtime_reset();
         Ok(())
     }
+    /// Backend-specific structured runtime event. Payloads must already be bounded and redacted.
+    fn on_runtime_event(&self, _event_type: &str, _payload: &serde_json::Value) {}
+    fn try_on_runtime_event(
+        &self,
+        event_type: &str,
+        payload: &serde_json::Value,
+    ) -> crate::Result<()> {
+        self.on_runtime_event(event_type, payload);
+        Ok(())
+    }
     /// The model produced a final answer (no tool call).
     fn on_final(&self, _text: &str) {}
     fn try_on_final(&self, text: &str) -> crate::Result<()> {

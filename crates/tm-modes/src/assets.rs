@@ -16,8 +16,11 @@ use crate::{
 const BUNDLED_MODES_SOURCE: &str = "bundled:tm-modes/default-modes";
 pub(crate) const BUNDLED_SOUL: &str = include_str!("../assets/SOUL.md");
 const BUNDLED_MODES: &str = include_str!("../assets/modes.json");
+pub(crate) const BUNDLED_TM_LANG_FLUENCY_SKILL: &str =
+    include_str!("../assets/skills/tm-lang-fluency/SKILL.md");
 pub(crate) const MISSING_SKILL_PROMPT_FALLBACK: &str = "Guidance for this situation is temporarily unavailable. Default to careful, capability-appropriate behavior and ask before uncertain or destructive actions.";
 const BUNDLED_SKILLS: &[(&str, &str)] = &[
+    ("tm-lang-fluency", BUNDLED_TM_LANG_FLUENCY_SKILL),
     (
         "miku-voice",
         include_str!("../assets/skills/miku-voice/SKILL.md"),
@@ -291,7 +294,8 @@ impl ModesConfig {
         };
 
         let modes = load_configured_modes(root, &mut warnings);
-        let skills = load_configured_skills(root, &mut warnings);
+        let mut skills = load_configured_skills(root, &mut warnings);
+        pin_runtime_skill(&mut skills, &mut warnings);
         warn_missing_skill_references(&modes, &skills, &mut warnings);
 
         let status = if warnings.is_empty() {
@@ -310,6 +314,22 @@ impl ModesConfig {
             warnings,
         }
     }
+}
+
+fn pin_runtime_skill(skills: &mut BTreeMap<String, String>, warnings: &mut Vec<String>) {
+    if skills
+        .get("tm-lang-fluency")
+        .is_some_and(|contents| contents != BUNDLED_TM_LANG_FLUENCY_SKILL)
+    {
+        warnings.push(
+            "configured tm-lang-fluency skill cannot replace the runtime-owned bundled contract"
+                .to_string(),
+        );
+    }
+    skills.insert(
+        "tm-lang-fluency".to_string(),
+        BUNDLED_TM_LANG_FLUENCY_SKILL.to_string(),
+    );
 }
 
 fn overlay_managed_skills(assets: &mut ModeAssets, root: &Path, states: Vec<ManagedSkillState>) {

@@ -1,15 +1,15 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use tm_core::{Agent, AgentConfig, EventSink, LlmClient, Message, Sandbox, Session};
-use tm_host::{DefaultDenyApprovalPolicy, HostFn};
+use tm_host::{DefaultDenyApprovalPolicy, HostEventSink, HostFn};
+use tm_lang::{TmSandbox, TmSandboxOptions, core_tm_grants};
 use tm_modes::ModeId;
-use tm_sandbox::{DenoSandbox, DenoSandboxOptions, core_sandbox_grants};
 use uuid::Uuid;
 
 use crate::{Result, ServerError};
@@ -106,7 +106,8 @@ impl Default for AgentChatRunnerOptions {
     }
 }
 
-type SandboxFactory = dyn Fn(&ChatTurn) -> Arc<dyn Sandbox> + Send + Sync + 'static;
+type SandboxFactory =
+    dyn Fn(&ChatTurn, Arc<dyn HostEventSink>) -> Arc<dyn Sandbox> + Send + Sync + 'static;
 
 #[derive(Clone, PartialEq, Eq)]
 struct SandboxProfile {
@@ -138,6 +139,32 @@ struct CachedSession {
     session: Box<dyn Session>,
     profile: SandboxProfile,
     last_used: Instant,
+    event_proxy: Arc<SwappableHostEventSink>,
+}
+
+#[derive(Default)]
+struct SwappableHostEventSink {
+    sink: Mutex<Option<Arc<dyn EventSink + Send + Sync>>>,
+}
+
+impl SwappableHostEventSink {
+    fn bind(&self, sink: Arc<dyn EventSink + Send + Sync>) {
+        *self.sink.lock().expect("host event proxy lock poisoned") = Some(sink);
+    }
+}
+
+#[async_trait]
+impl HostEventSink for SwappableHostEventSink {
+    async fn emit(&self, event_type: &str, payload_json: serde_json::Value) -> tm_host::Result<()> {
+        self.sink
+            .lock()
+            .expect("host event proxy lock poisoned")
+            .as_ref()
+            .map_or(Ok(()), |sink| {
+                sink.try_on_runtime_event(event_type, &payload_json)
+                    .map_err(|error| tm_host::HostError::HostCall(error.to_string()))
+            })
+    }
 }
 
 impl AgentChatRunner {
@@ -167,33 +194,35 @@ impl AgentChatRunner {
         }
     }
 
-    pub fn deno(
-        llm: Arc<dyn LlmClient>,
-        cfg: AgentConfig,
-        base_options: DenoSandboxOptions,
-    ) -> Self {
-        Self::deno_with_options(llm, cfg, base_options, AgentChatRunnerOptions::default())
+    pub fn tm(llm: Arc<dyn LlmClient>, cfg: AgentConfig, base_options: TmSandboxOptions) -> Self {
+        Self::tm_with_options(llm, cfg, base_options, AgentChatRunnerOptions::default())
     }
 
-    pub fn deno_with_options(
+    pub fn tm_with_options(
         llm: Arc<dyn LlmClient>,
         cfg: AgentConfig,
-        base_options: DenoSandboxOptions,
+        base_options: TmSandboxOptions,
         runner_options: AgentChatRunnerOptions,
     ) -> Self {
-        Self::new_with_sandbox_factory_and_options(llm, cfg, runner_options, move |turn| {
-            let mut options = base_options.clone();
-            options.session_id = turn.session_id.to_string();
-            options.session_scope = Some(turn.scope.clone());
-            options.grants = core_sandbox_grants().allow_many(turn.capabilities.iter().cloned());
-            for function in &turn.host_functions {
-                options.host_registry.register(Arc::clone(function));
-            }
-            if turn.deny_approvals {
-                options.approval_policy = Arc::new(DefaultDenyApprovalPolicy);
-            }
-            Arc::new(DenoSandbox::new(options))
-        })
+        Self::new_with_host_event_sandbox_factory_and_options(
+            llm,
+            cfg,
+            runner_options,
+            move |turn, host_events| {
+                let mut options = base_options.clone();
+                options.session_id = turn.session_id.to_string();
+                options.session_scope = Some(turn.scope.clone());
+                options.grants = core_tm_grants().allow_many(turn.capabilities.iter().cloned());
+                for function in &turn.host_functions {
+                    options.host_registry.register(Arc::clone(function));
+                }
+                if turn.deny_approvals {
+                    options.approval_policy = Arc::new(DefaultDenyApprovalPolicy);
+                }
+                options.host_event_sink = host_events;
+                Arc::new(TmSandbox::new(options))
+            },
+        )
     }
 
     pub fn new_with_sandbox_factory(
@@ -214,6 +243,23 @@ impl AgentChatRunner {
         cfg: AgentConfig,
         runner_options: AgentChatRunnerOptions,
         sandbox_factory: impl Fn(&ChatTurn) -> Arc<dyn Sandbox> + Send + Sync + 'static,
+    ) -> Self {
+        Self::new_with_host_event_sandbox_factory_and_options(
+            llm,
+            cfg,
+            runner_options,
+            move |turn, _host_events| sandbox_factory(turn),
+        )
+    }
+
+    fn new_with_host_event_sandbox_factory_and_options(
+        llm: Arc<dyn LlmClient>,
+        cfg: AgentConfig,
+        runner_options: AgentChatRunnerOptions,
+        sandbox_factory: impl Fn(&ChatTurn, Arc<dyn HostEventSink>) -> Arc<dyn Sandbox>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         assert!(
             runner_options.shard_count > 0,
@@ -249,9 +295,7 @@ impl AgentChatRunner {
 impl Drop for AgentChatRunner {
     fn drop(&mut self) {
         // Disconnect every shard before joining so its receive loop exits and cached
-        // !Send sessions (including V8 isolates) are destroyed on their owning thread.
-        // Detached teardown can otherwise overlap the next runner and corrupt V8's
-        // thread-local HandleScope state.
+        // !Send sessions are destroyed on their owning thread.
         self.senders.clear();
         for worker in self.workers.drain(..) {
             let _ = worker.join();
@@ -309,7 +353,10 @@ async fn run_cached_turn(
         .get(&session_id)
         .is_none_or(|cached| cached.profile != profile);
     if replace_session {
-        let sandbox = sandbox_factory(&request.turn);
+        let event_proxy = Arc::new(SwappableHostEventSink::default());
+        event_proxy.bind(Arc::clone(&request.sink));
+        let host_events: Arc<dyn HostEventSink> = event_proxy.clone();
+        let sandbox = sandbox_factory(&request.turn, host_events);
         let session = sandbox
             .open(tm_core::SessionConfig::default())
             .await
@@ -321,6 +368,7 @@ async fn run_cached_turn(
                 session,
                 profile,
                 last_used: Instant::now(),
+                event_proxy,
             },
         );
         if !request.turn.prior_messages.is_empty() {
@@ -334,6 +382,7 @@ async fn run_cached_turn(
     let cached = sessions
         .get_mut(&session_id)
         .expect("cached session exists after open");
+    cached.event_proxy.bind(Arc::clone(&request.sink));
     let mut cfg = base_cfg.clone();
     cfg.system_prompt = request.turn.system_prompt.clone();
     apply_turn_limits(&mut cfg, request.turn.limits);
@@ -448,7 +497,10 @@ mod tests {
         CellBudget, ChatRequest, Error, EvalOutput, Message, NullSink, Role, SessionConfig,
         StreamEvent,
     };
-    use tm_host::{ApprovalDecision, ApprovalPolicy, FsMode, LinkedFolderConfig, LinkedFolders};
+    use tm_host::{
+        ApprovalDecision, ApprovalPolicy, FsMode, GrantDoc, HostFn, InvocationCtx,
+        LinkedFolderConfig, LinkedFolders, ToolDocs,
+    };
 
     use super::*;
 
@@ -462,6 +514,55 @@ mod tests {
             _timeout: Duration,
         ) -> tm_host::Result<ApprovalDecision> {
             Ok(ApprovalDecision::Approved)
+        }
+    }
+
+    struct ApprovedPatch {
+        calls: Arc<AtomicUsize>,
+        docs: ToolDocs,
+    }
+
+    impl ApprovedPatch {
+        fn new(calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                calls,
+                docs: ToolDocs {
+                    name: "fs.patch".into(),
+                    namespace: "fs".into(),
+                    summary: "Apply a test patch".into(),
+                    description: None,
+                    signature: "fs.patch(args)".into(),
+                    args_schema: serde_json::json!({"type":"object"}),
+                    result_schema: Some(serde_json::json!({"type":"object"})),
+                    examples: Vec::new(),
+                    errors: Vec::new(),
+                    grants: vec![GrantDoc {
+                        kind: "capability".into(),
+                        description: "fs.patch".into(),
+                    }],
+                    sensitive: true,
+                    approval: "on-write".into(),
+                    since: "0.1".into(),
+                    stability: "stable".into(),
+                },
+            }
+        }
+    }
+
+    #[async_trait]
+    impl HostFn for ApprovedPatch {
+        fn docs(&self) -> &ToolDocs {
+            &self.docs
+        }
+
+        async fn call(
+            &self,
+            args: serde_json::Value,
+            ctx: &InvocationCtx,
+        ) -> tm_host::Result<serde_json::Value> {
+            ctx.require_approval("fs.patch").await?;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({"applied": true, "args": args}))
         }
     }
 
@@ -674,6 +775,18 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RuntimeSink(Mutex<Vec<(String, serde_json::Value)>>);
+
+    impl EventSink for RuntimeSink {
+        fn on_runtime_event(&self, event_type: &str, payload: &serde_json::Value) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((event_type.to_string(), payload.clone()));
+        }
+    }
+
     fn chat_turn(session_id: Uuid) -> ChatTurn {
         ChatTurn {
             session_id,
@@ -692,6 +805,59 @@ mod tests {
     async fn run(runner: &AgentChatRunner, turn: ChatTurn) {
         let sink: Arc<dyn EventSink + Send + Sync> = Arc::new(NullSink);
         assert_eq!(runner.run_turn(turn, sink).await.unwrap(), "done");
+    }
+
+    #[tokio::test]
+    async fn tm_backend_uses_cached_session_and_forwards_structured_events() {
+        let temp = tempfile::tempdir().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let llm = Arc::new(ReactiveLlm::with_code(
+            "[{patch: \"secret\"}] |> par map @fs.patch |> display {kind: \"table\"}",
+        ));
+        let llm_client: Arc<dyn LlmClient> = llm;
+        let mut base_options = TmSandboxOptions {
+            artifact_root: temp.path().join("artifacts"),
+            ..TmSandboxOptions::default()
+        };
+        base_options.approval_policy = Arc::new(AlwaysApprove);
+        let runner = AgentChatRunner::tm_with_options(
+            llm_client,
+            AgentConfig {
+                model: "fake".into(),
+                max_turns: 3,
+                ..AgentConfig::default()
+            },
+            base_options,
+            options(1, Duration::from_secs(60)),
+        );
+        let sink = Arc::new(RuntimeSink::default());
+        let event_sink: Arc<dyn EventSink + Send + Sync> = sink.clone();
+        let mut turn = chat_turn(Uuid::from_u128(20));
+        turn.capabilities = vec!["fs.patch".into()];
+        turn.host_functions = vec![Arc::new(ApprovedPatch::new(Arc::clone(&calls)))];
+        assert_eq!(runner.run_turn(turn, event_sink).await.unwrap(), "done");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let events = sink.0.lock().unwrap();
+        for expected in [
+            "scope_start",
+            "scope_result",
+            "effect_start",
+            "effect_suspended",
+            "effect_resumed",
+            "effect_result",
+            "display",
+            "binding_committed",
+        ] {
+            assert!(
+                events.iter().any(|(event, _)| event == expected),
+                "missing {expected}: {events:?}"
+            );
+        }
+        let effect_start = events
+            .iter()
+            .find(|(kind, _)| kind == "effect_start")
+            .unwrap();
+        assert_eq!(effect_start.1["argsPreview"], "[redacted]");
     }
 
     fn options(shard_count: usize, session_ttl: Duration) -> AgentChatRunnerOptions {
@@ -785,7 +951,14 @@ mod tests {
         run(&runner, turn).await;
 
         let requests = harness.llm.requests.lock().unwrap();
-        assert_eq!(requests[0][0], Message::system("test system"));
+        assert_eq!(requests[0][0].role, Role::System);
+        assert!(
+            requests[0][0]
+                .content
+                .starts_with("## Immutable tm runtime contract")
+        );
+        assert!(requests[0][0].content.contains("test system"));
+        assert!(requests[0][0].content.contains("tm-conformance-v2"));
         assert_eq!(requests[0][1], Message::user("earlier question"));
         assert_eq!(requests[0][2], Message::assistant("earlier answer"));
         assert_eq!(requests[0][3], Message::user("advance state"));
@@ -838,7 +1011,7 @@ mod tests {
 
     #[serial_test::serial]
     #[tokio::test]
-    async fn deny_approvals_replaces_the_deno_base_policy() {
+    async fn deny_approvals_replaces_the_base_policy() {
         let temp = tempfile::tempdir().unwrap();
         let repo = temp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
@@ -852,23 +1025,25 @@ mod tests {
         }])
         .unwrap();
         let llm = Arc::new(ReactiveLlm::with_code(
-            r#"const result = await proc.run("cargo", ["clean"], { cwd: "repo:" })
-  .catch(err => ({ name: err.name }));
-display(result);"#,
+            r#"let result = handle (@proc.run {cmd: "cargo", args: ["clean"], cwd: "repo:"}) with error {
+  | ApprovalDeniedError {message, ...} -> {name: "ApprovalDeniedError", message: message}
+  | other -> rethrow other
+};
+result |> display {kind: "json"}"#,
         ));
         let llm_client: Arc<dyn LlmClient> = llm.clone();
-        let runner = AgentChatRunner::deno_with_options(
+        let runner = AgentChatRunner::tm_with_options(
             llm_client,
             AgentConfig {
                 model: "fake".to_string(),
                 max_turns: 3,
                 ..AgentConfig::default()
             },
-            DenoSandboxOptions {
+            TmSandboxOptions {
                 artifact_root: temp.path().join("artifacts"),
                 linked_folders: Some(linked),
                 approval_policy: Arc::new(AlwaysApprove),
-                ..DenoSandboxOptions::default()
+                ..TmSandboxOptions::default()
             },
             options(1, Duration::from_secs(60)),
         );

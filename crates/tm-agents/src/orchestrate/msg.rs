@@ -32,7 +32,7 @@ impl AgentsMsgFn {
                      Requires agents.msg grant."
                         .to_string(),
                 ),
-                signature: "agents.msg(handle: AgentHandle, text: string, opts?: MsgOpts): Promise<AgentReceipt | string | null>"
+                signature: "@agents.msg AgentMsgArgs -> AgentReceipt | String | null"
                     .to_string(),
                 args_schema: json!({
                     "type": "object",
@@ -61,7 +61,7 @@ impl AgentsMsgFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Request a status update".to_string()),
-                    code: "const reply = await agents.msg(handle, 'What is your current status?', { await: true });\nif (reply) display(reply);"
+                    code: "let reply = @agents.msg {handle: handle, text: \"What is your current status?\", opts: {await: true}};\nreply |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some("null reply means unreachable — move on.".to_string()),
                 }],

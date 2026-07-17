@@ -1,0 +1,42 @@
+use crate::Spanned;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    Ident(String),
+    Upper(String),
+    String(String),
+    Int(i64),
+    Decimal(f64),
+    Uri(String),
+    At,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Comma,
+    Colon,
+    Semicolon,
+    Dot,
+    Ellipsis,
+    Eq,
+    EqEq,
+    NotEq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Pipe,
+    PipeGt,
+    Arrow,
+    Cons,
+    Eof,
+}
+
+pub type SpannedToken = Spanned<Token>;

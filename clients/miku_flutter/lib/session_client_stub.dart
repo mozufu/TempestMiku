@@ -126,7 +126,7 @@ class ScriptedMikuClient implements MikuSessionClient {
     String sessionId, {
     required String approvalId,
     required String action,
-    String backend = 'native-deno',
+    String backend = 'native-tm',
     Map<String, Object?> scope = const {},
     List<Map<String, Object?>> options = const [
       {'optionId': 'allow', 'name': 'Allow once', 'kind': 'allow_once'},
@@ -278,13 +278,13 @@ class ScriptedMikuClient implements MikuSessionClient {
       );
       final approvalId = 'approval-${_nextEventId++}';
       _approvalSessions[approvalId] = sessionId;
-      _approvalBackends[approvalId] = 'native-deno';
+      _approvalBackends[approvalId] = 'native-tm';
       final approvalEvent = MikuEvent(
         type: 'approval',
         id: _eventId(),
         data: {
           'approvalId': approvalId,
-          'backend': 'native-deno',
+          'backend': 'native-tm',
           'action': 'proc.run cargo clean',
           'scope': const {'actorId': 'Worker0', 'capability': 'proc.run'},
           'options': const [

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "tm-fluency-v1",
+  "promptVersion": "tm-fluency-prompt-v2",
+  "model": "gpt-5.5",
+  "corpusCases": 20,
+  "runsPerCase": 50,
+  "concurrency": 4,
+  "expectedRecords": 2000,
+  "observedRecords": 2000,
+  "protocolComplete": true,
+  "usageComplete": true,
+  "typescript": {
+    "runs": 1000,
+    "firstTrySuccesses": 1000,
+    "firstTrySuccessRate": 1.0,
+    "eventualSuccesses": 1000,
+    "retryRuns": 0,
+    "retryRate": 0.0,
+    "firstAttemptCodeTokens": 50849,
+    "meanFirstAttemptCodeTokens": 50.849,
+    "firstAttemptCompletionTokens": 71577,
+    "meanFirstAttemptCompletionTokens": 71.577,
+    "missingUsageRuns": 0
+  },
+  "tm": {
+    "runs": 1000,
+    "firstTrySuccesses": 1000,
+    "firstTrySuccessRate": 1.0,
+    "eventualSuccesses": 1000,
+    "retryRuns": 0,
+    "retryRate": 0.0,
+    "firstAttemptCodeTokens": 40228,
+    "meanFirstAttemptCodeTokens": 40.228,
+    "firstAttemptCompletionTokens": 62521,
+    "meanFirstAttemptCompletionTokens": 62.521,
+    "missingUsageRuns": 0
+  },
+  "taskSuccessNotWorse": true,
+  "generatedCodeShorter": true,
+  "retriesWithin12x": true,
+  "passed": true,
+  "rawOutputs": "docs/evidence/2026-07-16-tm-fluency-prompt-v2/raw.jsonl"
+}

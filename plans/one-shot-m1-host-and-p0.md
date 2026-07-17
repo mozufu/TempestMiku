@@ -221,7 +221,7 @@ Add the first serious-engineer real-repo capability surface: config-declared lin
 - Add `proc.run(cmd, args)` using argv-vector execution only; never `sh -c` or shell strings.
 - Add default yolo behavior like Pi (`pi.exe`) for configured linked folders: safe build/test/check commands and normal writes run without per-action approval once the config grants them.
 - Keep approvals for explicitly destructive, external, or out-of-grant actions.
-- Add first `code.edit` as patch/surgical edit only.
+- Add first `fs.patch` as patch/surgical edit only.
 - Defer LSP and AST editing/search to later milestones.
 
 ### Explicit non-goals

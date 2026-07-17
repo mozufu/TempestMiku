@@ -1398,6 +1398,52 @@ async fn drive_host_calls_require_exact_authoritative_project_scope() {
 }
 
 #[tokio::test]
+async fn research_drive_returns_bounded_local_digests_and_citations() {
+    let (_dir, store) = store();
+    store
+        .put_bytes(
+            b"# Approval Drop\nManual approval gates drive writes.\nExtra detail.",
+            DrivePutOptions {
+                suggested_path: Some("projects/tempestmiku/approval.md".to_string()),
+                project: Some("tempestmiku".to_string()),
+                ..DrivePutOptions::default()
+            },
+        )
+        .unwrap();
+    let mut host = HostRegistry::new();
+    let mut resources = ResourceRegistry::new();
+    register_drive_functions(&mut host, &mut resources, store, None);
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("research.drive"))
+        .with_session_id(Uuid::new_v4().to_string())
+        .with_session_scope("project:tempestmiku");
+
+    let result = host
+        .invoke(
+            "research.drive",
+            json!({
+                "query": "approval",
+                "project": "tempestmiku",
+                "maxDocs": 1,
+                "maxSnippets": 1,
+                "maxWorkers": 0,
+                "maxBytesPerDoc": 80,
+                "maxDigestBytes": 80
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result["corpus"].as_array().unwrap().len(), 1);
+    assert_eq!(result["digests"].as_array().unwrap().len(), 1);
+    assert_eq!(result["citations"].as_array().unwrap().len(), 1);
+    assert_eq!(result["citations"][0]["sourceKind"], json!("drive"));
+    assert!(result["answer"].as_str().unwrap().contains("drive://"));
+    assert_eq!(result["budget"]["maxWorkers"], json!(0));
+    assert_eq!(result["budget"]["agentDocs"], json!(0));
+}
+
+#[tokio::test]
 async fn drive_organize_apply_collision_fails_without_partial_metadata_write() {
     let (_dir, store) = store();
     store

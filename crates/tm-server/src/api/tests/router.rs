@@ -245,7 +245,7 @@ async fn message_chat_path_applies_approved_model_mode_suggestion() {
                 name: Some("execute".to_string()),
                 arguments: Some(
                     serde_json::json!({
-                        "code": "await modes.suggest('serious_engineer', 'needs repository access')"
+                        "code": "@modes.suggest {targetMode: \"serious_engineer\", reason: \"needs repository access\"}"
                     })
                     .to_string(),
                 ),
@@ -263,16 +263,16 @@ async fn message_chat_path_applies_approved_model_mode_suggestion() {
     ]));
     let llm_client: Arc<dyn LlmClient> = llm.clone();
     let temp = tempfile::tempdir().unwrap();
-    let chat = Arc::new(AgentChatRunner::deno(
+    let chat = Arc::new(AgentChatRunner::tm(
         llm_client,
         AgentConfig {
             model: "fake".to_string(),
             max_turns: 4,
             ..AgentConfig::default()
         },
-        DenoSandboxOptions {
+        TmSandboxOptions {
             artifact_root: temp.path().join("artifacts"),
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         },
     ));
     let state = AppState::new(

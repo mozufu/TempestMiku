@@ -18,13 +18,13 @@ use tm_host::{
     CapabilityGrants, FsMode, HostError, InvocationCtx, LinkedFolderConfig, LinkedFolders,
     ResourceRegistry,
 };
-use tm_sandbox::DenoSandboxOptions;
+use tm_lang::TmSandboxOptions;
 use tower::ServiceExt;
 
 use crate::{
     AgentChatRunner, ApprovalOption, ApprovalPrompt, ChatRunner, ChatTurn, CodingEventSink,
     CodingTurn, CodingTurnResult, EchoChatRunner, InMemoryStore, NativeApprovalMode,
-    NativeDenoBackend, PostgresStore, StoreMemoryProvider,
+    NativeTmBackend, NativeTmBackendOptions, PostgresStore, StoreMemoryProvider,
     auth::ForwardedAuthConfig,
     store::{ProfileFactRecord, RecallChunkRecord},
 };
@@ -509,7 +509,14 @@ where
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("event {event_type} was not persisted")
+    let events = store.as_ref().events_after(session_id, None).await.unwrap();
+    panic!(
+        "event {event_type} was not persisted; saw {:?}",
+        events
+            .iter()
+            .map(|event| (&event.event_type, &event.payload_json))
+            .collect::<Vec<_>>()
+    )
 }
 
 async fn wait_for_nth_event_payload<S>(

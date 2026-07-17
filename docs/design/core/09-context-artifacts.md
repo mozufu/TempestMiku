@@ -111,14 +111,14 @@ subsystem registers a handler and grant.
 | `skill://[<name>[/versions[/<digest>]]]` | P7.1 managed-skill catalog, active body, version metadata, and immutable digest-addressed body. Bundled/hand-authored skills are prompt assets and are not exposed through this managed catalog. | skills §22 / §26 | `tm-modes` handler + `tm-server` gateway |
 | `drive://<path>` | P5 user document by canonical path, with virtual directory views such as `drive://by-project/<project>` and `drive://by-type/<kind>` §24 | drive §24 | `tm-drive` |
 | `cron://[<id>]` | P4 scheduler job table: list jobs / a job's definition + run history §27.2 | scheduler §27 | `tm-server` session resource gateway |
-| `workspace://session/<path>` | current session sandbox workspace read/list/preview | sandbox workspace §07 / §08 | `tm-sandbox` |
+| `workspace://session/<path>` | current session workspace read/list/preview | workspace §07 / §08 | `tm-server` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
 | `project://<id>/<view>` | aggregate project surface: status, open loops, decisions, linked folders, artifacts, agents | server project layer §27 / memory §22 / host §25 | `tm-server` |
 
 P7.1 promotes approved managed skills to a first-class resource scheme without opening a `skills.*`
 write namespace. `skill://` lists active managed entries; `skill://<name>` reads the active body;
 `skill://<name>/versions` returns version state; and
-`skill://<name>/versions/<sha256-hex>` reads an immutable version. The native Deno handler requires
+`skill://<name>/versions/<sha256-hex>` reads an immutable version. The native tm handler requires
 `resources.read:skill`; the authenticated session gateway applies the same parser and catalog source.
 An unconfigured catalog remains unregistered, selectors are rejected, and bundled/hand-authored
 skills cannot be shadowed by managed entries.
@@ -132,7 +132,7 @@ scratch files and generated intermediates, not for user documents, host files, o
 
 `linked://<alias>/<path>` is the read/list/preview route for an explicitly linked folder. It is backed
 by the same `FsPolicy` grant used by `fs.*`, `code.*`, and `proc.run` (§25), but the resource route is
-read-only: writes still go through `fs.write` / `code.edit`, and commands still go through
+read-only: writes still go through `fs.write` / `fs.patch`, and commands still go through
 `proc.run(cmd,args)` with argv allowlists and approvals. The alias is stable and model-visible; raw
 host paths are not. A remote folder uses the same `linked://` URI — "remote" is a connector property
 behind the grant, not a public scheme.
@@ -152,8 +152,8 @@ project-scoped recall while `memory://root` remains the active session-scope vie
 ### Project promotion
 
 Promotion copies selected session-scoped state into a durable project while preserving provenance. It is
-not a URI rename and it never writes to a linked host folder unless a separate `fs.write` / `code.edit`
-operation is approved.
+not a URI rename and it never writes to a linked host folder unless a separately authorized
+`fs.write` / `fs.patch` operation runs.
 
 | source | promoted target |
 |---|---|

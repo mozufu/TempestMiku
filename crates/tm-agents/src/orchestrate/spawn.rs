@@ -21,7 +21,7 @@ impl AgentsSpawnFn {
                      Requires agents.spawn grant."
                         .to_string(),
                 ),
-                signature: "agents.spawn(role: string, task: string, opts?: AgentSpawnOpts): Promise<AgentHandle>"
+                signature: "@agents.spawn AgentSpawnArgs -> AgentHandle"
                     .to_string(),
                 args_schema: json!({
                     "type": "object",
@@ -54,7 +54,7 @@ impl AgentsSpawnFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Spawn a background worker".to_string()),
-                    code: "const h = await agents.spawn('worker', 'Process the batch');\nconst reply = await agents.msg(h, 'Status?', { await: true });\ndisplay(reply);"
+                    code: "let h = @agents.spawn {role: \"worker\", task: \"Process the batch\"};\nlet reply = @agents.msg {handle: h, text: \"Status?\", opts: {await: true}};\nreply |> display {kind: \"json\"}"
                         .to_string(),
                     notes: None,
                 }],

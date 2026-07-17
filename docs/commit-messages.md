@@ -24,7 +24,7 @@ Examples:
 
 ```text
 feat(core/agent-loop): stream tool-call deltas
-fix(sandbox/deno): default-deny unknown http hosts
+fix(sandbox/tm): default-deny unknown http hosts
 docs(repo/commits): define commit message rules
 test(server/sse): cover approval denial events
 ```
@@ -60,7 +60,7 @@ Preferred machines:
 |---|---|---|
 | `core` | `agent-loop`, `messages`, `events`, `llm`, `sandbox-trait` | `core/agent-loop` |
 | `llm` | `openai`, `sse`, `errors`, `fixtures` | `llm/sse` |
-| `sandbox` | `stub`, `deno`, `sdk`, `artifacts`, `security` | `sandbox/deno` |
+| `sandbox` | `tm`, `sdk`, `artifacts`, `security` | `sandbox/tm` |
 | `host` | `approval`, `fs`, `proc`, `code`, `policy` | `host/approval` |
 | `artifacts` | `store`, `resource`, `spill`, `refs` | `artifacts/store` |
 | `persona` | `modes`, `router`, `overlay`, `voice` | `persona/modes` |

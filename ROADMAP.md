@@ -12,11 +12,11 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 
 | Milestone | Deliverable |
 |---|---|
-| **M0 — streaming protocol skeleton** | Streaming-first OpenAI client (SSE) + the agent loop consuming deltas live + an `EventSink` (assistant tokens token-by-token) + a stub sandbox (echoes code). Validates the streaming message protocol end-to-end; tests drive a scripted stream with no network. |
-| **M1 — real REPL** | `deno_core` backend; ops for `display`, `http.get` (allowlisted), `artifacts`; result-shaping + artifact spill; system prompt. |
+| **M0 — streaming protocol skeleton** | Streaming-first OpenAI client (SSE) + the agent loop consuming deltas live + an `EventSink` (assistant tokens token-by-token). The original test-only stub was retired after the tm-lang-only cut. |
+| **M1 — real REPL** | Persistent tm-lang runtime; `display`, allowlisted `http.get`, artifacts/resources, result shaping, and spill. The original Deno/V8 implementation is historical and no longer ships. |
 | **M2 — disclosure + tools** | `tools.search/docs/call`; the catalog/SDK translation contract for external tools. Production `tm-mcp` import ships only in P10 after P9 egress and secrets-by-reference. |
 | **M3 — production loop** | Approval gates, audit log, session pooling, deterministic replay. (Streaming landed in M0.) |
-| **M4 — backends & hardening** | `rquickjs` + Python-subprocess backends; Linux isolation (seccomp/cgroups/microVM); egress hardening. |
+| **M4 — runtime hardening** | Linux isolation (seccomp/cgroups/microVM) and egress hardening around the sole tm-lang runtime. |
 
 ## Product roadmap (§28)
 
@@ -39,14 +39,21 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
 
-## Execution plan from current workspace (2026-07-15)
+## Execution plan from current workspace (2026-07-16)
+
+The owner-priority **tm-lang runtime** described by §tm and `TODO.md` is closed. Its frozen
+conformance, checker, persistence, effect/approval, Postgres/replay, affected-client, and 20-prompt x
+50-run historical fluency gates passed on 2026-07-16. The subsequent hard cut made tm-lang the only
+language/runtime: Deno/V8, the shipped stub, backend selectors, and the executable comparative
+runner were removed without rewriting old durable events. P7.2b resumes as the active milestone;
+this does not reopen P6.6 or weaken the P9-before-P10 boundary.
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
-`tm-core`, `tm-llm`, `tm-sandbox` with both `StubSandbox` and a `deno_core` backend, `tm-artifacts`,
-`tm-host`, `tm-modes`, `tm-agents`, `tm-server`, `apps/tm-cli`, and client scaffolds under
+`tm-core`, `tm-llm`, `tm-lang`, `tm-artifacts`, `tm-host`, `tm-modes`, `tm-agents`, `tm-server`,
+`apps/tm-cli`, and client scaffolds under
 `clients/`. The implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP
 bridging, the native P0 Serious Engineer dogfood slice, the CLI native cutover proof for
-linked-repo edit/run/artifact workflows, native Deno HTTP approvals for the Serious Engineer backend,
+linked-repo edit/run/artifact workflows, native tm HTTP approvals for the Serious Engineer backend,
 the P1 project-manager remote-control surface, the P2 personal-assistant baseline, the full P3
 actor orchestration surface, and the P4 dreaming/scheduler slice. P3 ships `agents.run/spawn/parallel/msg`, the `agent://` + `history://`
 resource handlers, child artifact spill + transcript history, actor lifecycle events in the SSE
@@ -90,8 +97,9 @@ mandatory outside loopback and for embedded workers. This gate does not broaden 
 target into multi-tenancy or arbitrary public-internet hosting.
 
 Also not production-complete: deferred P6.6 Android voice capture, active P7.2b persona addenda, P9
-production egress/secret hardening, and P10 `tm-mcp`/live research. Optional cloud drive
-sync, `code.ast`/`code.lsp`, `tm-trace`, generated SDK docs, and additional sandbox backends are
+production egress/secret hardening, and P10 `tm-mcp`/live research.
+Optional cloud drive sync, `code.ast`/`code.lsp`, `tm-trace`, generated SDK docs, and any future
+second sandbox backend are
 demand-triggered rather than part of the committed critical path.
 
 Sizing below is **solo focused engineering days**. Treat it as sequencing pressure, not a promise:
@@ -99,11 +107,11 @@ each milestone is done only when its acceptance checks pass.
 
 | Order | Milestone | Estimate | Tasks | Acceptance |
 |---:|---|---:|---|---|
-| 0 | **DONE — M0 closeout: streaming skeleton locked** | 0.5–1d | Freeze stream event contract; keep OpenAI SSE adapter tests; keep CLI token streaming; document current stub-sandbox boundary. | `cargo test`; scripted stream test proves token deltas, tool-call assembly, stub eval, and final answer path. |
-| 1 | **DONE — M1 real REPL + SDK spine** | 4–7d | Add `deno_core` backend behind `Sandbox`; implement persistent cells, cancel/reset, `display`, `http.get` allowlist, artifact writes; add `tm-artifacts` spill store; enforce `CellBudget` and output caps. | Rust tests cover TypeScript cells, persistent state, reset, display/print capture, blocked raw APIs/network, timeout/cancel, shaped output truncation, and artifact spill/readback. |
+| 0 | **DONE — M0 closeout: streaming skeleton locked** | 0.5–1d | Freeze stream event contract; keep OpenAI SSE adapter tests and CLI token streaming. The original stub proof was later retired. | `cargo test`; scripted stream tests prove token deltas, tool-call assembly, execution, and final answer path. |
+| 1 | **DONE — M1 real REPL + SDK spine** | 4–7d | Ship the persistent REPL, cancel/reset, `display`, `http.get` allowlist, artifacts, `CellBudget`, and output caps. The first Deno implementation was later replaced and deleted by tm-lang. | Rust tests cover tm cells, persistence, reset, display/print capture, blocked ambient I/O, timeout/cancel, shaped output truncation, and artifact spill/readback. |
 | 2 | **DONE — host registry + approvals foundation** | 3–5d | Add `tm-host`; define `HostFn`, capability grants, `ResourceRegistry`, `ApprovalPolicy`; wire SDK dispatch from sandbox ops; fail closed on unknown schemes/capabilities. | Unit tests prove denied capability cannot execute, approval timeout denies by default, `artifact://` resolves through the registry, linked paths cannot escape roots, and unsafe operations gate or fail closed. |
 | 2.5 | **DONE — P0a OMP ACP bridge path** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | Tests cover ACP event normalization, diff/artifact events, generated approval mode, permission request round trips, approval route resolution, and replay from `Last-Event-ID`. Live `omp acp` dogfood remains backend-environment dependent. |
-| 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement `fs.*`, search, patch-only `code.edit`, `proc.run(cmd,args)` allowlist, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, patch edit and stale-tag rejection, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI Deno host ops, native Deno approve/deny/timeout through the HTTP approval route, serious-mode voice cap, and project summary/open-loop recall. |
+| 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement explicit `fs.write/patch/move/remove`, search, argv-only `proc.run(cmd,args)`, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, atomic patch plus stale-tag rejection and bounded diff spill, approval-gated overwrite/remove behavior, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI tm host effects, native tm approve/deny/timeout through the HTTP approval route, serious-mode voice cap, and project summary/open-loop recall. |
 | 4 | **DONE — P1 project manager + remote control** | 4–7d | Added the project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Tests and smoke coverage prove reconnect replay from event id, router lock/unlock, project status and decisions across sessions, `POST /sessions/:id/promote` to `project://` resources with provenance, approval/resource workflows, and Flutter Web/PWA attach/send/watch/resume behavior. |
 | 5 | **DONE — P2 personal assistant baseline** | 5–8d | Added the companion baseline: full persona overlay via SOUL + mode skill bundles, configurable Hermes asset path with degraded boot warning, profile/user recall, personal-assistant state capture, negative-state grounding, and bounded proactive reminder/open-loop capture through approval-backed memory writes. | Tests cover token/text streaming over SSE, active mode profiles loading SOUL + dedicated skills, profile/recall context injection, characterful non-serious voice caps, approval-gated profile/recall/reminder writes, `memory://` resources, negative-state no-write guardrails, and health-over-productivity/proactivity prompt bounds. |
 | 6 | **DONE — P3: handoff + sub-agent actors** | 6–10d | Added `tm-agents` with actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` + `history://` resources, child artifact spill + transcript history, actor lifecycle events in SSE stream, supervision defaults, Handoff mode wired from catalog, `CapabilityGrants` glob permit. | ✓ Fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ child crash isolated + `actor_failed` in SSE log; ✓ handoff matches `oh-my-pi-handoff`. |
@@ -119,7 +127,8 @@ each milestone is done only when its acceptance checks pass.
 | 15 | **DONE — P6.5 QUICK CAPTURE** | 2–4d | One versioned native action accepts only a fresh UUID plus optional sanitized bounded text and rejects MIME, data, `ClipData`, selectors, streams, URI grants, and unknown extras. A static launcher shortcut passes through a no-history trampoline and the Quick Settings `TileService` uses that same intent; both land in the existing editable current/new-session review path. No widget or native send/model path was added. | Kotlin parser/buffer tests, Flutter parser/widget tests, analyze/full Flutter, strict Rust workspace gates, signed arm64 APK inspection, and in-place Android 15 proof pass. The real launcher menu and HyperOS tile opened from foreground/background/killed states; empty/cancel sent nothing, current/new confirmations produced exactly one turn each, duplicate event ids were ignored, and process death did not replay a draft. |
 | — | **DEFERRED — P6.6 ON-DEVICE VOICE CAPTURE + P6 CLOSEOUT** | 5–9d | Retain the replaceable `LocalAsrEngine` spike and isolated benchmark evidence, but schedule no production microphone, model installer/runtime, review/send, or closeout work until the owner explicitly resumes the slice. | Resumption starts from the independent evidence note; Taiwan-ready quality, real speech, memory headroom, deterministic runtime, airplane mode, signed APK inspection, and Android 15 record/edit/cancel/current/new/process-death gates all remain required. |
 | 16 | **DONE — P8 FULLER MEMORY** | 8–14d | P8.1 froze replayable global/project lexical controls and contracts; P8.2 added restart-safe scoped records, evidence, corrections, tombstones, and jobs; P8.3 added local embeddings, pgvector/HNSW generations, and deterministic FTS+dense RRF; P8.4/P8.5 compose bounded results into durable turns/resources, type approved extraction, and close quality/deployment evidence. | Frozen overall and held-out quality improve beyond threshold with no Recall regression and zero unsafe inclusions. Exact retry/replay, scope/unlink/correction, provider-loss/restart, resumable re-embedding, strict Rust/Postgres/client gates, and self-hosted lumo evidence pass. |
-| 17 | **ACTIVE — P7.2b APPROVAL-BACKED PERSONA ADDENDA** | 4–7d | Let Auto mode detect repeated preference/persona mismatch and create typed, deduplicated, cooldown-bound proposals. Manual approval activates immutable tone/address/interaction guidance; rollback restores a prior version or the hand-authored base. | Tests/evidence prove auto-propose but never auto-apply, bounded evidence, stable base checks, deny/timeout/stale/retry safety, next-turn composition, rollback, and invariance of identity, `SOUL.md`, safety, modes, and capabilities. |
+| 16.5 | **DONE — tm-conformance-v2 BATCH HARDENING** | 1–2d | Hard-cut standalone `---` separators to semicolon cells and replace speculative unbound-name retries with scope-aware forward binding dependencies over one pre-batch snapshot. | V2 corpus, parser diagnostics, rebind/closure/interpolation chains, independent overlap, response-order collision, failed-producer no-effect, public API/e2e, and strict workspace gates pass; v1 remains historical evidence only. |
+| 17 | **QUEUED — P7.2b APPROVAL-BACKED PERSONA ADDENDA** | 4–7d | Let Auto mode detect repeated preference/persona mismatch and create typed, deduplicated, cooldown-bound proposals. Manual approval activates immutable tone/address/interaction guidance; rollback restores a prior version or the hand-authored base. | Tests/evidence prove auto-propose but never auto-apply, bounded evidence, stable base checks, deny/timeout/stale/retry safety, next-turn composition, rollback, and invariance of identity, `SOUL.md`, safety, modes, and capabilities. |
 | 18 | **P9 PRODUCTION EGRESS + SECRET BROKER** | 6–10d | Add destination allowlists, DNS/IP/redirect policy, request/byte/time budgets, audit/revocation, exact grants, and opaque egress-scoped secret handles resolved only at the host boundary. | Denial, timeout, redirect, rebinding, exfiltration, replay, secret-redaction, restart, and audit gates pass with production egress disabled by default. |
 | 19 | **P10 MCP + LIVE RESEARCH** | 6–10d | Import selected MCP resources/prompts/tools into lazy SDK/resource surfaces behind P9 and build live research on that same boundary. Preserve `execute(code)` as the only model-visible tool. | Catalog/reload, bounded schema/result, prompt-injection isolation, provenance, approval-backed mutation, egress, audit, replay, and context-size gates pass. |
 
@@ -153,7 +162,7 @@ gate matrix are recorded in
 The follow-up PR review hardening adds serialized scope revocation and approved writes, monotonic
 scope-revision-pinned embedding generations, exact authority-first dense queries, balanced 2/2/1
 prompt allocation, and isolated oversized-input recovery without reopening P8 or changing the frozen
-P8.1 control. P7.2b remains the active product slice.
+P8.1 control. The owner-priority tm-lang runtime is closed; P7.2b is the active slice.
 
 ### Immediate next task queue
 
@@ -161,8 +170,8 @@ P8.1 control. P7.2b remains the active product slice.
    evidence-backed proposals. Durable manual approval remains the sole activation/rollback path, and
    addenda cannot mutate identity, `SOUL.md`, safety, modes, voice caps, scopes, or capabilities.
 2. **Open external capabilities only through the safety spine** — P9 egress/secret hardening must
-   close before P10 MCP/live research. OMP remains replaceable and native Deno remains the coding
-   dogfood path.
+   close before P10 MCP/live research. OMP remains a replaceable external coding bridge; tm-lang is
+   the sole in-process coding runtime.
 
 ### Deferred SDK namespace placement
 
@@ -184,7 +193,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
   this sequencing change does not close P6.6 or P6.
 - P8 provenance, correction, and recall-quality evidence precede Auto-mode persona proposals.
 - P9 egress and opaque-secret gates precede all P10 MCP/live-research production paths.
-- Cloud sync/CRDT, `code.ast`/`code.lsp`, `tm-trace`, and additional sandbox backends require a
+- Cloud sync/CRDT, `code.ast`/`code.lsp`, `tm-trace`, and any future second sandbox backend require a
   concrete user or second consumer before entering the execution table.
 
 ### Do-not-start-yet list
@@ -200,7 +209,7 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 
 ## Crate plan
 
-Current crates/apps: `tm-core`, `tm-llm`, `tm-sandbox`, `tm-artifacts`, `tm-host`, `tm-modes`,
+Current crates/apps: `tm-core`, `tm-llm`, `tm-lang`, `tm-artifacts`, `tm-host`, `tm-modes`,
 `tm-agents`, `tm-memory`, `tm-drive`, `tm-server`, `apps/tm-cli`, and client scaffolds under `clients/`. The P0a bridge
 currently lives in `tm-server::omp_acp`; P2 minimal memory still lives in `tm-server::memory` while
 P4 dream queue ownership lives in `tm-memory`; `fs.*` /

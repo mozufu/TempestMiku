@@ -771,7 +771,7 @@ async fn approval_detail_endpoint_returns_redacted_prompt_without_effect_payload
             session_id: session.id,
             turn_id: None,
             requester_id: Uuid::new_v4(),
-            origin: "native-deno".to_string(),
+            origin: "native-tm".to_string(),
             action: "proc.run cargo test".to_string(),
             scope_json: json!({"capability": "proc.run"}),
             options_json: json!([

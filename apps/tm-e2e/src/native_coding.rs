@@ -18,10 +18,10 @@ use tm_core::{
     StreamEvent,
 };
 use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
-use tm_sandbox::DenoSandboxOptions;
+use tm_lang::TmSandboxOptions;
 use tm_server::{
-    AppState, AuthConfig, EchoChatRunner, InMemoryStore, NativeApprovalMode, NativeDenoBackend,
-    NativeDenoBackendOptions, StoreMemoryProvider, app,
+    AppState, AuthConfig, EchoChatRunner, InMemoryStore, NativeApprovalMode, NativeTmBackend,
+    NativeTmBackendOptions, StoreMemoryProvider, app,
 };
 
 use crate::{
@@ -81,7 +81,7 @@ async fn run_native_coding_scenario(recorder: &EvidenceRecorder) -> Result<Value
         base_url: server.base_url.clone(),
         artifact_root: server.artifact_root.display().to_string(),
         store: "in-memory".to_string(),
-        coding_backend: "native-deno-scripted-offline".to_string(),
+        coding_backend: "native-tm-scripted-offline".to_string(),
     });
     let client = MikuClient::new(E2eConfig {
         base_url: server.base_url.clone(),
@@ -227,7 +227,7 @@ async fn run_approved_path(
         .context("reading patched native coding fixture")?;
     ensure!(
         source.contains("    2\n"),
-        "code.edit did not patch the linked fixture: {source}"
+        "fs.patch did not patch the linked fixture: {source}"
     );
     let final_text = final_text(&replayed)?;
     ensure!(
@@ -385,7 +385,7 @@ async fn start_native_session(client: &MikuClient) -> Result<(String, Option<i64
 }
 
 fn is_native_approval(event: &E2eEvent) -> bool {
-    event.event_type == "approval" && event.data["backend"] == json!("native-deno")
+    event.event_type == "approval" && event.data["backend"] == json!("native-tm")
 }
 
 fn approval_id(event: &E2eEvent) -> Result<String> {
@@ -399,7 +399,7 @@ fn ensure_resolution(events: &[E2eEvent], expected_status: &str) -> Result<()> {
     ensure!(
         events.iter().any(|event| {
             event.event_type == "approval_resolved"
-                && event.data["backend"] == json!("native-deno")
+                && event.data["backend"] == json!("native-tm")
                 && event.data["status"] == json!(expected_status)
         }),
         "native replay did not include {expected_status} approval resolution: {events:#?}"
@@ -408,6 +408,13 @@ fn ensure_resolution(events: &[E2eEvent], expected_status: &str) -> Result<()> {
 }
 
 fn cell_display(events: &[E2eEvent]) -> Result<Value> {
+    if let Some(value) = events
+        .iter()
+        .find(|event| event.event_type == "display")
+        .map(|event| event.data["value"].clone())
+    {
+        return Ok(value);
+    }
     events
         .iter()
         .filter(|event| event.event_type == "cell_result")
@@ -547,20 +554,20 @@ impl NativeCodingRecordingServer {
         .with_auto_turn_dispatcher(true)
         .with_artifact_root(artifact_root.clone())
         .with_linked_folders(linked.clone());
-        let backend = NativeDenoBackend::new_with_options(
+        let backend = NativeTmBackend::new_with_options(
             llm_for_backend,
             cfg,
-            DenoSandboxOptions {
+            TmSandboxOptions {
                 artifact_root: artifact_root.clone(),
                 linked_folders: Some(linked),
                 approval_timeout: APPROVAL_TIMEOUT,
-                ..DenoSandboxOptions::default()
+                ..TmSandboxOptions::default()
             },
             NativeApprovalMode::Manual,
             Arc::clone(&state.approval_broker),
-            NativeDenoBackendOptions {
+            NativeTmBackendOptions {
                 shard_count: 1,
-                ..NativeDenoBackendOptions::default()
+                ..NativeTmBackendOptions::default()
             },
         );
         state = state.with_coding_backend(Arc::new(backend));
@@ -617,42 +624,40 @@ fn create_fixture_repo(root: &Path) -> Result<()> {
 
 fn approved_code() -> &'static str {
     r#"
-const hits = await code.search({ pattern: "    1", paths: ["repo:src/lib.rs"], regex: false });
-if (hits.length !== 1) throw new Error(`expected one patch target, saw ${hits.length}`);
-const hit = hits[0];
-const edit = await code.edit({
+let hits = @code.search {pattern: "    1", paths: ["repo:src/lib.rs"], regex: false};
+let hit = match hits { | first :: _ -> first | [] -> null };
+let edit = @fs.patch {
   path: hit.path,
   tag: hit.tag,
-  hunks: [{ op: "replace", startLine: hit.line, endLine: hit.line, lines: ["    2"] }]
-});
-const run = await proc.run("cargo", ["test", "answer_is_two", "--", "--nocapture"], {
-  cwd: "repo:",
-  outputBytes: 1
-});
-display({
+  hunks: [{op: "replace", startLine: hit.line, endLine: hit.line, expectedLines: [hit.text], lines: ["    2"]}]
+};
+let run = @proc.run {cmd: "cargo", args: ["test", "answer_is_two", "--", "--nocapture"], cwd: "repo:", outputBytes: 1};
+{
   editChanged: edit.changed,
   exitCode: run.exitCode,
   truncated: run.truncated,
-  artifactUri: run.artifact?.uri ?? null
-});
+  artifactUri: run.artifact.uri
+} |> display {kind: "json"}
 "#
 }
 
 fn denied_code() -> &'static str {
     r#"
-const result = await fs.write("repo:guard.txt", "mutated\n", { overwrite: true })
-  .then(() => ({ name: "unexpected-success" }))
-  .catch((err) => ({ name: err.name, retryable: err.retryable }));
-display(result);
+let result = handle (@fs.write {path: "repo:guard.txt", data: "mutated\n", overwrite: true}) with error {
+  | ApprovalDeniedError {message, ...} -> {name: "ApprovalDeniedError", message: message}
+  | other -> rethrow other
+};
+result |> display {kind: "json"}
 "#
 }
 
 fn timeout_code() -> &'static str {
     r#"
-const result = await fs.write("repo:timeout.txt", "mutated\n", { overwrite: true })
-  .then(() => ({ name: "unexpected-success" }))
-  .catch((err) => ({ name: err.name, retryable: err.retryable }));
-display(result);
+let result = handle (@fs.write {path: "repo:timeout.txt", data: "mutated\n", overwrite: true}) with error {
+  | ApprovalTimeoutError {message, ...} -> {name: "ApprovalTimeoutError", message: message}
+  | other -> rethrow other
+};
+result |> display {kind: "json"}
 "#
 }
 

@@ -188,7 +188,8 @@ reload. Validation bounds the body and references, requires the title/Trigger/Pr
 shape, rejects traversal/absolute/schemed references and affirmative requests for prohibited
 authority, and still marks every P7.0 candidate `installable: false`. Approval could therefore review
 or reject the proposal and append audit history, but P7.0 had no install/import/reload dispatch and
-no path from the conservative evolution target to `fs.write`, `code.edit`, or a hand-authored skill.
+no path from the conservative evolution target to `fs.write`, `fs.patch`, `fs.move`, `fs.remove`,
+or a hand-authored skill.
 
 P7.1 enables only the proven managed-skill subset of that dormant contract. An approved `skill_write`
 effect revalidates the current tier, typed target, proposal provenance, candidate digest, and successful
@@ -203,7 +204,7 @@ Rollback is a separate durable manual approval created by
 `POST /sessions/:id/evolution/skills/:name/rollback`. Its effect requires both the expected current
 digest and a target digest already present in the same proposal-backed immutable version set, then
 atomically swaps the pointer after the same tier/provenance re-check. The authenticated client gateway
-and native Deno resource registry expose `skill://`, active entries, version metadata, and immutable
+and native tm resource registry expose `skill://`, active entries, version metadata, and immutable
 version bodies from that catalog; native reads require `resources.read:skill`. The `skills.*`
 namespace, MCP import/reload, arbitrary filesystem writes, persona apply, direct mode
 file/capability changes, and aggressive evolution remain disabled.

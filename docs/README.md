@@ -9,6 +9,11 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
 - **[Design docs](design/README.md)** — the full specification, split by section.
 - **[Running Miku](running-miku.md)** — local server, browser app, CLI, and e2e run paths.
 - **[Roadmap](../ROADMAP.md)** — canonical milestones and execution order.
+- **[tm-lang T0-T7 closeout evidence](evidence/2026-07-16-tm-lang-closeout.md)** — language/runtime cutover,
+  real host/resource/approval adapter, public/Postgres product seam, comparative fluency, and
+  default-cutover gates.
+- **[tm-lang-only runtime hard cut](evidence/2026-07-16-tm-lang-only-runtime.md)** — sole-language
+  runtime contract, removed backend surfaces, preserved behavior, and verification matrix.
 - **[P6.6 ASR deferment evidence](evidence/2026-07-15-p6-6-on-device-asr-deferment.md)** — retained
   benchmark, Taiwan Mandarin findings, open gates, and resume contract.
 - **[P8.1 recall baseline evidence](evidence/2026-07-15-p8-1-recall-baseline.md)** — frozen

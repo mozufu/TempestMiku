@@ -21,9 +21,7 @@ impl AgentsRunFn {
                      The agent DAG must be acyclic. Requires agents.run grant."
                         .to_string(),
                 ),
-                signature:
-                    "agents.run(role: string, task: string, opts?: AgentRunOpts): Promise<AgentDigest>"
-                        .to_string(),
+                signature: "@agents.run AgentRunArgs -> AgentDigest".to_string(),
                 args_schema: json!({
                     "type": "object",
                     "required": ["role", "task"],
@@ -45,7 +43,7 @@ impl AgentsRunFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Run a one-shot research subtask".to_string()),
-                    code: "const d = await agents.run('researcher', 'Summarize §23');\ndisplay(d.summary);"
+                    code: "let d = @agents.run {role: \"researcher\", task: \"Summarize §23\"};\nd.summary |> display {kind: \"text\"}"
                         .to_string(),
                     notes: Some(
                         "Only the digest returns to parent context; full output is at d.historyUri."

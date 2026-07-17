@@ -91,18 +91,53 @@ pub(crate) fn drive_docs(name: &str, summary: &str, approval: &str, sensitive: b
     }
 }
 
+pub(crate) fn research_drive_docs() -> ToolDocs {
+    let mut docs = drive_docs(
+        "research.drive",
+        "Build a bounded, cited research digest from local drive documents",
+        "none",
+        false,
+    );
+    docs.namespace = "research".to_string();
+    docs.signature = "@research.drive ResearchDriveOptions -> ResearchDriveResult".to_string();
+    docs.args_schema = json!({
+        "type": "object",
+        "properties": {
+            "query": { "type": "string" },
+            "project": { "type": "string" },
+            "docKind": { "type": "string" },
+            "tags": { "type": "array", "items": { "type": "string" } },
+            "selector": { "type": "string" },
+            "maxDocs": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "maxSnippets": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "maxBytesPerDoc": { "type": "integer", "minimum": 1, "maximum": 8000 },
+            "maxDigestBytes": { "type": "integer", "minimum": 32, "maximum": 2000 },
+            "maxWorkers": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "workerTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+            "totalTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 300000 }
+        }
+    });
+    docs.result_schema = Some(json!({ "type": "object" }));
+    docs.examples = vec![ToolExample {
+        title: None,
+        code: "let result = @research.drive {query: \"approval policy\", project: \"TempestMiku\", maxDocs: 3}".to_string(),
+        notes: Some("Returns deterministic local digests and drive:// citations.".to_string()),
+    }];
+    docs
+}
+
 fn drive_signature(name: &str) -> String {
     match name {
-        "drive.put" => "drive.put(content: DriveContent, opts?: DrivePutOptions): Promise<DrivePutResult>",
-        "drive.get" => "drive.get(pathOrUri: string, opts?: { selector?: ResourceSelector }): Promise<ResourceContent>",
-        "drive.ls" => "drive.ls(pathOrQuery?: string, opts?: DriveListOptions): Promise<DriveEntry[]>",
-        "drive.move" => "drive.move(from: string, to: string, opts?: DriveMoveOptions): Promise<DriveEntry>",
-        "drive.search" => "drive.search(query?: string, opts?: DriveSearchOptions): Promise<DriveSearchResult[]>",
-        "drive.tag" => "drive.tag(path: string, tags: string[]): Promise<DriveEntry>",
-        "drive.link" => "drive.link(hostPath: string, mode?: 'ro' | 'rw', opts?: { project?: string }): Promise<DriveLinkPlan>",
-        "drive.unlink" => "drive.unlink(aliasOrUri: string): Promise<DriveUnlinkResult>",
-        "drive.organize" => "drive.organize(opts?: DriveOrganizeOptions): Promise<OrganizerProposal[]>",
-        _ => "drive.unknown(args): Promise<unknown>",
+        "drive.put" => "@drive.put {content, options?} -> DrivePutResult",
+        "drive.get" => "@drive.get {path?|uri?, selector?} -> ResourceContent",
+        "drive.ls" => "@drive.ls DriveListOptions -> List DriveEntry",
+        "drive.move" => "@drive.move {from, to, collision?, overwrite?} -> DriveEntry",
+        "drive.search" => "@drive.search DriveSearchOptions -> List DriveSearchResult",
+        "drive.tag" => "@drive.tag {path, tags} -> DriveEntry",
+        "drive.link" => "@drive.link {hostPath, mode?, project?} -> DriveLinkPlan",
+        "drive.unlink" => "@drive.unlink {alias} -> DriveUnlinkResult",
+        "drive.organize" => "@drive.organize DriveOrganizeOptions -> List OrganizerProposal",
+        _ => "@drive.unknown args -> value",
     }
     .to_string()
 }
@@ -188,25 +223,27 @@ fn drive_result_schema(name: &str) -> Value {
 fn drive_examples(name: &str) -> Vec<ToolExample> {
     let code = match name {
         "drive.put" => {
-            "const filed = await drive.put('# Note\\nhello', { auto: true, project: 'TempestMiku' });"
+            "let filed = @drive.put {content: \"# Note\\nhello\", options: {auto: true, project: \"TempestMiku\"}}"
         }
         "drive.get" => {
-            "const doc = await drive.get('projects/tempestmiku/docs/note.md', { selector: '1-20' });"
+            "let doc = @drive.get {path: \"projects/tempestmiku/docs/note.md\", selector: \"1-20\"}"
         }
-        "drive.ls" => "const invoices = await drive.ls('/by-type/invoice');",
+        "drive.ls" => "let invoices = @drive.ls {path: \"/by-type/invoice\"}",
         "drive.move" => {
-            "await drive.move('inbox/today/note.md', 'projects/tempestmiku/notes/note.md');"
+            "@drive.move {from: \"inbox/today/note.md\", to: \"projects/tempestmiku/notes/note.md\"}"
         }
         "drive.search" => {
-            "const hits = await drive.search('approval policy', { project: 'TempestMiku', returnSnippets: true });"
+            "let hits = @drive.search {query: \"approval policy\", project: \"TempestMiku\", returnSnippets: true}"
         }
-        "drive.tag" => "await drive.tag('projects/tempestmiku/notes/note.md', ['planning']);",
+        "drive.tag" => {
+            "@drive.tag {path: \"projects/tempestmiku/notes/note.md\", tags: [\"planning\"]}"
+        }
         "drive.link" => {
-            "const plan = await drive.link('/path/to/project', 'ro', { project: 'TempestMiku' });"
+            "let plan = @drive.link {hostPath: \"/path/to/project\", mode: \"ro\", project: \"TempestMiku\"}"
         }
-        "drive.unlink" => "const revoked = await drive.unlink('tempestmiku');",
-        "drive.organize" => "const proposals = await drive.organize();",
-        _ => "await tools.call('drive.unknown', {});",
+        "drive.unlink" => "let revoked = @drive.unlink {alias: \"tempestmiku\"}",
+        "drive.organize" => "let proposals = @drive.organize {}",
+        _ => "@tools.call {name: \"drive.unknown\", args: {}}",
     };
     vec![ToolExample {
         title: None,

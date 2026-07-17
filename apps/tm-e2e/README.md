@@ -135,7 +135,7 @@ Each evidence bundle includes:
 
 `tm_e2e::run_actor_smoke` is a narrow public-API smoke used by tests for the
 P3+ actor surface. It creates a Handoff session, watches actor lifecycle events
-over SSE, resolves a child `native-deno` approval through
+over SSE, resolves a child `native-tm` approval through
 `POST /sessions/:id/approvals/:approval_id`, opens child `artifact://`,
 `history://`, and `agent://` resources through the session resource gateway,
 checks a terminal cancelled `agent://` record, and reconnects with
@@ -146,7 +146,7 @@ cancellation events.
 
 `tm_e2e::run_drive_smoke` is the P5 public-API smoke for the local-first drive
 and research workspace. It starts a Serious Engineer session, sends a scripted
-native-Deno turn that files a dropped `drop://` document through `drive.put`,
+native-tm turn that files a dropped `drop://` document through `drive.put`,
 watches the shared approval appear in transcript `pendingEvents`, approves it
 through the normal approval route, then verifies `drive_put` replay, `drive://`
 preview/resolve, the compact drive feed, `drive.search`, `research.drive`, and
@@ -154,9 +154,9 @@ preview/resolve, the compact drive feed, `drive.search`, `research.drive`, and
 
 ## Native Actor Coordination
 
-`native_deno_actor_coordination_public_api_covers_p3_plus_route` is the
-network-free public-API E2E for the native Deno actor path. It starts an
-in-process `tm-server` with `NativeDenoBackend`, injects a scripted streaming
+`native_tm_actor_coordination_public_api_covers_p3_plus_route` is the
+network-free public-API E2E for the native tm actor path. It starts an
+in-process `tm-server` with `NativeTmBackend`, injects a scripted streaming
 LLM, opens a Handoff session through HTTP, and runs real sandbox SDK calls:
 `agents.spawn`, `agents.send`, `agents.broadcast`, `agents.wait`, and
 `agents.list`. The test verifies live SSE plus `Last-Event-ID` replay for
@@ -164,7 +164,7 @@ LLM, opens a Handoff session through HTTP, and runs real sandbox SDK calls:
 and `final`, then resolves each child `artifact://`, `history://`, and
 `agent://` resource through the public session resource gateway.
 
-For a credentialed live check without letting the model free-form the JS route,
+For a credentialed live check without letting the model free-form the tm route,
 run:
 
 ```sh
@@ -172,13 +172,13 @@ TM_LLM_E2E_LIVE=1 cargo run -p tm-e2e -- record native-actor
 ```
 
 That command loads `.env`, performs a real OpenAI-compatible streaming preflight,
-uses the same native Deno actor route, and lets the final parent/child LLM turns
-come from the `.env` endpoint while keeping the executed JS deterministic.
+uses the same native tm actor route, and lets the final parent/child LLM turns
+come from the `.env` endpoint while keeping the executed tm program deterministic.
 
 ## Native Coding Acceptance
 
 `record native-coding` is the network-free public-API evidence gate for the
-native Deno Serious Engineer backend:
+native tm Serious Engineer backend:
 
 ```sh
 cargo run -p tm-e2e -- record native-coding
@@ -186,8 +186,8 @@ cargo run -p tm-e2e -- record native-coding
 
 It creates a disposable linked Rust crate inside the evidence directory, keeps
 all model responses scripted, and drives three durable turns through HTTP/SSE.
-The approved turn uses real `code.search`, `code.edit`, and an argv-vector
-`proc.run("cargo", ...)`, then forces process output into `artifact://` and
+The successful coding turn uses real `code.search`, `fs.patch`, and an argv-vector
+`@proc.run {cmd: "cargo", ...}`, then forces process output into `artifact://` and
 opens both the spill and patched `linked://` source through the resource
 gateway. The denied and timed-out turns attempt guarded overwrites and prove
 that neither effect is applied. Every replayed approval/cell/final event must
@@ -211,8 +211,8 @@ The workflow verifies the public P1/P2 surface: session creation, Miku persona
 metadata, SSE streaming and replay, mode routing, memory approval/persistence,
 project promotion, and resource reads. Actor smoke verifies the public P3+
 attach/approve/resource/replay path, while native actor coordination verifies
-the real Deno SDK route for P3+ mailbox coordination and child resources. The
+the real tm effect route for P3+ mailbox coordination and child resources. The
 drive smoke verifies the P5 drop/approve/file/preview/search/research/replay
-path. The remaining native Deno engineering path stays covered by focused server
+path. The remaining native tm engineering path stays covered by focused server
 tests for `fs.*`, `code.*`, `proc.*`, child actor approval routing, and approval
 approve/deny/timeout behavior.

@@ -115,18 +115,14 @@ impl ToolSpec {
             kind: "function".into(),
             function: FunctionSpec {
                 name: "execute".into(),
-                description: "Run JavaScript/TypeScript in your persistent sandbox REPL. \
-                    Variables persist across calls and top-level await is supported. Only what you \
-                    display()/return reaches you; everything else stays in the sandbox. Discover \
-                    capabilities with await tools.search()/tools.docs()."
-                    .into(),
+                description: "Run tm-conformance-v2 code in the persistent tm-lang sandbox. Top-level forms use semicolon separators, host effects use @capability, and pipelines are data-last. Only display/final results reach you; discover granted effects with @tools.search and help @capability.".into(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "Source to evaluate in the session."
+                            "description": "tm-conformance-v2 source to evaluate in the session."
                         }
                     },
                     "required": ["code"]

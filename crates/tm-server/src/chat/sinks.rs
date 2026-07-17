@@ -176,6 +176,18 @@ where
         )
     }
 
+    fn on_runtime_event(&self, event_type: &str, payload: &serde_json::Value) {
+        self.preserve_legacy_result(self.try_on_runtime_event(event_type, payload));
+    }
+
+    fn try_on_runtime_event(
+        &self,
+        event_type: &str,
+        payload: &serde_json::Value,
+    ) -> tm_core::Result<()> {
+        self.push_event(event_type, payload.clone())
+    }
+
     fn on_final(&self, text: &str) {
         self.preserve_legacy_result(self.try_on_final(text));
     }
@@ -344,5 +356,57 @@ mod tests {
         );
 
         sink.flush().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn structured_runtime_events_persist_in_replay_order() {
+        let store = Arc::new(InMemoryStore::default());
+        let session = store
+            .create_session(NewSession {
+                mode: ModeId::from("general"),
+                persona_status: AssetStatus::Degraded {
+                    warning: "test assets".into(),
+                },
+            })
+            .await
+            .unwrap();
+        let (sender, _receiver) = tokio::sync::broadcast::channel(8);
+        let sink = PersistingEventSink::new(session.id, Arc::clone(&store), sender);
+        for (kind, payload) in [
+            (
+                "effect_start",
+                json!({"cellId":"cell-1","nodeId":"cell-1-node-1","argsPreview":"[redacted]"}),
+            ),
+            (
+                "effect_suspended",
+                json!({"cellId":"cell-1","nodeId":"cell-1-node-1"}),
+            ),
+            (
+                "effect_resumed",
+                json!({"cellId":"cell-1","nodeId":"cell-1-node-1"}),
+            ),
+            (
+                "effect_result",
+                json!({"cellId":"cell-1","nodeId":"cell-1-node-1","status":"completed"}),
+            ),
+        ] {
+            sink.try_on_runtime_event(kind, &payload).unwrap();
+        }
+        sink.flush().await.unwrap();
+        let events = store.events_after(session.id, None).await.unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "effect_start",
+                "effect_suspended",
+                "effect_resumed",
+                "effect_result"
+            ]
+        );
+        assert!(events.windows(2).all(|pair| pair[0].seq + 1 == pair[1].seq));
+        assert_eq!(events[0].payload_json["argsPreview"], "[redacted]");
     }
 }

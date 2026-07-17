@@ -6,4 +6,3 @@
   <https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills>
 - Simon Willison — *Code execution with MCP* (summary) —
   <https://simonwillison.net/2025/Nov/4/code-execution-with-mcp/>
-- `deno_core` — <https://docs.rs/deno_core> · `rquickjs` — <https://docs.rs/rquickjs>

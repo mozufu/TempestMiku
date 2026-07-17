@@ -1,8 +1,8 @@
 # 7. Language reference — the syntax contract
 
-> Status: experimental / fun. This is the canonical source-level contract for the
-> tm design exploration. It does not schedule an implementation or replace the
-> shipping TypeScript sandbox.
+> Status: frozen shipping contract `tm-conformance-v2`. tm-lang is the sole runtime. Source syntax outside this reference and the versioned
+> conformance corpus is unsupported and must fail with a deterministic diagnostic. The v1 corpus
+> remains historical evidence only.
 
 This reference fixes the source syntax agreed for tm. The execution, approval, replay,
 and UI contracts in the preceding sections remain authoritative; this document makes their
@@ -18,8 +18,7 @@ tm is a small ML-shaped expression language with a data-flow surface:
 - host authority is visible only through the @ capability marker;
 - types, capability rows, error sets, and presentation sets are inferred, not written by the
   model;
-- braces make nested sequential scope explicit, while a standalone --- separates top-level
-  forms in a cell;
+- semicolons separate top-level forms and forms inside explicit nested `do` scopes;
 - tables use ordinary prelude application, not a separate SQL grammar.
 
 There are no statements, assignment, return, async/await, exceptions, optional chaining,
@@ -39,9 +38,8 @@ Strings use JSON escapes and support interpolation:
 "literal hash: \#"
 ~~~
 
-Line comments begin with --. A line containing only optional whitespace, ---, optional
-whitespace, and an optional line comment is instead the cell-form separator. The lexer gives
-that separator priority over a comment.
+Line comments begin with --. The removed standalone `---` spelling fails with `TM1006` instead of
+silently becoming a line comment; use `;` between cell forms.
 
 Numbers use JSON-shaped integer or decimal syntax. The checker distinguishes integer and decimal
 uses where needed; it never coerces a string to a number. The source language has true, false,
@@ -63,7 +61,7 @@ so a field such as name: "miku" is not a URI. Quote URI-looking text when it is 
 ## 7.3 Cells, forms, and blocks
 
 ~~~ebnf
-cell           ::= top_form ("---" top_form)* EOF
+cell           ::= top_form (";" top_form)* [";"] EOF
 top_form       ::= type_decl | let_binding | fun_binding | expr
 
 block          ::= "do" "{" block_form (";" block_form)* "}"
@@ -107,18 +105,18 @@ record_pattern ::= "{" [pattern_field ("," pattern_field)*] ["," "..."] "}"
 pattern_field  ::= lower_name | lower_name ":" pattern
 ~~~
 
-The final form is the cell result. Successful top-level let and fun bindings commit together
-after the whole cell completes. --- is syntactic only: it never creates a second cell,
-commit point, approval checkpoint, or recovery boundary.
+The final form is the cell result, including when one trailing semicolon is present. Successful
+top-level let and fun bindings commit together after the whole cell completes. A semicolon is
+syntactic only: it never creates a second cell, commit point, approval checkpoint, or recovery
+boundary. Empty forms such as `;;` are rejected.
 
 A block is an expression. Its forms execute left to right; let extends to the remaining forms.
 It is equivalent to nested let/sequence expressions, not a statement language:
 
 ~~~tm
 do {
-  let before = @fs.read workspace:config.json;
-  @code.edit {patch: replace "v1" "v2" before};
-  display {kind: "text"} "patched"
+  @fs.remove target;
+  display {kind: "text"} "removed"
 }
 ~~~
 
@@ -273,8 +271,7 @@ table is a core constructor and table operations are ordinary data-last prelude 
 let users = table [
   {name: "ice", age: 30, email: "i@x"},
   {name: "miku", age: 21, email: "m@x"}
-]
----
+];
 users
   |> where (age > 18)
   |> select {name, email}
@@ -309,7 +306,7 @@ host capabilities rather than syntax growth.
 
 ~~~tm
 @fs.read workspace:src/main.rs
-@code.edit {patch}
+@fs.patch {path: hit.path, tag: hit.tag, hunks: [{op: "append", lines: ["done"]}]}
 @mcp.github.search_issues {repo: "owner/repo", query: "is:open"}
 help @fs.read
 ~~~
@@ -324,7 +321,7 @@ performs the core error effect.
 
 ~~~tm
 handle @fs.read workspace:missing.rs with error {
-  | NotFound {uri} -> display {kind: "text"} "missing #uri"
+  | NotFoundError {uri, ...} -> display {kind: "text"} "missing #uri"
   | e -> rethrow e
 }
 ~~~

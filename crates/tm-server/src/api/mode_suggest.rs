@@ -2,7 +2,7 @@
 //!
 //! `modes.suggest` is a capability-gated [`tm_host::HostFn`], not a second native model tool.
 //! The core agent loop still advertises exactly one tool (`execute`); an unlocked normal chat
-//! turn may call `await modes.suggest(...)` from inside that tool. Coding backends, actors,
+//! turn may call `@modes.suggest {...}` from inside that tool. Coding backends, actors,
 //! scheduler runs, and locked turns never receive the `modes.suggest` grant.
 
 use async_trait::async_trait;
@@ -120,7 +120,7 @@ where
         }
         let reason = tm_memory::redact_dream_text(reason).text;
 
-        // Always reload authoritative state. A handler retained by a cached Deno session never
+        // Always reload authoritative state. A handler retained by a cached runtime session never
         // retains a per-turn sink or a mode snapshot.
         let session = self
             .store
@@ -296,7 +296,7 @@ fn mode_suggest_docs(known_modes: Vec<String>) -> ToolDocs {
                 .to_string(),
         ),
         signature:
-            "modes.suggest(targetMode: string, reason?: string): Promise<ModeSuggestionOutcome>"
+            "@modes.suggest {targetMode, reason?} -> ModeSuggestionOutcome"
                 .to_string(),
         args_schema: json!({
             "type": "object",
@@ -325,7 +325,7 @@ fn mode_suggest_docs(known_modes: Vec<String>) -> ToolDocs {
         })),
         examples: vec![ToolExample {
             title: Some("Ask to enter Serious Engineer".to_string()),
-            code: "const outcome = await modes.suggest('serious_engineer', 'This requires repository writes');\ndisplay(outcome);".to_string(),
+            code: "let outcome = @modes.suggest {targetMode: \"serious_engineer\", reason: \"This requires repository writes\"};\noutcome |> display {kind: \"json\"}".to_string(),
             notes: Some("Continue using the current mode unless outcome.status is approved.".to_string()),
         }],
         errors: vec![

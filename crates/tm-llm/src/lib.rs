@@ -23,6 +23,8 @@ pub struct OpenAiConfig {
     /// Request `stream_options.include_usage`. Most servers accept it; disable for the few
     /// that reject unknown fields.
     pub include_usage: bool,
+    /// Optional OpenAI-compatible Chat Completions reasoning effort.
+    pub reasoning_effort: Option<String>,
     /// TCP/TLS connection deadline.
     pub connect_timeout: Duration,
     /// Maximum idle time between streamed response chunks.
@@ -44,6 +46,7 @@ impl fmt::Debug for OpenAiConfig {
             .field("base_url", &base_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("include_usage", &self.include_usage)
+            .field("reasoning_effort", &self.reasoning_effort)
             .field("connect_timeout", &self.connect_timeout)
             .field("read_timeout", &self.read_timeout)
             .field("request_timeout", &self.request_timeout)
@@ -60,6 +63,7 @@ impl Default for OpenAiConfig {
             base_url: "https://api.openai.com/v1".into(),
             api_key: None,
             include_usage: true,
+            reasoning_effort: None,
             connect_timeout: Duration::from_secs(10),
             read_timeout: Duration::from_secs(120),
             request_timeout: Duration::from_secs(300),
@@ -90,7 +94,8 @@ impl OpenAiClient {
 
     /// Build from the environment:
     /// `OPENAI_BASE_URL` (default `https://api.openai.com/v1`), `OPENAI_API_KEY`,
-    /// `OPENAI_STREAM_USAGE` (`0`/`false`/`no` disables `include_usage`).
+    /// `OPENAI_STREAM_USAGE` (`0`/`false`/`no` disables `include_usage`), and
+    /// `OPENAI_REASONING_EFFORT`.
     pub fn from_env() -> Result<Self> {
         let mut cfg = OpenAiConfig::default();
         if let Ok(base) = std::env::var("OPENAI_BASE_URL")
@@ -106,6 +111,11 @@ impl OpenAiClient {
         if let Ok(v) = std::env::var("OPENAI_STREAM_USAGE") {
             cfg.include_usage = !matches!(v.trim(), "0" | "false" | "no");
         }
+        if let Ok(value) = std::env::var("OPENAI_REASONING_EFFORT")
+            && !value.trim().is_empty()
+        {
+            cfg.reasoning_effort = Some(value.trim().to_ascii_lowercase());
+        }
         Self::new(cfg)
     }
 
@@ -120,7 +130,11 @@ impl LlmClient for OpenAiClient {
         &self,
         req: &ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        let body = wire::build_body(req, self.cfg.include_usage);
+        let body = wire::build_body(
+            req,
+            self.cfg.include_usage,
+            self.cfg.reasoning_effort.as_deref(),
+        );
         let url = format!(
             "{}/chat/completions",
             self.cfg.base_url.trim_end_matches('/')
@@ -176,6 +190,16 @@ fn validate_config(cfg: &OpenAiConfig) -> Result<()> {
     {
         return Err(Error::Llm("invalid OpenAI client limits".to_string()));
     }
+    if let Some(effort) = cfg.reasoning_effort.as_deref()
+        && !matches!(
+            effort,
+            "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+        )
+    {
+        return Err(Error::Llm(format!(
+            "invalid OpenAI reasoning effort {effort:?}"
+        )));
+    }
     Ok(())
 }
 
@@ -228,6 +252,15 @@ mod tests {
         let cfg = OpenAiConfig {
             max_stream_bytes: 10,
             max_sse_line_bytes: 11,
+            ..OpenAiConfig::default()
+        };
+        assert!(OpenAiClient::new(cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_reasoning_effort() {
+        let cfg = OpenAiConfig {
+            reasoning_effort: Some("turbo".to_string()),
             ..OpenAiConfig::default()
         };
         assert!(OpenAiClient::new(cfg).is_err());

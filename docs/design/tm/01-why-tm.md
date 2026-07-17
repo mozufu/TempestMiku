@@ -53,7 +53,7 @@ execution structure to sit in.
 
 The genuinely agent-first idea is not the syntax. It is:
 
-> **Approval is a resumable effect.** The model writes `@code.edit {patch}` and the language
+> **Approval is a resumable effect.** The model writes `@fs.remove target` and the language
 > *suspends the whole isolate*, the host asks the user, and execution *resumes* with the
 > answer — no callbacks, no try/catch, no polling. Approval policy is an effect-handler
 > implementation detail, not an API the model learns.
@@ -63,12 +63,12 @@ intra-event-loop. You can fake it with a host op that blocks, but the TS type st
 says `Promise<void>`, identical to `fs.read`. In `tm`:
 
 ```
-fun ship patch = @code.edit {patch}
+fun remove target = @fs.remove target
 ```
 
-The checker infers the concrete authority row (code.edit here) and possible error set, then emits
+The checker infers the concrete authority row (fs.remove here) and possible error set, then emits
 them through the typed-cell artifact and trace. @ shows the host boundary. The registry declares
-that code.edit is resumable and carries on-write approval metadata; the effective runtime policy
+that fs.remove is resumable and carries always-approve metadata; the effective runtime policy
 decides whether this particular perform suspends. The transcript records what actually happened.
 
 There is deliberately no call-site `!`. Approval policy is not part of capability identity,
@@ -79,8 +79,8 @@ regardless of configured policy, that should be an explicit control effect such 
 
 ## 1.4 What it is not
 
-- **Not a replacement for TS.** §6.1 stands. `tm` is a `Sandbox` backend (§3.7 pluggable
-  everything), a sibling of the deno_core and CPython backends.
+- **The sole language runtime.** `tm` is the shipped `Sandbox` implementation (§3.7 pluggable
+  boundary); the former language backends were retired after cutover.
 - **Not for humans.** No package manager, no build system, no `Cargo.toml` of macros. It
   exists to be *written by a model* and *audited by the host*.
 - **Not a general-purpose language.** No classes, no prototypes, no macros, no FFI. If you
@@ -94,6 +94,7 @@ regardless of configured policy, that should be an explicit control effect such 
 The cost is named and it is the same one §6.1 already flagged when it rejected Rhai/Rune:
 **model fluency.** If the model writes `tm` worse than it writes the TS prelude, the whole
 thing is a vanity project. §5 sets the gate: a fluency benchmark (same prompt, 50 runs each,
-compare success rate + token count) must show `tm` not-worse before it ships anywhere. Until
-then this folder is a design exercise — which, per the user's instruction, is the point: it
-should be **fun**.
+compare success rate + token count) must show `tm` not-worse before it ships anywhere. The
+`tm-fluency-prompt-v2` run passed that gate on 2026-07-16: both backends achieved 1,000/1,000
+first-try successes with zero retries, while tm generated shorter code. tm-lang therefore became
+the sole runtime; the former fallback was removed after the cutover evidence passed.

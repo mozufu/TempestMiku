@@ -13,9 +13,11 @@ loop:
         acc.push(delta)
     turn = acc.finish()                   # assembled assistant message (text + tool_calls)
     append turn.message to messages
-    if turn has tool_call "execute":
-        out = session.eval(code = call.code, budget)
-        append tool_result(call.id, shape_result(out)) to messages
+    if turn has tool_calls "execute":
+        validate the complete batch (maximum 16)
+        outputs = session.eval_batch(calls, budget)  # tm-lang runs independent cells concurrently
+        for call, out in response order:
+            append tool_result(call.id, shape_result(out)) to messages
         continue
     else:
         return turn.text                  # no tool call ⇒ final answer
@@ -36,7 +38,7 @@ between turns.
   "type": "function",
   "function": {
     "name": "execute",
-    "description": "Run JavaScript/TypeScript in your persistent sandbox REPL. Variables persist across calls and top-level await is supported. Only what you display()/return reaches you; everything else stays in the sandbox. Discover capabilities with await tools.search()/tools.docs().",
+    "description": "Run tm-conformance-v2 in your persistent REPL. Bindings persist across calls. Use @capability effects for host work; only displayed/returned bounded results reach you.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -51,10 +53,17 @@ between turns.
 That is the *entire* tool surface presented to the model. Capability growth never grows this
 schema — it grows the SDK the code discovers at runtime.
 
-Native requests set `parallel_tool_calls: false`, and the loop independently fails closed before
-execution unless a tool turn contains exactly one complete `execute` call with an id, an object
-argument, and non-empty string `code`. Multiple calls, any other native tool name, malformed
-arguments, and truncated `tool_calls` completions are protocol errors.
+Native requests set `parallel_tool_calls: true`. The loop accepts at most sixteen complete
+`execute` calls and validates the entire batch before executing the first cell: every call needs a
+unique non-empty id, an object argument containing only non-empty string `code`, and the exact
+`execute` name. Oversized batches, duplicate ids, any other native tool name, malformed arguments,
+and truncated `tool_calls` completions are protocol errors and execute nothing. `tm-lang` parses
+each cell to derive free binding reads and persistent writes, then connects each read to its nearest
+earlier writer. Independent cells run concurrently from the pre-batch snapshot; dependent cells run
+once after their producers commit. Failed producers block dependents without retrying effects or
+falling back to stale bindings. Successful commits merge into persistent state in response order.
+Backward dependencies and side-effect ordering are unsupported. Other session backends retain the
+response-order compatibility default until they implement parallel batches.
 
 ### 5.3 Fallback for endpoints without function calling
 
@@ -88,11 +97,9 @@ field must not multiply the allowance. Policy:
   audit log — know what happened.
 
 The system prompt teaches the model the rule: **compute and filter in code; return only what you
-need; park big data as an artifact.** It also carries the minimal runtime primer required for
-self-discovery: the REPL is JavaScript/TypeScript on the sandboxed Deno/V8 backend, supports
-top-level `await`, persists state across cells, and expects capability lookup through
-`await tools.search(...)` followed by `await tools.docs(...)` before calling newly discovered SDK
-namespaces.
+need; park big data as an artifact.** It also carries the tm syntax primer: bindings persist across
+cells, effects use `@capability {args}`, and catalog discovery uses `@tools.search` / `@tools.docs`
+before invoking newly discovered capability namespaces.
 
 ### 5.5 Streaming (day 1)
 

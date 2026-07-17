@@ -13,7 +13,10 @@ use crate::{
 use super::*;
 use super::{
     docs::docs,
-    tools::{CodeEditFn, CodeSearchFn, FsFindFn, FsLsFn, FsReadFn, FsWriteFn, ProcRunFn},
+    tools::{
+        CodeSearchFn, FsFindFn, FsLsFn, FsMoveFn, FsPatchFn, FsReadFn, FsRemoveFn, FsWriteFn,
+        ProcRunFn,
+    },
     util::file_tag,
 };
 
@@ -43,12 +46,26 @@ impl ApprovalPolicy for StaticApproval {
 }
 
 fn temp_linked(root: &Path, mode: FsMode) -> LinkedFolders {
+    temp_linked_with_commands(
+        root,
+        mode,
+        vec!["cargo".to_string()],
+        vec![vec!["cargo".to_string(), "test".to_string()]],
+    )
+}
+
+fn temp_linked_with_commands(
+    root: &Path,
+    mode: FsMode,
+    commands: Vec<String>,
+    safe_args: Vec<Vec<String>>,
+) -> LinkedFolders {
     LinkedFolders::from_configs(vec![LinkedFolderConfig {
         name: "tempestmiku".to_string(),
         path: root.to_path_buf(),
         mode,
-        commands: vec!["cargo".to_string()],
-        safe_args: vec![vec!["cargo".to_string(), "test".to_string()]],
+        commands,
+        safe_args,
     }])
     .unwrap()
 }
@@ -59,8 +76,10 @@ fn ctx() -> InvocationCtx {
         "fs.write",
         "fs.ls",
         "fs.find",
+        "fs.move",
         "code.search",
-        "code.edit",
+        "fs.patch",
+        "fs.remove",
         "proc.run",
         "resources.read:artifact",
         "resources.read:linked",
@@ -93,9 +112,22 @@ async fn unknown_scheme_fails_closed() {
     assert!(matches!(err, HostError::UnknownScheme { .. }));
 }
 
+#[test]
+fn host_config_defaults_and_bounds_proc_run_timeout() {
+    let root = tempfile::tempdir().unwrap();
+    let default_path = root.path().join("default.json");
+    fs::write(&default_path, "{}").unwrap();
+    let default = P0HostConfig::from_json_file(default_path).unwrap();
+    assert_eq!(default.proc_run_timeout_ms, 180_000);
+
+    let invalid_path = root.path().join("invalid.json");
+    fs::write(&invalid_path, r#"{"proc_run_timeout_ms":900001}"#).unwrap();
+    let err = P0HostConfig::from_json_file(invalid_path).unwrap_err();
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+}
+
 #[tokio::test]
-async fn p0_tool_docs_include_sdk_contract_metadata() {
-    let sdk_types = include_str!("../../../../docs/sdk/tm-runtime.d.ts");
+async fn p0_tool_docs_include_tm_contract_metadata() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("lib.rs"), "pub fn x() {}\n").unwrap();
     let artifact_dir = tempfile::tempdir().unwrap();
@@ -107,18 +139,11 @@ async fn p0_tool_docs_include_sdk_contract_metadata() {
         &mut resource_registry,
         temp_linked(root.path(), FsMode::Rw),
         store,
+        Duration::from_millis(180_000),
     );
 
     let docs = host_registry.docs("fs.read", &ctx()).unwrap();
-    assert!(
-        sdk_types.contains(&docs.signature),
-        "docs/sdk/tm-runtime.d.ts is missing {}",
-        docs.signature
-    );
-    assert_eq!(
-        docs.signature,
-        "fs.read(path: SdkPath, opts?: FsReadOptions): Promise<ResourceContent>"
-    );
+    assert_eq!(docs.signature, "@fs.read FsReadArgs -> ResourceContent");
     assert_eq!(docs.args_schema["required"], json!(["path"]));
     assert_eq!(
         docs.result_schema.as_ref().unwrap()["properties"]["content"]["type"],
@@ -127,7 +152,7 @@ async fn p0_tool_docs_include_sdk_contract_metadata() {
     assert!(
         docs.examples
             .iter()
-            .any(|example| example.code.contains("fs.read"))
+            .any(|example| example.code.contains("@fs.read"))
     );
     assert!(docs.errors.iter().any(|err| err.name == "InvalidPathError"));
     assert!(
@@ -142,14 +167,16 @@ async fn p0_tool_docs_include_sdk_contract_metadata() {
         "fs.write",
         "fs.ls",
         "fs.find",
+        "fs.move",
         "code.search",
-        "code.edit",
+        "fs.patch",
+        "fs.remove",
         "proc.run",
     ] {
         let docs = host_registry.docs(name, &ctx()).unwrap();
         assert!(
-            sdk_types.contains(&docs.signature),
-            "docs/sdk/tm-runtime.d.ts is missing {}",
+            docs.signature.starts_with(&format!("@{name} ")),
+            "{name} docs should expose a tm effect signature: {}",
             docs.signature
         );
         assert!(
@@ -161,6 +188,19 @@ async fn p0_tool_docs_include_sdk_contract_metadata() {
             "{name} docs should document fail-closed errors"
         );
     }
+    assert!(matches!(
+        host_registry.docs("code.edit", &ctx()),
+        Err(HostError::NotFound(_))
+    ));
+    let patch_docs = host_registry.docs("fs.patch", &ctx()).unwrap();
+    let replace_required =
+        &patch_docs.args_schema["properties"]["hunks"]["items"]["oneOf"][0]["required"];
+    assert!(
+        replace_required
+            .as_array()
+            .unwrap()
+            .contains(&json!("expectedLines"))
+    );
 }
 
 #[tokio::test]
@@ -399,56 +439,172 @@ async fn code_search_returns_tag_and_context() {
 }
 
 #[tokio::test]
-async fn code_edit_applies_json_hunks_and_rejects_stale_tags() {
+async fn fs_patch_applies_explicit_hunks_and_rejects_stale_tags() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("lib.rs");
     fs::write(&path, "one\ntwo\nthree\n").unwrap();
     let tag = file_tag(&fs::read(&path).unwrap());
-    let edit = CodeEditFn::new(temp_linked(root.path(), FsMode::Rw));
+    let patch = FsPatchFn::new(
+        temp_linked(root.path(), FsMode::Rw),
+        ArtifactStore::open(root.path().join("artifacts"), "patch").unwrap(),
+    );
     let value = call_fn(
-        &edit,
+        &patch,
         json!({
             "path":"tempestmiku:lib.rs",
             "tag":tag,
             "hunks":[
-                {"op":"replace","startLine":2,"endLine":2,"lines":["TWO"]},
-                {"op":"insert","at":"head","lines":["zero"]},
-                {"op":"delete","startLine":3,"endLine":3}
+                {"op":"replace","startLine":2,"endLine":2,"expectedLines":["two"],"lines":["TWO"]},
+                {"op":"prepend","lines":["zero"]},
+                {"op":"insertAfter","line":1,"expectedLine":"one","lines":["middle"]},
+                {"op":"delete","startLine":3,"endLine":3,"expectedLines":["three"]}
             ]
         }),
         &ctx(),
     )
     .await;
     assert_ne!(value["newTag"].as_str().unwrap(), tag);
-    assert_eq!(fs::read_to_string(&path).unwrap(), "zero\none\nTWO\n");
-    let err = edit
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "zero\none\nmiddle\nTWO\n"
+    );
+    let err = patch
             .call(
-                json!({"path":"tempestmiku:lib.rs","tag":"deadbeefdeadbeef","hunks":[{"op":"insert","at":"tail","lines":["x"]}]}),
+                json!({"path":"tempestmiku:lib.rs","tag":"deadbeefdeadbeef","hunks":[{"op":"append","lines":["x"]}]}),
                 &ctx(),
             )
             .await
             .unwrap_err();
     assert!(matches!(err, HostError::InvalidArgs(_)));
-    assert_eq!(fs::read_to_string(&path).unwrap(), "zero\none\nTWO\n");
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "zero\none\nmiddle\nTWO\n"
+    );
+
+    let legacy_insert = patch
+        .call(
+            json!({
+                "path":"tempestmiku:lib.rs",
+                "tag":file_tag(&fs::read(&path).unwrap()),
+                "hunks":[{"op":"insert","at":"tail","lines":["x"]}]
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(legacy_insert, HostError::InvalidArgs(_)));
+
+    let missing = patch
+        .call(
+            json!({
+                "path":"tempestmiku:new.rs",
+                "tag":"deadbeefdeadbeef",
+                "hunks":[{"op":"append","lines":["x"]}]
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, HostError::InvalidPath(_)));
+    assert!(!root.path().join("new.rs").exists());
 }
 
 #[tokio::test]
-async fn code_edit_remove_requires_approval() {
+async fn fs_patch_rejects_missing_or_mismatched_expected_context_without_writing() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("lib.rs");
+    fs::write(&path, "one\ntwo\nthree\n").unwrap();
+    let patch = FsPatchFn::new(
+        temp_linked(root.path(), FsMode::Rw),
+        ArtifactStore::open(root.path().join("artifacts"), "patch-context").unwrap(),
+    );
+
+    let missing = patch
+        .call(
+            json!({
+                "path":"tempestmiku:lib.rs",
+                "tag":file_tag(&fs::read(&path).unwrap()),
+                "hunks":[{"op":"replace","startLine":2,"endLine":2,"lines":["TWO"]}]
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, HostError::InvalidArgs(_)));
+
+    for hunk in [
+        json!({"op":"replace","startLine":2,"endLine":2,"expectedLines":["wrong"],"lines":["TWO"]}),
+        json!({"op":"delete","startLine":2,"endLine":2,"expectedLines":["wrong"]}),
+        json!({"op":"insertAfter","line":2,"expectedLine":"wrong","lines":["new"]}),
+    ] {
+        let err = patch
+            .call(
+                json!({
+                    "path":"tempestmiku:lib.rs",
+                    "tag":file_tag(&fs::read(&path).unwrap()),
+                    "hunks":[hunk]
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)));
+        assert!(err.to_string().contains("context mismatch"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "one\ntwo\nthree\n");
+    }
+}
+
+#[tokio::test]
+async fn fs_patch_rejects_inserts_anchored_inside_replaced_ranges() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("lib.rs");
+    fs::write(&path, "one\ntwo\nthree\nfour\n").unwrap();
+    let patch = FsPatchFn::new(
+        temp_linked(root.path(), FsMode::Rw),
+        ArtifactStore::open(root.path().join("artifacts"), "patch-overlap").unwrap(),
+    );
+
+    for insert in [
+        json!({"op":"insertAfter","line":2,"expectedLine":"two","lines":["hidden"]}),
+        json!({"op":"insertBefore","line":3,"expectedLine":"three","lines":["hidden"]}),
+    ] {
+        let err = patch
+            .call(
+                json!({
+                    "path":"tempestmiku:lib.rs",
+                    "tag":file_tag(&fs::read(&path).unwrap()),
+                    "hunks":[
+                        {"op":"delete","startLine":2,"endLine":3,"expectedLines":["two","three"]},
+                        insert
+                    ]
+                }),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)));
+        assert!(err.to_string().contains("overlaps"));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "one\ntwo\nthree\nfour\n"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fs_remove_requires_approval_and_a_fresh_tag() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("lib.rs");
     fs::write(&path, "bye\n").unwrap();
     let tag = file_tag(&fs::read(&path).unwrap());
-    let edit = CodeEditFn::new(temp_linked(root.path(), FsMode::Rw));
+    let remove = FsRemoveFn::new(temp_linked(root.path(), FsMode::Rw));
     let denied_ctx = InvocationCtx::with_approvals(
         ctx().grants,
         Arc::new(StaticApproval(ApprovalDecision::Denied)),
         Duration::from_secs(1),
     );
-    let err = edit
-        .call(
-            json!({"path":"tempestmiku:lib.rs","tag":tag,"hunks":[{"op":"remove"}]}),
-            &denied_ctx,
-        )
+    let err = remove
+        .call(json!({"path":"tempestmiku:lib.rs","tag":tag}), &denied_ctx)
         .await
         .unwrap_err();
     assert!(matches!(err, HostError::ApprovalDenied(_)));
@@ -458,13 +614,233 @@ async fn code_edit_remove_requires_approval() {
         Arc::new(StaticApproval(ApprovalDecision::Approved)),
         Duration::from_secs(1),
     );
-    edit.call(
-            json!({"path":"tempestmiku:lib.rs","tag":file_tag(&fs::read(&path).unwrap()),"hunks":[{"op":"remove"}]}),
+    remove
+        .call(
+            json!({"path":"tempestmiku:lib.rs","tag":file_tag(&fs::read(&path).unwrap())}),
             &approved_ctx,
         )
         .await
         .unwrap();
     assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fs_remove_deletes_an_in_repo_symlink_without_deleting_its_target() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("target.rs");
+    let link = root.path().join("link.rs");
+    fs::write(&target, "keep\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let remove = FsRemoveFn::new(temp_linked(root.path(), FsMode::Rw));
+    let approved_ctx = InvocationCtx::with_approvals(
+        ctx().grants,
+        Arc::new(StaticApproval(ApprovalDecision::Approved)),
+        Duration::from_secs(1),
+    );
+
+    remove
+        .call(
+            json!({
+                "path": "tempestmiku:link.rs",
+                "tag": file_tag(&fs::read(&link).unwrap())
+            }),
+            &approved_ctx,
+        )
+        .await
+        .unwrap();
+
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep\n");
+}
+
+#[tokio::test]
+async fn fs_move_requires_approval_only_for_overwrite() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.rs");
+    fs::write(&source, "source\n").unwrap();
+    let move_file = FsMoveFn::new(temp_linked(root.path(), FsMode::Rw));
+    let source_tag = file_tag(&fs::read(&source).unwrap());
+    let same_path = move_file
+        .call(
+            json!({"path":"tempestmiku:source.rs","dest":"tempestmiku:source.rs","tag":source_tag.clone()}),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(same_path, HostError::InvalidArgs(_)));
+    call_fn(
+        &move_file,
+        json!({"path":"tempestmiku:source.rs","dest":"tempestmiku:moved.rs","tag":source_tag}),
+        &ctx(),
+    )
+    .await;
+    assert!(!source.exists());
+    assert_eq!(
+        fs::read_to_string(root.path().join("moved.rs")).unwrap(),
+        "source\n"
+    );
+
+    fs::write(&source, "replacement\n").unwrap();
+    let denied_ctx = InvocationCtx::with_approvals(
+        ctx().grants,
+        Arc::new(StaticApproval(ApprovalDecision::Denied)),
+        Duration::from_secs(1),
+    );
+    let err = move_file
+        .call(
+            json!({
+                "path":"tempestmiku:source.rs",
+                "dest":"tempestmiku:moved.rs",
+                "tag":file_tag(&fs::read(&source).unwrap()),
+                "overwrite":true
+            }),
+            &denied_ctx,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, HostError::ApprovalDenied(_)));
+    assert!(source.exists());
+
+    let other = tempfile::tempdir().unwrap();
+    let linked = LinkedFolders::from_configs(vec![
+        LinkedFolderConfig {
+            name: "tempestmiku".to_string(),
+            path: root.path().to_path_buf(),
+            mode: FsMode::Rw,
+            commands: Vec::new(),
+            safe_args: Vec::new(),
+        },
+        LinkedFolderConfig {
+            name: "other".to_string(),
+            path: other.path().to_path_buf(),
+            mode: FsMode::Rw,
+            commands: Vec::new(),
+            safe_args: Vec::new(),
+        },
+    ])
+    .unwrap();
+    let cross_alias = FsMoveFn::new(linked)
+        .call(
+            json!({
+                "path":"tempestmiku:source.rs",
+                "dest":"other:new/path.rs",
+                "tag":file_tag(&fs::read(&source).unwrap()),
+                "createParents":true
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(cross_alias, HostError::InvalidPath(_)));
+    assert!(!other.path().join("new").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fs_move_moves_an_in_repo_symlink_without_moving_its_target() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("target.rs");
+    let link = root.path().join("link.rs");
+    let moved = root.path().join("moved-link.rs");
+    fs::write(&target, "keep\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let move_file = FsMoveFn::new(temp_linked(root.path(), FsMode::Rw));
+
+    move_file
+        .call(
+            json!({
+                "path": "tempestmiku:link.rs",
+                "dest": "tempestmiku:moved-link.rs",
+                "tag": file_tag(&fs::read(&link).unwrap())
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert!(
+        fs::symlink_metadata(&moved)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep\n");
+}
+
+#[tokio::test]
+async fn fs_patch_spills_large_diffs_without_failing_the_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("large.txt");
+    fs::write(&path, "old\n").unwrap();
+    let patch = FsPatchFn::new(
+        temp_linked(root.path(), FsMode::Rw),
+        ArtifactStore::open(root.path().join("artifacts"), "patch").unwrap(),
+    );
+    let value = call_fn(
+        &patch,
+        json!({
+            "path":"tempestmiku:large.txt",
+            "tag":file_tag(&fs::read(&path).unwrap()),
+            "hunks":[{"op":"replace","startLine":1,"endLine":1,"expectedLines":["old"],"lines":["x".repeat(20_000)]}]
+        }),
+        &ctx(),
+    )
+    .await;
+    assert_eq!(value["changed"], json!(true));
+    assert_eq!(value["truncated"], json!(true));
+    assert!(value["diffPreview"].as_str().unwrap().len() <= 12 * 1024 + 64);
+    assert!(value["diffArtifact"]["uri"].as_str().is_some());
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        format!("{}\n", "x".repeat(20_000))
+    );
+}
+
+#[tokio::test]
+async fn fs_patch_preserves_crlf_and_keeps_diff_context_bounded() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("windows.txt");
+    let old = (1..=2_000)
+        .map(|line| format!("line {line}\r\n"))
+        .collect::<String>();
+    fs::write(&path, old.as_bytes()).unwrap();
+    let patch = FsPatchFn::new(
+        temp_linked(root.path(), FsMode::Rw),
+        ArtifactStore::open(root.path().join("artifacts"), "patch-crlf").unwrap(),
+    );
+
+    let value = call_fn(
+        &patch,
+        json!({
+            "path":"tempestmiku:windows.txt",
+            "tag":file_tag(&fs::read(&path).unwrap()),
+            "hunks":[{"op":"replace","startLine":1000,"endLine":1000,"expectedLines":["line 1000"],"lines":["changed"]}]
+        }),
+        &ctx(),
+    )
+    .await;
+
+    let written = fs::read(&path).unwrap();
+    assert!(written.windows(2).any(|pair| pair == b"\r\n"));
+    assert!(
+        !written
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| *byte == b'\n' && (index == 0 || written[index - 1] != b'\r'))
+    );
+    let preview = value["diffPreview"].as_str().unwrap();
+    assert!(preview.contains("-line 1000"));
+    assert!(preview.contains("+changed"));
+    assert!(!preview.contains('\r'));
+    assert!(
+        preview.len() < 1_000,
+        "contextual preview was {} bytes",
+        preview.len()
+    );
+    assert_eq!(value["truncated"], json!(false));
+    assert!(value["diffArtifact"].is_null());
 }
 
 #[tokio::test]
@@ -484,7 +860,7 @@ async fn proc_run_allows_safe_prefix_approval_gates_unsafe_and_spills() {
     let artifact_dir = tempfile::tempdir().unwrap();
     let store = ArtifactStore::open(artifact_dir.path(), "proc").unwrap();
     let read_store = store.clone();
-    let proc_run = ProcRunFn::new(temp_linked(root.path(), FsMode::Rw), store);
+    let proc_run = ProcRunFn::with_timeout_ms(temp_linked(root.path(), FsMode::Rw), store, 180_000);
     let value = call_fn(
         &proc_run,
         json!({"cmd":"cargo","args":["test"],"cwd":"tempestmiku:"}),
@@ -526,4 +902,251 @@ async fn proc_run_allows_safe_prefix_approval_gates_unsafe_and_spills() {
         .unwrap();
     assert!(!persisted.content.contains("sk-testsecret123456"));
     assert!(persisted.content.contains("[REDACTED_TOKEN]"));
+}
+
+#[tokio::test]
+async fn proc_run_accepts_bounded_utf8_stdin_and_spills_echoed_output() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = tempfile::tempdir().unwrap();
+    let store = ArtifactStore::open(artifact_dir.path(), "proc-stdin").unwrap();
+    let read_store = store.clone();
+    let proc_run = ProcRunFn::with_timeout_ms(
+        temp_linked_with_commands(
+            root.path(),
+            FsMode::Rw,
+            vec!["cat".to_string(), "sleep".to_string()],
+            vec![vec!["cat".to_string()], vec!["sleep".to_string()]],
+        ),
+        store,
+        180_000,
+    );
+
+    let echoed = call_fn(
+        &proc_run,
+        json!({"cmd":"cat","cwd":"tempestmiku:","stdin":"hello, 世界"}),
+        &ctx(),
+    )
+    .await;
+    assert_eq!(echoed["exitCode"], json!(0));
+    assert_eq!(echoed["stdout"], json!("hello, 世界"));
+
+    let empty = call_fn(
+        &proc_run,
+        json!({"cmd":"cat","cwd":"tempestmiku:","stdin":""}),
+        &ctx(),
+    )
+    .await;
+    assert_eq!(empty["exitCode"], json!(0));
+    assert_eq!(empty["stdout"], json!(""));
+
+    let spill = call_fn(
+        &proc_run,
+        json!({
+            "cmd":"cat",
+            "cwd":"tempestmiku:",
+            "stdin":"x".repeat(60_000),
+            "outputBytes":1000
+        }),
+        &ctx(),
+    )
+    .await;
+    assert_eq!(spill["truncated"], json!(true));
+    let persisted = read_store
+        .read(spill["artifact"]["uri"].as_str().unwrap(), None)
+        .unwrap();
+    assert_eq!(persisted.content.len(), 60_000);
+}
+
+#[tokio::test]
+async fn proc_run_rejects_non_string_or_oversized_stdin_and_bounds_timeout() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = tempfile::tempdir().unwrap();
+    let store = ArtifactStore::open(artifact_dir.path(), "proc-stdin-errors").unwrap();
+    let proc_run = ProcRunFn::with_timeout_ms(
+        temp_linked_with_commands(
+            root.path(),
+            FsMode::Rw,
+            vec!["cat".to_string(), "sleep".to_string()],
+            vec![vec!["cat".to_string()], vec!["sleep".to_string()]],
+        ),
+        store,
+        180_000,
+    );
+
+    for stdin in [json!(["not", "text"]), json!({"not":"text"}), json!(42)] {
+        let err = proc_run
+            .call(
+                json!({"cmd":"cat","cwd":"tempestmiku:","stdin":stdin}),
+                &ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs(_)));
+        assert!(err.to_string().contains("UTF-8 string"));
+    }
+
+    let err = proc_run
+        .call(
+            json!({
+                "cmd":"cat",
+                "cwd":"tempestmiku:",
+                "stdin":"x".repeat(1024 * 1024 + 1)
+            }),
+            &ctx(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, HostError::InvalidArgs(_)));
+    assert!(err.to_string().contains("1048576"));
+
+    let timed_out = call_fn(
+        &proc_run,
+        json!({
+            "cmd":"sleep",
+            "args":["1"],
+            "cwd":"tempestmiku:",
+            "stdin":"x",
+            "timeoutMs":1
+        }),
+        &ctx(),
+    )
+    .await;
+    assert_eq!(timed_out["timedOut"], json!(true));
+    assert_eq!(timed_out["exitCode"], json!(-1));
+}
+
+#[tokio::test]
+async fn proc_run_configured_timeout_updates_docs_and_caps_commands() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = tempfile::tempdir().unwrap();
+    let proc_run = ProcRunFn::with_timeout_ms(
+        temp_linked_with_commands(
+            root.path(),
+            FsMode::Rw,
+            vec!["sleep".to_string()],
+            vec![vec!["sleep".to_string()]],
+        ),
+        ArtifactStore::open(artifact_dir.path(), "proc-configured-timeout").unwrap(),
+        25,
+    );
+    assert_eq!(
+        proc_run.docs().args_schema["properties"]["timeoutMs"]["maximum"],
+        json!(25)
+    );
+    assert_eq!(
+        proc_run.docs().args_schema["properties"]["timeoutMs"]["default"],
+        json!(25)
+    );
+
+    let timed_out = call_fn(
+        &proc_run,
+        json!({
+            "cmd":"sleep",
+            "args":["1"],
+            "cwd":"tempestmiku:",
+            "timeoutMs":500
+        }),
+        &ctx(),
+    )
+    .await;
+    assert_eq!(timed_out["timedOut"], json!(true));
+    assert!(timed_out["durationMs"].as_u64().unwrap() < 500);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn proc_run_timeout_kills_descendant_processes() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("descendant-survived");
+    let artifact_dir = tempfile::tempdir().unwrap();
+    let proc_run = ProcRunFn::with_timeout_ms(
+        temp_linked_with_commands(
+            root.path(),
+            FsMode::Rw,
+            vec!["python3".to_string()],
+            vec![vec!["python3".to_string()]],
+        ),
+        ArtifactStore::open(artifact_dir.path(), "proc-tree-timeout").unwrap(),
+        180_000,
+    );
+    let descendant = format!(
+        "import time; time.sleep(0.3); open({:?}, 'w').write('leaked')",
+        marker
+    );
+    let parent = format!(
+        "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {:?}]); time.sleep(5)",
+        descendant
+    );
+
+    let timed_out = call_fn(
+        &proc_run,
+        json!({
+            "cmd":"python3",
+            "args":["-c", parent],
+            "cwd":"tempestmiku:",
+            "timeoutMs":50
+        }),
+        &ctx(),
+    )
+    .await;
+    assert_eq!(timed_out["timedOut"], json!(true));
+
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        !marker.exists(),
+        "a proc.run descendant survived the timeout and wrote {}",
+        marker.display()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_proc_run_kills_descendant_processes() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("descendant-survived-cancel");
+    let artifact_dir = tempfile::tempdir().unwrap();
+    let proc_run = ProcRunFn::with_timeout_ms(
+        temp_linked_with_commands(
+            root.path(),
+            FsMode::Rw,
+            vec!["python3".to_string()],
+            vec![vec!["python3".to_string()]],
+        ),
+        ArtifactStore::open(artifact_dir.path(), "proc-tree-cancel").unwrap(),
+        180_000,
+    );
+    let descendant = format!(
+        "import time; time.sleep(0.3); open({:?}, 'w').write('leaked')",
+        marker
+    );
+    let parent = format!(
+        "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {:?}]); time.sleep(5)",
+        descendant
+    );
+    let invocation = ctx();
+
+    {
+        let call = proc_run.call(
+            json!({
+                "cmd":"python3",
+                "args":["-c", parent],
+                "cwd":"tempestmiku:",
+                "timeoutMs":5_000
+            }),
+            &invocation,
+        );
+        tokio::pin!(call);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut call)
+                .await
+                .is_err()
+        );
+    }
+
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        !marker.exists(),
+        "a proc.run descendant survived cancellation and wrote {}",
+        marker.display()
+    );
 }

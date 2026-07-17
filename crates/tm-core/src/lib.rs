@@ -19,7 +19,7 @@ pub use agent::{Agent, AgentConfig, CancellationToken, InboxDrain, Protocol};
 pub use error::{Error, Result};
 pub use llm::{ChatRequest, LlmClient, Usage};
 pub use message::{FunctionSpec, Message, Role, ToolCall, ToolChoice, ToolSpec};
-pub use prompt::DEFAULT_SYSTEM_PROMPT;
+pub use prompt::{DEFAULT_SYSTEM_PROMPT, TM_RUNTIME_BOOT_CONTRACT};
 pub use sandbox::{CellBudget, EvalOutput, Sandbox, Session, SessionConfig};
 pub use shape::{shape_result, shape_result_capped};
 pub use sink::{EventSink, NullSink};

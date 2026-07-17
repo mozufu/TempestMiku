@@ -11,12 +11,15 @@ REPL with declarative presentation and a structured observable execution model.
 
 ## 6.1 Cell semantics
 
-A submitted cell runs now against the current committed REPL environment. Its top-level forms are
-separated by standalone --- syntax, but the whole cell is still one transaction:
+A submitted cell runs now against the current committed REPL environment. Its top-level forms use
+semicolon separators, but the whole cell is still one transaction:
 
 1. Parse and type-check the complete cell, including its grant-bearing effect row.
 2. Reject missing capability grants before evaluation.
-3. Evaluate expressions in dependency order; only explicit `par` scopes introduce concurrency.
+3. Evaluate forms inside one cell in dependency order; only explicit `par` scopes introduce
+   concurrency within that cell. Separate `execute` calls returned in one model turn are an
+   independent batch; ordinary free binding reads form forward dependency edges and run only after
+   their producer commits.
 4. Stream structured lifecycle events while host effects run or approval suspends the cell.
 5. On success, commit new top-level bindings and the final value/reference as one REPL-state step.
 6. On language error, denial, timeout, or cancellation, discard partial bindings.
@@ -26,6 +29,12 @@ rolled back. Each host handler keeps the existing approval, idempotency, and dur
 contracts. Reconnect replays recorded events without disturbing the live interpreter. A process
 restart or runtime eviction follows the existing `runtime_reset` contract and starts a fresh REPL
 environment; it never re-executes an old effectful cell to reconstruct either bindings or UI.
+
+The batch scheduler starts from one pre-batch environment, runs independent cells concurrently,
+and overlays only successful producer commits into dependent cells. It applies successful cell
+commits to the persistent environment in response order after the batch finishes. A failed
+producer blocks its dependents with `BatchDependencyError`; it never retries an effect or falls
+back to an older binding with the same name. Effects without binding edges remain unordered.
 
 Therefore:
 
@@ -165,17 +174,15 @@ intended presentation and should not compete with `display` in the conversation.
 For:
 
 ```tm
-let files = @fs.find {root: workspace:src, glob: "**/*.rs"}
----
+let files = @fs.find {root: workspace:src, glob: "**/*.rs"};
 let hits =
   files
   |> par map @fs.read
   |> flatmap lines
-  |> filter (contains "TODO")
----
+  |> filter (contains "TODO");
 
 do {
-  @code.edit {patch: build_patch hits};
+  hits |> par map (fun hit -> @fs.patch {path: hit.path, tag: hit.tag, hunks: build_hunks hit});
   hits |> display {kind: "table", title: "Updated TODOs"}
 }
 ```
@@ -200,7 +207,7 @@ planner. It does not let model code bypass server-owned approval rendering or in
 actions. It does not expose more sensitive arguments/results merely because the UI can render them.
 
 The first credible UI acceptance test should prove one cell containing `par map`, an approval-gated
-`@code.edit`, and a table `display`:
+`@fs.remove`, and a table `display`:
 
 - emits one correctly parented, gap-free execution tree;
 - folds fan-out into stable progress while retaining expandable child outcomes;

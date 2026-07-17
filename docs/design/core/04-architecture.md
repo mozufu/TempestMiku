@@ -36,5 +36,5 @@ Components:
 
 The product server (§27) wraps these components with authenticated durable turns and one replayable
 SSE envelope. Postgres-backed `api`, `worker`, and `all` roles own persistence and supervision; they
-do not create a second agent loop. A Deno session remains thread-affine to its runtime shard while the
+do not create a second agent loop. A tm session remains thread-affine to its runtime shard while the
 core loop continues to own accumulation, execution, and result shaping.

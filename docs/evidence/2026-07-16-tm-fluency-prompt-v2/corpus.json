@@ -1,0 +1,168 @@
+{
+  "schemaVersion": "tm-fluency-v1",
+  "cases": [
+    {
+      "id": "read-filter-active-names",
+      "category": "read_filter",
+      "prompt": "Read the fixture list, keep only records whose active field is true, and return their name fields in input order.",
+      "input": [{"name":"miku","active":true},{"name":"teto","active":false},{"name":"rin","active":true}],
+      "expected": ["miku","rin"],
+      "expectedEffects": {"bench.fixture":1}
+    },
+    {
+      "id": "read-filter-todo-lines",
+      "category": "read_filter",
+      "prompt": "Read the fixture string, split it into lines, keep lines containing TODO, and return those lines in order.",
+      "input": "done\nTODO alpha\nnotes\nTODO beta",
+      "expected": ["TODO alpha","TODO beta"],
+      "expectedEffects": {"bench.fixture":1}
+    },
+    {
+      "id": "read-filter-large-sum",
+      "category": "read_filter",
+      "prompt": "Read the fixture numbers, keep values greater than 10, and return their sum.",
+      "input": [4,11,8,13,18],
+      "expected": 42,
+      "expectedEffects": {"bench.fixture":1}
+    },
+    {
+      "id": "read-filter-high-ids",
+      "category": "read_filter",
+      "prompt": "Read the fixture findings, keep severity high, and return their id fields in order.",
+      "input": [{"id":"a","severity":"low"},{"id":"b","severity":"high"},{"id":"c","severity":"high"}],
+      "expected": ["b","c"],
+      "expectedEffects": {"bench.fixture":1}
+    },
+    {
+      "id": "edit-increment-version",
+      "category": "edit",
+      "prompt": "Read the fixture record, produce the same record with version changed to 2, pass that value to bench.write exactly once, and return the written value.",
+      "input": {"name":"miku","version":1},
+      "expected": {"name":"miku","version":2},
+      "expectedEffects": {"bench.fixture":1,"bench.write":1}
+    },
+    {
+      "id": "edit-change-status",
+      "category": "edit",
+      "prompt": "Read the fixture record, change status from draft to ready while preserving id, pass it to bench.write exactly once, and return the written value.",
+      "input": {"id":"P7","status":"draft"},
+      "expected": {"id":"P7","status":"ready"},
+      "expectedEffects": {"bench.fixture":1,"bench.write":1}
+    },
+    {
+      "id": "edit-replace-threshold",
+      "category": "edit",
+      "prompt": "Read the fixture record, preserve enabled and replace threshold with 8, pass it to bench.write exactly once, and return the written value.",
+      "input": {"enabled":true,"threshold":5},
+      "expected": {"enabled":true,"threshold":8},
+      "expectedEffects": {"bench.fixture":1,"bench.write":1}
+    },
+    {
+      "id": "fanout-read-paths",
+      "category": "fanout_read",
+      "prompt": "Read the fixture list and concurrently call bench.item once for every value. Return the ordered list of results.",
+      "input": ["repo:a.rs","repo:b.rs","repo:c.rs"],
+      "expected": ["repo:a.rs","repo:b.rs","repo:c.rs"],
+      "expectedEffects": {"bench.fixture":1,"bench.item":3}
+    },
+    {
+      "id": "fanout-read-numbers",
+      "category": "fanout_read",
+      "prompt": "Read the fixture list and concurrently call bench.item once for every number. Return the ordered list of results.",
+      "input": [2,3,5,7],
+      "expected": [2,3,5,7],
+      "expectedEffects": {"bench.fixture":1,"bench.item":4}
+    },
+    {
+      "id": "fanout-read-records",
+      "category": "fanout_read",
+      "prompt": "Read the fixture list and concurrently call bench.item once for every record. Return the ordered list of results without reshaping them.",
+      "input": [{"id":"x","ok":true},{"id":"y","ok":false},{"id":"z","ok":true}],
+      "expected": [{"id":"x","ok":true},{"id":"y","ok":false},{"id":"z","ok":true}],
+      "expectedEffects": {"bench.fixture":1,"bench.item":3}
+    },
+    {
+      "id": "fanout-read-then-filter",
+      "category": "fanout_read",
+      "prompt": "Read the fixture list, concurrently call bench.item once for every record, then keep only results whose ok field is true and return their id fields.",
+      "input": [{"id":"one","ok":true},{"id":"two","ok":false},{"id":"three","ok":true}],
+      "expected": ["one","three"],
+      "expectedEffects": {"bench.fixture":1,"bench.item":3}
+    },
+    {
+      "id": "approval-write-title",
+      "category": "approval_write",
+      "prompt": "Read the fixture record, preserve id and change title to approved, call approval-gated bench.write exactly once, and return its result.",
+      "input": {"id":17,"title":"pending"},
+      "expected": {"id":17,"title":"approved"},
+      "expectedEffects": {"bench.fixture":1,"bench.write":1}
+    },
+    {
+      "id": "approval-write-enabled",
+      "category": "approval_write",
+      "prompt": "Read the fixture record, preserve feature and set enabled true, call approval-gated bench.write exactly once, and return its result.",
+      "input": {"feature":"memory","enabled":false},
+      "expected": {"feature":"memory","enabled":true},
+      "expectedEffects": {"bench.fixture":1,"bench.write":1}
+    },
+    {
+      "id": "approval-write-bounded-list",
+      "category": "approval_write",
+      "prompt": "Read the fixture list, keep its first two values, call approval-gated bench.write exactly once with that list, and return its result.",
+      "input": ["a","b","c","d"],
+      "expected": ["a","b"],
+      "expectedEffects": {"bench.fixture":1,"bench.write":1}
+    },
+    {
+      "id": "error-recovery-string",
+      "category": "error_recovery",
+      "prompt": "Read the fixture fallback value, call bench.fail exactly once, recover its structured error locally, and return the fixture fallback.",
+      "input": "fallback-ok",
+      "expected": "fallback-ok",
+      "expectedEffects": {"bench.fail":1,"bench.fixture":1}
+    },
+    {
+      "id": "error-recovery-record",
+      "category": "error_recovery",
+      "prompt": "Read the fixture fallback record, call bench.fail exactly once, recover its structured error locally, and return the fixture record.",
+      "input": {"status":"degraded","retryable":false},
+      "expected": {"status":"degraded","retryable":false},
+      "expectedEffects": {"bench.fail":1,"bench.fixture":1}
+    },
+    {
+      "id": "error-recovery-list",
+      "category": "error_recovery",
+      "prompt": "Read the fixture fallback list, call bench.fail exactly once, recover its structured error locally, and return the fixture list.",
+      "input": ["cached","local"],
+      "expected": ["cached","local"],
+      "expectedEffects": {"bench.fail":1,"bench.fixture":1}
+    },
+    {
+      "id": "table-summary-open",
+      "category": "table_summary",
+      "prompt": "Read the fixture rows, keep rows whose state is open, display the resulting rows as a table, and also return those rows as the final value.",
+      "input": [{"id":1,"state":"open"},{"id":2,"state":"closed"},{"id":3,"state":"open"}],
+      "expected": [{"id":1,"state":"open"},{"id":3,"state":"open"}],
+      "requireDisplay": true,
+      "expectedEffects": {"bench.fixture":1}
+    },
+    {
+      "id": "table-summary-adults",
+      "category": "table_summary",
+      "prompt": "Read the fixture rows, keep rows whose age is at least 18, display the resulting rows as a table, and also return those rows as the final value.",
+      "input": [{"name":"a","age":16},{"name":"b","age":18},{"name":"c","age":21}],
+      "expected": [{"name":"b","age":18},{"name":"c","age":21}],
+      "requireDisplay": true,
+      "expectedEffects": {"bench.fixture":1}
+    },
+    {
+      "id": "table-summary-high-scores",
+      "category": "table_summary",
+      "prompt": "Read the fixture rows, keep rows whose score is greater than 7, display the resulting rows as a table, and also return those rows as the final value.",
+      "input": [{"name":"miku","score":9},{"name":"teto","score":7},{"name":"rin","score":8}],
+      "expected": [{"name":"miku","score":9},{"name":"rin","score":8}],
+      "requireDisplay": true,
+      "expectedEffects": {"bench.fixture":1}
+    }
+  ]
+}

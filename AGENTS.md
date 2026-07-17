@@ -15,7 +15,6 @@
 - Existing crates/apps:
   - `crates/tm-core`: message types, streaming agent loop, result shaping, `LlmClient`, `Sandbox`, `EventSink` traits.
   - `crates/tm-llm`: OpenAI-compatible streaming SSE client.
-  - `crates/tm-sandbox`: M0 `StubSandbox` plus the M1 `deno_core` JS/TS backend with persistent cells, timeout/reset, output spill, resource reads, SDK prelude, and host-call bridge.
   - `crates/tm-artifacts`: session artifacts and content-addressed blob storage.
   - `crates/tm-host`: host registry, capability grants, approval policy, resource registry, linked folders, `fs.*`, `code.*`, and argv-vector `proc.run`.
   - `crates/tm-modes`: mode catalog, routing, voice caps, and configurable mode/skill asset status.
@@ -25,9 +24,14 @@
     job/tombstone/readiness contracts, and P8.3 local embedding plus deterministic hybrid-RRF
     contracts.
   - `crates/tm-drive`: local-first drive entries, transducers, virtual directories/search, organizer proposals, linked-folder policy, and `drive://` resources.
+  - `crates/tm-lang`: the sole `execute(code)` runtime: `tm` lexer, parser, checker, persistent
+    interpreter, effect machine, host/resource/artifact wiring, and `Sandbox` adapter. Its T0-T7
+    public HTTP/SSE, approval, runtime-loss, real-Postgres replay, client, and historical comparative
+    fluency gates pass.
   - `crates/tm-server`: authenticated axum session API, durable turn queue, replayable SSE/event store, ordered Postgres migrations including the P8.3 scoped hybrid-memory spine, supervised runtime roles, durable approvals/dreams/cron/drive state, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
-  - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and Deno sandbox by default; `--stub-sandbox` remains for protocol tests.
-  - `apps/tm-e2e`: local/dev public-API workflow harness for scripted and opt-in live session smoke coverage.
+  - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and sole tm-lang sandbox.
+  - `apps/tm-e2e`: local/dev public-API workflow harness for scripted and opt-in live session smoke
+    coverage. The retired TypeScript-versus-tm runner survives only as historical evidence/corpus.
   - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.
 - The P4/P5 production-hardening implementation has landed: ordered checksummed migrations,
   transactional session end, durable approval effects, fenced dream/cron leases, `api|worker|all`
@@ -58,10 +62,10 @@
   inspection, typed approved extraction, and lumo quality/restart/fallback gates all pass. Its
   post-closeout contract also requires serialized scope revocation/approved writes, monotonic
   scope-revision-pinned embedding activation, authority-first dense queries, and balanced 2/2/1
-  prompt allocation. P7.2b
-  approval-backed persona addenda is now active, followed by P9 egress/secrets and P10 MCP/live
-  research. `tm-trace`, cloud
-  sync, AST/LSP, and extra sandbox backends are demand-triggered; aggressive self-evolution is out.
+  prompt allocation. The owner-priority tm-lang runtime slice is closed and default; P7.2b
+  approval-backed persona addenda is active, followed by P9 egress/secrets and P10 MCP/live
+  research. `tm-trace`, cloud sync, AST/LSP, and any future second sandbox backend are
+  demand-triggered; aggressive self-evolution is out.
 
 ## Read before changing code
 
@@ -94,12 +98,11 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. Implement P7.2b from `TODO.md`: Auto mode may create bounded, evidence-backed persona addendum
-   proposals, but durable manual approval is the only activation/rollback path. Preserve identity,
-   `SOUL.md`, safety, modes, voice caps, skills, scopes, and capability invariants.
-2. Continue with P9 egress/opaque secrets only after P7.2b closes, then P10 MCP/live research.
-3. Keep the native/OMP boundary boring: OMP ACP remains replaceable, while native Deno remains the
-   dogfood path for `fs.*` / `code.*` / `proc.*`, artifacts, and HTTP-routed approvals.
+1. Implement P7.2b from `TODO.md`: bounded evidence-backed persona addendum proposals with durable
+   manual approval as the only activation/rollback path.
+2. Continue with P9 egress/opaque secrets after P7.2b, then P10 MCP/live research.
+3. Keep the native/OMP boundary boring: OMP ACP remains replaceable; tm-lang uses the existing
+   `Sandbox` and host approval/artifact/resource boundaries.
 
 Do not start yet unless explicitly requested:
 
@@ -136,7 +139,7 @@ Do not start yet unless explicitly requested:
 ## Commit messages
 
 - Use the repository Conventional Commit dialect in `docs/commit-messages.md`: `<type>(<machine>/<scope>): <subject>`.
-- Prefer stable machine/scope pairs from the spec, for example `core/agent-loop`, `sandbox/deno`, `host/approval`, `server/sse`, `web/approvals`, `docs/roadmap`, or `repo/workspace`.
+- Prefer stable machine/scope pairs from the spec, for example `core/agent-loop`, `sandbox/tm`, `host/approval`, `server/sse`, `web/approvals`, `docs/roadmap`, or `repo/workspace`.
 - Split unrelated intents into separate commits; keep tests, callsite migrations, and required docs with the behavior they prove or describe.
 
 ## Documentation rules

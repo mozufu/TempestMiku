@@ -8,7 +8,7 @@
       "voiceCap": "medium",
       "defaultScope": "global",
       "activeSkills": ["miku-voice", "personal-assistant-state-capture"],
-      "capabilities": ["memory.recall", "memory.propose", "drive.*", "resources.read:drive", "resources.read:skill"],
+      "capabilities": ["memory.recall", "memory.propose", "drive.*", "research.drive", "resources.read:drive", "resources.read:skill"],
       "capabilityClass": "conversation",
       "route": {
         "isDefault": true,
@@ -23,7 +23,7 @@
       "voiceCap": "off",
       "defaultScope": "project:tempestmiku",
       "activeSkills": ["serious-engineer-ops"],
-      "capabilities": ["fs.*", "code.*", "proc.*", "drive.*", "resources.read:drive", "resources.read:linked", "resources.read:skill", "backend.coding"],
+      "capabilities": ["fs.*", "code.*", "proc.*", "drive.*", "research.drive", "resources.read:drive", "resources.read:linked", "resources.read:skill", "backend.coding"],
       "capabilityClass": "engineering",
       "route": {
         "priority": 70,
@@ -56,7 +56,7 @@
       "voiceCap": "off",
       "defaultScope": "project:tempestmiku",
       "activeSkills": ["oh-my-pi-handoff"],
-      "capabilities": ["agents.*", "drive.*", "resources.read:drive", "resources.read:skill", "backend.coding"],
+      "capabilities": ["agents.*", "drive.*", "research.drive", "resources.read:drive", "resources.read:skill", "backend.coding"],
       "capabilityClass": "handoff",
       "route": {
         "priority": 100,

@@ -76,6 +76,71 @@ fn bundled_layered_skills_have_expected_activation_and_triggers() {
 }
 
 #[test]
+fn runtime_fluency_skill_is_pinned_before_identity_for_every_mode() {
+    let config = ModesConfig::default();
+    let assets = config.load_assets();
+    let skill = assets
+        .skills
+        .get("tm-lang-fluency")
+        .expect("runtime fluency skill");
+    assert!(skill.contains("fun value -> expr"));
+    assert!(!skill.contains("`remove` deletes"));
+    assert!(!skill.contains("stale tag"));
+
+    for profile in &assets.modes.modes {
+        let prompt = config.build_system_prompt(&profile.mode, "base", "", "");
+        let fluency = prompt
+            .system_prompt
+            .find("# tm Language Fluency")
+            .expect("runtime fluency guidance");
+        let soul = prompt
+            .system_prompt
+            .find("## SOUL.md")
+            .expect("SOUL section");
+        assert!(
+            fluency < soul,
+            "runtime fluency must precede identity skills"
+        );
+    }
+}
+
+#[test]
+fn configured_assets_cannot_replace_runtime_fluency_skill() {
+    let root = temp_modes_root();
+    write_fixture(
+        &root,
+        true,
+        &["custom-skill", "tm-lang-fluency"],
+        Some(custom_modes_json()),
+    );
+
+    let config = ModesConfig::from_path(&root);
+    let assets = config.load_assets();
+    assert!(
+        assets
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("cannot replace the runtime-owned bundled contract"))
+    );
+    let skill = assets
+        .skills
+        .get("tm-lang-fluency")
+        .expect("pinned runtime skill");
+    assert!(skill.contains("fun value -> expr"));
+    assert!(!skill.contains("fixture skill body"));
+
+    let prompt = config.build_system_prompt(&ModeId::from("custom_runtime_mode"), "base", "", "");
+    assert!(prompt.system_prompt.contains("# tm Language Fluency"));
+    assert!(
+        !prompt
+            .system_prompt
+            .contains("tm-lang-fluency fixture skill body")
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn composed_prompt_never_leaks_skill_frontmatter_or_mode_metadata() {
     let catalog = ModesConfig::default().load_assets().modes;
     for profile in &catalog.modes {
@@ -268,7 +333,9 @@ fn mode_profiles_map_expected_skills_voice_and_scope() {
         .expect("serious profile");
     assert_eq!(serious.active_skills, vec!["serious-engineer-ops"]);
     assert!(serious.has_capability("fs.read"));
-    assert!(serious.has_capability("code.edit"));
+    assert!(serious.has_capability("fs.patch"));
+    assert!(serious.has_capability("fs.move"));
+    assert!(serious.has_capability("fs.remove"));
     assert!(serious.has_capability("proc.run"));
     assert!(serious.has_capability("resources.read:linked"));
     assert!(serious.has_capability("backend.coding"));

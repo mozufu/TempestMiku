@@ -13,7 +13,8 @@ rendered by help/checker output as an effect signature:
 eff fs.read   : (path: Path) -> ResourceContent
 eff fs.write  : (path: Path, data: Data) -> Unit
 eff http.get  : (url: Url) -> Bytes
-eff code.edit : (patch: Patch) -> Unit
+eff fs.patch  : (path: Path, tag: Tag, hunks: List Hunk) -> PatchResult
+eff fs.remove : (path: Path, tag: Tag) -> RemoveResult
 eff proc.run  : (cmd: String, args: List String) -> ProcResult
 ```
 
@@ -105,19 +106,18 @@ the decision. The effective approval policy decides whether a particular perform
 
 Resumability is handler metadata, not call-site punctuation. `@` already marks the stable
 language boundary that matters for authority, type checking, provenance, and review.
-Encoding policy as `!` in `@code.edit!` or `<code.edit!>` would conflate capability identity
+Encoding policy as `!` in `@fs.remove!` or `<fs.remove!>` would conflate capability identity
 with deployment/session policy and would misleadingly resemble a mutation marker. The source
 therefore uses the same `@capability` form for every host effect.
 
 ```
 do {
-  let before = @fs.read workspace:config.json;
-  @code.edit {patch: replace "v1" "v2" before};
-  display {kind: "text"} "patched"
+  @fs.remove target;
+  display {kind: "text"} "removed"
 }
 ```
 
-Control flow under approval policy `always` for `code.edit`:
+Control flow under approval policy `always` for `fs.remove`:
 
 ```mermaid
 sequenceDiagram
@@ -126,19 +126,19 @@ sequenceDiagram
   participant H as Host handler
   participant E as Event sink / UI
   participant U as User
-  M->>I: @code.edit {patch} performs code.edit
+  M->>I: @fs.remove target performs fs.remove
   I->>H: effect + continuation
   I-->>E: effect_suspended
-  H->>U: approval prompt (patch diff)
+  H->>U: approval prompt (file removal)
   U-->>H: approve
   H->>I: resume ()
   I-->>E: effect_resumed
-  I->>M: continue → display {kind: "text"} "patched"
+  I->>M: continue → display {kind: "text"} "removed"
 ```
 
-Under policy `on-write` the same code might not suspend at all if the session pre-approved
-writes. **The model's code is identical either way.** The policy is a handler config, not a
-language construct the model has to branch on.
+Other effects may use `on-write` and skip suspension when the session already approved that
+class of write; current `fs.remove` remains `always`. **The model's source form is identical
+either way.** Policy is handler config, not a language construct the model has to branch on.
 
 ### Why this matters
 
@@ -166,7 +166,9 @@ The approval boundary (AGENTS.md: "manual approvals" as a parity invariant) beco
 | `@fs.read` / `@fs.ls` / `@fs.find` | `fs.read` / `fs.ls` / `fs.find` | normally none |
 | `@fs.write` | `fs.write` | `on-write`, resumable |
 | `@code.search` | `code.search` | normally none |
-| `@code.edit` | `code.edit` | `on-write`, resumable |
+| `@fs.patch` | `fs.patch` | none after the linked-folder write grant and fresh-tag check |
+| `@fs.move` | `fs.move` | `on-overwrite`, resumable |
+| `@fs.remove` | `fs.remove` | `always`, resumable |
 | `@proc.run` | `proc.run` | `always`, resumable per §7 |
 | `@resources.read` / `@resources.preview` / `@resources.list` | `resources.read` / `resources.preview` / `resources.list` | none |
 | `@artifacts.put` / `@artifacts.get` / `@artifacts.slice` / `@artifacts.list` | `artifacts.put` / `artifacts.get` / `artifacts.slice` / `artifacts.list` | capability-specific, normally none |

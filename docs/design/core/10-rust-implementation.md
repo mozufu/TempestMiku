@@ -7,7 +7,7 @@ tempest-miku/
 ├── crates/
 │   ├── tm-core/        # message types, the agent loop, result-shaping policy, config
 │   ├── tm-llm/         # OpenAI-compatible client (chat + streaming), LlmClient trait
-│   ├── tm-sandbox/     # Sandbox/Session traits + backends (stub, deno_core; more planned)
+│   ├── tm-lang/        # sole tm language/runtime, Sandbox adapter, host/resource wiring
 │   ├── tm-host/        # host capability registry, linked folders, approvals, resource handlers (§9.2)
 │   ├── tm-artifacts/   # content-addressed artifact store
 │   ├── tm-modes/       # runtime mode catalog, default scopes, voice caps, mode/skill asset status
@@ -168,8 +168,8 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
 
 ### 10.4 Conventions
 
-- **Async runtime:** Tokio. `deno_core` sessions are single-thread-affine and evaluated on their
-  owning task/thread; a timeout helper terminates the V8 isolate on wall-clock budget expiry.
+- **Async runtime:** Tokio. tm sessions are single-thread-affine and evaluated on their owning
+  task/thread; runtime limits and cancellation bound wall-clock work.
 - **Errors:** `thiserror` per crate, `anyhow` at the binary edge. Sandbox errors are *data*
   returned to the model, not host failures.
 - **Serialization:** `serde` everywhere; the op boundary is `serde_json::Value`.
@@ -178,16 +178,14 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
 
 ### 10.5 Current implementation boundary
 
-The M0 stub path still exists, but only as a protocol-test and explicit `--stub-sandbox` fallback.
-The default CLI path now wires the streaming `Agent` to `DenoSandbox`, backed by the same
-`Sandbox` / `Session` traits. The runtime installs the first-pass JS/TS SDK prelude (`print`,
-`display`, `tools`, `resources`, `artifacts`, `fs`, `code`, `proc`, plus default-deny allowlisted
-`http.get`),
-uses `tm-artifacts` for spill/readback, and calls host capabilities through `tm-host` grants,
-resource handlers, and approval policy.
+CLI and server wire the streaming `Agent` to the sole `TmSandbox`, backed by the existing
+`Sandbox` / `Session` traits. tm-lang owns the persistent interpreter plus host setup for `print`,
+`display`, catalog/resource/artifact effects, linked-folder capabilities, drive/research, actors,
+and default-deny allowlisted `http.get`. It uses `tm-artifacts` for spill/readback and calls host
+capabilities through exact `tm-host` grants, resource handlers, and approval policy.
 
 The server path now has two coding backends behind the same `CodingBackend` interface: the
-replaceable P0a `omp_acp` bridge and the native Deno backend. The native Serious Engineer backend
+replaceable P0a `omp_acp` bridge and the native tm backend. The native Serious Engineer backend
 maps approval-gated host calls such as unsafe `proc.run`, overwrites, and destructive edits into the
 same durable approval surface used by the client API; timeout still denies by default. Normal turns
 receive only their exact mode/session grants, including `modes.suggest` only when unlocked; registered
@@ -196,14 +194,14 @@ handlers and configured storage do not expand that set.
 `tm-server` upgrades Postgres with ordered checksummed migrations and exposes role-separated
 supervision: `api` serves authenticated HTTP/SSE, `worker` dispatches turns and runs approval effects,
 dreams, and cron, and `all` combines them. Worker roles require Postgres. Turn workers serialize each
-session while allowing bounded concurrency across sessions; native V8 state is kept on deterministic
+session while allowing bounded concurrency across sessions; native tm state is kept on deterministic
 thread-affine shards and is reset—not replayed—after restart/TTL eviction. The core agent loop remains
 the only owner of message accumulation and execution.
 
 That boundary remains deliberate:
 
 - model-visible behavior still goes through one `execute(code)` tool;
-- the loop never depends on stub- or Deno-specific behavior;
+- the loop never depends on tm interpreter internals;
 - product features target the trait boundary and host registry, not ambient runtime APIs;
-- real-repo reach stays behind linked-folder grants, `code.edit`, and argv-vector `proc.run`;
-- the stub remains useful for deterministic loop tests without creating a second agent loop.
+- real-repo reach stays behind linked-folder grants, `fs.patch`, and argv-vector `proc.run`;
+- deterministic loop tests use test-local `Sandbox` implementations rather than a shipped backend.

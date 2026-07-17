@@ -30,6 +30,7 @@ pub use types::{Mode, ModeCatalog, ModeId, ModeProfile, ModeRoute, SkillActivati
 pub(crate) use assets::MISSING_SKILL_PROMPT_FALLBACK;
 
 pub const KNOWN_SKILLS: &[&str] = &[
+    "tm-lang-fluency",
     "miku-voice",
     "ambiguity-grill",
     "negative-state-grounding",

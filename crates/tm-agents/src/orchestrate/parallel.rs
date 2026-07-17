@@ -21,7 +21,7 @@ impl AgentsParallelFn {
                      Requires agents.parallel grant."
                         .to_string(),
                 ),
-                signature: "agents.parallel(tasks: AgentTask[]): Promise<AgentDigest[]>".to_string(),
+                signature: "@agents.parallel {tasks} -> List AgentDigest".to_string(),
                 args_schema: json!({
                     "type": "object",
                     "required": ["tasks"],
@@ -52,7 +52,7 @@ impl AgentsParallelFn {
                 result_schema: Some(json!({ "type": "array", "items": { "type": "object" } })),
                 examples: vec![ToolExample {
                     title: Some("Research three topics in parallel".to_string()),
-                    code: "const results = await agents.parallel([\n  { role: 'researcher', task: 'Summarize §21' },\n  { role: 'researcher', task: 'Summarize §22' },\n]);\nresults.forEach(d => display(d.summary));"
+                    code: "let results = @agents.parallel {tasks: [\n  {role: \"researcher\", task: \"Summarize §21\"},\n  {role: \"researcher\", task: \"Summarize §22\"}\n]};\nresults |> map (fun d -> d.summary) |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some(
                         "Digests only — use d.historyUri for the full output of each actor."

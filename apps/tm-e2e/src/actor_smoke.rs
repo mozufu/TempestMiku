@@ -45,7 +45,7 @@ pub async fn run_actor_smoke(client: &MikuClient) -> Result<ActorSmokeReport> {
 
     let (approval_events, approval) = client
         .wait_for_event(&session.id, Some(last_event_id), |event| {
-            event.event_type == "approval" && event.data["backend"] == json!("native-deno")
+            event.event_type == "approval" && event.data["backend"] == json!("native-tm")
         })
         .await?;
     let replay_anchor = approval_events

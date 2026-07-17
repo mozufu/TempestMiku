@@ -12,7 +12,6 @@ repository = "https://github.com/mozufu/TempestMiku"
 # internal
 tm-core = { path = "crates/tm-core" }
 tm-llm = { path = "crates/tm-llm" }
-tm-sandbox = { path = "crates/tm-sandbox" }
 tm-artifacts = { path = "crates/tm-artifacts" }
 tm-host = { path = "crates/tm-host" }
 tm-modes = { path = "crates/tm-modes" }
@@ -20,6 +19,7 @@ tm-server = { path = "crates/tm-server" }
 tm-agents = { path = "crates/tm-agents" }
 tm-memory = { path = "crates/tm-memory" }
 tm-drive = { path = "crates/tm-drive" }
+tm-lang = { path = "crates/tm-lang" }
 
 # async + runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time", "process", "signal"] }
@@ -36,6 +36,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
 bytes = "1"
+libc = "0.2"
 
 # http + serde
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
@@ -52,9 +53,6 @@ url = "2"
 regex = "1"
 globset = "0.4"
 ignore = "0.4"
-deno_ast = { version = "=0.53.2", features = ["transpiling"] }
-deno_error = "=0.7.1"
-
 agent-client-protocol = "1.0.0"
 
 # errors + tracing

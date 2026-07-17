@@ -67,9 +67,9 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 
 | OMP tool | TempestMiku SDK | Notes |
 |---|---|---|
-| read / write / ls | `fs.read/write/ls` | jail or linked folder (§24.4) |
+| read / write / patch / move / remove / ls | `fs.read/write/patch/move/remove/ls` | jail or linked folder (§24.4) |
 | search (regex) / find (glob) | `code.search` / `fs.find` | RE2-style regex + glob |
-| edit / ast-grep / ast-edit | `code.edit` / `code.ast` | surgical + structural |
+| edit / ast-grep / ast-edit | `fs.patch` / `code.ast` | surgical + structural |
 | lsp | `code.lsp` | defs / refs / rename / diagnostics |
 | eval (persistent kernel) | the `execute` loop itself | already the core (§05) |
 | task / job / irc | `agents.*` | §23 |
@@ -132,11 +132,16 @@ unknown capabilities.
 
 Each linked folder also registers a `linked://<alias>/` resource root (§9.3). `linked://` is the
 read/list/preview route for UI and model inspection; writes and commands stay on the explicit SDK paths
-(`fs.write`, `code.edit`, `proc.run`). Local vs remote is hidden behind the grant's host connector, so a
+(`fs.write`, `fs.patch`, `proc.run`). Local vs remote is hidden behind the grant's host connector, so a
 folder keeps the same URI if it moves from an in-process adaptor to a remote connector.
 
-First `code.edit` is **patch edit only**. LSP (`code.lsp`) and AST (`code.ast`) stay in the SDK map
-but are later milestones, not part of the first serious-engineer cut.
+`fs.patch` is **patch only**: it requires an existing UTF-8 file plus a fresh tag, exact
+`expectedLines` for replace/delete ranges or `expectedLine` for relative inserts, applies one atomic
+file update, preserves a uniform file's LF or CRLF convention, returns a bounded contextual diff
+preview, and spills larger diffs to `artifact://`.
+New files use `fs.write`; moves and destructive removal use `fs.move` and `fs.remove`. LSP
+(`code.lsp`) and AST (`code.ast`) stay in the SDK map but are later milestones, not part of the
+first serious-engineer cut.
 
 ### 25.2.2 Current JS/TS runtime contract
 
@@ -158,11 +163,20 @@ Product-layer scope is intentionally narrower than the full translation map:
   `NotImplementedError`.
 - **Read shape:** `fs.read` and `resources.read` return the shared `ResourceContent` envelope, never a
   naked string.
-- **Edit shape:** `code.edit` takes JSON hunks, not a string patch grammar.
+- **Patch shape:** `fs.patch` takes explicit JSON `replace`, `delete`, `insertBefore`,
+  `insertAfter`, `prepend`, or `append` hunks, never a string patch grammar or optional `at` union.
+  Replace/delete ranges carry exact `expectedLines`; relative inserts carry an exact
+  `expectedLine`, so a fresh whole-file tag cannot make a mistaken line range silently valid.
+- **Filesystem mutation shape:** new files use `fs.write`; file moves and removals use `fs.move`
+  and approval-gated `fs.remove`, never patch hunks.
 - **Process shape:** `proc.run(cmd, args, opts)` is argv-vector only. Shell strings, pipes, redirects,
-  and command concatenation are not accepted.
-- **Approval shape:** in the native server Serious Engineer backend, approval-gated `fs.*`,
-  `code.*`, and unsafe `proc.run` actions suspend through the same `approval` SSE event and
+  and command concatenation are not accepted. Timeout and cancellation terminate the command's
+  complete process group on Unix rather than leaving descendant compilers or test workers alive.
+  The host config owns a bounded default/maximum timeout (180 seconds by default, at most 900
+  seconds); benchmark profiles may opt into a larger value without changing production defaults.
+- **Approval shape:** in the native server Serious Engineer backend, `fs.write` overwrites,
+  `fs.move` overwrites, `fs.remove`, and unsafe `proc.run` actions suspend through the same
+  `approval` SSE event and
   `POST /sessions/:id/approvals/:approval_id` route as ACP permissions. `manual` mode waits for that
   route; `deny` and timeouts fail closed.
 

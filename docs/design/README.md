@@ -39,13 +39,10 @@ Design doc, split by section. Read in order or jump to a section:
 28. [Product roadmap](../../ROADMAP.md#product-roadmap-28)
 29. [Parity baseline — the current deployment](product/29-parity-baseline.md)
 
-## Experimental: the `tm` language
+## Shipping language: `tm`
 
-> Status: **fun / experimental**, not a committed milestone. A design exploration of what an
-> agent-first language for `execute(code)` would look like — a persistent effectful REPL with
-> a structured execution trace and declarative presentation for the client UI.
-> Does not change §6.1 (TS on `deno_core` is the shipping sandbox language); `tm` would be a
-> third `Sandbox` backend that gives capability gating, approval suspension, provenance, replay,
-> and UI projection one observable execution model. Its source syntax is now fixed in the
-> experimental [tm language reference](tm/07-language-reference.md). See
+> Status: **implemented and sole runtime**. tm is the persistent effectful language for
+> `execute(code)`, with structured execution traces and declarative presentation for the client UI.
+> Its source syntax is frozen in the
+> [tm language reference](tm/07-language-reference.md). See
 > [`tm/README.md`](tm/README.md).

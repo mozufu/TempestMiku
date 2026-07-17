@@ -180,7 +180,7 @@ impl ActorExecutor for ChatActorExecutor {
             return Err(ActorError::Cancelled);
         }
 
-        // DenoSandbox sessions are !Send (Deno JS runtime is single-threaded), so we
+        // TmSandbox sessions are !Send, so we
         // cannot await agent.run() directly in an async_trait Send future. Spawn a
         // dedicated thread with its own single-threaded tokio runtime — the same
         // isolation pattern as AgentChatRunner, but one thread per actor call rather

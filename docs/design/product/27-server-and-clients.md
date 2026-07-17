@@ -28,7 +28,7 @@ Android release, certificate, and secret-leak verification matrix.
   bounded catch-up, exact capabilities, and `cron_mode: deny`; prompt text is never the boundary.
 - **Replayable** (core principle #6): every client surface is a **view over one ordered event
   stream**, so a session can be resumed, audited, and reproduced.
-- **No on-device sandbox** (decision A): V8 / `deno_core` stays on the server; clients never execute code.
+- **No on-device sandbox** (decision A): tm-lang stays on the server; clients never execute code.
 
 ## 27.1 `tm-server` & the session event stream
 
@@ -71,8 +71,8 @@ deduplication; there is no named-event compatibility stream.
   while workers process different sessions concurrently. Queued turns resume after restart; stale
   running turns fail rather than replay possible side effects.
 - **History/runtime recovery.** A turn restores the newest 40 complete messages within 128 KiB into
-  the sole core loop. V8 state is thread-affine and not snapshotted: restart or TTL eviction opens a
-  clean isolate and emits `runtime_reset`, never re-executing old cells.
+  the sole core loop. tm interpreter state is thread-affine and not snapshotted: restart or TTL
+  eviction opens a clean session and emits `runtime_reset`, never re-executing old cells.
 - **Single-owner auth.** `auth_devices` stores revocable hashed credentials. Android sends bearer
   auth on every request/SSE; Web uses the same device through a Secure/HttpOnly/SameSite=Strict cookie
   plus origin-based CSRF checks. Pairing codes are hashed, single-use, random 256-bit values with a
@@ -358,7 +358,7 @@ persisted unlink tombstones revoke project access immediately.
 
 Coding execution is a backend choice behind the same API. `TM_OMP_ACP_ENABLED=1` dispatches Serious
 Engineer / Handoff turns to the P0a OMP ACP bridge; otherwise, when a real LLM is configured,
-`tm-server` uses the native Deno coding backend. The client API does not change: ACP and native Deno
+`tm-server` uses the native tm coding backend. The client API does not change: ACP and native tm
 events normalize into the same durable `session_event` envelope.
 
 `POST /sessions/:id/promote` turns an ad-hoc session into a project or merges it into an existing one.
@@ -378,7 +378,7 @@ The server is the **client-side of the proactivity bounds** (§21.3, §08). Gate
 `approval_requests` persists origin, action, scope/options, expiry, status, and resumability;
 `approval_effects` is an idempotent outbox. Resolution uses compare-and-swap and appends its event in
 the same transaction. Local notification plus store polling lets another process resolve/apply an
-effect exactly once. ACP/V8 waits are non-resumable and cancel after origin loss; durable
+effect exactly once. ACP/native-runtime waits are non-resumable and cancel after origin loss; durable
 memory/skill/drive proposal effects can resume after restart. After an idempotent proposal mutation,
 the terminal `write_proposal` append and effect `applied` transition commit atomically; broadcast is
 post-commit, so a crash or local publish failure is recovered through durable event replay.
@@ -418,7 +418,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   into the same `approval` event + POST resolution path; unsupported or timed-out prompts deny by
   default. If the bridge process disappears, its outstanding non-resumable requests are cancelled;
   they are never replayed into a new backend process.
-- **Native Deno coding backend:** `manual` mode maps host `ApprovalPolicy` requests for approval-gated
+- **Native tm coding backend:** `manual` mode maps host `ApprovalPolicy` requests for approval-gated
   `fs.*`, `code.*`, and unsafe `proc.run` calls into the same `ApprovalBroker`; approve, deny, and
   timeout are observable as `approval` / `approval_resolved` events. `deny` mode keeps default-deny
   behavior.
@@ -443,8 +443,8 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 - `roles` — model-role resolution + fallback (delegates to `tm-llm` §10).
 - `auth` — single-owner device records, hashed five-minute pairing codes, bearer/cookie+CSRF auth,
   local token/no-auth debug modes, and trusted-CIDR forwarded identity.
-- `coding_backend` / `native_deno` / `omp_acp` — the common backend interface, native Serious
-  Engineer Deno backend, and P0a adapter that owns the `omp acp` subprocess, JSON-RPC framing, event
+- `coding_backend` / `native_tm` / `omp_acp` — the common backend interface, native Serious
+  Engineer tm backend, and P0a adapter that owns the `omp acp` subprocess, JSON-RPC framing, event
   normalization, permission translation, and bridge health/version checks.
 - Clients live **outside** the Rust workspace: `clients/miku_flutter` (one codebase targeting
   Web/PWA and Android) plus `clients/miku_web` smoke/evidence tests (§28).
@@ -485,7 +485,7 @@ Flutter Web UI through Playwright, and writes a human-openable evidence bundle u
 
 Normal `cargo test` uses scripted API/actor coverage and an in-process `tm-server` fixture, so it stays
 network-free and does not require Flutter or Playwright. Live actor recordings require
-`TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native Deno engineering keeps focused server tests
+`TM_LLM_E2E_LIVE=1` plus `OPENAI_*` configuration. Native tm engineering keeps focused server tests
 for `fs.*`, `code.*`, `proc.*`, artifacts, and approval approve/deny/timeout paths, while
 `cargo run -p tm-e2e -- record native-coding` now composes those contracts through the public API in
 one offline evidence run. It patches a disposable linked crate, runs a targeted argv-vector test,

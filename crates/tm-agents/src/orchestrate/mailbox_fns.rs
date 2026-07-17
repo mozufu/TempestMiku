@@ -23,8 +23,7 @@ impl AgentsBroadcastFn {
                      are rejected. Returns one receipt per target. Requires agents.broadcast grant."
                         .to_string(),
                 ),
-                signature:
-                    "agents.broadcast(text: string): Promise<AgentBroadcastReceipt[]>".to_string(),
+                signature: "@agents.broadcast {text} -> List AgentBroadcastReceipt".to_string(),
                 args_schema: json!({
                     "type": "object",
                     "required": ["text"],
@@ -46,7 +45,7 @@ impl AgentsBroadcastFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Notify all direct children".to_string()),
-                    code: "const receipts = await agents.broadcast('Please send your final status when ready.');"
+                    code: "let receipts = @agents.broadcast {text: \"Please send your final status when ready.\"}"
                         .to_string(),
                     notes: Some(
                         "A failed receipt means that target was unreachable or backpressured — move on."
@@ -124,9 +123,7 @@ impl AgentsCancelFn {
                      children, may cancel an actor. Requires agents.cancel grant."
                         .to_string(),
                 ),
-                signature:
-                    "agents.cancel(target: AgentHandle | string): Promise<AgentCancelReceipt>"
-                        .to_string(),
+                signature: "@agents.cancel {target} -> AgentCancelReceipt".to_string(),
                 args_schema: json!({
                     "type": "object",
                     "required": ["target"],
@@ -147,7 +144,7 @@ impl AgentsCancelFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Cancel a child worker".to_string()),
-                    code: "const worker = await agents.spawn('worker', 'Monitor the queue');\nconst receipt = await agents.cancel(worker);\ndisplay(receipt);"
+                    code: "let worker = @agents.spawn {role: \"worker\", task: \"Monitor the queue\"};\nlet receipt = @agents.cancel {target: worker};\nreceipt |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some(
                         "A cancelled actor is terminal; future sends to it return failed receipts."
@@ -231,7 +228,7 @@ impl AgentsSendFn {
                      Requires agents.send grant."
                         .to_string(),
                 ),
-                signature: "agents.send(to: AgentHandle | string, text: string, opts?: SendOpts): Promise<AgentReceipt | AgentMessage | null>"
+                signature: "@agents.send AgentSendArgs -> AgentReceipt | AgentMessage | null"
                     .to_string(),
                 args_schema: json!({
                     "type": "object",
@@ -258,7 +255,7 @@ impl AgentsSendFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Send a live actor message".to_string()),
-                    code: "const receipt = await agents.send(worker, 'Please send your status when ready.');"
+                    code: "let receipt = @agents.send {to: worker, text: \"Please send your status when ready.\"}"
                         .to_string(),
                     notes: Some(
                         "A failed receipt means unreachable or backpressured — move on."
@@ -349,7 +346,7 @@ impl AgentsWaitFn {
                      descendant. Returns null on timeout. Requires agents.wait grant."
                         .to_string(),
                 ),
-                signature: "agents.wait(from?: AgentHandle | string, timeoutMs?: number): Promise<AgentMessage | null>"
+                signature: "@agents.wait AgentWaitArgs -> AgentMessage | null"
                     .to_string(),
                 args_schema: json!({
                     "type": "object",
@@ -371,7 +368,7 @@ impl AgentsWaitFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Wait for a worker reply".to_string()),
-                    code: "const msg = await agents.wait(worker, 5000);\nif (msg) display(msg.text);"
+                    code: "let msg = @agents.wait {from: worker, timeoutMs: 5000};\nmsg |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some("null means timeout; do not retry-loop.".to_string()),
                 }],
@@ -438,7 +435,7 @@ impl AgentsInboxFn {
                      agents.inbox grant."
                         .to_string(),
                 ),
-                signature: "agents.inbox(): Promise<AgentMessage[]>".to_string(),
+                signature: "@agents.inbox {} -> List AgentMessage".to_string(),
                 args_schema: json!({
                     "type": "object",
                     "additionalProperties": false,
@@ -447,7 +444,7 @@ impl AgentsInboxFn {
                 result_schema: Some(json!({ "type": "array", "items": { "type": "object" } })),
                 examples: vec![ToolExample {
                     title: Some("Drain pending messages".to_string()),
-                    code: "for (const msg of await agents.inbox()) display(msg.text);".to_string(),
+                    code: "let messages = @agents.inbox {};\nmessages |> map (fun msg -> msg.text) |> display {kind: \"json\"}".to_string(),
                     notes: None,
                 }],
                 errors: vec![denied_error_doc()],
@@ -501,7 +498,7 @@ impl AgentsListFn {
                      last activity timestamp, and resource links. Requires agents.list grant."
                         .to_string(),
                 ),
-                signature: "agents.list(): Promise<AgentRosterEntry[]>".to_string(),
+                signature: "@agents.list {} -> List AgentRosterEntry".to_string(),
                 args_schema: json!({
                     "type": "object",
                     "additionalProperties": false,
@@ -510,7 +507,7 @@ impl AgentsListFn {
                 result_schema: Some(json!({ "type": "array", "items": { "type": "object" } })),
                 examples: vec![ToolExample {
                     title: Some("Show live actors".to_string()),
-                    code: "const actors = await agents.list();\ndisplay(actors, { kind: 'json' });"
+                    code: "let actors = @agents.list {};\nactors |> display {kind: \"json\"}"
                         .to_string(),
                     notes: None,
                 }],

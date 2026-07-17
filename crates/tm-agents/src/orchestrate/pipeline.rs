@@ -33,7 +33,7 @@ impl AgentsPipelineFn {
                         .to_string(),
                 ),
                 signature:
-                    "agents.pipeline(items: JsonValue[], ...stages: AgentPipelineStage[]): Promise<AgentDigest[][]>"
+                    "@agents.pipeline AgentPipelineArgs -> List (List AgentDigest)"
                         .to_string(),
                 args_schema: json!({
                     "type": "object",
@@ -69,7 +69,7 @@ impl AgentsPipelineFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Research then summarize".to_string()),
-                    code: "const waves = await agents.pipeline(\n  ['§21', '§22'],\n  { role: 'researcher', task: 'Find the important points for this input.' },\n  { role: 'writer', task: 'Turn this digest into a concise summary.' },\n);\ndisplay(waves.at(-1).map(d => d.summary));"
+                    code: "let waves = @agents.pipeline {items: [\"§21\", \"§22\"], stages: [\n  {role: \"researcher\", task: \"Find the important points for this input.\"},\n  {role: \"writer\", task: \"Turn this digest into a concise summary.\"}\n]};\nwaves |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some(
                         "Each stage waits for all actors in the previous stage; downstream prompts receive actor/resource references plus bounded summaries, not transcripts."

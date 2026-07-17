@@ -61,10 +61,8 @@ bounded by host-configured pattern/work limits.
 Lists use JSON-style literals and right-associative cons:
 
 ~~~tm
-let paths = [workspace:src/a.rs, workspace:src/b.rs]
----
-let with_readme = workspace:README.md :: paths
----
+let paths = [workspace:src/a.rs, workspace:src/b.rs];
+let with_readme = workspace:README.md :: paths;
 with_readme |> par map @fs.read
 ~~~
 
@@ -73,8 +71,7 @@ with_readme |> par map @fs.read
 Records are JSON-shaped values:
 
 ~~~tm
-let resource = @fs.read workspace:README.md
----
+let resource = @fs.read workspace:README.md;
 match resource {
   | {content, mime: "text/plain", ...} ->
       display {kind: "markdown"} content
@@ -105,8 +102,7 @@ let rows = table [
   {file: "a.ts", todos: 3, owner: "ice"},
   {file: "b.ts", todos: 7, owner: "miku"},
   {file: "c.ts", todos: 1, owner: "ice"}
-]
----
+];
 rows
   |> where (todos > 2)
   |> select {file, owner, todos}
@@ -199,4 +195,4 @@ chains without pretending that a failed host effect is ordinary absence.
   syntax.
 
 The result is deliberately compact enough to teach through help and to benchmark against the
-shipping TypeScript prelude.
+historical TypeScript prelude that preceded tm-lang.

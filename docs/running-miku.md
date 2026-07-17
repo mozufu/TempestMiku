@@ -422,6 +422,17 @@ curl -s \
 
 ## CLI
 
+tm-lang is the sole language/runtime for CLI and server chat/coding sessions:
+
+```bash
+cargo run -p tm-cli -- "use execute(code) to inspect the workspace"
+```
+
+Backend-selection flags and environment selectors no longer exist.
+
+The retired 20-case x 50-run comparative runner is not a supported command. Its immutable cutover
+record and frozen corpus remain under `docs/evidence/2026-07-16-tm-fluency-prompt-v2/`.
+
 Run a one-shot Serious Engineer turn:
 
 ```sh
@@ -435,9 +446,12 @@ Useful CLI options:
 cargo run -p tm-cli -- --help
 cargo run -p tm-cli -- --model gpt-4o-mini "Explain the current architecture."
 cargo run -p tm-cli -- --config .tempestmiku/config.json --session-id cli-smoke "Run a safe repo check."
+cargo run -p tm-cli -- --event-log .tempestmiku/tm-events.jsonl "Run with structured telemetry."
 ```
 
-The CLI streams assistant text to stdout and cell/tool telemetry to stderr.
+The CLI streams assistant text to stdout and cell/tool telemetry to stderr. `--event-log` additionally
+writes one flushed JSON object per line for reasoning/text deltas, tool calls, cell starts/results,
+turn boundaries, and the final answer; it remains usable after a nonzero turn-budget exit.
 
 ## Host Config For Code Execution
 
@@ -464,6 +478,7 @@ Minimal repo-linked config:
   "self_evolution": {
     "tier": "conservative"
   },
+  "proc_run_timeout_ms": 180000,
   "artifact_root": ".tempestmiku/artifacts"
 }
 ```
@@ -474,6 +489,13 @@ Notes:
 - `mode` is `ro` or `rw`.
 - `commands` is an allowlist of executable names for `proc.run`.
 - `safe_args` entries are argv prefixes that can run without approval.
+- `proc.run.stdin` accepts an optional UTF-8 string capped at 1 MiB. It shares the command timeout
+  with process execution and output collection; non-string or oversized input fails before spawn.
+- `proc_run_timeout_ms` sets both the default and maximum per-command timeout. It defaults to
+  180000 and must stay between 1 and 900000; benchmark adapters may opt into a larger bounded value.
+- On Unix, each `proc.run` command owns a fresh process group. Timeout or turn cancellation kills
+  the full descendant tree before returning, so compiler/test grandchildren cannot leak into later
+  gates.
 - Approval mode `deny` is the default. Approval mode `manual` asks before non-safe writes or
   commands.
 - `self_evolution.tier` accepts `off`, `conservative` (the compatibility-preserving default), or
@@ -488,6 +510,9 @@ Notes:
   `POST /sessions/:id/evolution/modes/:mode_id/rollback` creates a separate durable rollback approval.
 - The CLI prompts on the tty; the server emits approval events to the UI/API.
 - There is no raw shell escape hatch. Commands run as argv vectors.
+- Benchmark adapters may pass `--turn-budget-ok`: the CLI records a
+  `turn_budget_exhausted` JSONL event and exits successfully after the final cell result. Without
+  that opt-in flag, turn-budget exhaustion remains a nonzero CLI error.
 
 ## E2E Harness
 
@@ -507,7 +532,7 @@ nix develop --command cargo run -p tm-e2e -- record suite
 The UI part of `record suite` runs `npm exec playwright` from `clients/miku_web`. If
 `clients/miku_web/node_modules` is absent, install the Node dependencies in that directory first.
 
-For the offline native Deno coding-backend gate (linked-repo patch, targeted
+For the offline native tm coding-backend gate (linked-repo patch, targeted
 test, artifact spill, approval approve/deny/timeout, and durable turn replay):
 
 ```sh
@@ -546,7 +571,7 @@ Evidence bundles are written under `target/tm-e2e/`.
   drive metadata intentionally uses the historical in-memory local-development path. If a persisted
   linked root is missing or its canonical identity changed, startup marks it invalid instead of
   restoring authority; explicitly link the intended root again after inspecting the change.
-- A pre-restart ACP/V8 approval is cancelled: those waits cannot safely resume after their origin is
+- A pre-restart ACP/native-runtime approval is cancelled: those waits cannot safely resume after their origin is
   lost. Durable proposal effects remain in the approval outbox and resume exactly once.
 - Startup rejects a migration checksum: do not edit an applied migration; add the next ordered
   migration or restore the exact applied file.

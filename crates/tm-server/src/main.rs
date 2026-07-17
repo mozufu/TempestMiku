@@ -13,16 +13,15 @@ use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox
 use tm_host::{
     ApprovalPolicy, DefaultDenyApprovalPolicy, FsMode, FsPolicy, LinkedFolders, P0HostConfig,
 };
+use tm_lang::{TmSandbox, TmSandboxOptions, core_tm_grants};
 use tm_llm::OpenAiClient;
 use tm_modes::ModesConfig;
-use tm_sandbox::DenoSandbox;
-use tm_sandbox::DenoSandboxOptions;
 
 use tm_server::{
     AgentChatRunner, AppState, ApprovalBroker, AuthConfig, ChatActorExecutor, CodingBackend,
     CodingEventSink, DeviceAuthConfig, EchoChatRunner, ForwardedAuthConfig, HttpApprovalPolicy,
     InMemoryAuthDeviceStore, InMemoryStore, LocalEmbeddingHttpClient, NativeApprovalMode,
-    NativeDenoBackend, OmpAcpBackend, OmpAcpConfig, PostgresDriveMetadataStore,
+    NativeTmBackend, OmpAcpBackend, OmpAcpConfig, PostgresDriveMetadataStore,
     PostgresMemoryEmbeddingWorker, PostgresPushStore, PostgresStore, PushCipher, PushProvider,
     PushService, RosterCodingEventSink, RuntimeConfig, RuntimeStatus, ServerChatRunner, ServerRole,
     Store, StoreMemoryProvider, UnifiedPushProvider, run_server,
@@ -172,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state,
             &linked_folders,
             artifact_root.clone(),
-            runtime.native_deno,
+            runtime.native_tm,
         )?;
         state.wire_lifecycle_sink();
         run_server(addr, state, role, RuntimeConfig::default()).await?;
@@ -215,7 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state,
             &linked_folders,
             artifact_root.clone(),
-            runtime.native_deno,
+            runtime.native_tm,
         )?;
         state.wire_lifecycle_sink();
         run_server(addr, state, role, RuntimeConfig::default()).await?;
@@ -326,13 +325,13 @@ where
 
 struct BuiltRuntime {
     chat: Arc<ServerChatRunner>,
-    native_deno: Option<NativeDenoBackendConfig>,
+    native_tm: Option<NativeTmBackendConfig>,
 }
 
-struct NativeDenoBackendConfig {
+struct NativeTmBackendConfig {
     llm: Arc<dyn LlmClient>,
     cfg: AgentConfig,
-    sandbox_options: DenoSandboxOptions,
+    sandbox_options: TmSandboxOptions,
     approval_mode: NativeApprovalMode,
 }
 
@@ -356,7 +355,7 @@ fn build_runtime(
         tracing::warn!("OPENAI_API_KEY / OPENAI_BASE_URL not set — falling back to EchoChatRunner");
         return Ok(BuiltRuntime {
             chat: Arc::new(ServerChatRunner::Echo(EchoChatRunner)),
-            native_deno: None,
+            native_tm: None,
         });
     }
 
@@ -374,13 +373,14 @@ fn build_runtime(
     let linked_folders =
         (drive_store.is_some() || !linked_folders.is_empty()).then_some(linked_folders.clone());
     let approval_mode = NativeApprovalMode::parse(&host_config.approvals.mode)?;
-    let mut sandbox_options = DenoSandboxOptions {
+    let mut sandbox_options = TmSandboxOptions {
         artifact_root,
         linked_folders,
         drive_store,
         approval_policy: chat_approval_policy(host_config)?,
         approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
-        ..DenoSandboxOptions::default()
+        proc_run_timeout: Duration::from_millis(host_config.proc_run_timeout_ms),
+        ..TmSandboxOptions::default()
     };
     tm_agents::register(
         &mut sandbox_options.host_registry,
@@ -414,8 +414,7 @@ fn build_runtime(
                 opts.actor_id = actor_id.map(str::to_string);
                 opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants = tm_sandbox::core_sandbox_grants()
-                    .allow_many(grants.names().map(str::to_string));
+                opts.grants = core_tm_grants().allow_many(grants.names().map(str::to_string));
                 if matches!(approval_mode, NativeApprovalMode::Manual) {
                     let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                         session_id,
@@ -430,21 +429,22 @@ fn build_runtime(
                         .with_actor_id(actor_id.map(str::to_string)),
                     );
                 }
-                Arc::new(DenoSandbox::new(opts)) as Arc<dyn Sandbox>
+                Arc::new(TmSandbox::new(opts)) as Arc<dyn Sandbox>
             },
             Some(executor_artifact_root),
             executor_roster,
         ));
     roster.set_executor(executor);
 
-    tracing::info!(model, "real LLM agent runner configured");
+    let chat = AgentChatRunner::tm(Arc::clone(&llm), cfg.clone(), sandbox_options.clone());
+    tracing::info!(
+        model,
+        sandbox_backend = "tm",
+        "real LLM agent runner configured"
+    );
     Ok(BuiltRuntime {
-        chat: Arc::new(ServerChatRunner::Agent(AgentChatRunner::deno(
-            Arc::clone(&llm),
-            cfg.clone(),
-            sandbox_options.clone(),
-        ))),
-        native_deno: Some(NativeDenoBackendConfig {
+        chat: Arc::new(ServerChatRunner::Agent(chat)),
+        native_tm: Some(NativeTmBackendConfig {
             llm,
             cfg,
             sandbox_options,
@@ -457,7 +457,7 @@ fn configure_coding_backend<S, M, C>(
     mut state: AppState<S, M, C>,
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
-    native_deno: Option<NativeDenoBackendConfig>,
+    native_tm: Option<NativeTmBackendConfig>,
 ) -> Result<AppState<S, M, C>, Box<dyn std::error::Error>> {
     state = state
         .with_artifact_root(artifact_root)
@@ -468,13 +468,14 @@ fn configure_coding_backend<S, M, C>(
             Arc::clone(&state.approval_broker),
         )?);
         state = state.with_coding_backend(backend);
-    } else if let Some(native_deno) = native_deno {
-        let backend: Arc<dyn CodingBackend> = Arc::new(NativeDenoBackend::new(
-            native_deno.llm,
-            native_deno.cfg,
-            native_deno.sandbox_options,
-            native_deno.approval_mode,
-            Arc::clone(&state.approval_broker),
+    } else if let Some(native_tm) = native_tm {
+        let approval_broker = Arc::clone(&state.approval_broker);
+        let backend: Arc<dyn CodingBackend> = Arc::new(NativeTmBackend::new(
+            native_tm.llm,
+            native_tm.cfg,
+            native_tm.sandbox_options,
+            native_tm.approval_mode,
+            approval_broker,
         ));
         state = state.with_coding_backend(backend);
     }
@@ -495,6 +496,7 @@ fn load_host_config() -> Result<P0HostConfig, Box<dyn std::error::Error>> {
             linked_folders: Vec::new(),
             approvals: Default::default(),
             artifact_root: None,
+            proc_run_timeout_ms: tm_host::default_proc_run_timeout_ms(),
             self_evolution: Default::default(),
         }),
     }

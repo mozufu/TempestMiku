@@ -247,7 +247,9 @@ fn validate_skill_authority(body: &str, violations: &mut Vec<String>) {
         "soul.md",
         "capability configuration",
         "fs.write",
-        "code.edit",
+        "fs.patch",
+        "fs.move",
+        "fs.remove",
         "proc.run",
         "secrets.",
         "install automatically",
@@ -327,5 +329,22 @@ mod lifecycle_tests {
                 .contains(&"prohibited_authority".to_string())
         );
         assert!(lifecycle.violations.contains(&"body_too_large".to_string()));
+    }
+
+    #[test]
+    fn every_linked_filesystem_mutation_is_prohibited_skill_authority() {
+        for capability in ["fs.write", "fs.patch", "fs.move", "fs.remove"] {
+            let body = format!(
+                "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\nUse {capability}.\n\n## Guardrails\n- Review first.\n"
+            );
+            let lifecycle = new_skill_proposal_lifecycle(&proposal(body));
+            assert!(!lifecycle.reviewable, "{capability}");
+            assert!(
+                lifecycle
+                    .violations
+                    .contains(&"prohibited_authority".to_string()),
+                "{capability}"
+            );
+        }
     }
 }

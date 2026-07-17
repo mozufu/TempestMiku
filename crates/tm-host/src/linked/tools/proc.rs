@@ -1,29 +1,40 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const DEFAULT_OUTPUT_BYTES: usize = 50_000;
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_STDIN_BYTES: usize = 1024 * 1024;
 const MAX_PROCESS_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RETAINED_PROCESS_OUTPUT_BYTES: usize = MAX_PROCESS_ARTIFACT_BYTES - 256;
 
 pub(in crate::linked) struct ProcRunFn {
     linked: LinkedFolders,
     artifact_store: ArtifactStore,
+    timeout_ms: u64,
     docs: ToolDocs,
 }
 
 impl ProcRunFn {
-    pub(in crate::linked) fn new(linked: LinkedFolders, artifact_store: ArtifactStore) -> Self {
+    pub(in crate::linked) fn with_timeout_ms(
+        linked: LinkedFolders,
+        artifact_store: ArtifactStore,
+        timeout_ms: u64,
+    ) -> Self {
+        let timeout_ms = timeout_ms.clamp(1, 900_000);
+        let mut docs = docs(
+            "proc.run",
+            "proc",
+            "Run allowlisted argv-vector commands",
+            true,
+        );
+        docs.args_schema["properties"]["timeoutMs"]["maximum"] = timeout_ms.into();
+        docs.args_schema["properties"]["timeoutMs"]["default"] = timeout_ms.into();
         Self {
             linked,
             artifact_store,
-            docs: docs(
-                "proc.run",
-                "proc",
-                "Run allowlisted argv-vector commands",
-                true,
-            ),
+            timeout_ms,
+            docs,
         }
     }
 }
@@ -64,11 +75,7 @@ impl HostFn for ProcRunFn {
         }
         let args: Args = parse_args(args)?;
         validate_command_name(&args.cmd)?;
-        if stdin_present(&args.stdin) {
-            return Err(HostError::InvalidArgs(
-                "proc.run stdin is unavailable in P0".to_string(),
-            ));
-        }
+        let stdin = parse_stdin(args.stdin)?;
         if args.env.as_ref().is_some_and(|env| !env.is_empty()) {
             return Err(HostError::InvalidArgs(
                 "proc.run env overrides are unavailable in P0".to_string(),
@@ -90,7 +97,10 @@ impl HostFn for ProcRunFn {
             ctx.require_approval(&format!("proc.run {}", argv.join(" ")))
                 .await?;
         }
-        let timeout_ms = args.timeout_ms.unwrap_or(180_000).min(180_000);
+        let timeout_ms = args
+            .timeout_ms
+            .unwrap_or(self.timeout_ms)
+            .min(self.timeout_ms);
         let output_bytes = args.output_bytes.unwrap_or(DEFAULT_OUTPUT_BYTES);
         if output_bytes == 0 || output_bytes > MAX_OUTPUT_BYTES {
             return Err(HostError::InvalidArgs(format!(
@@ -102,11 +112,17 @@ impl HostFn for ProcRunFn {
         command
             .args(&args.args)
             .current_dir(&cwd.path)
-            .stdin(Stdio::null())
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .env_clear();
+        #[cfg(unix)]
+        command.process_group(0);
         for (key, value) in env::vars() {
             let upper = key.to_uppercase();
             if ["KEY", "TOKEN", "SECRET", "PASSWORD", "COOKIE", "AUTH"]
@@ -120,6 +136,7 @@ impl HostFn for ProcRunFn {
         let mut child = command
             .spawn()
             .map_err(|err| HostError::HostCall(err.to_string()))?;
+        let mut process_group = ProcessGroupGuard::new(child.id());
         let stdout = child
             .stdout
             .take()
@@ -128,9 +145,11 @@ impl HostFn for ProcRunFn {
             .stderr
             .take()
             .ok_or_else(|| HostError::HostCall("proc.run stderr pipe missing".to_string()))?;
+        let child_stdin = child.stdin.take();
         let retained = Arc::new(AtomicUsize::new(0));
         let run = async {
             tokio::join!(
+                write_stdin(child_stdin, stdin),
                 child.wait(),
                 read_bounded_output(
                     stdout,
@@ -147,23 +166,32 @@ impl HostFn for ProcRunFn {
         let output = tokio::time::timeout(Duration::from_millis(timeout_ms), run).await;
         let duration_ms = start.elapsed().as_millis();
         let (exit_code, timed_out, stdout, stderr, output_limit_reached) = match output {
-            Ok((Ok(status), Ok(stdout), Ok(stderr))) => (
-                status.code().unwrap_or(-1),
-                false,
-                String::from_utf8_lossy(&stdout.bytes).to_string(),
-                String::from_utf8_lossy(&stderr.bytes).to_string(),
-                stdout.truncated || stderr.truncated,
-            ),
-            Ok((Err(err), _, _)) | Ok((_, Err(err), _)) | Ok((_, _, Err(err))) => {
-                return Err(HostError::HostCall(err.to_string()));
+            Ok((Ok(()), Ok(status), Ok(stdout), Ok(stderr))) => {
+                process_group.disarm();
+                (
+                    status.code().unwrap_or(-1),
+                    false,
+                    String::from_utf8_lossy(&stdout.bytes).to_string(),
+                    String::from_utf8_lossy(&stderr.bytes).to_string(),
+                    stdout.truncated || stderr.truncated,
+                )
             }
-            Err(_) => (
-                -1,
-                true,
-                String::new(),
-                "TimeoutError: proc.run timed out".to_string(),
-                false,
-            ),
+            Ok((Err(err), _, _, _))
+            | Ok((_, Err(err), _, _))
+            | Ok((_, _, Err(err), _))
+            | Ok((_, _, _, Err(err))) => return Err(HostError::HostCall(err.to_string())),
+            Err(_) => {
+                stop_process_tree(&mut child, &mut process_group)
+                    .await
+                    .map_err(|err| HostError::HostCall(err.to_string()))?;
+                (
+                    -1,
+                    true,
+                    String::new(),
+                    "TimeoutError: proc.run timed out".to_string(),
+                    false,
+                )
+            }
         };
         // Command output may contain credentials inherited from tools or repository files. The
         // process result remains useful after redaction, while no raw output crosses an artifact
@@ -204,6 +232,116 @@ impl HostFn for ProcRunFn {
             duration_ms,
         };
         serde_json::to_value(result).map_err(|err| HostError::HostCall(err.to_string()))
+    }
+}
+
+struct ProcessGroupGuard {
+    #[cfg(unix)]
+    process_group: Option<i32>,
+}
+
+impl ProcessGroupGuard {
+    fn new(child_id: Option<u32>) -> Self {
+        #[cfg(not(unix))]
+        let _ = child_id;
+        Self {
+            #[cfg(unix)]
+            process_group: child_id.and_then(|id| i32::try_from(id).ok()),
+        }
+    }
+
+    fn disarm(&mut self) {
+        #[cfg(unix)]
+        {
+            self.process_group = None;
+        }
+    }
+
+    #[cfg(unix)]
+    fn kill(&self) -> std::io::Result<()> {
+        let Some(process_group) = self.process_group else {
+            return Ok(());
+        };
+        // SAFETY: `process_group` comes from the spawned child PID and the command was placed in a
+        // new process group before spawning. A negative PID targets that entire group.
+        let result = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        let _ = self.kill();
+    }
+}
+
+async fn stop_process_tree(
+    child: &mut tokio::process::Child,
+    process_group: &mut ProcessGroupGuard,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    process_group.kill()?;
+    #[cfg(not(unix))]
+    child.kill().await?;
+
+    match child.wait().await {
+        Ok(_) => {
+            process_group.disarm();
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            process_group.disarm();
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn parse_stdin(stdin: Option<Value>) -> Result<Option<Vec<u8>>> {
+    match stdin {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(stdin)) => {
+            if stdin.len() > MAX_STDIN_BYTES {
+                return Err(HostError::InvalidArgs(format!(
+                    "proc.run stdin must not exceed {MAX_STDIN_BYTES} UTF-8 bytes"
+                )));
+            }
+            Ok(Some(stdin.into_bytes()))
+        }
+        Some(_) => Err(HostError::InvalidArgs(
+            "proc.run stdin must be a UTF-8 string".to_string(),
+        )),
+    }
+}
+
+async fn write_stdin<W>(stdin: Option<W>, data: Option<Vec<u8>>) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    match (stdin, data) {
+        (Some(mut stdin), Some(data)) => {
+            if let Err(error) = stdin.write_all(&data).await {
+                return if error.kind() == std::io::ErrorKind::BrokenPipe {
+                    Ok(())
+                } else {
+                    Err(error)
+                };
+            }
+            match stdin.shutdown().await {
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+                result => result,
+            }
+        }
+        _ => Ok(()),
     }
 }
 
@@ -294,5 +432,14 @@ mod tests {
         let output = bounded_process_artifact("x".repeat(MAX_PROCESS_ARTIFACT_BYTES), true);
         assert!(output.len() <= MAX_PROCESS_ARTIFACT_BYTES);
         assert!(output.contains("retained-output limit reached"));
+    }
+
+    #[tokio::test]
+    async fn early_stdin_pipe_closure_is_not_a_process_failure() {
+        let (writer, reader) = tokio::io::duplex(1);
+        drop(reader);
+        write_stdin(Some(writer), Some(vec![b'x'; 1024]))
+            .await
+            .unwrap();
     }
 }

@@ -21,7 +21,7 @@
 - **Resource limits** (§6.3) enforced by the isolate + host.
 - **Approval gates.** Capabilities flagged `sensitive` pause for human approval before execution.
   Postgres persists requests and an idempotent effect outbox; resolution is compare-and-swap with its
-  event in the same transaction. Durable proposal effects resume exactly once, while ACP/V8 waits are
+  event in the same transaction. Durable proposal effects resume exactly once, while ACP/native-runtime waits are
   non-resumable and become cancelled after origin loss. P7.0 memory, skill, and review-only
   persona/mode effects also carry a typed
   target and creation tier; the worker re-derives the target, rechecks the current tier, and renews

@@ -232,7 +232,7 @@ async function waitForPendingApproval(page: Page, sessionId: string): Promise<Pe
     expect(response.ok()).toBeTruthy();
     const json = await response.json();
     const event = (json.pendingEvents ?? []).find(
-      (item: any) => item.type === 'approval' && item.data?.backend === 'native-deno',
+      (item: any) => item.type === 'approval' && item.data?.backend === 'native-tm',
     );
     if (!event?.data?.approvalId) return null;
     return { approvalId: event.data.approvalId };

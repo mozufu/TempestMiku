@@ -12,7 +12,7 @@ pub mod dream;
 pub mod error;
 mod evolution;
 pub mod memory;
-pub mod native_deno;
+pub mod native_tm;
 pub mod omp_acp;
 pub mod push;
 pub mod runtime;
@@ -48,8 +48,8 @@ pub use memory::{
     ProfileFactProposalInput, StoreMemoryProvider, evaluate_lexical_recall_baseline,
     evaluate_memory_provider_recall,
 };
-pub use native_deno::{
-    HttpApprovalPolicy, NativeApprovalMode, NativeDenoBackend, NativeDenoBackendOptions,
+pub use native_tm::{
+    HttpApprovalPolicy, NativeApprovalMode, NativeTmBackend, NativeTmBackendOptions,
 };
 pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
 pub use push::{

@@ -1,180 +1,54 @@
-# 6. The REPL / sandbox
+# 06 — tm REPL sandbox
 
-### 6.1 Language choice
+## 6.1 Decision
 
-Decision matrix for the language the *model* writes — the axes that actually decide it:
+`tm-conformance-v2`, implemented by `crates/tm-lang`, is the sole language/runtime behind
+`execute(code)`. CLI and server do not expose a backend selector. The former Deno/V8 and shipped
+stub implementations were deleted after tm-lang passed the frozen conformance, approval, replay,
+client, and comparative-fluency gates.
 
-| Option | Model fluency | Rust embeddability | Sandbox story | npm/stdlib | Verdict |
-|---|---|---|---|---|---|
-| **JS/TS via `deno_core`** (V8) | High | Good (single crate) | Excellent — ops opt-in, zero ambient I/O, in-process | ES + web APIs you expose | **Chosen** |
-| JS via `rquickjs` (QuickJS) | High | Excellent (small, fast startup) | Excellent — no I/O unless bound | ES2020-ish, no npm | Alt (tests / minimal builds) |
-| Python via subprocess (CPython) | Highest | Out-of-process + RPC | Strong on Linux (ns+seccomp); needs a container on macOS | Full PyPI | **Planned 2nd backend** |
-| Pure-Rust DSL (`rhai`/`rune`) | Low | Excellent | Excellent | Tiny | Rejected — poor fluency |
+The public abstraction remains `tm_core::Sandbox` / `tm_core::Session`; this keeps the agent loop
+independent from interpreter details without promising another language backend.
 
-**Decision: TypeScript on `deno_core`** — the only substrate that is portably sandboxed,
-zero-external-dependency, *and* cheap to extend, all at once.
+## 6.2 Persistent cells
 
-- **Real async event loop** — host calls are async ops; the model can `await Promise.all([...])`
-  for natural fan-out.
-- **Capability model is free** — nothing is callable unless we register it (no `fetch`/fs/`Deno.*`
-  by default). That *is* the least-privilege boundary, in-process and portable — no container on macOS.
-- **Cheap to extend** — capabilities route through one dispatch bridge into a runtime registry
-  (§3 principle 9): add a handler + a generated stub, no new op, no rebuild.
-- **Ecosystem worry is mostly moot** — capabilities come from the Rust host, not a package manager,
-  and there is no raw shell (§3 principle 8), so the `bash("python …")` escape never arises.
-- **Good model priors** — high TS fluency; matches Anthropic's own TS examples.
+A session owns one persistent tm interpreter environment. Successful top-level bindings and named
+functions commit atomically and remain available to later `execute` calls. Failed, denied, timed
+out, cancelled, or otherwise incomplete cells roll back their pending bindings. `reset` restores
+the frozen prelude and clears ephemeral state.
 
-`rquickjs` stays as a lighter, faster-start alternative for tests and minimal builds. If the model
-ever genuinely needs in-language Python libraries (`pandas`, `pdfplumber`, …), the
-**CPython-subprocess backend** (§6.6) drops in behind the same `Sandbox` trait — same loop, SDK,
-and registry, different executor. The choice is reversible by construction.
+The checker runs before evaluation. Unknown names, invalid patterns, ungranted capabilities, and
+unknown resource schemes fail closed. The runtime enforces wall, step, result, output, and
+presentation limits through `CellBudget` plus tm runtime limits.
 
-### 6.2 Session & state
+## 6.3 Effects and approvals
 
-A `Session` is one long-lived V8 isolate + context. `eval(code)` runs a cell in that context;
-top-level `let/const/var` and assignments persist. `reset()` tears down and recreates the isolate
-for a clean slate. V8 sessions are deliberately **not `Send`**: each stays on its owning runtime
-thread. The product server shards sessions by session id onto dedicated runtime threads, serializes
-cells within a session, and evicts inactive sessions by TTL. After daemon restart, conversation
-history is restored but a fresh isolate is created and `runtime_reset` is emitted; historical code
-cells are never replayed.
+Host access is explicit tm effect syntax:
 
-Top-level await is syntax-aware. `deno_ast`/SWC detects only actual top-level `await` or `for await`
-nodes (never strings/comments or awaits nested in functions), transpiles TypeScript, and lowers the
-cell into an async expression. Simple top-level identifiers/functions/classes are hoisted into the
-persistent script scope and declarations in the async body become assignments; the final expression
-remains the cell result. Imports/exports, `using`, reserved runtime names, destructuring, and other
-unsupported binding patterns fail with structured sandbox errors rather than textual source
-corruption.
-
-### 6.3 Resource limits
-
-Per cell and per session:
-
-- **Wall-clock timeout** → isolate terminated, `Timeout` error returned to the model.
-- **Heap cap:** 128 MiB per V8 isolate. Near-limit exhaustion terminates and rebuilds the isolate and
-  returns a structured `ResourceLimitError`; a subsequent cell runs in the rebuilt session.
-- **Retained output/result/error cap:** 4 MiB per cell, plus at most 64 `display()` calls. Result
-  shaping applies its own total context budget and spills readable artifact references (§5.4/§9).
-- **Egress cap** (bytes/requests via host net ops) → `EgressLimit`.
-- **Host-call rate/quota** per capability.
-
-A killed cell never kills the host; it returns a structured error the model can react to.
-
-### 6.4 The host-call bridge
-
-The SDK (a TS prelude injected at session creation) is thin sugar over **ops** — Rust async
-functions registered with the isolate. Sketch (deno_core `op2`):
-
-```rust
-#[op2(async)]
-#[serde]
-async fn op_tools_call(
-    state: Rc<RefCell<OpState>>,
-    #[string] name: String,
-    #[serde] args: serde_json::Value,
-) -> Result<serde_json::Value, AnyError> {
-    let registry = state.borrow().borrow::<Arc<HostRegistry>>().clone();
-    let ctx = state.borrow().borrow::<InvocationCtx>().clone();
-    registry.invoke(&name, args, &ctx).await   // capability checks happen inside invoke()
-}
+```tm
+let hits = @code.search {pattern: "TODO", paths: ["repo:src"], regex: false};
+hits |> take 10 |> display {kind: "table"}
 ```
 
-```ts
-// injected prelude (illustrative; see §7 for the authoritative .d.ts)
-const print = (...items: unknown[]) => Deno.core.ops.op_print(items);
-const display = (value: unknown, opts?: DisplayOptions) =>
-  Deno.core.ops.op_display(value, opts); // synchronous: buffered until cell finish
+Every effect is resolved through the existing `tm_host::HostRegistry`, exact per-turn grants,
+`ApprovalPolicy`, resource registry, and artifact store. Registration never grants authority.
+Approval-backed effects suspend the tm continuation and resume that same node after an approved
+decision; denial, timeout, cancellation, stale resume, and duplicate completion fail closed.
 
-const tools = {
-  search: (query: string, opts?: ToolSearchOptions) =>
-    Deno.core.ops.op_tools_search(query, opts),
-  docs: (name: string) => Deno.core.ops.op_tools_docs(name),
-  call: (name: string, args?: JsonValue) =>
-    Deno.core.ops.op_host_call(name, args),
-};
+The runtime emits bounded `effect_start`, `effect_suspended`, `effect_resumed`, `effect_result`,
+scope, display, binding, cell-result, and runtime-reset events through the existing event sink.
 
-const fs = {
-  read: (path: SdkPath, opts?: FsReadOptions) =>
-    tools.call("fs.read", { path, ...opts }),
-  write: (path: SdkPath, data: string, opts?: FsWriteOptions) =>
-    tools.call("fs.write", { path, data, ...opts }),
-  ls: (path?: SdkPath, opts?: FsListOptions) =>
-    tools.call("fs.ls", { path, ...opts }),
-  find: (patterns: string | string[], opts?: FsFindOptions) =>
-    tools.call("fs.find", { patterns, ...opts }),
-};
+## 6.4 Runtime ownership
 
-const code = {
-  search: (query: CodeSearchQuery) => tools.call("code.search", query),
-  edit: (patch: PatchEdit, opts?: CodeEditOptions) =>
-    tools.call("code.edit", { ...patch, ...opts }),
-};
+tm sessions are `!Send`. Server chat and native coding backends shard sessions onto owning
+single-thread Tokio runtimes, preserve session affinity, and destroy cached sessions on their owner
+thread. Runtime loss creates a fresh interpreter and emits the existing reset/replay contract;
+ephemeral bindings are not reconstructed from durable events.
 
-const proc = {
-  run: (cmd: string, args: string[] = [], opts?: ProcRunOptions) =>
-    tools.call("proc.run", { cmd, args, ...opts }),
-};
+## 6.5 Ambient authority
 
-const resources = {
-  read: (uri: ResourceUri, selector?: ResourceSelector) =>
-    Deno.core.ops.op_tm_resource_read(uri, selector ?? ""),
-  preview: (uri: ResourceUri) => Deno.core.ops.op_tm_resource_preview(uri),
-  list: (uri?: ResourceUri) => Deno.core.ops.op_tm_resource_list(uri ?? ""),
-};
-
-const artifactUri = (ref: ArtifactUri | ArtifactRef) =>
-  typeof ref === "string" ? ref : ref.uri;
-
-const artifacts = {
-  put: (data: ArtifactInput, opts?: ArtifactPutOptions) =>
-    Deno.core.ops.op_tm_artifact_put(data, opts ?? null),
-  get: (ref: ArtifactUri | ArtifactRef, opts?: ArtifactReadOptions) =>
-    resources.read(artifactUri(ref), opts?.selector),
-  slice: (ref: ArtifactUri | ArtifactRef, selector: ResourceSelector) =>
-    resources.read(artifactUri(ref), selector),
-  list: () => Deno.core.ops.op_tm_artifact_list(),
-};
-
-// M1 has a deterministic default-deny helper; broader network egress remains deferred.
-globalThis.http = { get: (url: string) => tools.call("http.get", { url }) };
-// Closed-by-default namespaces are explicitly present so feature checks are safe.
-globalThis.secrets = undefined;
-globalThis.memory = undefined;
-globalThis.skills = undefined;
-globalThis.agents = undefined;
-```
-
-**Two tiers of ops.** A small fixed set of **core primitives** (`print`, synchronous
-`display`, `artifacts`, `resources`) is bound directly; every other capability goes through one
-**dispatch bridge** (`op_host_call` → registry, surfaced as `tools.call`). New capabilities take the
-bridge — register a handler, emit a typed stub — so the op layer never grows and never needs a
-rebuild (§3 principle 9). The first real JS/TS pass exposes `fs.*`, `code.search`, JSON-hunk
-`code.edit`, argv-vector `proc.run`, and the default-deny/allowlisted `http.get` helper. `secrets`,
-`memory`, and `skills` remain `undefined`; the P2 `memory://` route is a resource handler reached
-through `resources.read`, not a `memory.*` namespace. `agents` also starts as `undefined`, then the
-P3 agents prelude replaces it with `AgentsNamespace` only for sessions holding an `agents.*` grant.
-If a future namespace exists but a method is not ready, it throws `NotImplementedError`.
-
-For an **out-of-process** backend (Python), the same SDK is implemented over **JSON-RPC** on a
-pipe/socket: the in-sandbox `host.*` makes a blocking RPC, the Rust host services it
-asynchronously and concurrently, and replies. Code stays simple (no async needed); concurrency
-lives host-side or behind an explicit `host.parallel([...])`.
-
-### 6.5 Async & parallelism
-
-`deno_core` runs a Tokio-backed event loop, so the model's code can issue concurrent host calls
-naturally:
-
-```ts
-const docs = await Promise.all(paths.map(p => fs.read(p))); // fan-out, one execute() round-trip
-const hits = docs.flatMap(d => d.content?.split("\n") ?? []).filter(line => line.includes("TODO"));
-display(hits.slice(0, 20), { kind: "json", title: "first TODO lines" });
-```
-
-### 6.6 Future backend: Python in isolation
-
-When fluency demands Python: spawn CPython in a locked-down subprocess (Linux: namespaces +
-seccomp + cgroups; or gVisor/Firecracker microVM), bridge via JSON-RPC. macOS lacks
-production-grade local sandboxing — for dev, rely on subprocess + rlimits + capability-gated host
-ops; for prod, run the Linux isolation path. Same `Sandbox` trait.
+tm has no filesystem, process, network, environment, package-manager, or dynamic-code ambient
+authority. Real-repo operations use linked-folder `fs.*` / `code.*`; processes use argv-vector
+`proc.run`; network uses allowlisted host capabilities; large values spill to `artifact://`; and
+resources are read only through registered schemes. One model-visible tool remains:
+`execute({code})`.

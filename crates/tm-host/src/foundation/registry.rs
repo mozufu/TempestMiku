@@ -65,6 +65,13 @@ impl ResourceRegistry {
         self.handlers.keys().cloned().collect()
     }
 
+    pub fn capabilities(&self) -> Vec<(String, String)> {
+        self.handlers
+            .iter()
+            .map(|(scheme, handler)| (scheme.clone(), handler.capability().to_string()))
+            .collect()
+    }
+
     pub async fn read(
         &self,
         uri: &str,

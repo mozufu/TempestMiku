@@ -19,24 +19,22 @@ display {kind: "text"} "hello, Miku"
 
 ## 2.2 A persistent cell
 
-A cell contains top-level forms separated by a standalone ---. The last form is its result.
-The complete cell evaluates now and commits its successful top-level bindings together; --- is
-not a sub-cell or a second transaction.
+A cell contains top-level forms separated by semicolons. One trailing semicolon is allowed and
+preserves the last form as its result. The complete cell evaluates now and commits its successful
+top-level bindings together; `;` is not a sub-cell or a second transaction.
 
 ~~~tm
 let paths = [
   workspace:src/a.rs,
   workspace:src/b.rs,
   workspace:src/c.rs
-]
----
+];
 let hits =
   paths
   |> par map @fs.read
   |> flatmap lines
   |> filter (fun line -> contains "TODO" line)
-  |> take 20
----
+  |> take 20;
 display {kind: "table", title: "first TODO lines"} hits
 ~~~
 
@@ -44,7 +42,7 @@ tm is expression-oriented. A nested sequence is explicit with do braces and semi
 
 ~~~tm
 do {
-  @code.edit {patch};
+  @fs.remove target;
   display {kind: "text"} "done"
 }
 ~~~
@@ -85,10 +83,8 @@ Values are JSON-shaped records, lists, strings, numbers, booleans, and JSON-boun
 Record punning keeps common values compact; merge is the explicit immutable record update:
 
 ~~~tm
-let config = {name: "miku", cap: 8}
----
-let next = merge {cap: 9} config
----
+let config = {name: "miku", cap: 8};
+let next = merge {cap: 9} config;
 display {kind: "json"} next
 ~~~
 
@@ -124,8 +120,7 @@ let users = table [
   {name: "ice", age: 30, email: "i@x"},
   {name: "miku", age: 21, email: "m@x"},
   {name: "ren", age: 17, email: "r@x"}
-]
----
+];
 users
   |> where (age > 18)
   |> select {name, email}
@@ -162,18 +157,18 @@ provenance node. The source never writes an effect row or approval suffix.
 ## 2.7 Approval is execution state
 
 ~~~tm
-fun save patch = @code.edit {patch}
+fun remove target = @fs.remove target
 ~~~
 
 The checker infers save's authority and possible errors. Registry metadata decides whether a
-particular code.edit perform suspends. If it does, the isolate waits, the UI emits
+particular fs.remove perform suspends. If it does, the isolate waits, the UI emits
 effect_suspended, and the same continuation resumes after approval. The source is unchanged if
 the session was already approved.
 
 ~~~tm
 handle do {
-  @code.edit {patch};
-  display {kind: "text"} "patched"
+  @fs.remove target;
+  display {kind: "text"} "removed"
 } with error {
   | ApprovalDenied {capability} ->
       display {kind: "text"} "denied #capability"

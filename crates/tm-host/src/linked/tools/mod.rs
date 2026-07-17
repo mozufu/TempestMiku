@@ -21,7 +21,7 @@ use crate::{
 use super::util::{
     apply_line_hunks, collect_files, compile_globs, display_path, ensure_rw, file_tag, fs_entry,
     linked_uri, list_entries, load_simple_gitignore, parse_args, parse_linked_path, simple_diff,
-    stdin_present, validate_command_name,
+    validate_command_name,
 };
 use super::{LinkedFolders, docs::docs};
 
@@ -31,9 +31,11 @@ mod fs_tools;
 mod proc;
 mod resources;
 
-pub(in crate::linked) use code::{CodeEditFn, CodeSearchFn, InsertAt, PatchHunk};
+pub(in crate::linked) use code::CodeSearchFn;
 pub use fs_tools::FsEntry;
-pub(in crate::linked) use fs_tools::{FsFindFn, FsLsFn, FsReadFn, FsWriteFn};
+pub(in crate::linked) use fs_tools::{
+    FsFindFn, FsLsFn, FsMoveFn, FsPatchFn, FsReadFn, FsRemoveFn, FsWriteFn, PatchHunk,
+};
 pub(in crate::linked) use proc::ProcRunFn;
 pub use resources::LinkedResourceHandler;
 
@@ -42,16 +44,23 @@ pub fn register_p0_linked_folder_functions(
     resource_registry: &mut ResourceRegistry,
     linked_folders: LinkedFolders,
     artifact_store: ArtifactStore,
+    proc_run_timeout: Duration,
 ) {
     host_registry.register(Arc::new(FsReadFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsWriteFn::new(linked_folders.clone())));
+    host_registry.register(Arc::new(FsPatchFn::new(
+        linked_folders.clone(),
+        artifact_store.clone(),
+    )));
+    host_registry.register(Arc::new(FsMoveFn::new(linked_folders.clone())));
+    host_registry.register(Arc::new(FsRemoveFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsLsFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsFindFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(CodeSearchFn::new(linked_folders.clone())));
-    host_registry.register(Arc::new(CodeEditFn::new(linked_folders.clone())));
-    host_registry.register(Arc::new(ProcRunFn::new(
+    host_registry.register(Arc::new(ProcRunFn::with_timeout_ms(
         linked_folders.clone(),
         artifact_store,
+        u64::try_from(proc_run_timeout.as_millis()).unwrap_or(u64::MAX),
     )));
     resource_registry.register(Arc::new(LinkedResourceHandler::new(linked_folders)));
 }

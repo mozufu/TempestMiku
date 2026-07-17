@@ -50,5 +50,18 @@ pub trait Sandbox: Send + Sync {
 #[async_trait(?Send)]
 pub trait Session {
     async fn eval(&mut self, code: &str, budget: CellBudget) -> Result<EvalOutput>;
+    /// Evaluate an independent batch. Backends may run cells concurrently from the same
+    /// pre-batch snapshot; the compatibility default preserves response-order sequencing.
+    async fn eval_batch(
+        &mut self,
+        codes: &[String],
+        budget: CellBudget,
+    ) -> Result<Vec<EvalOutput>> {
+        let mut outputs = Vec::with_capacity(codes.len());
+        for code in codes {
+            outputs.push(self.eval(code, budget).await?);
+        }
+        Ok(outputs)
+    }
     async fn reset(&mut self) -> Result<()>;
 }

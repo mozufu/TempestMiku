@@ -20,12 +20,12 @@ use tm_e2e::{
     run_record_api, run_record_native_coding, run_workflow, write_workflow_record,
 };
 use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
-use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
+use tm_lang::{TmSandbox, TmSandboxOptions};
 use tm_server::{
     AppState, ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig,
     ChatActorExecutor, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
-    EchoChatRunner, HttpApprovalPolicy, InMemoryStore, ModeId, NativeApprovalMode,
-    NativeDenoBackend, RosterCodingEventSink, ServerError, StoreEvent, StoreMemoryProvider, app,
+    EchoChatRunner, HttpApprovalPolicy, InMemoryStore, ModeId, NativeApprovalMode, NativeTmBackend,
+    RosterCodingEventSink, ServerError, StoreEvent, StoreMemoryProvider, app,
 };
 
 #[tokio::test]
@@ -198,7 +198,7 @@ async fn drive_smoke_public_api_covers_p5_drop_approval_resource_and_replay() {
 }
 
 #[tokio::test]
-async fn native_deno_actor_coordination_public_api_covers_p3_plus_route() {
+async fn native_tm_actor_coordination_public_api_covers_p3_plus_route() {
     let (base_url, server, _temp) = start_native_actor_coordination_server().await;
     let client = MikuClient::new(E2eConfig {
         base_url,
@@ -309,6 +309,88 @@ async fn native_deno_actor_coordination_public_api_covers_p3_plus_route() {
         assert_native_child_resources(&client, &session.id, &linked).await;
     }
 
+    server.abort();
+}
+
+#[tokio::test]
+async fn native_tm_http_sse_e2e_approves_and_replays_structured_trace() {
+    let (base_url, server, temp) = start_native_tm_server().await;
+    let client = MikuClient::new(E2eConfig {
+        base_url,
+        bearer_token: None,
+        timeout: Duration::from_secs(10),
+    })
+    .unwrap();
+    let session = client
+        .create_session(Some("serious_engineer"))
+        .await
+        .unwrap();
+    client
+        .set_session_scope(&session.id, "project:repo")
+        .await
+        .unwrap();
+    let (_, mode) = client
+        .wait_for_event(&session.id, Some(0), |event| event.event_type == "mode")
+        .await
+        .unwrap();
+    let anchor = mode.id;
+
+    let send_client = client.clone();
+    let send_session = session.id.clone();
+    let send = tokio::spawn(async move {
+        send_client
+            .send_message(&send_session, "approve the tm e2e fixture removal")
+            .await
+    });
+    let (before_approval, approval) = client
+        .wait_for_event(&session.id, anchor, |event| event.event_type == "approval")
+        .await
+        .unwrap();
+    assert!(before_approval.iter().any(|event| {
+        event.event_type == "effect_suspended" && event.data["nodeId"].as_str().is_some()
+    }));
+    let approval_id = approval.data["approvalId"].as_str().unwrap();
+    client
+        .resolve_approval(&session.id, approval_id, "approve")
+        .await
+        .unwrap();
+    let live_tail = client
+        .read_until_final(&session.id, approval.id)
+        .await
+        .unwrap();
+    send.await.unwrap().unwrap();
+    assert!(!temp.path().join("repo/remove-me.txt").exists());
+
+    let replay = client.read_until_final(&session.id, anchor).await.unwrap();
+    for expected in [
+        "scope_start",
+        "effect_start",
+        "effect_suspended",
+        "approval",
+        "approval_resolved",
+        "effect_resumed",
+        "effect_result",
+        "scope_result",
+        "display",
+        "binding_committed",
+        "cell_result",
+        "final",
+    ] {
+        assert!(
+            replay.iter().any(|event| event.event_type == expected),
+            "missing {expected}: {:?}",
+            replay
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+    let remove_start = replay
+        .iter()
+        .find(|event| event.event_type == "effect_start" && event.data["capability"] == "fs.remove")
+        .unwrap();
+    assert_eq!(remove_start.data["argsPreview"], "[redacted]");
+    assert!(live_tail.iter().any(|event| event.event_type == "final"));
     server.abort();
 }
 
@@ -424,7 +506,7 @@ async fn recorded_native_coding_proves_public_api_edit_test_approval_and_replay(
     assert_eq!(manifest.schema_version, EVIDENCE_SCHEMA_VERSION);
     assert_eq!(
         manifest.server.as_ref().unwrap().coding_backend,
-        "native-deno-scripted-offline"
+        "native-tm-scripted-offline"
     );
     let scenario = manifest
         .scenarios
@@ -607,10 +689,10 @@ async fn start_native_actor_coordination_server()
     };
 
     let roster = Arc::new(MailboxRegistry::new());
-    let mut sandbox_options = DenoSandboxOptions {
+    let mut sandbox_options = TmSandboxOptions {
         artifact_root: artifact_root.clone(),
         approval_timeout: Duration::from_secs(5),
-        ..DenoSandboxOptions::default()
+        ..TmSandboxOptions::default()
     };
     tm_agents::register(
         &mut sandbox_options.host_registry,
@@ -648,8 +730,8 @@ async fn start_native_actor_coordination_server()
                 opts.actor_id = actor_id.map(str::to_string);
                 opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants = tm_sandbox::core_sandbox_grants()
-                    .allow_many(grants.names().map(str::to_string));
+                opts.grants =
+                    tm_lang::core_tm_grants().allow_many(grants.names().map(str::to_string));
                 let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                     session_id,
                     Arc::clone(&executor_approval_roster),
@@ -658,7 +740,7 @@ async fn start_native_actor_coordination_server()
                     HttpApprovalPolicy::new(Arc::clone(&executor_broker), session_id, sink)
                         .with_actor_id(actor_id.map(str::to_string)),
                 );
-                Arc::new(DenoSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
+                Arc::new(TmSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
             },
             Some(artifact_root.clone()),
             executor_roster,
@@ -666,7 +748,7 @@ async fn start_native_actor_coordination_server()
     roster.set_executor(executor);
 
     let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
-    let backend = NativeDenoBackend::new(
+    let backend = NativeTmBackend::new(
         llm_for_backend,
         cfg,
         sandbox_options,
@@ -676,6 +758,72 @@ async fn start_native_actor_coordination_server()
     state = state.with_coding_backend(Arc::new(backend));
     state.wire_lifecycle_sink();
 
+    let router = app(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (format!("http://{addr}"), server, temp)
+}
+
+async fn start_native_tm_server() -> (String, tokio::task::JoinHandle<()>, tempfile::TempDir) {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("repo");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    std::fs::write(linked_root.join("remove-me.txt"), "delete-me\n").unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "repo".into(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
+    let code = r#"
+let hits = @code.search {pattern: "delete-me", paths: ["repo:remove-me.txt"], regex: false};
+hits |> par map (fun hit -> @fs.remove {path: hit.path, tag: hit.tag}) |> display {kind: "table"}
+"#;
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        execute_script("tm_e2e_edit", code),
+        text_script("tm e2e complete"),
+    ]));
+    let llm_client: Arc<dyn LlmClient> = llm;
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store,
+        memory,
+        chat,
+        tm_server::ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_auto_turn_dispatcher(true)
+    .with_artifact_root(artifact_root.clone())
+    .with_linked_folders(linked.clone());
+    let backend = NativeTmBackend::new(
+        llm_client,
+        AgentConfig {
+            model: "fake".into(),
+            max_turns: 3,
+            cell_budget: CellBudget {
+                wall_ms: 30_000,
+                output_bytes: 50_000,
+            },
+            ..AgentConfig::default()
+        },
+        TmSandboxOptions {
+            artifact_root,
+            linked_folders: Some(linked),
+            approval_timeout: Duration::from_secs(5),
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Manual,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
     let router = app(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -720,14 +868,14 @@ async fn start_drive_smoke_server() -> (String, tokio::task::JoinHandle<()>, tem
     .with_artifact_root(artifact_root.clone())
     .with_drive_store(drive_store.clone());
     let broker = Arc::clone(&state.approval_broker);
-    let backend = NativeDenoBackend::new(
+    let backend = NativeTmBackend::new(
         llm,
         cfg,
-        DenoSandboxOptions {
+        TmSandboxOptions {
             artifact_root,
             drive_store: Some(Arc::new(drive_store)),
             approval_timeout: Duration::from_secs(5),
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         },
         NativeApprovalMode::Manual,
         broker,
@@ -745,31 +893,36 @@ async fn start_drive_smoke_server() -> (String, tokio::task::JoinHandle<()>, tem
 
 fn drive_smoke_code() -> String {
     r##"
-const filed = await drive.put("# Approval Drop\nManual approval gates drive writes.\nResearch smoke citation body.", {
+let filed = @drive.put {content: "# Approval Drop\nManual approval gates drive writes.\nResearch smoke citation body.", options: {
   auto: true,
   suggestedPath: "inbox/approval-drop.md",
   project: "tempestmiku",
   docKind: "note",
   sourceUri: "drop://browser/approval-drop.md",
   eventSeq: 101
-});
-const hits = await drive.search("approval", { project: "tempestmiku", returnSnippets: true });
-const researchResult = await research.drive("approval", {
+}};
+let hits = @drive.search {query: "approval", project: "tempestmiku", returnSnippets: true};
+let researchResult = @research.drive {
+  query: "approval",
   project: "tempestmiku",
   maxDocs: 1,
   maxSnippets: 1,
   maxWorkers: 0,
   maxBytesPerDoc: 200,
   maxDigestBytes: 120
-});
-display({
+};
+let citation = match researchResult.citations {
+  | first :: _ -> first
+  | [] -> {sourceKind: "missing"}
+};
+{
   filedUri: filed.uri,
   sourceUri: filed.entry.sourceUri,
-  searchHits: hits.length,
-  researchCitations: researchResult.citations.length,
-  sourceKind: researchResult.citations[0]?.sourceKind,
-  answerHasDriveUri: researchResult.answer.includes("drive://")
-});
+  searchHits: length hits,
+  researchCitations: length researchResult.citations,
+  sourceKind: citation.sourceKind,
+  answerHasDriveUri: contains "drive://" researchResult.answer
+} |> display {kind: "json"}
 "##
     .to_string()
 }
@@ -788,28 +941,20 @@ fn test_linked_project(root: &std::path::Path) -> LinkedFolders {
 fn native_parent_coordination_code() -> String {
     format!(
         r#"
-const alpha = await agents.spawn("worker", "Wait for the parent broadcast, write a short artifact, and send Root a report.");
-const beta = await agents.spawn("worker", "Wait for the parent broadcast, write a short artifact, and send Root a report.");
-const readyA = await agents.wait(alpha, 15000);
-const readyB = await agents.wait(beta, 15000);
-const receipts = await agents.broadcast("{broadcast}");
-const first = await agents.wait(alpha, 15000);
-const second = await agents.wait(beta, 15000);
-let roster = [];
-for (let i = 0; i < 40; i++) {{
-  roster = await agents.list();
-  const done = [alpha.id, beta.id].every((id) =>
-    roster.find((entry) => entry.id === id)?.status === "terminated"
-  );
-  if (done) break;
-  await agents.wait(undefined, 100);
-}}
-display({{
+let alpha = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
+let beta = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
+let readyA = @agents.wait {{from: alpha, timeoutMs: 15000}};
+let readyB = @agents.wait {{from: beta, timeoutMs: 15000}};
+let receipts = @agents.broadcast {{text: "{broadcast}"}};
+let first = @agents.wait {{from: alpha, timeoutMs: 15000}};
+let second = @agents.wait {{from: beta, timeoutMs: 15000}};
+let roster = @agents.list {{}};
+{{
   receipts,
-  ready: [readyA?.text, readyB?.text],
-  reports: [first?.text, second?.text],
-  roster: roster.map((entry) => [entry.id, entry.status, entry.artifactUri, entry.historyUri])
-}});
+  ready: [readyA.text, readyB.text],
+  reports: [first.text, second.text],
+  roster
+}} |> display {{kind: "json"}}
 "#,
         broadcast = NATIVE_P3_BROADCAST_TEXT
     )
@@ -817,12 +962,12 @@ display({{
 
 fn native_child_coordination_code() -> String {
     r#"
-await agents.send("Root", "child ready for native broadcast");
-const msg = await agents.wait("Root", 15000);
-const text = msg?.text ?? "missing broadcast";
-const artifact = artifacts.put(`native child saw: ${text}`, { title: "native p3 child" });
-await agents.send("Root", `child report ${artifact.uri}: ${text}`);
-display({ text, artifact: artifact.uri });
+let ready = @agents.send {to: "Root", text: "child ready for native broadcast"};
+let msg = @agents.wait {from: "Root", timeoutMs: 15000};
+let text = msg.text;
+let artifact = @artifacts.put {data: "native child saw: #{text}", title: "native p3 child"};
+let report = @agents.send {to: "Root", text: "child report #{artifact.uri}: #{text}"};
+{text, artifact: artifact.uri} |> display {kind: "json"}
 "#
     .to_string()
 }
@@ -1003,7 +1148,7 @@ impl CodingBackend for ActorSmokeBackend {
             .broker
             .request_permission_detailed_for_backend(
                 turn.session_id,
-                "native-deno",
+                "native-tm",
                 ApprovalPrompt {
                     action: "proc.run cargo clean".to_string(),
                     scope: json!({

@@ -181,6 +181,7 @@ mod postgres_memory_embeddings;
 mod postgres_platform;
 mod postgres_scheduling;
 mod postgres_sessions;
+mod postgres_tm_lang;
 
 #[derive(Debug, PartialEq, Eq)]
 struct LogicalDriveSnapshot {

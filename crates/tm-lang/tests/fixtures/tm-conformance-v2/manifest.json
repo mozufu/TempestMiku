@@ -1,0 +1,15 @@
+{
+  "version": "tm-conformance-v2",
+  "reference": "docs/design/tm/07-language-reference.md",
+  "unsupported": [
+    "assignment", "return", "async-await", "exceptions", "classes", "packages",
+    "macros", "generic-user-types", "dynamic-capabilities", "ambient-io",
+    "implicit-concurrency", "source-level-approval-markers", "reactive-bindings",
+    "legacy-dash-separators"
+  ],
+  "acceptCoverage": [
+    "semicolon-cells/forms/blocks", "unicode-identifiers/strings/uris", "local-sum-types",
+    "precedence/application/pipelines", "json-record-list-patterns", "match/handle",
+    "capabilities", "tables", "structured-concurrency"
+  ]
+}

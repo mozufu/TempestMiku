@@ -43,13 +43,21 @@ coding product:
   message content. Independent of mode capability grants.
 
 ```
-system prompt = [ SOUL identity (constant) ]
+system prompt = [ immutable tm runtime boot contract ]
+              + [ runtime-owned tm-lang-fluency skill ]
+              + [ SOUL identity (constant) ]
               + [ always-on layered skill markdown ]
               + [ active mode's own declared skill markdown ]
               + [ triggered layered skill markdown, if this message matched ]
               + [ voice overlay @ context-appropriate intensity, via miku-voice when loaded ]
               + [ memory: recall context + summary (§22) ]
 ```
+
+The core agent loop prepends the small immutable boot contract on every path, including custom
+persona and actor prompts. The mode composer then inserts the bundled `tm-lang-fluency` skill before
+SOUL and mode-selected skills. Configured or managed assets cannot replace or disable this
+runtime-owned language guidance. Repo workflow details such as `fs.patch` operations remain in
+`serious-engineer-ops`, not in the language contract.
 
 All skill markdown is frontmatter-stripped before composition. Mode id, capability list, voice cap,
 and scope are dispatch data the router and host act on — they are never rendered into the prompt as
@@ -59,9 +67,9 @@ value — it's implicit in whether `miku-voice` is among the composed skills, an
 concentration table reads intensity from context.
 
 Rust vendors the default `SOUL.md`, `modes.json`, and bundled skills under
-`crates/tm-modes/assets/`. A configured mode/skill asset path may override those files; missing or
-unreadable configured assets degrade with warnings but fall back to the bundled defaults so the
-default Miku identity and mode catalog stay available.
+`crates/tm-modes/assets/`. A configured mode/skill asset path may override those files except the
+runtime-owned `tm-lang-fluency` skill; missing or unreadable configured assets degrade with warnings
+but fall back to the bundled defaults so the default Miku identity and mode catalog stay available.
 
 Catalog skill references are validated against loaded skill assets, for both a mode's `activeSkills`
 and the top-level `skills[]` array. A missing reference degrades with a stable warning naming which

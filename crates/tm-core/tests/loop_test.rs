@@ -16,7 +16,7 @@ use serde_json::Value;
 use tm_core::{
     Agent, AgentConfig, CancellationToken, CellBudget, ChatRequest, DEFAULT_SYSTEM_PROMPT, Error,
     EvalOutput, EventSink, InboxDrain, LlmClient, Message, Protocol, Result, Role, Sandbox,
-    Session, SessionConfig, StreamEvent, ToolSpec,
+    Session, SessionConfig, StreamEvent, TM_RUNTIME_BOOT_CONTRACT, ToolSpec,
 };
 
 /// An `LlmClient` that replays a fixed script of stream events per turn and records every
@@ -97,18 +97,56 @@ impl Session for CountingSession {
     }
 }
 
+#[derive(Default)]
+struct BatchSession {
+    batches: Vec<Vec<String>>,
+}
+
+#[async_trait(?Send)]
+impl Session for BatchSession {
+    async fn eval(&mut self, _code: &str, _budget: CellBudget) -> Result<EvalOutput> {
+        panic!("agent loop should use eval_batch for native execute calls")
+    }
+
+    async fn eval_batch(
+        &mut self,
+        codes: &[String],
+        _budget: CellBudget,
+    ) -> Result<Vec<EvalOutput>> {
+        self.batches.push(codes.to_vec());
+        Ok(codes
+            .iter()
+            .map(|code| EvalOutput {
+                result: Some(Value::String(code.clone())),
+                ..EvalOutput::default()
+            })
+            .collect())
+    }
+
+    async fn reset(&mut self) -> Result<()> {
+        self.batches.clear();
+        Ok(())
+    }
+}
+
 #[test]
-fn default_prompt_teaches_js_ts_repl_discovery_contract() {
-    assert!(DEFAULT_SYSTEM_PROMPT.contains("JavaScript/TypeScript"));
-    assert!(DEFAULT_SYSTEM_PROMPT.contains("Top-level `await`"));
-    assert!(DEFAULT_SYSTEM_PROMPT.contains("await tools.search"));
-    assert!(DEFAULT_SYSTEM_PROMPT.contains("await tools.docs"));
+fn default_prompt_teaches_tm_repl_discovery_contract() {
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("@tools.search"));
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("help @capability"));
     assert!(DEFAULT_SYSTEM_PROMPT.contains("agents.parallel"));
+    assert!(DEFAULT_SYSTEM_PROMPT.contains("do not spend turns rediscovering a capability"));
+    assert!(TM_RUNTIME_BOOT_CONTRACT.contains("not JavaScript"));
+    assert!(TM_RUNTIME_BOOT_CONTRACT.contains("tm-conformance-v2"));
+    assert!(TM_RUNTIME_BOOT_CONTRACT.contains("at most 16 `execute` calls"));
+    assert!(TM_RUNTIME_BOOT_CONTRACT.contains("ordered left-to-right"));
+    assert!(TM_RUNTIME_BOOT_CONTRACT.contains("custom persona, mode, and actor prompts"));
+    assert!(!TM_RUNTIME_BOOT_CONTRACT.contains("fs.patch"));
+    assert!(!TM_RUNTIME_BOOT_CONTRACT.contains("stale tag"));
 
     let description = ToolSpec::execute().function.description;
-    assert!(description.contains("JavaScript/TypeScript"));
-    assert!(description.contains("top-level await"));
-    assert!(description.contains("await tools.search"));
+    assert!(description.contains("tm-conformance-v2"));
+    assert!(description.contains("@capability"));
+    assert!(description.contains("@tools.search"));
 }
 
 struct StaticInbox {
@@ -301,6 +339,85 @@ async fn native_tool_loop_streams_and_executes() {
         "tool result should echo the executed code, got: {}",
         tool_msg.content
     );
+}
+
+#[tokio::test]
+async fn native_tool_loop_executes_parallel_batch_and_shapes_results_in_response_order() {
+    let scripts = vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_1".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"display('first')"}"#.into()),
+            },
+            StreamEvent::ToolCall {
+                index: 1,
+                id: Some("call_2".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"display('second')"}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("done".into()),
+            StreamEvent::Finish {
+                reason: Some("stop".into()),
+            },
+        ],
+    ];
+    let llm = Arc::new(FakeLlm::new(scripts));
+    let agent = Agent::new(
+        llm.clone(),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let mut session = BatchSession::default();
+
+    assert_eq!(
+        agent
+            .run_with_session("run both", &[], &mut session, &sink)
+            .await
+            .unwrap(),
+        "done"
+    );
+    assert_eq!(
+        session.batches,
+        vec![vec![
+            "display('first')".to_string(),
+            "display('second')".to_string()
+        ]]
+    );
+
+    let events = sink.events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.as_str() == "cell_start")
+            .count(),
+        2
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.as_str() == "cell_result")
+            .count(),
+        2
+    );
+
+    let requests = llm.requests.lock();
+    let tool_results: Vec<_> = requests[1]
+        .iter()
+        .filter(|message| message.role == Role::Tool)
+        .collect();
+    assert_eq!(tool_results.len(), 2);
+    assert_eq!(tool_results[0].tool_call_id.as_deref(), Some("call_1"));
+    assert!(tool_results[0].content.contains("display('first')"));
+    assert_eq!(tool_results[1].tool_call_id.as_deref(), Some("call_2"));
+    assert!(tool_results[1].content.contains("display('second')"));
 }
 
 #[tokio::test]
@@ -662,25 +779,20 @@ async fn run_with_controls_cancels_a_pending_session_eval() {
 }
 
 #[tokio::test]
-async fn rejects_multiple_or_malformed_tool_calls_before_execution() {
+async fn rejects_oversized_or_malformed_tool_call_batches_before_execution() {
+    let mut oversized = (0..17)
+        .map(|index| StreamEvent::ToolCall {
+            index,
+            id: Some(format!("call_{index}")),
+            name: Some("execute".into()),
+            arguments: Some(format!(r#"{{"code":"{index}"}}"#)),
+        })
+        .collect::<Vec<_>>();
+    oversized.push(StreamEvent::Finish {
+        reason: Some("tool_calls".into()),
+    });
     let cases = vec![
-        vec![
-            StreamEvent::ToolCall {
-                index: 0,
-                id: Some("call_1".into()),
-                name: Some("execute".into()),
-                arguments: Some(r#"{"code":"1"}"#.into()),
-            },
-            StreamEvent::ToolCall {
-                index: 1,
-                id: Some("call_2".into()),
-                name: Some("execute".into()),
-                arguments: Some(r#"{"code":"2"}"#.into()),
-            },
-            StreamEvent::Finish {
-                reason: Some("tool_calls".into()),
-            },
-        ],
+        oversized,
         vec![
             StreamEvent::ToolCall {
                 index: 0,
@@ -692,6 +804,23 @@ async fn rejects_multiple_or_malformed_tool_calls_before_execution() {
                 index: 1,
                 id: Some("call_missing_name".into()),
                 name: None,
+                arguments: Some(r#"{"code":"2"}"#.into()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_duplicate".into()),
+                name: Some("execute".into()),
+                arguments: Some(r#"{"code":"1"}"#.into()),
+            },
+            StreamEvent::ToolCall {
+                index: 1,
+                id: Some("call_duplicate".into()),
+                name: Some("execute".into()),
                 arguments: Some(r#"{"code":"2"}"#.into()),
             },
             StreamEvent::Finish {
@@ -767,6 +896,76 @@ async fn rejects_multiple_or_malformed_tool_calls_before_execution() {
 }
 
 #[tokio::test]
+async fn compatibility_eval_batch_stops_after_first_session_failure() {
+    struct FailsSecondSession {
+        calls: Vec<String>,
+    }
+
+    #[async_trait(?Send)]
+    impl Session for FailsSecondSession {
+        async fn eval(&mut self, code: &str, _budget: CellBudget) -> Result<EvalOutput> {
+            self.calls.push(code.to_string());
+            if self.calls.len() == 2 {
+                return Err(Error::Sandbox("second cell failed".to_string()));
+            }
+            Ok(EvalOutput {
+                result: Some(Value::String(code.to_string())),
+                ..EvalOutput::default()
+            })
+        }
+
+        async fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    let script = vec![
+        StreamEvent::ToolCall {
+            index: 0,
+            id: Some("call_1".into()),
+            name: Some("execute".into()),
+            arguments: Some(r#"{"code":"first"}"#.into()),
+        },
+        StreamEvent::ToolCall {
+            index: 1,
+            id: Some("call_2".into()),
+            name: Some("execute".into()),
+            arguments: Some(r#"{"code":"second"}"#.into()),
+        },
+        StreamEvent::ToolCall {
+            index: 2,
+            id: Some("call_3".into()),
+            name: Some("execute".into()),
+            arguments: Some(r#"{"code":"third"}"#.into()),
+        },
+        StreamEvent::Finish {
+            reason: Some("tool_calls".into()),
+        },
+    ];
+    let agent = Agent::new(
+        Arc::new(FakeLlm::new(vec![script])),
+        Arc::new(EchoSandbox),
+        config(Protocol::NativeTool),
+    );
+    let sink = CaptureSink::default();
+    let mut session = FailsSecondSession { calls: Vec::new() };
+
+    let result = agent
+        .run_with_session("run batch", &[], &mut session, &sink)
+        .await;
+
+    assert!(matches!(result, Err(Error::Sandbox(ref message)) if message == "second cell failed"));
+    assert_eq!(session.calls, vec!["first", "second"]);
+    assert_eq!(
+        sink.events()
+            .iter()
+            .filter(|event| event.as_str() == "cell_start")
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
 async fn native_requests_advertise_exactly_execute() {
     struct InspectingLlm(Arc<Mutex<Vec<ToolSpec>>>);
 
@@ -797,4 +996,48 @@ async fn native_requests_advertise_exactly_execute() {
     let tools = seen.lock();
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].function.name, "execute");
+}
+
+#[tokio::test]
+async fn tm_requests_append_language_contract_and_advertise_tm_execute() {
+    struct InspectingLlm(Arc<Mutex<Option<(String, String)>>>);
+
+    #[async_trait]
+    impl LlmClient for InspectingLlm {
+        async fn chat_stream(
+            &self,
+            request: &ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+            *self.0.lock() = Some((
+                request.messages[0].content.clone(),
+                request.tools[0].function.description.clone(),
+            ));
+            Ok(Box::pin(stream::iter([
+                Ok(StreamEvent::Text("done".to_string())),
+                Ok(StreamEvent::Finish {
+                    reason: Some("stop".to_string()),
+                }),
+            ])))
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(None));
+    let mut cfg = config(Protocol::NativeTool);
+    cfg.system_prompt = "custom persona prompt".into();
+    let agent = Agent::new(
+        Arc::new(InspectingLlm(Arc::clone(&seen))),
+        Arc::new(EchoSandbox),
+        cfg,
+    );
+    agent.run("hello", &CaptureSink::default()).await.unwrap();
+
+    let seen = seen.lock();
+    let (prompt, description) = seen.as_ref().unwrap();
+    assert!(prompt.starts_with("## Immutable tm runtime contract"));
+    assert!(prompt.contains("custom persona prompt"));
+    assert!(prompt.contains("tm-conformance-v2"));
+    assert!(prompt.contains("separate top-level forms"));
+    assert!(!prompt.contains("fs.patch"));
+    assert!(!description.contains("JavaScript/TypeScript"));
+    assert!(description.contains("tm-conformance-v2"));
 }

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use tm_core::{ChatRequest, Message, Role, Usage};
 
 /// Build the JSON request body. `stream` is always true (streaming is the one transport).
-pub fn build_body(req: &ChatRequest, include_usage: bool) -> Value {
+pub fn build_body(req: &ChatRequest, include_usage: bool, reasoning_effort: Option<&str>) -> Value {
     let messages: Vec<Value> = req.messages.iter().map(wire_message).collect();
 
     let mut body = serde_json::json!({
@@ -25,15 +25,17 @@ pub fn build_body(req: &ChatRequest, include_usage: bool) -> Value {
             "tool_choice".into(),
             Value::String(req.tool_choice.as_str().into()),
         );
-        // At most one tool call per turn: the agent loop exposes only `execute` and fails
-        // closed on any parallel batch. Keep the transport aligned with that protocol.
-        map.insert("parallel_tool_calls".into(), Value::Bool(false));
+        // tm-core prevalidates and bounds the complete batch before the session executes it.
+        map.insert("parallel_tool_calls".into(), Value::Bool(true));
     }
     if include_usage {
         map.insert(
             "stream_options".into(),
             serde_json::json!({ "include_usage": true }),
         );
+    }
+    if let Some(effort) = reasoning_effort {
+        map.insert("reasoning_effort".into(), Value::String(effort.to_string()));
     }
     if let Some(t) = req.temperature {
         map.insert("temperature".into(), serde_json::json!(t));
@@ -42,6 +44,33 @@ pub fn build_body(req: &ChatRequest, include_usage: bool) -> Value {
         map.insert("max_tokens".into(), serde_json::json!(m));
     }
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use tm_core::{ToolChoice, ToolSpec};
+
+    use super::*;
+
+    #[test]
+    fn includes_requested_reasoning_effort() {
+        let body = build_body(
+            &ChatRequest {
+                model: "gpt-5.6-sol".to_string(),
+                messages: Vec::new(),
+                tools: vec![ToolSpec::execute()],
+                tool_choice: ToolChoice::Auto,
+                temperature: None,
+                max_tokens: None,
+            },
+            true,
+            Some("medium"),
+        );
+
+        assert_eq!(body["model"], "gpt-5.6-sol");
+        assert_eq!(body["reasoning_effort"], "medium");
+        assert_eq!(body["parallel_tool_calls"], true);
+    }
 }
 
 /// Convert one [`Message`] to its OpenAI wire object. Assistant tool-call arguments are

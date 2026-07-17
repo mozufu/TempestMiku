@@ -935,7 +935,7 @@ mod tests {
         let timed_out = broker
             .request_permission_detailed_for_backend(
                 session_id,
-                "native-deno",
+                "native-tm",
                 prompt(vec![("reject", "reject_once"), ("allow", "allow_once")]),
                 Duration::from_millis(1),
                 sink,

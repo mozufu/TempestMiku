@@ -146,9 +146,9 @@ async fn approval_route_resolves_pending_backend_permission() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn native_deno_backend_approval_route_approves_proc_run() {
+async fn native_tm_backend_approval_route_approves_proc_run() {
     let (app, store, llm, session, _temp) =
-        native_deno_approval_app(Duration::from_secs(5), native_proc_script()).await;
+        native_tm_approval_app(Duration::from_secs(5), native_proc_script()).await;
     let session_id = session.id;
     let response = app
         .clone()
@@ -165,7 +165,7 @@ async fn native_deno_backend_approval_route_approves_proc_run() {
     let turn_id = accepted_turn_id(response).await;
 
     let approval = wait_for_event_payload(&store, session_id, "approval").await;
-    assert_eq!(approval["backend"], json!("native-deno"));
+    assert_eq!(approval["backend"], json!("native-tm"));
     assert_eq!(approval["action"], json!("proc.run cargo clean"));
     let approval_id = approval["approvalId"]
         .as_str()
@@ -197,10 +197,10 @@ async fn native_deno_backend_approval_route_approves_proc_run() {
         .into_iter()
         .find(|event| event.event_type == "approval_resolved")
         .unwrap();
-    assert_eq!(resolved.payload_json["backend"], json!("native-deno"));
+    assert_eq!(resolved.payload_json["backend"], json!("native-tm"));
     assert_eq!(resolved.payload_json["optionId"], json!("allow"));
     assert_eq!(resolved.turn_id, Some(turn_id));
-    assert!(native_tool_result(&llm).contains("\"ok\":true"));
+    assert!(native_tool_result(&llm).contains("\"exitCode\": 0"));
     assert!(
         store
             .events_after(session_id, None)
@@ -213,9 +213,9 @@ async fn native_deno_backend_approval_route_approves_proc_run() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn native_deno_backend_approval_route_denies_proc_run() {
+async fn native_tm_backend_approval_route_denies_proc_run() {
     let (app, store, llm, session, _temp) =
-        native_deno_approval_app(Duration::from_secs(5), native_proc_script()).await;
+        native_tm_approval_app(Duration::from_secs(5), native_proc_script()).await;
     let session_id = session.id;
     let response = app
         .clone()
@@ -261,26 +261,572 @@ async fn native_deno_backend_approval_route_denies_proc_run() {
         .into_iter()
         .find(|event| event.event_type == "approval_resolved")
         .unwrap();
-    assert_eq!(resolved.payload_json["backend"], json!("native-deno"));
+    assert_eq!(resolved.payload_json["backend"], json!("native-tm"));
     assert_eq!(resolved.payload_json["optionId"], json!("reject"));
 }
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn native_deno_backend_approval_timeout_defaults_to_deny() {
+async fn native_tm_backend_approval_timeout_defaults_to_deny() {
     let (app, store, llm, session, _temp) =
-        native_deno_approval_app(Duration::from_millis(1), native_proc_script()).await;
+        native_tm_approval_app(Duration::from_millis(1), native_proc_script()).await;
     post_user_message(&app, session.id, "timeout an unsafe proc command").await;
     assert!(native_tool_result(&llm).contains("ApprovalTimeoutError"));
     let events = store.events_after(session.id, None).await.unwrap();
     assert!(events.iter().any(|event| {
-        event.event_type == "approval" && event.payload_json["backend"] == json!("native-deno")
+        event.event_type == "approval" && event.payload_json["backend"] == json!("native-tm")
     }));
     assert!(events.iter().any(|event| {
         event.event_type == "approval_resolved"
-            && event.payload_json["backend"] == json!("native-deno")
+            && event.payload_json["backend"] == json!("native-tm")
             && event.payload_json["optionId"] == json!("reject")
     }));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn native_tm_public_route_approves_one_redacted_effect_and_replays_trace() {
+    let (app, store, llm, session, temp) =
+        native_tm_effect_approval_app(Duration::from_secs(5)).await;
+    let session_id = session.id;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .body(message_body("remove the reviewed fixture through tm"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
+
+    let approval = wait_for_event_payload(&store, session_id, "approval").await;
+    let approval_id = approval["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let before_approval = store.events_after(session_id, None).await.unwrap();
+    let suspended = before_approval
+        .iter()
+        .find(|event| event.event_type == "effect_suspended")
+        .expect("tm effect suspends before the HTTP approval");
+    let replay_cursor = suspended.seq.saturating_sub(1);
+
+    let approved = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"decision":"approve"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.status(), StatusCode::OK);
+    assert_eq!(
+        wait_for_turn(&app, session_id, turn_id).await["status"],
+        json!("completed")
+    );
+    assert!(!temp.path().join("repo/remove-me.txt").exists());
+
+    let events = store.events_after(session_id, None).await.unwrap();
+    let effect_events = events
+        .iter()
+        .filter(|event| event.event_type.starts_with("effect_"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        effect_events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "effect_start",
+            "effect_result",
+            "effect_start",
+            "effect_suspended",
+            "effect_resumed",
+            "effect_result"
+        ],
+        "code.search and the exactly-once fs.remove each own one effect node"
+    );
+    let remove_start = effect_events
+        .iter()
+        .find(|event| event.payload_json["capability"] == json!("fs.remove"))
+        .unwrap();
+    assert_eq!(remove_start.payload_json["argsPreview"], "[redacted]");
+    let remove_node = remove_start.payload_json["nodeId"].clone();
+    assert_eq!(
+        effect_events
+            .iter()
+            .filter(|event| event.payload_json["nodeId"] == remove_node)
+            .count(),
+        4
+    );
+    assert!(events.iter().any(|event| event.event_type == "scope_start"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == "scope_result")
+    );
+    assert!(events.iter().any(|event| event.event_type == "display"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == "binding_committed")
+    );
+    assert!(native_tool_result(&llm).contains("removed"));
+
+    let replay = store
+        .events_after(session_id, Some(replay_cursor))
+        .await
+        .unwrap();
+    for expected in [
+        "effect_suspended",
+        "approval",
+        "approval_resolved",
+        "effect_resumed",
+        "effect_result",
+        "scope_result",
+        "display",
+        "binding_committed",
+        "cell_result",
+        "final",
+    ] {
+        assert!(
+            replay.iter().any(|event| event.event_type == expected),
+            "missing {expected} from cursor replay: {:?}",
+            replay
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let duplicate = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"decision":"approve"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn native_tm_public_route_denial_rolls_back_bindings_and_effect() {
+    let (app, store, llm, session, temp) =
+        native_tm_effect_approval_app(Duration::from_secs(5)).await;
+    let session_id = session.id;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/messages"))
+                .header("content-type", "application/json")
+                .body(message_body("deny the reviewed tm fixture removal"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
+    let approval_id = wait_for_event_payload(&store, session_id, "approval").await["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{session_id}/approvals/{approval_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"decision":"deny"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::OK);
+    assert_eq!(
+        wait_for_turn(&app, session_id, turn_id).await["status"],
+        json!("completed")
+    );
+    assert!(temp.path().join("repo/remove-me.txt").exists());
+    let events = store.events_after(session_id, None).await.unwrap();
+    let remove_node = events
+        .iter()
+        .find(|event| {
+            event.event_type == "effect_start"
+                && event.payload_json["capability"] == json!("fs.remove")
+        })
+        .unwrap()
+        .payload_json["nodeId"]
+        .clone();
+    assert!(events.iter().any(|event| {
+        event.event_type == "effect_result"
+            && event.payload_json["nodeId"] == remove_node
+            && event.payload_json["status"] == json!("failed")
+    }));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != "binding_committed"),
+        "the top-level hits binding must roll back with the denied effect"
+    );
+    assert!(native_tool_result(&llm).contains("approval denied"));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn native_tm_public_route_timeout_defaults_to_deny_without_commit() {
+    let (app, store, llm, session, temp) =
+        native_tm_effect_approval_app(Duration::from_millis(1)).await;
+    post_user_message(&app, session.id, "let the tm removal approval time out").await;
+    assert!(temp.path().join("repo/remove-me.txt").exists());
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert!(events.iter().any(|event| {
+        event.event_type == "approval_resolved"
+            && event.payload_json["status"] == json!("timed_out")
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_type == "effect_result" && event.payload_json["status"] == json!("failed")
+    }));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != "binding_committed")
+    );
+    assert!(native_tool_result(&llm).contains("approval timed out"));
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn native_tm_runtime_eviction_emits_reset_and_drops_ephemeral_bindings() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("tm_bind".into()),
+                name: Some("execute".into()),
+                arguments: Some(json!({"code": "let retained = 7"}).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("first".into()),
+            StreamEvent::Finish {
+                reason: Some("stop".into()),
+            },
+        ],
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("tm_after_reset".into()),
+                name: Some("execute".into()),
+                arguments: Some(json!({"code": "retained"}).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("second".into()),
+            StreamEvent::Finish {
+                reason: Some("stop".into()),
+            },
+        ],
+    ]));
+    let llm_client: Arc<dyn LlmClient> = llm.clone();
+    let cfg = AgentConfig {
+        model: "fake".into(),
+        max_turns: 3,
+        ..AgentConfig::default()
+    };
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let backend = NativeTmBackend::new_with_options(
+        llm_client,
+        cfg,
+        TmSandboxOptions {
+            artifact_root,
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Deny,
+        Arc::clone(&state.approval_broker),
+        NativeTmBackendOptions {
+            shard_count: 1,
+            session_ttl: Duration::from_millis(1),
+            event_channel_capacity: 32,
+        },
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    let router = app(state);
+    let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+
+    post_user_message(&router, session.id, "bind ephemeral tm state").await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    post_user_message(&router, session.id, "read after runtime eviction").await;
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "runtime_reset")
+            .count(),
+        1
+    );
+    let reset = events
+        .iter()
+        .position(|event| event.event_type == "runtime_reset")
+        .unwrap();
+    let second_cell = events
+        .iter()
+        .rposition(|event| event.event_type == "cell_start")
+        .unwrap();
+    assert!(reset < second_cell);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "binding_committed")
+            .count(),
+        1,
+        "only the pre-eviction successful cell commits a binding"
+    );
+    let requests = llm.requests.lock();
+    let second_tool_result = requests[3]
+        .iter()
+        .find(|message| message.role == Role::Tool)
+        .unwrap();
+    assert!(second_tool_result.content.contains("unbound name retained"));
+}
+
+struct CancelledTmCell;
+
+impl tm_core::CancellationToken for CancelledTmCell {
+    fn is_cancelled(&self) -> bool {
+        true
+    }
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn native_tm_public_route_cancellation_never_commits() {
+    let (app, store, llm, session, _temp) =
+        native_tm_simple_app("let never = 1", Some(Arc::new(CancelledTmCell))).await;
+    post_user_message(&app, session.id, "cancel this tm cell").await;
+    assert!(native_tool_result(&llm).contains("cell cancelled"));
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != "binding_committed")
+    );
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn native_tm_public_route_rejects_ungranted_effect_before_execution() {
+    let (app, store, llm, session, _temp) =
+        native_tm_simple_app("@agents.run {task: \"forbidden\"}", None).await;
+    post_user_message(&app, session.id, "attempt an ungranted tm effect").await;
+    assert!(native_tool_result(&llm).contains("unknown capability agents.run"));
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| event.event_type != "effect_start"),
+        "checker rejection must happen before any host effect starts"
+    );
+}
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn gated_postgres_native_tm_cell_approves_and_replays_after_store_reconnect() {
+    let Some(dsn) = postgres_test_dsn() else {
+        return;
+    };
+    let admin = PostgresStore::connect(&dsn).await.unwrap();
+    let schema = format!("tm_native_cell_{}", Uuid::new_v4().simple());
+    admin
+        .client()
+        .batch_execute(&format!("create schema {schema}"))
+        .await
+        .unwrap();
+    let store = Arc::new(
+        PostgresStore::connect_in_schema(&dsn, &schema)
+            .await
+            .unwrap(),
+    );
+    store.configure_owner_subject("brian").await.unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("repo");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    std::fs::write(linked_root.join("remove-me.txt"), "delete-me\n").unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "repo".into(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
+    let code = r#"
+let hits = @code.search {pattern: "delete-me", paths: ["repo:remove-me.txt"], regex: false};
+hits |> par map (fun hit -> @fs.remove {path: hit.path, tag: hit.tag}) |> display {kind: "table"}
+"#;
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("postgres_native_tm".into()),
+                name: Some("execute".into()),
+                arguments: Some(json!({"code": code}).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".into()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("done".into()),
+            StreamEvent::Finish {
+                reason: Some("stop".into()),
+            },
+        ],
+    ]));
+    let llm_client: Arc<dyn LlmClient> = llm;
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone())
+    .with_linked_folders(linked.clone());
+    let backend = NativeTmBackend::new(
+        llm_client,
+        AgentConfig {
+            model: "fake".into(),
+            max_turns: 3,
+            ..AgentConfig::default()
+        },
+        TmSandboxOptions {
+            artifact_root,
+            linked_folders: Some(linked),
+            approval_timeout: Duration::from_secs(5),
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Manual,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    let router = app(state);
+    let session = create_with_body(
+        &router,
+        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/messages", session.id))
+                .header("content-type", "application/json")
+                .body(message_body("run the Postgres tm approval cell"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
+    let approval_id = wait_for_event_payload(&store, session.id, "approval").await["approvalId"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let approved = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/approvals/{approval_id}", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"decision":"approve"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.status(), StatusCode::OK);
+    assert_eq!(
+        wait_for_turn(&router, session.id, turn_id).await["status"],
+        json!("completed")
+    );
+    assert!(!temp.path().join("repo/remove-me.txt").exists());
+    let initial = store.events_after(session.id, None).await.unwrap();
+    let cursor = initial
+        .iter()
+        .find(|event| event.event_type == "effect_suspended")
+        .unwrap()
+        .seq
+        .saturating_sub(1);
+
+    let reconnected = PostgresStore::connect_in_schema(&dsn, &schema)
+        .await
+        .unwrap();
+    let replay = reconnected
+        .events_after(session.id, Some(cursor))
+        .await
+        .unwrap();
+    for expected in [
+        "effect_suspended",
+        "approval",
+        "approval_resolved",
+        "effect_resumed",
+        "effect_result",
+        "scope_result",
+        "display",
+        "binding_committed",
+        "cell_result",
+        "final",
+    ] {
+        assert!(replay.iter().any(|event| event.event_type == expected));
+    }
+
+    drop(reconnected);
+    drop(router);
+    drop(store);
+    admin
+        .client()
+        .batch_execute(&format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -305,18 +851,13 @@ async fn native_child_actor_receives_only_delegated_grants() {
     .unwrap();
 
     let parent_code = r#"
-const digest = await agents.run("worker", "Verify undelegated repository capabilities are denied, then create a child artifact.");
-display(digest);
+let digest = @agents.run {role: "worker", task: "Verify undelegated repository capabilities are absent, then create a child artifact."};
+digest |> display {kind: "json"}
 "#;
     let child_code = r#"
-const denied = await Promise.all([
-  fs.read("repo:Cargo.toml").catch(err => err.name),
-  code.search({ pattern: "native-child", paths: ["repo:Cargo.toml"], regex: false }).catch(err => err.name),
-  proc.run("cargo", ["clean"], { cwd: "repo:" }).catch(err => err.name),
-  resources.read("linked://repo/Cargo.toml").catch(err => err.name)
-]);
-const artifact = artifacts.put("child resource open ok", { title: "child output" });
-display({ denied, artifact: artifact.uri });
+let catalog = @tools.search {query: "", limit: 100};
+let artifact = @artifacts.put {data: "child resource open ok", title: "child output"};
+{catalog: catalog, artifact: artifact.uri} |> display {kind: "json"}
 "#;
     let llm = Arc::new(ScriptedLlm::new(vec![
         vec![
@@ -365,11 +906,11 @@ display({ denied, artifact: artifact.uri });
     };
 
     let roster = Arc::new(tm_agents::MailboxRegistry::new());
-    let mut sandbox_options = DenoSandboxOptions {
+    let mut sandbox_options = TmSandboxOptions {
         artifact_root: artifact_root.clone(),
         linked_folders: Some(linked.clone()),
         approval_timeout: Duration::from_secs(5),
-        ..DenoSandboxOptions::default()
+        ..TmSandboxOptions::default()
     };
     tm_agents::register(
         &mut sandbox_options.host_registry,
@@ -407,8 +948,8 @@ display({ denied, artifact: artifact.uri });
                 opts.actor_id = actor_id.map(str::to_string);
                 opts.session_scope = session_scope.map(str::to_string);
                 opts.cancellation = cancellation;
-                opts.grants = tm_sandbox::core_sandbox_grants()
-                    .allow_many(grants.names().map(str::to_string));
+                opts.grants =
+                    tm_lang::core_tm_grants().allow_many(grants.names().map(str::to_string));
                 let sink: Arc<dyn CodingEventSink> = Arc::new(crate::RosterCodingEventSink::new(
                     session_id,
                     Arc::clone(&executor_approval_roster),
@@ -417,7 +958,7 @@ display({ denied, artifact: artifact.uri });
                     crate::HttpApprovalPolicy::new(Arc::clone(&executor_broker), session_id, sink)
                         .with_actor_id(actor_id.map(str::to_string)),
                 );
-                Arc::new(tm_sandbox::DenoSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
+                Arc::new(tm_lang::TmSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
             },
             Some(artifact_root.clone()),
             executor_roster,
@@ -425,7 +966,7 @@ display({ denied, artifact: artifact.uri });
     roster.set_executor(executor);
 
     let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
-    let backend = NativeDenoBackend::new(
+    let backend = NativeTmBackend::new(
         llm_for_backend,
         cfg,
         sandbox_options,
@@ -507,13 +1048,22 @@ display({ denied, artifact: artifact.uri });
             .content
             .clone()
     };
-    assert_eq!(
+    let child_result: Value = serde_json::from_str(
         child_result_content
-            .matches("CapabilityDeniedError")
-            .count(),
-        4,
-        "child tool result: {child_result_content}"
-    );
+            .strip_prefix("result:\n")
+            .expect("tm tool result should contain a JSON result"),
+    )
+    .unwrap();
+    for undelegated in ["fs.read", "code.search"] {
+        let entry = child_result["catalog"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == undelegated)
+            .unwrap_or_else(|| panic!("catalog should document {undelegated}"));
+        assert_eq!(entry["granted"], json!(false), "{child_result_content}");
+    }
+    assert!(child_result_content.contains("artifact://0"));
 
     let artifact = get_session_resource_json(&app, session.id, "resolve", "artifact://0").await;
     assert!(
@@ -821,13 +1371,7 @@ async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
     .unwrap();
 
     let code = r#"
-const denied = await Promise.all([
-  fs.read("repo:Cargo.toml").catch(err => err.name),
-  code.search({ pattern: "workspace", paths: ["repo:Cargo.toml"], regex: false }).catch(err => err.name),
-  proc.run("cargo", ["test"], { cwd: "repo:" }).catch(err => err.name),
-  resources.read("linked://repo/Cargo.toml").catch(err => err.name)
-]);
-display({ denied });
+@fs.read {path: "repo:Cargo.toml"}
 "#;
     let tool_turn = || {
         vec![
@@ -856,17 +1400,17 @@ display({ denied });
         tool_turn(),
         final_turn(),
     ]));
-    let chat = Arc::new(AgentChatRunner::deno(
+    let chat = Arc::new(AgentChatRunner::tm(
         llm.clone(),
         AgentConfig {
             model: "fake".to_string(),
             max_turns: 3,
             ..AgentConfig::default()
         },
-        DenoSandboxOptions {
+        TmSandboxOptions {
             artifact_root,
             linked_folders: Some(linked.clone()),
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         },
     ));
     let store = Arc::new(InMemoryStore::default());
@@ -894,9 +1438,8 @@ display({ denied });
             .iter()
             .find(|message| message.role == Role::Tool)
             .expect("tool result is fed back before final turn");
-        assert_eq!(
-            tool_result.content.matches("CapabilityDeniedError").count(),
-            4,
+        assert!(
+            tool_result.content.contains("unknown capability fs.read"),
             "tool result: {}",
             tool_result.content
         );
@@ -905,7 +1448,7 @@ display({ denied });
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn serious_server_agent_route_uses_deno_sdk_and_preserves_denials() {
+async fn serious_server_agent_route_uses_tm_effects_and_preserves_denials() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
     let linked_root = temp.path().join("repo");
@@ -925,21 +1468,22 @@ async fn serious_server_agent_route_uses_deno_sdk_and_preserves_denials() {
     .unwrap();
 
     let code = r#"
-const doc = await fs.read("linked://repo/Cargo.toml");
-const artifact = artifacts.put(`server sdk artifact\n${doc.content}`, {
-  title: "server-sdk",
-  mime: "text/plain"
-});
-const unsafeProc = await proc.run("cargo", ["clean"], { cwd: "repo:" })
-  .catch(err => ({ name: err.name, retryable: err.retryable }));
-const deniedHttp = await http.get("https://evil.test/")
-  .catch(err => ({ name: err.name, capability: err.capability }));
-display({
-  ok: doc.content.includes("[workspace]"),
+let doc = @fs.read {path: "repo:Cargo.toml"};
+let artifact = @artifacts.put {data: "server sdk artifact\n#{doc.content}", title: "server-sdk", mime: "text/plain"};
+let unsafeProc = handle (@proc.run {cmd: "cargo", args: ["clean"], cwd: "repo:"}) with error {
+  | ApprovalTimeoutError {message, ...} -> {name: "ApprovalTimeoutError", message: message}
+  | other -> rethrow other
+};
+let deniedHttp = handle (@http.get {url: "https://evil.test/"}) with error {
+  | CapabilityDeniedError {message, ...} -> {name: "CapabilityDeniedError", message: message}
+  | other -> rethrow other
+};
+{
+  ok: contains "[workspace]" doc.content,
   artifact: artifact.uri,
   unsafeProc,
   deniedHttp
-});
+} |> display {kind: "json"}
 "#;
     let tool_args = json!({ "code": code }).to_string();
     let llm = Arc::new(ScriptedLlm::new(vec![
@@ -970,14 +1514,14 @@ display({
         },
         ..AgentConfig::default()
     };
-    let chat = Arc::new(AgentChatRunner::deno(
+    let chat = Arc::new(AgentChatRunner::tm(
         llm.clone(),
         cfg,
-        DenoSandboxOptions {
+        TmSandboxOptions {
             artifact_root: artifact_root.clone(),
             linked_folders: Some(linked.clone()),
             approval_timeout: Duration::from_millis(1),
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         },
     ));
     let store = Arc::new(InMemoryStore::default());
@@ -1011,7 +1555,7 @@ display({
             .clone()
     };
     assert!(
-        tool_result_content.contains("\"ok\":true"),
+        tool_result_content.contains("\"ok\": true"),
         "tool result: {tool_result_content}"
     );
     assert!(
@@ -1071,7 +1615,7 @@ display({
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn serious_engineer_native_deno_uses_linked_repo_and_scoped_drive_search() {
+async fn serious_engineer_native_tm_uses_linked_repo_and_scoped_drive_search() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
     let linked_root = temp.path().join("repo");
@@ -1113,19 +1657,20 @@ async fn serious_engineer_native_deno_uses_linked_repo_and_scoped_drive_search()
 
     let code = format!(
         r#"
-const read = await fs.read("repo:src/lib.rs");
-const hits = await code.search({{ pattern: "linked_answer", paths: ["repo:src/lib.rs"], regex: false }});
-const run = await proc.run("cargo", ["test", "--quiet"], {{ cwd: "repo:" }});
-const driveHits = await drive.search("Scoped", {{ project: "repo", returnSnippets: true }});
-display({{
-  readOk: read.content.includes("linked_answer"),
-  codeHits: hits.length,
+let read = @fs.read {{path: "repo:src/lib.rs"}};
+let hits = @code.search {{pattern: "linked_answer", paths: ["repo:src/lib.rs"], regex: false}};
+let run = @proc.run {{cmd: "cargo", args: ["test", "--quiet"], cwd: "repo:"}};
+let driveHits = @drive.search {{query: "Scoped", project: "repo", returnSnippets: true}};
+let driveHit = match driveHits {{ | first :: _ -> first | [] -> null }};
+{{
+  readOk: contains "linked_answer" read.content,
+  codeHits: length hits,
   exitCode: run.exitCode,
-  driveHits: driveHits.length,
-  driveUri: driveHits[0]?.uri,
-  driveProject: driveHits[0]?.project,
+  driveHits: length driveHits,
+  driveUri: driveHit.uri,
+  driveProject: driveHit.project,
   expectedDriveUri: "{uri}"
-}});
+}} |> display {{kind: "json"}}
 "#,
         uri = filed.uri
     );
@@ -1172,15 +1717,15 @@ display({{
     .with_artifact_root(artifact_root.clone())
     .with_linked_folders(linked.clone())
     .with_drive_store(drive_store.clone());
-    let backend = NativeDenoBackend::new(
+    let backend = NativeTmBackend::new(
         llm_for_backend,
         cfg,
-        DenoSandboxOptions {
+        TmSandboxOptions {
             artifact_root,
             linked_folders: Some(linked),
             drive_store: Some(Arc::new(drive_store)),
             approval_timeout: Duration::from_secs(1),
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         },
         NativeApprovalMode::Deny,
         Arc::clone(&state.approval_broker),
@@ -1196,19 +1741,19 @@ display({{
     post_user_message(&router, session.id, "inspect the linked project").await;
 
     let tool_result = native_tool_result(&llm);
-    assert!(tool_result.contains("\"readOk\":true"), "{tool_result}");
-    assert!(tool_result.contains("\"codeHits\":1"), "{tool_result}");
-    assert!(tool_result.contains("\"exitCode\":0"), "{tool_result}");
-    assert!(tool_result.contains("\"driveHits\":1"), "{tool_result}");
+    assert!(tool_result.contains("\"readOk\": true"), "{tool_result}");
+    assert!(tool_result.contains("\"codeHits\": 1"), "{tool_result}");
+    assert!(tool_result.contains("\"exitCode\": 0"), "{tool_result}");
+    assert!(tool_result.contains("\"driveHits\": 1"), "{tool_result}");
     assert!(tool_result.contains(&filed.uri), "{tool_result}");
     assert!(
-        tool_result.contains("\"driveProject\":\"repo\""),
+        tool_result.contains("\"driveProject\": \"repo\""),
         "{tool_result}"
     );
 }
 
 #[tokio::test]
-async fn native_deno_drive_organizer_events_are_persisted_for_replay() {
+async fn native_tm_drive_organizer_events_are_persisted_for_replay() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
     let linked_root = temp.path().join("linked");
@@ -1225,19 +1770,20 @@ async fn native_deno_drive_organizer_events_are_persisted_for_replay() {
         tm_artifacts::ArtifactStore::open(temp.path(), "drive").unwrap(),
     );
     let code = r##"
-await drive.put("# Raw\norganizer should move this into project notes", {
+let filed = @drive.put {content: "# Raw\norganizer should move this into project notes", options: {
   suggestedPath: "inbox/raw.md",
   project: "TempestMiku",
   docKind: "note",
   approvalMode: "auto"
-});
-const proposals = await drive.organize();
-display({
-  proposals: proposals.length,
-  status: proposals[0]?.status,
-  source: proposals[0]?.sourcePath,
-  target: proposals[0]?.proposedPath
-});
+}};
+let proposals = @drive.organize {};
+let proposal = match proposals { | first :: _ -> first | [] -> null };
+{
+  proposals: length proposals,
+  status: proposal.status,
+  source: proposal.sourcePath,
+  target: proposal.proposedPath
+} |> display {kind: "json"}
 "##;
     let tool_args = json!({ "code": code }).to_string();
     let llm = Arc::new(ScriptedLlm::new(vec![
@@ -1282,15 +1828,15 @@ display({
     .with_artifact_root(artifact_root.clone())
     .with_linked_folders(linked.clone())
     .with_drive_store(drive_store.clone());
-    let backend = NativeDenoBackend::new(
+    let backend = NativeTmBackend::new(
         llm_for_backend,
         cfg,
-        DenoSandboxOptions {
+        TmSandboxOptions {
             artifact_root,
             drive_store: Some(Arc::new(drive_store)),
             linked_folders: Some(linked),
             approval_timeout: Duration::from_secs(1),
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         },
         NativeApprovalMode::Deny,
         Arc::clone(&state.approval_broker),
@@ -1306,9 +1852,9 @@ display({
     post_user_message(&router, session.id, "organize drive docs").await;
 
     let tool_result = native_tool_result(&llm);
-    assert!(tool_result.contains("\"proposals\":1"), "{tool_result}");
+    assert!(tool_result.contains("\"proposals\": 1"), "{tool_result}");
     assert!(
-        tool_result.contains("\"status\":\"pending\""),
+        tool_result.contains("\"status\": \"pending\""),
         "{tool_result}"
     );
     let events = store.events_after(session.id, None).await.unwrap();
@@ -1396,7 +1942,7 @@ display({
     }));
 }
 
-async fn native_deno_approval_app(
+async fn native_tm_approval_app(
     timeout: Duration,
     code: &str,
 ) -> (
@@ -1411,10 +1957,10 @@ async fn native_deno_approval_app(
     let linked_root = temp.path().join("repo");
     std::fs::create_dir_all(linked_root.join("src")).unwrap();
     std::fs::write(
-            linked_root.join("Cargo.toml"),
-            "[package]\nname = \"native-deno-approval-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
+        linked_root.join("Cargo.toml"),
+        "[package]\nname = \"native-tm-approval-test\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
     std::fs::write(linked_root.join("src/lib.rs"), "pub fn x() -> i32 { 1 }\n").unwrap();
     let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
         name: "repo".to_string(),
@@ -1429,7 +1975,7 @@ async fn native_deno_approval_app(
         vec![
             StreamEvent::ToolCall {
                 index: 0,
-                id: Some("call_native_deno".to_string()),
+                id: Some("call_native_tm".to_string()),
                 name: Some("execute".to_string()),
                 arguments: Some(tool_args),
             },
@@ -1466,14 +2012,14 @@ async fn native_deno_approval_app(
     )
     .with_artifact_root(artifact_root.clone())
     .with_linked_folders(linked.clone());
-    let backend = NativeDenoBackend::new(
+    let backend = NativeTmBackend::new(
         llm_for_backend,
         cfg,
-        DenoSandboxOptions {
+        TmSandboxOptions {
             artifact_root,
             linked_folders: Some(linked),
             approval_timeout: timeout,
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         },
         NativeApprovalMode::Manual,
         Arc::clone(&state.approval_broker),
@@ -1488,12 +2034,166 @@ async fn native_deno_approval_app(
     (router, store, llm, session, temp)
 }
 
+async fn native_tm_effect_approval_app(
+    timeout: Duration,
+) -> (
+    Router,
+    Arc<InMemoryStore>,
+    Arc<ScriptedLlm>,
+    CreateSessionResponse,
+    tempfile::TempDir,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let linked_root = temp.path().join("repo");
+    std::fs::create_dir_all(&linked_root).unwrap();
+    std::fs::write(linked_root.join("remove-me.txt"), "delete-me\n").unwrap();
+    let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
+        name: "repo".to_string(),
+        path: linked_root,
+        mode: FsMode::Rw,
+        commands: Vec::new(),
+        safe_args: Vec::new(),
+    }])
+    .unwrap();
+    let code = r#"
+let hits = @code.search {pattern: "delete-me", paths: ["repo:remove-me.txt"], regex: false};
+hits |> par map (fun hit -> @fs.remove {path: hit.path, tag: hit.tag}) |> display {kind: "table"}
+"#;
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_native_tm".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(json!({ "code": code }).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("done".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+    ]));
+    let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+    let cfg = AgentConfig {
+        model: "fake".to_string(),
+        max_turns: 3,
+        cell_budget: CellBudget {
+            wall_ms: 240_000,
+            output_bytes: 50_000,
+        },
+        ..AgentConfig::default()
+    };
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone())
+    .with_linked_folders(linked.clone());
+    let backend = NativeTmBackend::new(
+        llm_for_backend,
+        cfg,
+        TmSandboxOptions {
+            artifact_root,
+            linked_folders: Some(linked),
+            approval_timeout: timeout,
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Manual,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    let router = app(state);
+    let session = create_with_body(
+        &router,
+        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+    )
+    .await;
+    (router, store, llm, session, temp)
+}
+
+async fn native_tm_simple_app(
+    code: &str,
+    cancellation: Option<Arc<dyn tm_core::CancellationToken>>,
+) -> (
+    Router,
+    Arc<InMemoryStore>,
+    Arc<ScriptedLlm>,
+    CreateSessionResponse,
+    tempfile::TempDir,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_native_tm_simple".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(json!({ "code": code }).to_string()),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("done".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+    ]));
+    let llm_client: Arc<dyn LlmClient> = llm.clone();
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let backend = NativeTmBackend::new(
+        llm_client,
+        AgentConfig {
+            model: "fake".into(),
+            max_turns: 3,
+            ..AgentConfig::default()
+        },
+        TmSandboxOptions {
+            artifact_root,
+            cancellation,
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Deny,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    let router = app(state);
+    let session = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    (router, store, llm, session, temp)
+}
+
 fn native_proc_script() -> &'static str {
     r#"
-const result = await proc.run("cargo", ["clean"], { cwd: "repo:" })
-  .then(ok => ({ ok: true, exitCode: ok.exitCode }))
-  .catch(err => ({ ok: false, name: err.name, retryable: err.retryable }));
-display(result);
+let result = handle (@proc.run {cmd: "cargo", args: ["clean"], cwd: "repo:"}) with error {
+  | ApprovalDeniedError {message, ...} -> {ok: false, name: "ApprovalDeniedError", message: message}
+  | ApprovalTimeoutError {message, ...} -> {ok: false, name: "ApprovalTimeoutError", message: message}
+  | other -> rethrow other
+};
+result |> display {kind: "json"}
 "#
 }
 

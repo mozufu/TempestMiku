@@ -1,6 +1,6 @@
 use crate::assets::{
-    BUNDLED_SOUL, MISSING_SKILL_PROMPT_FALLBACK, missing_layered_skill_reference_warning,
-    missing_skill_reference_warning,
+    BUNDLED_SOUL, BUNDLED_TM_LANG_FLUENCY_SKILL, MISSING_SKILL_PROMPT_FALLBACK,
+    missing_layered_skill_reference_warning, missing_skill_reference_warning,
 };
 use crate::{AssetStatus, ModeId, ModeProfile, ModesConfig, resolve_active_skills};
 
@@ -34,6 +34,10 @@ impl ModesConfig {
         let mut prompt = String::new();
 
         push_section(&mut prompt, "Core runtime", base_system_prompt);
+        push_raw(
+            &mut prompt,
+            strip_frontmatter(BUNDLED_TM_LANG_FLUENCY_SKILL),
+        );
         match &assets.soul {
             Some(soul) => push_section(&mut prompt, "SOUL.md", soul),
             None => push_section(&mut prompt, "SOUL.md", BUNDLED_SOUL),

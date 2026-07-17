@@ -21,14 +21,14 @@ use tm_core::{
     Result as CoreResult, StreamEvent, ToolChoice,
 };
 use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
+use tm_lang::{TmSandbox, TmSandboxOptions};
 use tm_llm::OpenAiClient;
-use tm_sandbox::{DenoSandbox, DenoSandboxOptions};
 use tm_server::{
     AppState, ApprovalBroker, ApprovalOption, ApprovalPrompt, ApprovalStatus, AuthConfig,
     ChatActorExecutor, CodingBackend, CodingEventSink, CodingTurn, CodingTurnResult,
-    EchoChatRunner, HttpApprovalPolicy, InMemoryStore, ModeId, NativeApprovalMode,
-    NativeDenoBackend, RosterCodingEventSink, ServerDreamWorker, ServerError, Store, StoreEvent,
-    StoreMemoryProvider, app,
+    EchoChatRunner, HttpApprovalPolicy, InMemoryStore, ModeId, NativeApprovalMode, NativeTmBackend,
+    RosterCodingEventSink, ServerDreamWorker, ServerError, Store, StoreEvent, StoreMemoryProvider,
+    app,
 };
 use tokio::{process::Command, sync::broadcast};
 use uuid::Uuid;
@@ -649,7 +649,7 @@ async fn run_record_native_actor_inner(recorder: &EvidenceRecorder) -> Result<()
         base_url: server.base_url.clone(),
         artifact_root: server.artifact_root.display().to_string(),
         store: "in-memory".to_string(),
-        coding_backend: "native-deno-scripted-execute-live-final".to_string(),
+        coding_backend: "native-tm-scripted-execute-live-final".to_string(),
     });
     let client = MikuClient::new(E2eConfig {
         base_url: server.base_url.clone(),
@@ -1338,10 +1338,10 @@ impl NativeActorRecordingServer {
         };
 
         let roster = Arc::new(MailboxRegistry::new());
-        let mut sandbox_options = DenoSandboxOptions {
+        let mut sandbox_options = TmSandboxOptions {
             artifact_root: artifact_root.clone(),
             approval_timeout: Duration::from_secs(5),
-            ..DenoSandboxOptions::default()
+            ..TmSandboxOptions::default()
         };
         tm_agents::register(
             &mut sandbox_options.host_registry,
@@ -1379,8 +1379,8 @@ impl NativeActorRecordingServer {
                     opts.actor_id = actor_id.map(str::to_string);
                     opts.session_scope = session_scope.map(str::to_string);
                     opts.cancellation = cancellation;
-                    opts.grants = tm_sandbox::core_sandbox_grants()
-                        .allow_many(grants.names().map(str::to_string));
+                    opts.grants =
+                        tm_lang::core_tm_grants().allow_many(grants.names().map(str::to_string));
                     let sink: Arc<dyn CodingEventSink> = Arc::new(RosterCodingEventSink::new(
                         session_id,
                         Arc::clone(&executor_approval_roster),
@@ -1389,7 +1389,7 @@ impl NativeActorRecordingServer {
                         HttpApprovalPolicy::new(Arc::clone(&executor_broker), session_id, sink)
                             .with_actor_id(actor_id.map(str::to_string)),
                     );
-                    Arc::new(DenoSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
+                    Arc::new(TmSandbox::new(opts)) as Arc<dyn tm_core::Sandbox>
                 },
                 Some(artifact_root.clone()),
                 executor_roster,
@@ -1397,7 +1397,7 @@ impl NativeActorRecordingServer {
         roster.set_executor(executor);
 
         let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
-        let backend = NativeDenoBackend::new(
+        let backend = NativeTmBackend::new(
             llm_for_backend,
             cfg,
             sandbox_options,
@@ -1437,28 +1437,20 @@ impl Drop for NativeActorRecordingServer {
 fn native_parent_coordination_code() -> String {
     format!(
         r#"
-const alpha = await agents.spawn("worker", "Wait for the parent broadcast, write a short artifact, and send Root a report.");
-const beta = await agents.spawn("worker", "Wait for the parent broadcast, write a short artifact, and send Root a report.");
-const readyA = await agents.wait(alpha, 15000);
-const readyB = await agents.wait(beta, 15000);
-const receipts = await agents.broadcast("{broadcast}");
-const first = await agents.wait(alpha, 15000);
-const second = await agents.wait(beta, 15000);
-let roster = [];
-for (let i = 0; i < 40; i++) {{
-  roster = await agents.list();
-  const done = [alpha.id, beta.id].every((id) =>
-    roster.find((entry) => entry.id === id)?.status === "terminated"
-  );
-  if (done) break;
-  await agents.wait(undefined, 100);
-}}
-display({{
+let alpha = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
+let beta = @agents.spawn {{role: "worker", task: "Wait for the parent broadcast, write a short artifact, and send Root a report."}};
+let readyA = @agents.wait {{from: alpha, timeoutMs: 15000}};
+let readyB = @agents.wait {{from: beta, timeoutMs: 15000}};
+let receipts = @agents.broadcast {{text: "{broadcast}"}};
+let first = @agents.wait {{from: alpha, timeoutMs: 15000}};
+let second = @agents.wait {{from: beta, timeoutMs: 15000}};
+let roster = @agents.list {{}};
+{{
   receipts,
-  ready: [readyA?.text, readyB?.text],
-  reports: [first?.text, second?.text],
-  roster: roster.map((entry) => [entry.id, entry.status, entry.artifactUri, entry.historyUri])
-}});
+  ready: [readyA.text, readyB.text],
+  reports: [first.text, second.text],
+  roster
+}} |> display {{kind: "json"}}
 "#,
         broadcast = NATIVE_P3_BROADCAST_TEXT
     )
@@ -1466,12 +1458,12 @@ display({{
 
 fn native_child_coordination_code() -> String {
     r#"
-await agents.send("Root", "child ready for native broadcast");
-const msg = await agents.wait("Root", 15000);
-const text = msg?.text ?? "missing broadcast";
-const artifact = artifacts.put(`native child saw: ${text}`, { title: "native p3 child" });
-await agents.send("Root", `child report ${artifact.uri}: ${text}`);
-display({ text, artifact: artifact.uri });
+let ready = @agents.send {to: "Root", text: "child ready for native broadcast"};
+let msg = @agents.wait {from: "Root", timeoutMs: 15000};
+let text = msg.text;
+let artifact = @artifacts.put {data: "native child saw: #{text}", title: "native p3 child"};
+let report = @agents.send {to: "Root", text: "child report #{artifact.uri}: #{text}"};
+{text, artifact: artifact.uri} |> display {kind: "json"}
 "#
     .to_string()
 }
@@ -1767,7 +1759,7 @@ impl RecordingBackend {
             .broker
             .request_permission_detailed_for_backend(
                 turn.session_id,
-                "native-deno",
+                "native-tm",
                 ApprovalPrompt {
                     action: "proc.run cargo clean".to_string(),
                     scope: json!({

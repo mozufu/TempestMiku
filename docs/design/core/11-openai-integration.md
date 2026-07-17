@@ -9,18 +9,23 @@ POST {base_url}/v1/chat/completions
   "messages": [ /* system, user, assistant(tool_calls), tool(result), … */ ],
   "tools": [ /* the single execute() function from §5.2 */ ],
   "tool_choice": "auto",
-  "parallel_tool_calls": false,
+  "parallel_tool_calls": true,
   "stream": true
 }
 ```
 
 ### 11.2 Loop mapping
 
-- Assistant turn with `tool_calls[0].function.name == "execute"` → parse `arguments.code`, run,
-  append a `role:"tool"` message keyed by `tool_call_id`.
+- Assistant turn with one to sixteen `execute` calls → validate the complete batch, then evaluate
+  independent `arguments.code` cells through the session batch path, appending one `role:"tool"`
+  message per call in response order.
 - Assistant turn with content and no tool call → final answer; stop.
-- More than one tool call, any name other than `execute`, missing id, malformed arguments, empty
-  code, or a truncated tool-call completion is a protocol error and executes nothing (§5.2).
+- More than sixteen calls, duplicate or missing ids, any name other than `execute`, malformed
+  arguments, empty code, or a truncated tool-call completion is a protocol error and executes
+  nothing (§5.2). tm-lang derives a forward binding DAG from each cell's free reads and persistent
+  writes. Independent cells share the pre-batch snapshot; dependent cells execute once after
+  successful producers, and final commits merge deterministically in response order. A producer
+  failure blocks dependents with `BatchDependencyError`. Dependencies must point left-to-right.
 
 ### 11.3 Compatibility notes
 

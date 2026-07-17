@@ -1782,10 +1782,8 @@ class _MikuHomePageState extends State<MikuHomePage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder:
-          (sheetContext) => ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(sheetContext).size.height * 0.9,
-            ),
+          (sheetContext) => SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.9,
             child: _DriveFeedSheet(
               tok: tok,
               copy: _copy,
@@ -2031,78 +2029,73 @@ class _MikuHomePageState extends State<MikuHomePage>
       child: Scaffold(
         backgroundColor: tok.bg,
         drawer: Builder(
-          builder: (drawerCtx) => _MikuLeftDrawer(
-            tok: tok,
-            copy: _copy,
-            currentSessionId: _sessionId,
-            loadSessions: widget.client.listSessions,
-            onSelect: (id) {
-              Scaffold.of(drawerCtx).closeDrawer();
-              if (_sessionId != id || _sessionEnded) {
-                unawaited(_loadHistoricalSession(id));
-              }
-            },
-            onNewSession: () {
-              Scaffold.of(drawerCtx).closeDrawer();
-              _startFreshChat();
-            },
-            onDrive: () {
-              Scaffold.of(drawerCtx).closeDrawer();
-              Timer(const Duration(milliseconds: 320), () {
-                if (mounted) _showDriveSheet();
-              });
-            },
-            refreshToken: _sessionHistoryRevision,
-          ),
-        ),
-        endDrawer: Builder(
-          builder: (drawerCtx) => _MikuRightDrawer(
-            tok: tok,
-            copy: _copy,
-            accent: accent,
-            projectStatus: _projectStatus,
-            nextActions: _nextActions,
-            approvals: _approvals,
-            onOpenApproval: (a) {
-              Scaffold.of(drawerCtx).closeEndDrawer();
-              Timer(const Duration(milliseconds: 320), () {
-                if (mounted) _showApprovalSheet(a);
-              });
-            },
-            onPromote: () {
-              Scaffold.of(drawerCtx).closeEndDrawer();
-              unawaited(_promoteSession());
-            },
-            onRefresh: () => unawaited(_loadProject()),
-            themeMode: themeController.mode,
-            onThemeModeChanged:
-                (mode) => unawaited(themeController.setMode(mode)),
-            onLanguageToggle: () => unawaited(_toggleLanguage()),
-            onModeSettings: () {
-              Scaffold.of(drawerCtx).closeEndDrawer();
-              Timer(const Duration(milliseconds: 320), () {
-                if (mounted) _showModeSheet();
-              });
-            },
-            onServerTarget:
-                serverTargetClient == null
-                    ? null
-                    : () {
-                      Scaffold.of(drawerCtx).closeEndDrawer();
-                      Timer(const Duration(milliseconds: 320), () {
-                        if (mounted) {
-                          _showServerTargetDialog(serverTargetClient);
-                        }
-                      });
-                    },
-            onDisconnect:
-                serverTargetClient == null
-                    ? null
-                    : () {
-                      Scaffold.of(drawerCtx).closeEndDrawer();
-                      unawaited(_disconnectFromServer(serverTargetClient));
-                    },
-          ),
+          builder:
+              (drawerCtx) => _MikuDrawer(
+                tok: tok,
+                copy: _copy,
+                accent: accent,
+                currentSessionId: _sessionId,
+                loadSessions: widget.client.listSessions,
+                onSelect: (id) {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  if (_sessionId != id || _sessionEnded) {
+                    unawaited(_loadHistoricalSession(id));
+                  }
+                },
+                onNewSession: () {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  _startFreshChat();
+                },
+                onDrive: () {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  Timer(const Duration(milliseconds: 320), () {
+                    if (mounted) _showDriveSheet();
+                  });
+                },
+                refreshToken: _sessionHistoryRevision,
+                projectStatus: _projectStatus,
+                nextActions: _nextActions,
+                approvals: _approvals,
+                onOpenApproval: (a) {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  Timer(const Duration(milliseconds: 320), () {
+                    if (mounted) _showApprovalSheet(a);
+                  });
+                },
+                onPromote: () {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  unawaited(_promoteSession());
+                },
+                onRefresh: () => unawaited(_loadProject()),
+                themeMode: themeController.mode,
+                onThemeModeChanged:
+                    (mode) => unawaited(themeController.setMode(mode)),
+                onLanguageToggle: () => unawaited(_toggleLanguage()),
+                onModeSettings: () {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  Timer(const Duration(milliseconds: 320), () {
+                    if (mounted) _showModeSheet();
+                  });
+                },
+                onServerTarget:
+                    serverTargetClient == null
+                        ? null
+                        : () {
+                          Scaffold.of(drawerCtx).closeDrawer();
+                          Timer(const Duration(milliseconds: 320), () {
+                            if (mounted) {
+                              _showServerTargetDialog(serverTargetClient);
+                            }
+                          });
+                        },
+                onDisconnect:
+                    serverTargetClient == null
+                        ? null
+                        : () {
+                          Scaffold.of(drawerCtx).closeDrawer();
+                          unawaited(_disconnectFromServer(serverTargetClient));
+                        },
+              ),
         ),
         body: DecoratedBox(
           decoration: BoxDecoration(
@@ -2136,11 +2129,7 @@ class _MikuHomePageState extends State<MikuHomePage>
     );
   }
 
-  Widget _buildTopBar(
-    _Tok tok, {
-    required bool compact,
-    required bool showBrand,
-  }) {
+  Widget _buildTopBar(_Tok tok) {
     final copy = _copy;
     final online =
         _status == 'connected' ||
@@ -2153,72 +2142,61 @@ class _MikuHomePageState extends State<MikuHomePage>
             ? tok.cool
             : tok.warning;
     return Container(
-      constraints: const BoxConstraints(minHeight: 64),
-      padding: EdgeInsets.fromLTRB(compact ? 14 : 18, 8, 10, 8),
+      constraints: const BoxConstraints(minHeight: 52),
+      padding: const EdgeInsets.fromLTRB(6, 4, 12, 4),
       decoration: BoxDecoration(
         color: tok.glass,
         border: Border(bottom: BorderSide(color: tok.glassBorder)),
       ),
       child: Row(
         children: [
-          if (showBrand) ...[
-            const MikuBrandBadge(size: 40),
-            const SizedBox(width: 11),
-          ],
+          Builder(
+            builder:
+                (menuContext) => IconButton(
+                  tooltip: copy.pick('Open menu', '開啟選單'),
+                  onPressed: () => Scaffold.of(menuContext).openDrawer(),
+                  icon: const Icon(Icons.menu_rounded),
+                ),
+          ),
+          const SizedBox(width: 2),
           Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
                 Text(
-                  compact ? 'Miku' : 'Tempest Miku',
+                  'Miku',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: tok.text,
-                    fontSize: compact ? 17 : 18,
+                    fontSize: 16.5,
                     fontWeight: FontWeight.w900,
                     letterSpacing: -0.35,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        shape: BoxShape.circle,
-                      ),
+                const SizedBox(width: 8),
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: statusColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    copy.statusLabel(_status),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: tok.muted,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
                     ),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        copy.statusLabel(_status),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: tok.muted,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ],
             ),
-          ),
-          IconButton(
-            tooltip: copy.newSession,
-            onPressed: _startFreshChat,
-            icon: const Icon(Icons.edit_square),
-          ),
-          IconButton(
-            tooltip: copy.pick('Settings', '設定'),
-            onPressed: _showOverflowSheet,
-            icon: const Icon(Icons.tune_rounded),
           ),
         ],
       ),
@@ -2233,14 +2211,6 @@ class _MikuHomePageState extends State<MikuHomePage>
       onRetry: _retryConnection,
       onNewSession: _startFreshChat,
     );
-  }
-
-  Widget _buildPrimaryDestination(_Tok tok, Color accent) {
-    return switch (_destination) {
-      _AppDestination.chat => _buildChatSurface(tok, accent),
-      _AppDestination.sessions => _buildSessionsSurface(tok),
-      _AppDestination.drive => _buildDriveSurface(tok, accent),
-    };
   }
 
   Widget _buildChatSurface(
@@ -2272,38 +2242,6 @@ class _MikuHomePageState extends State<MikuHomePage>
             ),
           ),
       ],
-    );
-  }
-
-  Widget _buildSessionsSurface(_Tok tok) {
-    return _SessionHistorySheet(
-      tok: tok,
-      copy: _copy,
-      currentSessionId: _sessionId,
-      loadSessions: widget.client.listSessions,
-      embedded: true,
-      refreshToken: _sessionHistoryRevision,
-      onSelect: (sessionId) {
-        setState(() => _destination = _AppDestination.chat);
-        unawaited(_loadHistoricalSession(sessionId));
-      },
-      onNewSession: _startFreshChat,
-    );
-  }
-
-  Widget _buildDriveSurface(_Tok tok, Color accent) {
-    return _DriveFeedSheet(
-      tok: tok,
-      copy: _copy,
-      accent: accent,
-      initialFeed: _driveFeed,
-      initialError: _driveError,
-      initialLoading: _driveLoading,
-      approvals: _driveApprovals,
-      loadFeed: _fetchDriveFeed,
-      onOpenResource: _openResource,
-      onOpenApproval: _showApprovalSheet,
-      embedded: true,
     );
   }
 

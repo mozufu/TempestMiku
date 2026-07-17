@@ -76,24 +76,73 @@ class ActionableRecordingNotificationService
 }
 
 Future<void> _openSettings(WidgetTester tester) async {
-  await tester.tap(find.byTooltip('Settings').first);
+  await tester.tap(find.byTooltip('Open menu').first);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+  await tester.tap(find.text('Settings').first);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
+}
+
+Future<void> _openContext(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('Open menu').first);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+  await tester.tap(find.text('Context').first);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 100));
+}
+
+Future<void> _scrollDrawerUntilVisible(
+  WidgetTester tester,
+  Finder target,
+) async {
+  final scrollables = find.descendant(
+    of: find.byType(Drawer),
+    matching: find.byType(Scrollable),
+  );
+  await tester.scrollUntilVisible(
+    target,
+    220,
+    scrollable: scrollables.last,
+    maxScrolls: 12,
+  );
+  await tester.pump();
+}
+
+Future<void> _tapDrawerAction(WidgetTester tester, String label) async {
+  await _openSettings(tester);
+  final action = find.text(label);
+  await _scrollDrawerUntilVisible(tester, action);
+  await tester.tap(action);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+}
+
+Future<void> _startNewSessionFromDrawer(WidgetTester tester) async {
+  await tester.tap(find.text('New session').first);
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 350));
 }
 
 Future<void> _selectDestination(WidgetTester tester, String label) async {
-  final navigation =
-      find.byType(NavigationBar).evaluate().isNotEmpty
-          ? find.byType(NavigationBar)
-          : find.byType(NavigationRail);
-  final destination = find.descendant(
-    of: navigation,
-    matching: find.text(label),
-  );
-  expect(destination, findsOneWidget);
-  await tester.tap(destination);
+  if (label == 'Chat') {
+    await _popRoute(tester);
+    return;
+  }
+  await tester.tap(find.byTooltip('Open menu').first);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+  if (label == 'Sessions') return;
+  await tester.tap(find.text('Settings').first);
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 100));
+  final destination = find.text(label);
+  await _scrollDrawerUntilVisible(tester, destination);
+  await tester.tap(destination);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 700));
+  await tester.pump(const Duration(milliseconds: 350));
 }
 
 Future<void> _scrollChatUntilVisible(WidgetTester tester, Finder target) async {
@@ -548,7 +597,7 @@ void main() {
     expect(client.resolvedApprovals, contains('approval-review:approve'));
   });
 
-  testWidgets('compact mobile chrome stays readable at 390px', (
+  testWidgets('compact mobile shell keeps controls in the drawer at 390px', (
     WidgetTester tester,
   ) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -566,17 +615,21 @@ void main() {
     expect(find.text('TempestMiku'), findsNothing);
     expect(find.text('Miku is here'), findsOneWidget);
     expect(find.text('Miku 在這裡'), findsNothing);
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
     expect(find.byType(NavigationRail), findsNothing);
-    expect(find.text('Chat'), findsOneWidget);
-    expect(find.text('Sessions'), findsOneWidget);
-    expect(find.text('Drive'), findsOneWidget);
-    expect(find.byIcon(Icons.tune_rounded), findsOneWidget);
+    expect(find.byTooltip('Open menu'), findsOneWidget);
+    expect(find.text('Sessions'), findsNothing);
+    expect(find.text('Drive'), findsNothing);
+    await tester.tap(find.byTooltip('Open menu'));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Sessions'), findsWidgets);
+    expect(find.text('Context'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
     expect(find.text('Personal'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('desktop shell exposes sessions, chat, and context panes', (
+  testWidgets('desktop shell remains chat-only until its drawer is opened', (
     WidgetTester tester,
   ) async {
     tester.view.physicalSize = const Size(1440, 900);
@@ -590,12 +643,17 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.byType(NavigationRail), findsOneWidget);
+    expect(find.byType(NavigationRail), findsNothing);
     expect(find.byType(NavigationBar), findsNothing);
-    expect(find.text('Sessions'), findsNWidgets(2));
-    expect(find.text('Context'), findsOneWidget);
-    expect(find.text('Project status'), findsOneWidget);
+    expect(find.text('Sessions'), findsNothing);
+    expect(find.text('Context'), findsNothing);
+    expect(find.text('Project status'), findsNothing);
     expect(find.byType(TextField), findsOneWidget);
+    await tester.tap(find.byTooltip('Open menu'));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Sessions'), findsWidgets);
+    expect(find.text('Context'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -636,11 +694,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.byType(NavigationBar), findsOneWidget);
-    expect(find.text('Chat'), findsOneWidget);
-    expect(find.text('Sessions'), findsOneWidget);
-    expect(find.text('Drive'), findsOneWidget);
-    expect(find.byTooltip('Settings'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.byType(NavigationRail), findsNothing);
+    expect(find.byTooltip('Open menu'), findsOneWidget);
+    expect(find.text('Sessions'), findsNothing);
+    expect(find.text('Drive'), findsNothing);
     expect(find.bySemanticsLabel('Send message'), findsOneWidget);
 
     await tester.enterText(find.byType(EditableText), 'code artifact://0');
@@ -714,8 +772,7 @@ void main() {
       expect(client.slowSendStarted, isTrue);
 
       await _selectDestination(tester, 'Sessions');
-      await tester.tap(find.bySemanticsLabel('Create new session'));
-      await tester.pump();
+      await _startNewSessionFromDrawer(tester);
       for (var i = 0; i < 20 && client.eventResumeIds.length < 2; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
@@ -761,8 +818,7 @@ void main() {
       expect(client.initialConnectRequested, isTrue);
 
       await _selectDestination(tester, 'Sessions');
-      await tester.tap(find.bySemanticsLabel('Create new session'));
-      await tester.pump();
+      await _startNewSessionFromDrawer(tester);
       for (var i = 0; i < 20 && client.eventResumeIds.isEmpty; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
@@ -1155,7 +1211,9 @@ void main() {
         'drive-feed:drive://projects/tempestmiku/research/p5-drive-workspace.md',
       ),
     );
-    await tester.ensureVisible(row);
+    final driveList = find.ancestor(of: row, matching: find.byType(ListView));
+    await tester.drag(driveList, const Offset(0, -320));
+    await tester.pump();
     await tester.pump();
     await tester.tap(row);
     await tester.pump();
@@ -1324,8 +1382,9 @@ void main() {
 
     await _openSettings(tester);
     expect(find.text('Appearance and advanced actions'), findsOneWidget);
+    await _scrollDrawerUntilVisible(tester, find.text('Language'));
     await tester.tap(find.text('Language'));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
     await _popRoute(tester);
 
     expect(find.text('Miku 在這裡'), findsOneWidget);
@@ -1352,7 +1411,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(find.text('Tempest Miku'), findsOneWidget);
+      expect(find.text('Miku'), findsOneWidget);
       expect(find.text('Personal'), findsNothing);
       expect(find.text('個人助理'), findsNothing);
       expect(find.text('燒烤'), findsNothing);
@@ -1393,13 +1452,9 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 350));
 
-      await _openSettings(tester);
-      await tester.ensureVisible(find.text('Promote Session'));
-      await tester.tap(find.text('Promote Session'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
+      await _tapDrawerAction(tester, 'Promote Session');
 
-      await _openSettings(tester);
+      await _openContext(tester);
       await tester.ensureVisible(
         find.text('project://tempestmiku · 2 promoted'),
       );
@@ -1454,9 +1509,7 @@ void main() {
       expect(find.text('Sessions'), findsWidgets);
       expect(find.text('Miku heard: first history check'), findsWidgets);
 
-      await tester.tap(find.bySemanticsLabel('Create new session'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
+      await _startNewSessionFromDrawer(tester);
       expect(await client.listSessions(), hasLength(2));
       for (var i = 0; i < 20 && client.eventResumeIds.length < 2; i++) {
         await tester.pump(const Duration(milliseconds: 100));
@@ -1503,11 +1556,7 @@ void main() {
     expect(find.text('Personal locked'), findsNothing);
     expect(find.text('Personal'), findsNothing);
 
-    await _openSettings(tester);
-    await tester.ensureVisible(find.text('Mode settings'));
-    await tester.tap(find.text('Mode settings'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _tapDrawerAction(tester, 'Mode settings');
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.text('Mode / Lock'), findsOneWidget);
@@ -1522,11 +1571,7 @@ void main() {
     expect(find.text('Serious'), findsNothing);
     expect(find.text('認真工程師'), findsNothing);
 
-    await _openSettings(tester);
-    await tester.ensureVisible(find.text('Mode settings'));
-    await tester.tap(find.text('Mode settings'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _tapDrawerAction(tester, 'Mode settings');
     await tester.pump(const Duration(milliseconds: 350));
 
     await tester.ensureVisible(find.text('Lock Serious'));
@@ -1537,11 +1582,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(client.lockedModes, contains('serious_engineer'));
-    await _openSettings(tester);
-    await tester.ensureVisible(find.text('Mode settings'));
-    await tester.tap(find.text('Mode settings'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 350));
+    await _tapDrawerAction(tester, 'Mode settings');
     await tester.pump(const Duration(milliseconds: 350));
     await tester.ensureVisible(find.text('Unlock Serious'));
     await tester.pump();
@@ -1681,11 +1722,7 @@ void main() {
 
     await _closeActivitySheet(tester);
 
-    await _openSettings(tester);
-    await tester.ensureVisible(find.text('Promote Session'));
-    await tester.tap(find.text('Promote Session'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
+    await _tapDrawerAction(tester, 'Promote Session');
 
     expect(
       client.promotedSummaries.single,
@@ -1696,7 +1733,7 @@ void main() {
       'history://Worker0',
     ]);
 
-    await _openSettings(tester);
+    await _openContext(tester);
     await tester.ensureVisible(find.text('project://tempestmiku · 3 promoted'));
 
     expect(find.text('project://tempestmiku · 3 promoted'), findsOneWidget);

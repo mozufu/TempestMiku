@@ -12,7 +12,6 @@ class _DriveFeedSheet extends StatefulWidget {
     required this.loadFeed,
     required this.onOpenResource,
     required this.onOpenApproval,
-    this.embedded = false,
   });
 
   final _Tok tok;
@@ -25,7 +24,6 @@ class _DriveFeedSheet extends StatefulWidget {
   final Future<DriveFeed> Function() loadFeed;
   final void Function(String uri) onOpenResource;
   final void Function(ApprovalPrompt approval) onOpenApproval;
-  final bool embedded;
 
   @override
   State<_DriveFeedSheet> createState() => _DriveFeedSheetState();
@@ -101,24 +99,19 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
         feed == null || (feed.isEmpty && !hasPendingDriveApprovals);
     final displayFeed = feed ?? DriveFeed.empty;
     return ListView(
-      padding:
-          widget.embedded
-              ? const EdgeInsets.fromLTRB(20, 20, 20, 24)
-              : const EdgeInsets.fromLTRB(15, 9, 15, 18),
+      padding: const EdgeInsets.fromLTRB(15, 9, 15, 18),
       children: [
-        if (!widget.embedded) ...[
-          Center(
-            child: Container(
-              width: 38,
-              height: 5,
-              decoration: BoxDecoration(
-                color: tok.border,
-                borderRadius: BorderRadius.circular(999),
-              ),
+        Center(
+          child: Container(
+            width: 38,
+            height: 5,
+            decoration: BoxDecoration(
+              color: tok.border,
+              borderRadius: BorderRadius.circular(999),
             ),
           ),
-          const SizedBox(height: 14),
-        ],
+        ),
+        const SizedBox(height: 14),
         Row(
           children: [
             Container(
@@ -168,16 +161,14 @@ class _DriveFeedSheetState extends State<_DriveFeedSheet> {
               semanticLabel: copy.refreshDrive,
               onTap: _loading ? null : () => _refresh(),
             ),
-            if (!widget.embedded) ...[
-              const SizedBox(width: 8),
-              _TokIconBtn(
-                tok: tok,
-                icon: Icons.close,
-                tooltip: copy.close,
-                semanticLabel: copy.closeDriveFeed,
-                onTap: () => Navigator.pop(context),
-              ),
-            ],
+            const SizedBox(width: 8),
+            _TokIconBtn(
+              tok: tok,
+              icon: Icons.close,
+              tooltip: copy.close,
+              semanticLabel: copy.closeDriveFeed,
+              onTap: () => Navigator.pop(context),
+            ),
           ],
         ),
         const SizedBox(height: 13),

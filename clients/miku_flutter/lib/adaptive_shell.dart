@@ -1,103 +1,19 @@
 part of 'main.dart';
 
-// Adaptive shell for Tempest Miku. The shell exposes two ChatGPT-style
-// drawers (sessions on the left, context + settings on the right) over the
-// always-present chat surface. There is no bottom navigation bar or rail:
-// every width keeps the chat thread centered and routes sessions/drive/
-// context/settings through the drawers.
+// The chat is the product surface. Everything else lives in this single
+// overlay drawer so mobile and desktop keep the same content-first layout.
 
-class _MikuLeftDrawer extends StatelessWidget {
-  const _MikuLeftDrawer({
+class _MikuDrawer extends StatelessWidget {
+  const _MikuDrawer({
     required this.tok,
     required this.copy,
+    required this.accent,
     required this.currentSessionId,
     required this.loadSessions,
     required this.onSelect,
     required this.onNewSession,
     required this.onDrive,
     required this.refreshToken,
-  });
-
-  final _Tok tok;
-  final _UiCopy copy;
-  final String? currentSessionId;
-  final Future<List<SessionSummary>> Function() loadSessions;
-  final void Function(String sessionId) onSelect;
-  final VoidCallback onNewSession;
-  final VoidCallback onDrive;
-  final Object? refreshToken;
-
-  @override
-  Widget build(BuildContext context) {
-    return Drawer(
-      backgroundColor: tok.surface,
-      width: _drawerWidth(context),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
-                child: Row(
-                  children: [
-                    const MikuBrandBadge(size: 36),
-                    const SizedBox(width: 11),
-                    Expanded(
-                      child: Text(
-                        copy.sessions,
-                        style: TextStyle(
-                          color: tok.text,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: copy.newSession,
-                      onPressed: onNewSession,
-                      icon: const Icon(Icons.add),
-                    ),
-                  ],
-                ),
-              ),
-              Divider(color: tok.border, height: 1),
-              Expanded(
-                child: _SessionHistorySheet(
-                  tok: tok,
-                  copy: copy,
-                  currentSessionId: currentSessionId,
-                  loadSessions: loadSessions,
-                  onSelect: onSelect,
-                  onNewSession: onNewSession,
-                  embedded: true,
-                  refreshToken: refreshToken,
-                ),
-              ),
-              Divider(color: tok.border, height: 1),
-              ListTile(
-                leading: Icon(Icons.folder_outlined, color: tok.muted),
-                title: Text(
-                  copy.driveFeed,
-                  style: TextStyle(color: tok.text, fontWeight: FontWeight.w700),
-                ),
-                onTap: onDrive,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MikuRightDrawer extends StatelessWidget {
-  const _MikuRightDrawer({
-    required this.tok,
-    required this.copy,
-    required this.accent,
     required this.projectStatus,
     required this.nextActions,
     required this.approvals,
@@ -115,6 +31,12 @@ class _MikuRightDrawer extends StatelessWidget {
   final _Tok tok;
   final _UiCopy copy;
   final Color accent;
+  final String? currentSessionId;
+  final Future<List<SessionSummary>> Function() loadSessions;
+  final void Function(String sessionId) onSelect;
+  final VoidCallback onNewSession;
+  final VoidCallback onDrive;
+  final Object? refreshToken;
   final String projectStatus;
   final List<String> nextActions;
   final List<ApprovalPrompt> approvals;
@@ -130,38 +52,123 @@ class _MikuRightDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Drawer(
-      backgroundColor: tok.surface,
-      width: _drawerWidth(context),
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-          children: [
-            _ContextContent(
-              tok: tok,
-              copy: copy,
-              accent: accent,
-              projectStatus: projectStatus,
-              nextActions: nextActions,
-              approvals: approvals,
-              onOpenApproval: onOpenApproval,
-              onPromote: onPromote,
-              onRefresh: onRefresh,
-            ),
-            const SizedBox(height: 4),
-            Divider(color: tok.border, height: 1),
-            const SizedBox(height: 4),
-            _OverflowContent(
-              tok: tok,
-              copy: copy,
-              themeMode: themeMode,
-              onThemeModeChanged: onThemeModeChanged,
-              onLanguageToggle: onLanguageToggle,
-              onModeSettings: onModeSettings,
-              onServerTarget: onServerTarget,
-              onDisconnect: onDisconnect,
-            ),
-          ],
+    return DefaultTabController(
+      length: 3,
+      child: Drawer(
+        backgroundColor: tok.surface,
+        width: _drawerWidth(context),
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 8, 8),
+                child: Row(
+                  children: [
+                    const MikuBrandBadge(size: 38),
+                    const SizedBox(width: 11),
+                    Expanded(
+                      child: Text(
+                        'Miku',
+                        style: TextStyle(
+                          color: tok.text,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.35,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: copy.close,
+                      onPressed: () => Scaffold.of(context).closeDrawer(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton.icon(
+                    onPressed: onNewSession,
+                    icon: const Icon(Icons.edit_square, size: 19),
+                    label: Text(copy.newSession),
+                  ),
+                ),
+              ),
+              TabBar(
+                dividerColor: tok.border,
+                labelColor: tok.text,
+                unselectedLabelColor: tok.muted,
+                indicatorColor: accent,
+                tabs: [
+                  Tab(
+                    icon: const Icon(Icons.forum_outlined),
+                    text: copy.sessions,
+                  ),
+                  Tab(
+                    icon: const Icon(Icons.layers_outlined),
+                    text: copy.pick('Context', '情境'),
+                  ),
+                  Tab(
+                    icon: const Icon(Icons.tune_rounded),
+                    text: copy.pick('Settings', '設定'),
+                  ),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    _SessionHistorySheet(
+                      tok: tok,
+                      copy: copy,
+                      currentSessionId: currentSessionId,
+                      loadSessions: loadSessions,
+                      onSelect: onSelect,
+                      onNewSession: onNewSession,
+                      embedded: true,
+                      refreshToken: refreshToken,
+                    ),
+                    ListView(
+                      padding: EdgeInsets.zero,
+                      children: [
+                        _ContextContent(
+                          tok: tok,
+                          copy: copy,
+                          accent: accent,
+                          projectStatus: projectStatus,
+                          nextActions: nextActions,
+                          approvals: approvals,
+                          onOpenApproval: onOpenApproval,
+                          onPromote: onPromote,
+                          onRefresh: onRefresh,
+                        ),
+                      ],
+                    ),
+                    ListView(
+                      padding: EdgeInsets.zero,
+                      children: [
+                        _OverflowContent(
+                          tok: tok,
+                          copy: copy,
+                          themeMode: themeMode,
+                          onRefresh: onRefresh,
+                          onPromote: onPromote,
+                          onDrive: onDrive,
+                          onThemeModeChanged: onThemeModeChanged,
+                          onLanguageToggle: onLanguageToggle,
+                          onModeSettings: onModeSettings,
+                          onServerTarget: onServerTarget,
+                          onDisconnect: onDisconnect,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -314,7 +321,9 @@ class _NeedsAttentionPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = copy.pick(
-      count == 1 ? 'Miku needs your approval' : '$count approvals need attention',
+      count == 1
+          ? 'Miku needs your approval'
+          : '$count approvals need attention',
       count == 1 ? 'Miku 需要你的核可' : '$count 個操作等待核可',
     );
     return Padding(

@@ -23,6 +23,7 @@ part 'adaptive_shell.dart';
 part 'home.dart';
 part 'app_models.dart';
 part 'home_event_parsing.dart';
+part 'home_activity_mapping.dart';
 part 'widgets.dart';
 part 'widgets_chat.dart';
 part 'widgets_markdown.dart';

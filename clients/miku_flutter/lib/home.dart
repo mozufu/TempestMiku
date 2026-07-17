@@ -67,7 +67,6 @@ class _MikuHomePageState extends State<MikuHomePage>
   int _sessionHistoryRevision = 0;
   int _sessionNavigationEpoch = 0;
   int _sendEpoch = 0;
-  _AppDestination _destination = _AppDestination.chat;
   _UiLanguage _language = _UiLanguage.en;
   AppLifecycleState _appLifecycle = AppLifecycleState.resumed;
 
@@ -965,27 +964,28 @@ class _MikuHomePageState extends State<MikuHomePage>
         return _ActivityItem(
           icon: Icons.terminal,
           title: '執行程式',
-          detail: _eventText(data, 'code'),
+          detail: _eventText(data, 'sourcePreview', fallback: '[redacted]'),
           state: _ActivityState.running,
           monospace: true,
           kind: 'cell',
         );
       case 'cell_result':
-        final shaped = _eventText(data, 'shaped');
+        final status = _eventText(data, 'status', fallback: 'completed');
+        final error = _eventText(data, 'error');
+        final resultPreview = _eventText(data, 'resultPreview');
+        final failed =
+            error.isNotEmpty ||
+            const {'failed', 'cancelled', 'timed_out'}.contains(status);
+        final preview = error.isNotEmpty ? error : resultPreview;
+        final detail = preview.isEmpty ? '[redacted]' : preview;
         return _ActivityItem(
-          icon:
-              shaped.startsWith('error:')
-                  ? Icons.error_outline
-                  : Icons.check_circle_outline,
-          title: shaped.startsWith('error:') ? '程式失敗' : '程式結果',
-          detail: shaped,
-          state:
-              shaped.startsWith('error:')
-                  ? _ActivityState.failed
-                  : _ActivityState.done,
+          icon: failed ? Icons.error_outline : Icons.check_circle_outline,
+          title: failed ? '程式失敗' : '程式結果',
+          detail: detail,
+          state: failed ? _ActivityState.failed : _ActivityState.done,
           monospace: true,
           kind: 'cell',
-          resourceUris: _extractResources(shaped),
+          resourceUris: _extractResources(detail),
         );
       case 'actor_spawned':
         final actorId = _eventText(
@@ -1817,70 +1817,6 @@ class _MikuHomePageState extends State<MikuHomePage>
     );
   }
 
-  void _showOverflowSheet() {
-    final tok = _tok;
-    final serverTargetClient = _serverTargetClient;
-    final themeController = MikuThemeScope.controllerOf(context);
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder:
-          (sheetContext) => _OverflowSheet(
-            tok: tok,
-            copy: _copy,
-            projectStatus: _projectStatus,
-            nextActions: _nextActions,
-            themeMode: themeController.mode,
-            onRefresh: () {
-              Navigator.pop(sheetContext);
-              unawaited(_loadProject());
-            },
-            onPromote: () {
-              Navigator.pop(sheetContext);
-              unawaited(_promoteSession());
-            },
-            onDrive: () {
-              Navigator.pop(sheetContext);
-              Timer(const Duration(milliseconds: 320), () {
-                if (mounted) _showDriveSheet();
-              });
-            },
-            onThemeModeChanged:
-                (mode) => unawaited(themeController.setMode(mode)),
-            onLanguageToggle: () => unawaited(_toggleLanguage()),
-            onModeSettings: () {
-              Navigator.pop(sheetContext);
-              Timer(const Duration(milliseconds: 320), () {
-                if (mounted) _showModeSheet();
-              });
-            },
-            onServerTarget:
-                serverTargetClient == null
-                    ? null
-                    : () {
-                      Navigator.pop(sheetContext);
-                      Timer(const Duration(milliseconds: 320), () {
-                        if (mounted) {
-                          _showServerTargetDialog(serverTargetClient);
-                        }
-                      });
-                    },
-            onDisconnect:
-                serverTargetClient == null
-                    ? null
-                    : () {
-                      Navigator.pop(sheetContext);
-                      unawaited(_disconnectFromServer(serverTargetClient));
-                    },
-          ),
-    );
-  }
-
   Future<void> _showServerTargetDialog(ServerTargetClient client) async {
     final copy = _copy;
     String initial;
@@ -1969,19 +1905,8 @@ class _MikuHomePageState extends State<MikuHomePage>
     }
   }
 
-  void _selectDestination(_AppDestination destination) {
-    if (_destination == destination) return;
-    setState(() => _destination = destination);
-    if (destination == _AppDestination.drive) {
-      unawaited(_loadDriveFeed(silent: true));
-    }
-  }
-
   void _startFreshChat() {
     if (_disconnecting) return;
-    if (_destination != _AppDestination.chat) {
-      setState(() => _destination = _AppDestination.chat);
-    }
     unawaited(_startNewSession());
   }
 
@@ -2098,11 +2023,87 @@ class _MikuHomePageState extends State<MikuHomePage>
     final tok = _tok;
     final accent = _accent;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final serverTargetClient = _serverTargetClient;
+    final themeController = MikuThemeScope.controllerOf(context);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
       child: Scaffold(
         backgroundColor: tok.bg,
+        drawer: Builder(
+          builder: (drawerCtx) => _MikuLeftDrawer(
+            tok: tok,
+            copy: _copy,
+            currentSessionId: _sessionId,
+            loadSessions: widget.client.listSessions,
+            onSelect: (id) {
+              Scaffold.of(drawerCtx).closeDrawer();
+              if (_sessionId != id || _sessionEnded) {
+                unawaited(_loadHistoricalSession(id));
+              }
+            },
+            onNewSession: () {
+              Scaffold.of(drawerCtx).closeDrawer();
+              _startFreshChat();
+            },
+            onDrive: () {
+              Scaffold.of(drawerCtx).closeDrawer();
+              Timer(const Duration(milliseconds: 320), () {
+                if (mounted) _showDriveSheet();
+              });
+            },
+            refreshToken: _sessionHistoryRevision,
+          ),
+        ),
+        endDrawer: Builder(
+          builder: (drawerCtx) => _MikuRightDrawer(
+            tok: tok,
+            copy: _copy,
+            accent: accent,
+            projectStatus: _projectStatus,
+            nextActions: _nextActions,
+            approvals: _approvals,
+            onOpenApproval: (a) {
+              Scaffold.of(drawerCtx).closeEndDrawer();
+              Timer(const Duration(milliseconds: 320), () {
+                if (mounted) _showApprovalSheet(a);
+              });
+            },
+            onPromote: () {
+              Scaffold.of(drawerCtx).closeEndDrawer();
+              unawaited(_promoteSession());
+            },
+            onRefresh: () => unawaited(_loadProject()),
+            themeMode: themeController.mode,
+            onThemeModeChanged:
+                (mode) => unawaited(themeController.setMode(mode)),
+            onLanguageToggle: () => unawaited(_toggleLanguage()),
+            onModeSettings: () {
+              Scaffold.of(drawerCtx).closeEndDrawer();
+              Timer(const Duration(milliseconds: 320), () {
+                if (mounted) _showModeSheet();
+              });
+            },
+            onServerTarget:
+                serverTargetClient == null
+                    ? null
+                    : () {
+                      Scaffold.of(drawerCtx).closeEndDrawer();
+                      Timer(const Duration(milliseconds: 320), () {
+                        if (mounted) {
+                          _showServerTargetDialog(serverTargetClient);
+                        }
+                      });
+                    },
+            onDisconnect:
+                serverTargetClient == null
+                    ? null
+                    : () {
+                      Scaffold.of(drawerCtx).closeEndDrawer();
+                      unawaited(_disconnectFromServer(serverTargetClient));
+                    },
+          ),
+        ),
         body: DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -2121,127 +2122,17 @@ class _MikuHomePageState extends State<MikuHomePage>
                       brand: const MikuBrandBadge(size: 92),
                       onScan: _startPairingScan,
                     )
-                    : LayoutBuilder(
-                      builder:
-                          (context, constraints) =>
-                              _buildAdaptiveShell(constraints, tok, accent),
+                    : Column(
+                      children: [
+                        _buildTopBar(tok),
+                        _buildConnectionBanner(tok),
+                        Expanded(child: _buildChatSurface(tok, accent)),
+                        _buildComposer(tok, accent),
+                      ],
                     ),
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildAdaptiveShell(
-    BoxConstraints constraints,
-    _Tok tok,
-    Color accent,
-  ) {
-    if (constraints.maxWidth < 600) {
-      return Column(
-        children: [
-          _buildTopBar(tok, compact: true, showBrand: true),
-          _buildConnectionBanner(tok),
-          Expanded(child: _buildPrimaryDestination(tok, accent)),
-          if (_destination == _AppDestination.chat) ...[
-            _ApprovalAttentionBar(
-              tok: tok,
-              copy: _copy,
-              approvals: _approvals,
-              onOpen: _showApprovalSheet,
-            ),
-            _buildComposer(tok, accent),
-          ],
-          _MikuBottomNavigation(
-            destination: _destination,
-            copy: _copy,
-            onSelected: _selectDestination,
-          ),
-        ],
-      );
-    }
-
-    final rail = _MikuNavigationRail(
-      destination: _destination,
-      copy: _copy,
-      onSelected: _selectDestination,
-      brand: const MikuBrandBadge(size: 46),
-      onSettings: _showOverflowSheet,
-    );
-
-    if (constraints.maxWidth < 1100 || _destination != _AppDestination.chat) {
-      return Row(
-        children: [
-          rail,
-          VerticalDivider(width: 1, color: tok.border),
-          Expanded(
-            child: Column(
-              children: [
-                _buildTopBar(tok, compact: false, showBrand: false),
-                _buildConnectionBanner(tok),
-                Expanded(child: _buildPrimaryDestination(tok, accent)),
-                if (_destination == _AppDestination.chat) ...[
-                  _ApprovalAttentionBar(
-                    tok: tok,
-                    copy: _copy,
-                    approvals: _approvals,
-                    onOpen: _showApprovalSheet,
-                  ),
-                  _buildComposer(tok, accent),
-                ],
-              ],
-            ),
-          ),
-        ],
-      );
-    }
-
-    final sessionPaneWidth = constraints.maxWidth >= 1320 ? 280.0 : 220.0;
-    final contextPaneWidth = constraints.maxWidth >= 1320 ? 300.0 : 248.0;
-    return Row(
-      children: [
-        rail,
-        VerticalDivider(width: 1, color: tok.border),
-        SizedBox(
-          width: sessionPaneWidth,
-          child: ColoredBox(
-            color: tok.surface,
-            child: _buildSessionsSurface(tok),
-          ),
-        ),
-        VerticalDivider(width: 1, color: tok.border),
-        Expanded(
-          child: Column(
-            children: [
-              _buildTopBar(tok, compact: false, showBrand: false),
-              _buildConnectionBanner(tok),
-              Expanded(
-                child: _buildChatSurface(
-                  tok,
-                  accent,
-                  showPendingApprovals: false,
-                ),
-              ),
-              _buildComposer(tok, accent),
-            ],
-          ),
-        ),
-        VerticalDivider(width: 1, color: tok.border),
-        SizedBox(
-          width: contextPaneWidth,
-          child: _MikuContextPanel(
-            tok: tok,
-            copy: _copy,
-            accent: accent,
-            projectStatus: _projectStatus,
-            nextActions: _nextActions,
-            approvals: _approvals,
-            onOpenApproval: _showApprovalSheet,
-            onPromote: _promoteSession,
-            onRefresh: _loadProject,
-          ),
-        ),
-      ],
     );
   }
 

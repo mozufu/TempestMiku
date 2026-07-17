@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -37,6 +34,18 @@ use super::{
     SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
 };
 
+mod approval_helpers;
+mod memory_helpers;
+
+use approval_helpers::{
+    append_evolution_audit_in_memory, approval_effect_is_claimable, claim_approval_effect_at,
+    resolve_approval_in_memory, resolve_approval_with_event_in_memory, stale_approval_effect_lease,
+};
+use memory_helpers::{
+    ensure_memory_record_links_are_scoped, ensure_memory_scope_is_readable,
+    memory_record_is_retrievable,
+};
+
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryStore {
     inner: Arc<Mutex<Inner>>,
@@ -66,22 +75,6 @@ struct Inner {
     cron_runs: Vec<CronRunRecord>,
 }
 
-fn append_evolution_audit_in_memory(
-    inner: &mut Inner,
-    entry: EvolutionAuditEntry,
-) -> Result<EvolutionAuditRecord> {
-    if let Some(existing) = inner
-        .evolution_audits
-        .iter()
-        .find(|existing| existing.idempotency_key == entry.idempotency_key)
-    {
-        return Ok(existing.record.clone());
-    }
-    let record = entry.record.clone();
-    inner.evolution_audits.push(entry);
-    Ok(record)
-}
-
 fn stale_dream_lease(lease: &DreamLease) -> ServerError {
     ServerError::NotFound(format!(
         "active dream lease {} owner {} epoch {}",
@@ -94,289 +87,6 @@ fn stale_cron_lease(lease: &CronLease) -> ServerError {
         "active cron lease {} owner {} epoch {}",
         lease.run.id, lease.owner_id, lease.epoch
     ))
-}
-
-fn stale_approval_effect_lease(lease: &ApprovalEffectLease) -> ServerError {
-    ServerError::NotFound(format!(
-        "active approval effect lease {} owner {} epoch {}",
-        lease.effect.id, lease.owner_id, lease.epoch
-    ))
-}
-
-fn memory_scope_is_tombstoned(inner: &Inner, owner_subject: &str, memory_scope: &str) -> bool {
-    inner.memory_scope_tombstones.iter().any(|tombstone| {
-        tombstone.owner_subject == owner_subject && tombstone.memory_scope == memory_scope
-    })
-}
-
-fn ensure_memory_scope_is_readable(
-    inner: &Inner,
-    owner_subject: &str,
-    memory_scope: &str,
-) -> Result<()> {
-    if memory_scope_is_tombstoned(inner, owner_subject, memory_scope) {
-        return Err(ServerError::NotFound(format!(
-            "memory scope {owner_subject}/{memory_scope}"
-        )));
-    }
-    Ok(())
-}
-
-fn ensure_memory_record_links_are_scoped(inner: &Inner, record: &StoredMemoryRecord) -> Result<()> {
-    for target_id in [
-        record.resource.links().corrects_record_id,
-        record.resource.links().corrected_by_record_id,
-        record.resource.links().supersedes_record_id,
-        record.resource.links().superseded_by_record_id,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let target = inner
-            .memory_records
-            .iter()
-            .find(|candidate| candidate.id() == target_id)
-            .ok_or_else(|| ServerError::NotFound(format!("memory record {target_id}")))?;
-        if target.resource.owner_subject() != record.resource.owner_subject()
-            || target.resource.memory_scope() != record.resource.memory_scope()
-        {
-            return Err(ServerError::NotFound(format!(
-                "memory record {target_id} in requested authority"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn memory_record_is_retrievable(inner: &Inner, record: &StoredMemoryRecord) -> bool {
-    record.resource.status().is_retrievable()
-        && record.resource.effective_to().is_none()
-        && !memory_record_has_active_successor(inner, record)
-}
-
-fn memory_record_has_active_successor(inner: &Inner, record: &StoredMemoryRecord) -> bool {
-    let owner = record.resource.owner_subject();
-    let scope = record.resource.memory_scope();
-    let mut visited = HashSet::from([record.id()]);
-    let mut frontier = direct_memory_successors(inner, record)
-        .into_iter()
-        .map(StoredMemoryRecord::id)
-        .collect::<Vec<_>>();
-
-    while let Some(id) = frontier.pop() {
-        if !visited.insert(id) {
-            continue;
-        }
-        let Some(successor) = inner.memory_records.iter().find(|candidate| {
-            candidate.id() == id
-                && candidate.resource.owner_subject() == owner
-                && candidate.resource.memory_scope() == scope
-        }) else {
-            continue;
-        };
-        if successor.resource.status().is_retrievable()
-            && successor.resource.effective_to().is_none()
-        {
-            return true;
-        }
-        frontier.extend(
-            direct_memory_successors(inner, successor)
-                .into_iter()
-                .map(StoredMemoryRecord::id),
-        );
-    }
-    false
-}
-
-fn direct_memory_successors<'a>(
-    inner: &'a Inner,
-    record: &StoredMemoryRecord,
-) -> Vec<&'a StoredMemoryRecord> {
-    inner
-        .memory_records
-        .iter()
-        .filter(|candidate| {
-            candidate.resource.owner_subject() == record.resource.owner_subject()
-                && candidate.resource.memory_scope() == record.resource.memory_scope()
-                && (record.resource.links().corrected_by_record_id == Some(candidate.id())
-                    || record.resource.links().superseded_by_record_id == Some(candidate.id())
-                    || candidate.resource.links().corrects_record_id == Some(record.id())
-                    || candidate.resource.links().supersedes_record_id == Some(record.id()))
-        })
-        .collect()
-}
-
-fn approval_effect_is_claimable(
-    effect: &ApprovalEffectRecord,
-    now: DateTime<Utc>,
-    stale_before: DateTime<Utc>,
-) -> bool {
-    (effect.status == "pending" && effect.available_at <= now)
-        || (effect.status == "claimed"
-            && effect
-                .locked_at
-                .is_some_and(|locked| locked <= stale_before))
-}
-
-fn claim_approval_effect_at(
-    effect: &mut ApprovalEffectRecord,
-    owner_id: Uuid,
-    now: DateTime<Utc>,
-) -> ApprovalEffectLease {
-    effect.status = "claimed".to_string();
-    effect.attempts += 1;
-    effect.locked_at = Some(now);
-    effect.lease_owner = Some(owner_id);
-    effect.lease_epoch += 1;
-    effect.updated_at = now;
-    effect.error_at = None;
-    effect.last_error = None;
-    ApprovalEffectLease {
-        effect: effect.clone(),
-        owner_id,
-        epoch: effect.lease_epoch,
-    }
-}
-
-fn resolve_approval_in_memory(
-    inner: &mut Inner,
-    session_id: Uuid,
-    approval_id: Uuid,
-    mut resolution: NewApprovalResolution,
-) -> Result<ApprovalRequestRecord> {
-    tm_memory::redact_json_value(&mut resolution.resolution_json);
-    if !matches!(
-        resolution.status.as_str(),
-        "approved" | "denied" | "timed_out" | "cancelled"
-    ) {
-        return Err(ServerError::InvalidRequest(format!(
-            "invalid terminal approval status {}",
-            resolution.status
-        )));
-    }
-    let index = inner
-        .approval_requests
-        .iter()
-        .position(|approval| approval.id == approval_id && approval.session_id == session_id)
-        .ok_or_else(|| ServerError::NotFound(format!("approval {approval_id}")))?;
-    if inner.approval_requests[index].status != "pending" {
-        return Err(ServerError::Conflict(format!(
-            "approval {approval_id} is already resolved"
-        )));
-    }
-    let effect_payload = inner
-        .approval_effects
-        .iter()
-        .find(|effect| effect.approval_id == approval_id)
-        .map(|effect| (effect.id, effect.payload_json.clone()));
-    let audit = if let Some((effect_id, payload)) = effect_payload {
-        crate::evolution::evolution_audit_record(
-            &payload,
-            approval_id,
-            effect_id,
-            crate::evolution::audit_status_from_approval(&resolution.status)?,
-            resolution.resolved_at,
-            None,
-        )?
-        .map(|record| EvolutionAuditEntry {
-            idempotency_key: format!("approval:{approval_id}:resolution:{}", resolution.status),
-            record,
-        })
-    } else {
-        None
-    };
-    {
-        let approval = &mut inner.approval_requests[index];
-        approval.status = resolution.status;
-        approval.resolved_at = Some(resolution.resolved_at);
-        approval.selected_option_id = resolution.selected_option_id;
-        approval.resolution_json = Some(resolution.resolution_json.clone());
-        approval.resolution_version += 1;
-    }
-    if let Some(effect) = inner
-        .approval_effects
-        .iter_mut()
-        .find(|effect| effect.approval_id == approval_id)
-    {
-        effect.status = "pending".to_string();
-        effect.available_at = resolution.resolved_at;
-        effect.updated_at = resolution.resolved_at;
-        if let Value::Object(payload) = &mut effect.payload_json {
-            payload.insert("resolution".to_string(), resolution.resolution_json);
-        } else {
-            effect.payload_json = json!({
-                "effect": effect.payload_json.clone(),
-                "resolution": resolution.resolution_json,
-            });
-        }
-    } else {
-        inner.approval_effects.push(ApprovalEffectRecord {
-            id: approval_id,
-            approval_id,
-            session_id,
-            effect_type: "approval_resolution".to_string(),
-            payload_json: json!({ "resolution": resolution.resolution_json }),
-            status: "pending".to_string(),
-            attempts: 0,
-            available_at: resolution.resolved_at,
-            locked_at: None,
-            lease_owner: None,
-            lease_epoch: 0,
-            applied_at: None,
-            error_at: None,
-            last_error: None,
-            created_at: resolution.resolved_at,
-            updated_at: resolution.resolved_at,
-        });
-    }
-    if let Some(audit) = audit {
-        append_evolution_audit_in_memory(inner, audit)?;
-    }
-    Ok(inner.approval_requests[index].clone())
-}
-
-fn resolve_approval_with_event_in_memory(
-    inner: &mut Inner,
-    session_id: Uuid,
-    approval_id: Uuid,
-    mut resolution: NewApprovalResolution,
-) -> Result<(ApprovalRequestRecord, SessionEvent)> {
-    tm_memory::redact_json_value(&mut resolution.resolution_json);
-    let approval_id_text = approval_id.to_string();
-    if resolution
-        .resolution_json
-        .get("approvalId")
-        .and_then(Value::as_str)
-        != Some(approval_id_text.as_str())
-    {
-        return Err(ServerError::InvalidRequest(
-            "approval resolution event payload has a different approvalId".to_string(),
-        ));
-    }
-    let event_payload = resolution.resolution_json.clone();
-    let event_at = resolution.resolved_at;
-    let mut approval = resolve_approval_in_memory(inner, session_id, approval_id, resolution)?;
-    let events = inner.events.entry(session_id).or_default();
-    let mut event = SessionEvent::new(
-        session_id,
-        events.len() as i64 + 1,
-        "approval_resolved",
-        event_payload,
-        event_at,
-    );
-    event.turn_id = approval.turn_id;
-    events.push(event.clone());
-    let stored = inner
-        .approval_requests
-        .iter_mut()
-        .find(|record| record.id == approval_id && record.session_id == session_id)
-        .expect("resolved approval remains present");
-    stored.resolution_event_seq = Some(event.seq);
-    approval.resolution_event_seq = Some(event.seq);
-    if let Some(session) = inner.sessions.get_mut(&session_id) {
-        session.updated_at = event_at;
-    }
-    Ok((approval, event))
 }
 
 #[async_trait]

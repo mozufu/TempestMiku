@@ -10,7 +10,10 @@ use tokio::sync::{Mutex, RwLock, mpsc};
 
 use crate::actor::ActorId;
 
-use super::{ActorMessage, MAX_INBOX_BYTES, MAX_INBOX_MESSAGES};
+use super::ActorMessage;
+
+pub(super) const MAX_INBOX_MESSAGES: usize = 64;
+const MAX_INBOX_BYTES: usize = 64 * 1024;
 
 pub(super) struct ActorInbox {
     pub(super) sender: mpsc::Sender<ActorMessage>,

@@ -93,6 +93,7 @@ TM_CONFIG=.tempestmiku/config.json
 TM_MODES_PATH=/absolute/path/to/persona-assets # optional hand-authored SOUL/modes/skills
 TM_MANAGED_SKILLS_PATH=/shared/path/to/managed-skills # optional; defaults under artifact root
 TM_MANAGED_MODE_ADDENDA_PATH=/shared/path/to/managed-mode-addenda # optional; defaults under artifact root
+TM_MANAGED_PERSONA_ADDENDA_PATH=/shared/path/to/managed-persona-addenda # optional; defaults under artifact root
 TM_MEMORY_EMBEDDING_PROVIDER=disabled # disabled or local; local requires Postgres + pgvector
 TM_OMP_ACP_ENABLED=0
 TM_PUSH_PROVIDER=disabled # set unifiedpush only after configuring the exact endpoint origin
@@ -140,6 +141,14 @@ Approved P7.2a mode proposals are stored as immutable typed addendum versions be
 rollback atomically replace only the per-mode active pointer. Addenda compose description/routing
 guidance into the next prompt; they cannot alter `SOUL.md`, voice caps, capabilities, scopes, skills,
 or the hand-authored `modes.json` catalog.
+
+Approved P7.2b persona proposals are stored as immutable typed addendum versions beneath
+`TM_MANAGED_PERSONA_ADDENDA_PATH`; when unset, the server uses
+`<artifact-root>/managed-persona-addenda`. API and worker processes must share this root. Activation
+and rollback atomically replace only the `miku` active pointer. Addenda compose bounded tone,
+address, and interaction-preference guidance into every mode's next prompt; they cannot alter
+`SOUL.md`, identity, safety rules, voice caps, capabilities, scopes, routes, skills, or source
+configuration.
 
 `api` serves HTTP only, `worker` dispatches durable turns and runs approval effects, dreams, and cron,
 and `all` runs both in one process. `worker` and `all` require Postgres. A split deployment runs one

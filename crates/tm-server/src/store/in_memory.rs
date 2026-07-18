@@ -1265,6 +1265,7 @@ impl Store for InMemoryStore {
                 | "skill_write"
                 | "skill_rollback"
                 | "mode_addendum_rollback"
+                | "persona_addendum_rollback"
                 | "evolution_review"
         ) {
             return Err(ServerError::InvalidRequest(

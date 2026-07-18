@@ -209,7 +209,15 @@ version bodies from that catalog; native reads require `resources.read:skill`. T
 namespace, MCP import/reload, arbitrary filesystem writes, persona apply, direct mode
 file/capability changes, and aggressive evolution remain disabled.
 
-**Approved P7.2b direction (after P8 fuller-memory evidence):** Auto mode may detect repeated owner
+**P7.2b implementation direction (P8 fuller-memory evidence is closed):** the first landed slice
+extends the durable review path with a separate immutable persona-addendum catalog. Only typed tone,
+address, and interaction-preference sections can receive the `versioned_persona_addendum` apply
+contract. Approval atomically activates a digest-addressed version, the next prompt composes it
+after the hand-authored `SOUL.md`, and a separate durable manual approval rolls back to an older
+proposal-backed version or the hand-authored base. Legacy behavior/voice review sections remain
+readable but cannot activate.
+
+The remaining P7.2b slice lets Auto mode detect repeated owner
 preferences or a persona mismatch and create a typed persona-addendum proposal automatically. It may
 decide *when to propose*, never when to approve or activate. Candidates require bounded evidence,
 deduplication, cooldown, redacted previews, a stable base digest, and the same durable manual
@@ -232,7 +240,7 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
   (`write_proposal` events §27.1), typed review persistence, base/digest revalidation, and the audit
   trail (§12).
 - `tm-modes` — typed persona/mode addendum targets, managed-skill catalog, the P7.2a immutable
-  guidance-only mode-addendum catalog, and the future P7.2b immutable persona-addendum catalog; no
+  guidance-only mode-addendum catalog, and the P7.2b immutable persona-addendum catalog; no
   direct persona file, capability, voice-cap, or hand-authored mode-file write authority.
 - config — `self_evolution.tier` (+ the `write_approval` knobs, §26.2).
 

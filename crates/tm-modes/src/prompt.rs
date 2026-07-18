@@ -43,6 +43,24 @@ impl ModesConfig {
             None => push_section(&mut prompt, "SOUL.md", BUNDLED_SOUL),
         }
 
+        if self.managed_persona_addenda_path().is_some() {
+            match self.active_managed_persona_addendum("miku") {
+                Ok(Some(addendum)) => {
+                    let guidance = addendum
+                        .changes
+                        .iter()
+                        .map(|change| format!("{}: {}", change.after.label, change.after.summary))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    push_section(&mut prompt, "Approved persona addendum", &guidance);
+                }
+                Ok(None) => {}
+                Err(error) => warnings.push(format!(
+                    "managed persona addendum miku is unavailable: {error}"
+                )),
+            }
+        }
+
         for skill in resolve_active_skills(&assets.modes, &profile, message) {
             match assets.skills.get(skill.as_str()) {
                 Some(contents) => push_raw(&mut prompt, strip_frontmatter(contents)),

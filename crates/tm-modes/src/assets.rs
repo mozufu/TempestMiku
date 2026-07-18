@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ManagedModeAddendumActivation, ManagedModeAddendumError, ManagedModeAddendumInstall,
-    ManagedModeAddendumState, ManagedModeAddendumVersion, ManagedSkillActivation,
-    ManagedSkillError, ManagedSkillInstall, ManagedSkillState, ModeCatalog, ModeId, ModeProfile,
-    SkillActivation, SkillTrigger,
+    ManagedModeAddendumState, ManagedModeAddendumVersion, ManagedPersonaAddendumActivation,
+    ManagedPersonaAddendumError, ManagedPersonaAddendumInstall, ManagedPersonaAddendumState,
+    ManagedPersonaAddendumVersion, ManagedSkillActivation, ManagedSkillError, ManagedSkillInstall,
+    ManagedSkillState, ModeCatalog, ModeId, ModeProfile, SkillActivation, SkillTrigger,
 };
 
 const BUNDLED_MODES_SOURCE: &str = "bundled:tm-modes/default-modes";
@@ -88,6 +89,7 @@ pub struct ModesConfig {
     pub asset_path: Option<PathBuf>,
     pub managed_skills_path: Option<PathBuf>,
     pub managed_mode_addenda_path: Option<PathBuf>,
+    pub managed_persona_addenda_path: Option<PathBuf>,
 }
 
 impl ModesConfig {
@@ -96,6 +98,7 @@ impl ModesConfig {
             asset_path: Some(path.into()),
             managed_skills_path: None,
             managed_mode_addenda_path: None,
+            managed_persona_addenda_path: None,
         }
     }
 
@@ -115,6 +118,59 @@ impl ModesConfig {
 
     pub fn managed_mode_addenda_path(&self) -> Option<&Path> {
         self.managed_mode_addenda_path.as_deref()
+    }
+
+    pub fn with_managed_persona_addenda_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.managed_persona_addenda_path = Some(path.into());
+        self
+    }
+
+    pub fn managed_persona_addenda_path(&self) -> Option<&Path> {
+        self.managed_persona_addenda_path.as_deref()
+    }
+
+    pub fn install_managed_persona_addendum(
+        &self,
+        install: ManagedPersonaAddendumInstall,
+    ) -> Result<ManagedPersonaAddendumActivation, ManagedPersonaAddendumError> {
+        crate::persona_addendum::install(
+            crate::persona_addendum::configured_root(&self.managed_persona_addenda_path)?,
+            install,
+        )
+    }
+
+    pub fn rollback_managed_persona_addendum(
+        &self,
+        persona_id: &str,
+        expected_active_digest: &str,
+        target_digest: Option<&str>,
+    ) -> Result<ManagedPersonaAddendumActivation, ManagedPersonaAddendumError> {
+        crate::persona_addendum::rollback(
+            crate::persona_addendum::configured_root(&self.managed_persona_addenda_path)?,
+            persona_id,
+            expected_active_digest,
+            target_digest,
+        )
+    }
+
+    pub fn managed_persona_addendum(
+        &self,
+        persona_id: &str,
+    ) -> Result<ManagedPersonaAddendumState, ManagedPersonaAddendumError> {
+        crate::persona_addendum::state(
+            crate::persona_addendum::configured_root(&self.managed_persona_addenda_path)?,
+            persona_id,
+        )
+    }
+
+    pub fn active_managed_persona_addendum(
+        &self,
+        persona_id: &str,
+    ) -> Result<Option<ManagedPersonaAddendumVersion>, ManagedPersonaAddendumError> {
+        crate::persona_addendum::active(
+            crate::persona_addendum::configured_root(&self.managed_persona_addenda_path)?,
+            persona_id,
+        )
     }
 
     pub fn install_managed_mode_addendum(

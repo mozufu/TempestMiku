@@ -2162,7 +2162,7 @@ impl Store for PostgresStore {
                     select id, session_id
                       from approval_effects
                      where id = $1
-                       and effect_type in ('memory_write', 'skill_write', 'skill_rollback', 'mode_addendum_rollback', 'evolution_review')
+                       and effect_type in ('memory_write', 'skill_write', 'skill_rollback', 'mode_addendum_rollback', 'persona_addendum_rollback', 'evolution_review')
                        and status = 'claimed'
                        and lease_owner = $2
                        and lease_epoch = $3

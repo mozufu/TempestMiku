@@ -37,7 +37,8 @@ impl RecordingServer {
         .context("configuring recording-server project link")?;
         let persona = tm_server::ModesConfig::default()
             .with_managed_skills_path(artifact_root.join("managed-skills"))
-            .with_managed_mode_addenda_path(artifact_root.join("managed-mode-addenda"));
+            .with_managed_mode_addenda_path(artifact_root.join("managed-mode-addenda"))
+            .with_managed_persona_addenda_path(artifact_root.join("managed-persona-addenda"));
         let state = AppState::new(
             Arc::clone(&store),
             memory,

@@ -39,6 +39,9 @@ impl ReviewProposalTarget {
 pub enum ReviewAddendumSection {
     BehaviorGuidance,
     VoiceGuidance,
+    ToneGuidance,
+    AddressGuidance,
+    InteractionPreference,
     Description,
     RoutingGuidance,
 }
@@ -91,6 +94,7 @@ impl std::fmt::Display for ReviewProposalStatus {
 pub enum ReviewApplyContract {
     Disabled,
     VersionedModeAddendum,
+    VersionedPersonaAddendum,
 }
 
 #[cfg(test)]
@@ -118,6 +122,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ReviewApplyContract::VersionedModeAddendum).unwrap(),
             json!("versioned_mode_addendum")
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewApplyContract::VersionedPersonaAddendum).unwrap(),
+            json!("versioned_persona_addendum")
         );
     }
 }

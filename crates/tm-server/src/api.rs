@@ -102,8 +102,9 @@ pub use modes::{ModeRequest, ModeResponse};
 pub use sessions::{
     CreateSessionRequest, CreateSessionResponse, EndSessionRequest, EndSessionResponse,
     EvolutionReviewProposalResponse, ListSessionsResponse, MemoryWriteProposalResponse,
-    ModeAddendumRollbackResponse, PostMessageRequest, PostMessageResponse,
-    ProposeEvolutionReviewRequest, ProposeMemoryWriteRequest, ProposeModeAddendumRollbackRequest,
+    ModeAddendumRollbackResponse, PersonaAddendumRollbackResponse, PostMessageRequest,
+    PostMessageResponse, ProposeEvolutionReviewRequest, ProposeMemoryWriteRequest,
+    ProposeModeAddendumRollbackRequest, ProposePersonaAddendumRollbackRequest,
     ProposeSkillRollbackRequest, SessionMessagesResponse, SetSessionScopeRequest,
     SetSessionScopeResponse, SkillRollbackResponse,
 };
@@ -459,6 +460,10 @@ where
         .route(
             "/sessions/:id/evolution/modes/:name/rollback",
             post(sessions::propose_mode_addendum_rollback::<S, M, C>),
+        )
+        .route(
+            "/sessions/:id/evolution/personas/:name/rollback",
+            post(sessions::propose_persona_addendum_rollback::<S, M, C>),
         )
         .route(
             "/sessions/:id/evolution/skills/:name/rollback",

@@ -2,6 +2,7 @@ mod assets;
 mod evolution;
 mod managed;
 mod mode_addendum;
+mod persona_addendum;
 mod prompt;
 mod resource;
 mod skills;
@@ -20,6 +21,10 @@ pub use managed::{
 pub use mode_addendum::{
     ManagedModeAddendumActivation, ManagedModeAddendumError, ManagedModeAddendumInstall,
     ManagedModeAddendumState, ManagedModeAddendumVersion, mode_addendum_content_digest,
+};
+pub use persona_addendum::{
+    ManagedPersonaAddendumActivation, ManagedPersonaAddendumError, ManagedPersonaAddendumInstall,
+    ManagedPersonaAddendumState, ManagedPersonaAddendumVersion, persona_addendum_content_digest,
 };
 pub use prompt::ComposedPrompt;
 pub use resource::SkillResourceHandler;

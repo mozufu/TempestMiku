@@ -185,10 +185,18 @@ pub(crate) fn sanitize_evolution_review_proposal_persistence(
 
 fn review_section_allowed(target_kind: &str, section: tm_modes::ReviewAddendumSection) -> bool {
     use tm_modes::ReviewAddendumSection::{
-        BehaviorGuidance, Description, RoutingGuidance, VoiceGuidance,
+        AddressGuidance, BehaviorGuidance, Description, InteractionPreference, RoutingGuidance,
+        ToneGuidance, VoiceGuidance,
     };
     match target_kind {
-        "persona" => matches!(section, BehaviorGuidance | VoiceGuidance),
+        "persona" => matches!(
+            section,
+            BehaviorGuidance
+                | VoiceGuidance
+                | ToneGuidance
+                | AddressGuidance
+                | InteractionPreference
+        ),
         "mode" => matches!(section, Description | RoutingGuidance),
         _ => false,
     }

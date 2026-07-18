@@ -28,6 +28,21 @@ fn moderate_state_with_mode_addenda(
     .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate)
 }
 
+fn moderate_state_with_persona_addenda(
+    root: &std::path::Path,
+) -> AppState<InMemoryStore, StoreMemoryProvider<InMemoryStore>, EchoChatRunner> {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+    AppState::new(
+        store,
+        memory,
+        Arc::new(EchoChatRunner),
+        ModesConfig::default().with_managed_persona_addenda_path(root),
+        AuthConfig::NoAuth,
+    )
+    .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate)
+}
+
 fn mode_review_request(timeout_ms: u64) -> Value {
     json!({
         "target": { "kind": "mode", "modeId": "serious_engineer" },
@@ -42,6 +57,39 @@ fn mode_review_request(timeout_ms: u64) -> Value {
                 "summary": "Prefer explicit verification evidence when closing roadmap gates."
             }
         }],
+        "timeoutMs": timeout_ms
+    })
+}
+
+fn persona_review_request(timeout_ms: u64) -> Value {
+    json!({
+        "target": { "kind": "persona", "personaId": "miku" },
+        "changes": [
+            {
+                "section": "tone_guidance",
+                "before": null,
+                "after": {
+                    "label": "Tone preference",
+                    "summary": "Keep routine status updates concise and direct."
+                }
+            },
+            {
+                "section": "address_guidance",
+                "before": null,
+                "after": {
+                    "label": "Address preference",
+                    "summary": "Use Brian when a name makes the reply clearer."
+                }
+            },
+            {
+                "section": "interaction_preference",
+                "before": null,
+                "after": {
+                    "label": "Interaction preference",
+                    "summary": "Lead with the verified outcome before implementation detail."
+                }
+            }
+        ],
         "timeoutMs": timeout_ms
     })
 }
@@ -233,6 +281,131 @@ async fn approved_mode_addendum_composes_without_widening_authority_and_rolls_ba
 }
 
 #[tokio::test]
+async fn approved_persona_addendum_composes_across_modes_and_rolls_back_to_base() {
+    let root = tempfile::tempdir().unwrap();
+    let state = moderate_state_with_persona_addenda(root.path());
+    let store = Arc::clone(&state.store);
+    let persona = state.persona.clone();
+    let before_assets = persona.load_assets();
+    let general = tm_modes::ModeId::new("general");
+    let serious = tm_modes::ModeId::new("serious_engineer");
+    let general_profile = before_assets.profile_or_unknown(&general);
+    let serious_profile = before_assets.profile_or_unknown(&serious);
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+
+    let response = post_review_proposal(&app, session.id, persona_review_request(5_000)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    assert_eq!(response["applyEnabled"], json!(true));
+    let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
+    let approval_id = response["approvalId"].as_str().unwrap().parse().unwrap();
+    let pending = store.evolution_review_proposal(proposal_id).await.unwrap();
+    assert_eq!(
+        pending.apply_contract,
+        tm_modes::ReviewApplyContract::VersionedPersonaAddendum
+    );
+
+    resolve_test_approval(&app, session.id, approval_id, "approve").await;
+    let managed = persona.managed_persona_addendum("miku").unwrap();
+    let active = managed.active.unwrap();
+    assert_eq!(active.content_digest, pending.content_digest);
+    for (mode, profile) in [
+        (general.clone(), general_profile),
+        (serious, serious_profile),
+    ] {
+        let prompt = persona.build_system_prompt(&mode, "base", "", "report status");
+        assert!(prompt.system_prompt.contains("Approved persona addendum"));
+        assert!(prompt.system_prompt.contains("Use Brian"));
+        assert_eq!(prompt.profile, profile);
+    }
+    let after_assets = persona.load_assets();
+    assert_eq!(after_assets.soul, before_assets.soul);
+    assert_eq!(after_assets.modes, before_assets.modes);
+
+    let rollback = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/sessions/{}/evolution/personas/miku/rollback",
+                    session.id
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "expectedActiveDigest": pending.content_digest,
+                        "targetDigest": null,
+                        "timeoutMs": 5_000
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rollback.status(), StatusCode::OK);
+    let rollback = response_json(rollback).await;
+    let rollback_approval_id = rollback["approvalId"].as_str().unwrap().parse().unwrap();
+    resolve_test_approval(&app, session.id, rollback_approval_id, "approve").await;
+    assert!(
+        persona
+            .managed_persona_addendum("miku")
+            .unwrap()
+            .active
+            .is_none()
+    );
+    assert!(
+        !persona
+            .build_system_prompt(&general, "base", "", "report status")
+            .system_prompt
+            .contains("Approved persona addendum")
+    );
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert!(events.iter().any(|event| {
+        event.event_type == "write_proposal"
+            && event.payload_json["kind"] == json!("persona_addendum_rollback")
+            && event.payload_json["status"] == json!("approved")
+    }));
+}
+
+#[tokio::test]
+async fn legacy_persona_review_sections_remain_non_activatable() {
+    let root = tempfile::tempdir().unwrap();
+    let state = moderate_state_with_persona_addenda(root.path());
+    let store = Arc::clone(&state.store);
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+    let response = post_review_proposal(
+        &app,
+        session.id,
+        json!({
+            "target": { "kind": "persona", "personaId": "miku" },
+            "changes": [{
+                "section": "voice_guidance",
+                "before": null,
+                "after": { "label": "Legacy", "summary": "Review only." }
+            }],
+            "timeoutMs": 5_000
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    assert_eq!(response["applyEnabled"], json!(false));
+    let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
+    assert_eq!(
+        store
+            .evolution_review_proposal(proposal_id)
+            .await
+            .unwrap()
+            .apply_contract,
+        tm_modes::ReviewApplyContract::Disabled
+    );
+}
+
+#[tokio::test]
 async fn conservative_review_attempt_is_denied_before_proposal_or_approval() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
@@ -264,17 +437,29 @@ async fn conservative_review_attempt_is_denied_before_proposal_or_approval() {
 
 #[tokio::test]
 async fn moderate_review_deny_and_timeout_are_durable_no_apply_outcomes() {
-    for (decision, expected) in [
-        (Some("deny"), tm_modes::ReviewProposalStatus::Denied),
-        (None, tm_modes::ReviewProposalStatus::TimedOut),
+    for (persona_target, decision, expected) in [
+        (false, Some("deny"), tm_modes::ReviewProposalStatus::Denied),
+        (false, None, tm_modes::ReviewProposalStatus::TimedOut),
+        (true, Some("deny"), tm_modes::ReviewProposalStatus::Denied),
+        (true, None, tm_modes::ReviewProposalStatus::TimedOut),
     ] {
         let root = tempfile::tempdir().unwrap();
-        let state = moderate_state_with_mode_addenda(root.path());
+        let state = if persona_target {
+            moderate_state_with_persona_addenda(root.path())
+        } else {
+            moderate_state_with_mode_addenda(root.path())
+        };
         let store = Arc::clone(&state.store);
         let persona = state.persona.clone();
         let (app, _) = test_app_with_state(state);
         let session = create(&app).await;
-        let response = post_review_proposal(&app, session.id, mode_review_request(25)).await;
+        let timeout_ms = if decision.is_some() { 5_000 } else { 25 };
+        let request = if persona_target {
+            persona_review_request(timeout_ms)
+        } else {
+            mode_review_request(timeout_ms)
+        };
+        let response = post_review_proposal(&app, session.id, request).await;
         assert_eq!(response.status(), StatusCode::OK);
         let response = response_json(response).await;
         let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
@@ -321,15 +506,29 @@ async fn moderate_review_deny_and_timeout_are_durable_no_apply_outcomes() {
         assert_eq!(proposal.status, expected);
         assert_eq!(
             proposal.apply_contract,
-            tm_modes::ReviewApplyContract::VersionedModeAddendum
+            if persona_target {
+                tm_modes::ReviewApplyContract::VersionedPersonaAddendum
+            } else {
+                tm_modes::ReviewApplyContract::VersionedModeAddendum
+            }
         );
-        assert!(
-            persona
-                .managed_mode_addendum(&tm_modes::ModeId::new("serious_engineer"))
-                .unwrap()
-                .active
-                .is_none()
-        );
+        if persona_target {
+            assert!(
+                persona
+                    .managed_persona_addendum("miku")
+                    .unwrap()
+                    .active
+                    .is_none()
+            );
+        } else {
+            assert!(
+                persona
+                    .managed_mode_addendum(&tm_modes::ModeId::new("serious_engineer"))
+                    .unwrap()
+                    .active
+                    .is_none()
+            );
+        }
         let events = store.events_after(session.id, None).await.unwrap();
         assert!(events.iter().any(|event| {
             event.event_type == "write_proposal"

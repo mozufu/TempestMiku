@@ -55,7 +55,11 @@ pub(super) fn apply_managed_persona_paths(
     let managed_mode_addenda_path = std::env::var_os("TM_MANAGED_MODE_ADDENDA_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| artifact_root.join("managed-mode-addenda"));
-    persona.with_managed_mode_addenda_path(managed_mode_addenda_path)
+    persona = persona.with_managed_mode_addenda_path(managed_mode_addenda_path);
+    let managed_persona_addenda_path = std::env::var_os("TM_MANAGED_PERSONA_ADDENDA_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| artifact_root.join("managed-persona-addenda"));
+    persona.with_managed_persona_addenda_path(managed_persona_addenda_path)
 }
 
 pub(super) fn load_host_config() -> Result<P0HostConfig, BoxError> {

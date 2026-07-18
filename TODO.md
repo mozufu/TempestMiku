@@ -13,6 +13,17 @@ P6.6 on-device ASR remains explicitly deferred. Preserve its interface spike and
 not add microphone permission, production weights/runtime, server fallback, or automatic send unless
 the owner explicitly resumes it.
 
+## P7.2b Approval-backed Persona Addenda
+
+- [x] Add a separate immutable managed persona-addendum catalog for typed tone, address, and
+      interaction-preference guidance.
+- [x] Keep durable manual approval as the only activation path, compose the active version on the
+      next prompt across all modes, and preserve the hand-authored `SOUL.md` as authority.
+- [x] Add a separate durable manual rollback to a prior proposal-backed version or the base persona.
+- [ ] Add Auto-mode repeated-preference/persona-mismatch candidate detection over bounded P8
+      evidence, with deterministic deduplication and cooldown.
+- [ ] Close deny/timeout/stale/retry, restart, UI/e2e, and evidence gates; then mark P7.2b complete.
+
 ## tm-lang-only Runtime Outcome
 
 tm-lang `tm-conformance-v2` is the only language accepted by `execute(code)` and the only in-process `Sandbox`

@@ -33,11 +33,30 @@ pub struct ProposeModeAddendumRollbackRequest {
     pub timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProposePersonaAddendumRollbackRequest {
+    pub expected_active_digest: String,
+    pub target_digest: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModeAddendumRollbackResponse {
     pub approval_id: Uuid,
     pub mode_id: tm_modes::ModeId,
+    pub expected_active_digest: String,
+    pub target_digest: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonaAddendumRollbackResponse {
+    pub approval_id: Uuid,
+    pub persona_id: String,
     pub expected_active_digest: String,
     pub target_digest: Option<String>,
     pub status: String,
@@ -59,6 +78,12 @@ where
     let (base_version, base_digest, base_active_digest) =
         review_base_snapshot(&state.persona, &payload.target)?;
     let apply_contract = match &payload.target {
+        ReviewProposalTarget::Persona { .. }
+            if state.persona.managed_persona_addenda_path().is_some()
+                && persona_changes_are_activatable(&payload.changes) =>
+        {
+            ReviewApplyContract::VersionedPersonaAddendum
+        }
         ReviewProposalTarget::Mode { .. }
             if state.persona.managed_mode_addenda_path().is_some() =>
         {
@@ -154,6 +179,18 @@ where
     }))
 }
 
+fn persona_changes_are_activatable(changes: &[ReviewAddendumChange]) -> bool {
+    !changes.is_empty()
+        && changes.iter().all(|change| {
+            matches!(
+                change.section,
+                tm_modes::ReviewAddendumSection::ToneGuidance
+                    | tm_modes::ReviewAddendumSection::AddressGuidance
+                    | tm_modes::ReviewAddendumSection::InteractionPreference
+            )
+        })
+}
+
 pub(crate) fn review_target_class(target: &ReviewProposalTarget) -> EvolutionTargetClass {
     match target {
         ReviewProposalTarget::Persona { .. } => EvolutionTargetClass::PersonaProposal,
@@ -167,14 +204,25 @@ pub(crate) fn review_base_snapshot(
 ) -> Result<(u64, String, Option<String>)> {
     let assets = persona.load_assets();
     let (value, base_active_digest) = match target {
-        ReviewProposalTarget::Persona { persona_id } if persona_id == "miku" => (
-            json!({
-                "personaId": persona_id,
-                "soulDigest": crate::evolution::evolution_content_digest(&assets.soul)?.as_str(),
-                "modeCatalog": assets.modes,
-            }),
-            None,
-        ),
+        ReviewProposalTarget::Persona { persona_id } if persona_id == "miku" => {
+            let active = if persona.managed_persona_addenda_path().is_some() {
+                persona
+                    .active_managed_persona_addendum(persona_id)
+                    .map_err(|error| ServerError::InvalidRequest(error.to_string()))?
+            } else {
+                None
+            };
+            let active_digest = active.map(|version| version.content_digest);
+            (
+                json!({
+                    "personaId": persona_id,
+                    "soulDigest": crate::evolution::evolution_content_digest(&assets.soul)?.as_str(),
+                    "modeCatalog": assets.modes,
+                    "activeAddendumDigest": active_digest,
+                }),
+                active_digest,
+            )
+        }
         ReviewProposalTarget::Persona { persona_id } => {
             return Err(ServerError::InvalidRequest(format!(
                 "unknown persona proposal target {persona_id}"
@@ -216,32 +264,28 @@ pub(crate) fn review_content_digest(
     base_digest: &str,
     changes: &[ReviewAddendumChange],
 ) -> Result<String> {
-    if let ReviewProposalTarget::Mode { mode_id } = target {
-        let mut changes = changes.to_vec();
-        for change in &mut changes {
-            change.after.label = tm_memory::redact_dream_text(&change.after.label).text;
-            change.after.summary = tm_memory::redact_dream_text(&change.after.summary).text;
-            if let Some(before) = &mut change.before {
-                before.label = tm_memory::redact_dream_text(&before.label).text;
-                before.summary = tm_memory::redact_dream_text(&before.summary).text;
-            }
+    let mut changes = changes.to_vec();
+    for change in &mut changes {
+        change.after.label = tm_memory::redact_dream_text(&change.after.label).text;
+        change.after.summary = tm_memory::redact_dream_text(&change.after.summary).text;
+        if let Some(before) = &mut change.before {
+            before.label = tm_memory::redact_dream_text(&before.label).text;
+            before.summary = tm_memory::redact_dream_text(&before.summary).text;
         }
-        return tm_modes::mode_addendum_content_digest(
-            mode_id,
+    }
+    match target {
+        ReviewProposalTarget::Mode { mode_id } => {
+            tm_modes::mode_addendum_content_digest(mode_id, base_version, base_digest, &changes)
+                .map_err(|error| ServerError::InvalidRequest(error.to_string()))
+        }
+        ReviewProposalTarget::Persona { persona_id } => tm_modes::persona_addendum_content_digest(
+            persona_id,
             base_version,
             base_digest,
             &changes,
         )
-        .map_err(|error| ServerError::InvalidRequest(error.to_string()));
+        .map_err(|error| ServerError::InvalidRequest(error.to_string())),
     }
-    Ok(crate::evolution::evolution_content_digest(&json!({
-        "target": target,
-        "baseVersion": base_version,
-        "baseDigest": base_digest,
-        "changes": changes,
-    }))?
-    .as_str()
-    .to_string())
 }
 
 fn review_content_value(proposal: &crate::NewEvolutionReviewProposal) -> Value {
@@ -304,10 +348,12 @@ fn evolution_review_approval_prompt(
         options: vec![
             ApprovalOption {
                 option_id: "allow".to_string(),
-                name: if proposal.apply_contract == ReviewApplyContract::Disabled {
-                    "Accept for review".to_string()
-                } else {
-                    "Apply mode addendum".to_string()
+                name: match proposal.apply_contract {
+                    ReviewApplyContract::Disabled => "Accept for review".to_string(),
+                    ReviewApplyContract::VersionedModeAddendum => "Apply mode addendum".to_string(),
+                    ReviewApplyContract::VersionedPersonaAddendum => {
+                        "Apply persona addendum".to_string()
+                    }
                 },
                 kind: "allow_once".to_string(),
             },
@@ -446,6 +492,166 @@ where
         target_digest: payload.target_digest,
         status: "pending".to_string(),
     }))
+}
+
+pub(crate) async fn propose_persona_addendum_rollback<S, M, C>(
+    State(state): State<AppState<S, M, C>>,
+    Path((session_id, persona_id)): Path<(Uuid, String)>,
+    Json(payload): Json<ProposePersonaAddendumRollbackRequest>,
+) -> Result<Json<PersonaAddendumRollbackResponse>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    state.store.get_session(session_id).await?;
+    let managed = state
+        .persona
+        .managed_persona_addendum(&persona_id)
+        .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+    let active = managed.active.ok_or_else(|| {
+        ServerError::InvalidRequest(format!(
+            "managed persona addendum {persona_id} is not active"
+        ))
+    })?;
+    if active.content_digest != payload.expected_active_digest {
+        return Err(crate::evolution::policy_error(
+            tm_host::EvolutionPolicyReason::StaleApproval,
+            format!(
+                "managed persona addendum {persona_id} active version changed from {} to {}",
+                payload.expected_active_digest, active.content_digest
+            ),
+        ));
+    }
+    if payload.target_digest.as_deref() == Some(payload.expected_active_digest.as_str()) {
+        return Err(ServerError::InvalidRequest(format!(
+            "managed persona addendum {persona_id} is already at {}",
+            payload.expected_active_digest
+        )));
+    }
+    let target_proposal_id = payload
+        .target_digest
+        .as_ref()
+        .map(|digest| {
+            managed
+                .versions
+                .iter()
+                .find(|version| &version.content_digest == digest)
+                .ok_or_else(|| {
+                    ServerError::NotFound(format!(
+                        "managed persona addendum {persona_id} version {digest}"
+                    ))
+                })
+                .and_then(|version| {
+                    Uuid::parse_str(&version.source_proposal_id).map_err(|_| {
+                        ServerError::Store(format!(
+                            "managed persona addendum {persona_id} target version has invalid source proposal id"
+                        ))
+                    })
+                })
+        })
+        .transpose()?;
+    let evolution_target_id = target_proposal_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| active.source_proposal_id.clone());
+    let rollback = json!({
+        "personaId": persona_id,
+        "expectedActiveDigest": payload.expected_active_digest,
+        "targetDigest": payload.target_digest,
+        "targetProposalId": target_proposal_id,
+        "evolutionTargetId": evolution_target_id,
+    });
+    let evolution = crate::evolution::evolution_effect_metadata(
+        state.self_evolution_tier,
+        EvolutionTargetClass::PersonaProposal,
+        evolution_target_id,
+        "owner",
+        session_id,
+        None,
+        &rollback,
+    )?;
+    let timeout = Duration::from_millis(payload.timeout_ms.unwrap_or(60_000).clamp(1, 300_000));
+    let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
+        session_id,
+        Arc::clone(&state.store),
+        state.sender(session_id),
+    ));
+    sink.emit(
+        "write_proposal",
+        persona_addendum_rollback_payload(&rollback, "pending", None),
+    )
+    .await?;
+    let approval_id = state
+        .approval_broker
+        .enqueue_permission_for_backend(DurableApprovalSpec {
+            session_id,
+            origin: "persona-addendum-rollback".to_string(),
+            prompt: persona_addendum_rollback_prompt(&rollback, timeout),
+            timeout,
+            effect_type: "persona_addendum_rollback".to_string(),
+            effect_payload_json: json!({
+                "evolution": evolution,
+                "rollback": rollback,
+            }),
+            resumable: true,
+            sink,
+        })
+        .await?;
+    Ok(Json(PersonaAddendumRollbackResponse {
+        approval_id,
+        persona_id,
+        expected_active_digest: payload.expected_active_digest,
+        target_digest: payload.target_digest,
+        status: "pending".to_string(),
+    }))
+}
+
+pub(crate) fn persona_addendum_rollback_payload(
+    rollback: &Value,
+    status: &str,
+    activation: Option<&tm_modes::ManagedPersonaAddendumActivation>,
+) -> Value {
+    let mut payload = json!({
+        "kind": "persona_addendum_rollback",
+        "status": status,
+        "personaId": rollback["personaId"],
+        "expectedActiveDigest": rollback["expectedActiveDigest"],
+        "targetDigest": rollback["targetDigest"],
+        "targetProposalId": rollback["targetProposalId"],
+    });
+    if let Some(activation) = activation {
+        payload["activation"] = serde_json::to_value(activation).unwrap_or(Value::Null);
+    }
+    payload
+}
+
+fn persona_addendum_rollback_prompt(rollback: &Value, timeout: Duration) -> ApprovalPrompt {
+    ApprovalPrompt {
+        action: format!(
+            "persona.addendum.rollback {}",
+            rollback["personaId"].as_str().unwrap_or_default()
+        ),
+        scope: json!({
+            "kind": "persona_addendum_rollback",
+            "personaId": rollback["personaId"],
+            "expectedActiveDigest": rollback["expectedActiveDigest"],
+            "targetDigest": rollback["targetDigest"],
+            "targetProposalId": rollback["targetProposalId"],
+            "timeoutMs": timeout.as_millis(),
+        }),
+        options: vec![
+            ApprovalOption {
+                option_id: "allow".to_string(),
+                name: "Roll back persona guidance".to_string(),
+                kind: "allow_once".to_string(),
+            },
+            ApprovalOption {
+                option_id: "reject".to_string(),
+                name: "Keep current persona guidance".to_string(),
+                kind: "reject_once".to_string(),
+            },
+        ],
+    }
 }
 
 pub(crate) fn mode_addendum_rollback_payload(

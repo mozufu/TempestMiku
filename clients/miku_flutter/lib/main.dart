@@ -40,6 +40,8 @@ part 'sheets.dart';
 part 'sheet_mode_activity.dart';
 part 'sheet_history.dart';
 part 'sheet_approval_overflow.dart';
+part 'sheet_approval_overflow/overflow_content.dart';
+part 'sheet_approval_overflow/overflow_widgets.dart';
 part 'sheet_drive.dart';
 part 'sheet_drive/approvals.dart';
 part 'sheet_drive/documents.dart';

@@ -214,9 +214,7 @@ pub(in crate::linked) fn atomic_replace(
             temp.write_all(data)
                 .and_then(|()| temp.sync_all())
                 .map_err(host_call)?;
-            let mode = (permissions.mode() & 0o7777)
-                .try_into()
-                .expect("portable Unix permission bits fit rustix RawMode");
+            let mode = (permissions.mode() & 0o7777) as rustix::fs::RawMode;
             rustix::fs::fchmod(&temp, rustix::fs::Mode::from_raw_mode(mode)).map_err(host_call)?;
             let fresh = stat_entry(parent, display)?.ok_or_else(|| {
                 HostError::InvalidArgs(format!(

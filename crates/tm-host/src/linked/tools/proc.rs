@@ -266,6 +266,9 @@ impl HostFn for ProcRunFn {
                                         "proc.run executable path contains a NUL byte".to_string(),
                                     )
                                 })?;
+                        // `libc::dev_t` is `u64` on Linux but narrower on some Unix targets, so
+                        // keep the checked cross-target conversion even when it is a no-op here.
+                        #[allow(clippy::useless_conversion)]
                         let expected_device: libc::dev_t =
                             fresh_executable_identity.0.try_into().map_err(|_| {
                                 HostError::HostCall(

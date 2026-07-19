@@ -24,7 +24,7 @@ hostile-workload/trusted-host-kernel M4 boundary.
 - Lumo coordinator image source revision: `2cffd0e4e86e2ec669963cc986ed0783cd4db80d`.
   Later TempestMiku commits through `14ba767` change only the NixOS worker module, not the
   coordinator or worker Rust binaries.
-- deployment-config production revision: `4774c08`.
+- Deployment configuration revision: `4774c08`.
 - Homolab generation:
   `/nix/store/4p0jzs1bdm69v35rj974a8bjl8waa8vy-nixos-system-homolab-26.05.20260717.293d6ab`.
 
@@ -33,7 +33,7 @@ hostile-workload/trusted-host-kernel M4 boundary.
 Before deployment, `cargo test --workspace --all-features --locked --no-fail-fast` passed across
 the workspace, including 328 `tm-server` tests, 79 `tm-host` tests, two `tm-worker` tests, and three
 `tm-worker-protocol` tests. `cargo fmt --all --check` and strict all-target/all-feature Clippy with
-`-D warnings` also passed. The deployment-config flake check, explicit homolab NixOS evaluation, lumo Home
+`-D warnings` also passed. The deployment flake check, explicit homolab NixOS evaluation, lumo Home
 Manager evaluation, Nix formatting, and diff checks passed.
 
 The coordinator integration tests cover lumo-owned approval brokering, exact action-digest
@@ -71,7 +71,7 @@ unreachable while lumo's coordinator health remained good. The coordinator conta
 Lumo's OpenRC service and all normal lumo smoke checks passed. The running coordinator container is
 `localhost/tempestmiku:2cffd0e4e86e`, mounts the remote-worker config and signing credential, and
 does not contain a local linked-host configuration. The Mac `darwin-rebuild switch --flake
-.#m3air` also completed successfully at deployment-config revision `4774c08`.
+.#m3air` also completed successfully at deployment configuration revision `4774c08`.
 
 ## Production integration findings
 

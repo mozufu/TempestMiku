@@ -5,8 +5,9 @@ rewrite can reach **behavioral parity before adding anything new**.
 
 ## 29.1 Where it lives
 
-`~/deployment-config/hosts/lumo/home/services/hermes-agent/` (host `lumo`). Service name `hermes-agent`;
-Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
+The parity source was the owner-operated `hermes-agent` service on host `lumo`. Its private
+deployment location is intentionally omitted. Honcho host id `hermes`; Honcho workspace
+`tempest-miku`, peer `brian`.
 
 ## 29.2 Canonical behavioral spec (preserve)
 

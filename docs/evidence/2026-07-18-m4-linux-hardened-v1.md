@@ -221,7 +221,7 @@ emulation attempt, not a product regression. The later native homolab run closes
 
 ## Read-only lumo deployment audit
 
-The 2026-07-18 lumo deployment-config snapshot remains a safe fail-closed deployment, but it is not an M4
+The 2026-07-18 lumo deployment snapshot remains safe and fail closed, but it is not an M4
 deployment target yet:
 
 - it pins pre-M4 source revision `bb8689ec593b93037b6cd1d76a638017647fbaf8`;
@@ -233,7 +233,7 @@ deployment target yet:
   also declare no KVM, Firecracker, cloud-hypervisor, QEMU, Incus, or libvirt microVM target.
 
 A 2026-07-19 live, read-only SSH preflight confirmed the deployed state rather than relying only on
-deployment-config. lumo runs Linux `6.18.35-0-rpi` on `aarch64`; `lumo-tempestmiku` was started from
+configuration. lumo runs Linux `6.18.35-0-rpi` on `aarch64`; `lumo-tempestmiku` was started from
 `localhost/tempestmiku:bb8689ec593b`, and its Podman process belonged to
 `/libpod_parent/libpod-…`. The host uses cgroup v2, but both `cgroup.controllers` and the root
 `cgroup.subtree_control` exposed only `cpuset cpu io pids`. The required `memory` controller was
@@ -243,7 +243,7 @@ the correct result is fail closed before any service delegation or workload run.
 snapshot is [`2026-07-19-m4-lumo-readonly-preflight.json`](2026-07-19-m4-lumo-readonly-preflight.json).
 
 Consequently linked-folder and `proc.run` authority remain disabled there. Closing M4 on lumo would
-require an explicit owner decision to expose a curated project to that service, a deployment-config/image
+require an explicit owner decision to expose a curated project to that service, a configuration/image
 change, a kernel exposing the cgroup-v2 `memory` controller, selected measured limits,
 target-specific OpenRC/Podman cgroup delegation, deployment of a revision containing this profile,
 and the wrapper canary under UID 10001 inside the final runtime.

@@ -8,17 +8,16 @@ microVM isolation are intentionally not claimed.
 
 Machine-readable report:
 [`2026-07-19-m4-production-homolab-x86_64.json`](2026-07-19-m4-production-homolab-x86_64.json),
-SHA-256 `bb6dbc80b5022623263d16ef7aa1d7bfce3456210718c8eacf5ad6e3c68bef6a`.
+SHA-256 `6e79ecef4ab65b69bd5c2af061ed71f514726b8255c32939f7da37a7525e90d0`.
 
 ## Selected target and persistent deployment
 
 - Target: `homolab`, native `x86_64`, NixOS `26.05.20260528.ec942ba`, Linux `7.0.10`.
-- Configuration source: `/home/operator/deployment-config#homolab`, not `/etc/nixos`.
-- deployment-config base revision: `693fc9d402dba11ca5d711c6f2c24324ef8b3e1d`; the scoped M4 files are staged but were not
-  committed because this execution did not authorize a deployment-config commit.
-- Changed deployment-config files: `flake.nix`, `flake.lock`,
-  `hosts/homolab/services/ai/default.nix`, and the new
-  `hosts/homolab/services/ai/tempestmiku-m4.nix`. `git diff --cached --check` passes.
+- Configuration source: the owner's selected `homolab` Nix flake target, not `/etc/nixos`.
+- Deployment configuration base revision: `693fc9d402dba11ca5d711c6f2c24324ef8b3e1d`; the scoped
+  M4 configuration was staged but not committed during this acceptance run.
+- The changed deployment configuration covered the flake inputs, host AI service aggregation, and
+  the new TempestMiku M4 service module. Its staged diff check passed.
 - The server and runtime flake inputs use the content-addressed `*-source` paths already retained by
   the active system closure, rather than temporary build-result symlinks. Rebuilding after this
   change reproduced the exact same system generation.
@@ -71,7 +70,7 @@ server listened only on `127.0.0.1:8787`.
 ## Failures resolved during production integration
 
 1. `/etc/nixos` was rejected as the deployment source because it built a different, stale system;
-   the host's actual configuration source is `~/deployment-config#homolab`.
+   the selected `homolab` flake target was the authoritative deployment configuration.
 2. A pre-start controller setup was invalid with `DelegateSubgroup`: systemd places only the main
    service process in the delegated subgroup. A single main-process launch wrapper now verifies the
    subgroup, enables the controllers, and then `exec`s the server.

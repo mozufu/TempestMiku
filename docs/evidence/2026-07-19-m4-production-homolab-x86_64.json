@@ -129,7 +129,7 @@
     "unit": "tempestmiku-m4.service"
   },
   "source": {
-    "remote": "/Users/operator/code/mozufu/TempestMiku/.",
+    "remote": "operator-provisioned checkout",
     "revision": "6822077058994d10a796f3d2cffa369e01a05108",
     "tree": "4b0ff81ca0f59453203a12afa8556275a80774d2"
   },

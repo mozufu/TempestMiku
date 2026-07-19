@@ -74,7 +74,7 @@ retained consented real-speaker evidence.
       [`2026-07-19-p6-6-android-asr-ab.json`](docs/evidence/2026-07-19-p6-6-android-asr-ab.json) and
       [`2026-07-19-p6-6-real-speaker-eval.json`](docs/evidence/2026-07-19-p6-6-real-speaker-eval.json).
 - [x] **M4:** the owner selected homolab under the hostile-workload/trusted-host-kernel contract.
-      Its persistent `~/deployment-config#homolab` NixOS service, UID/GID, loopback exposure, exact systemd
+      Its persistent NixOS service, UID/GID, loopback exposure, exact systemd
       delegation, cgroup exclusivity, native x86_64 execution, representative memory/pids/CPU
       sizing, retained report, persistent switch, and restart stability pass. Hostile-kernel and
       microVM containment are not claimed; see the

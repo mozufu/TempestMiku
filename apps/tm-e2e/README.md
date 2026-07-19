@@ -64,9 +64,11 @@ compare rounds without scraping logs:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "mode": "scripted",
   "sessionId": "...",
+  "continuitySessionId": "...",
+  "continuityProjectUri": "project://tempestmiku",
   "rounds": [
     {
       "index": 1,
@@ -83,6 +85,12 @@ compare rounds without scraping logs:
   ]
 }
 ```
+
+The scripted/public-API workflow promotes its first session into `project://tempestmiku`, then
+opens the summary, open loops, decisions, next actions, and resource view from a distinct newly
+created project-scoped session. The native-coding recording separately creates a fresh Serious
+Engineer session and verifies that the earlier linked-repo turn's project recall is present in the
+model request while the resulting `text`/`final` events remain replayable.
 
 ## Recording Evidence Runs
 
@@ -204,6 +212,23 @@ TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... OPENAI_MODEL=... cargo run -p tm-e2e -- liv
 ```
 
 Use `TM_E2E_SPEAKER_MODEL` to choose a separate model for the E2E actor.
+
+## P2 Live Voice Rubric
+
+The frozen `tm-modes` rubric calibrates positive and negative General, negative-state grounding,
+and Serious Engineer outputs without a network. It does not prove that a configured model follows
+the prompts. Run the opt-in public-API evaluator against a real `tm-server` model path for that:
+
+```sh
+TM_P2_VOICE_LIVE=1 \
+TM_MIKU_BASE_URL=http://127.0.0.1:8787 \
+cargo run -p tm-e2e -- voice-eval
+```
+
+The command writes `target/tm-e2e/p2-voice-live-latest.json`, retains each exact model final plus
+criterion results, rejects an echo response, and exits nonzero unless all three contexts pass. Use
+`--output <path>` to retain a dated acceptance record. This gate is deliberately separate from the
+network-free suite and must not be reported as passing unless the JSON came from a live run.
 
 ## Coverage Boundary
 

@@ -187,6 +187,24 @@ impl MikuClient {
         .await
     }
 
+    pub async fn propose_persona_addendum_rollback(
+        &self,
+        session_id: &str,
+        persona_id: &str,
+        expected_active_digest: &str,
+        target_digest: Option<&str>,
+    ) -> Result<Value> {
+        self.post_json(
+            &format!("/sessions/{session_id}/evolution/personas/{persona_id}/rollback"),
+            json!({
+                "expectedActiveDigest": expected_active_digest,
+                "targetDigest": target_digest,
+                "timeoutMs": 5_000,
+            }),
+        )
+        .await
+    }
+
     pub async fn promote_session(
         &self,
         session_id: &str,

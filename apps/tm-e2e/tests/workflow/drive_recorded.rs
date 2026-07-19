@@ -157,7 +157,24 @@ async fn recorded_native_coding_proves_public_api_edit_test_approval_and_replay(
     assert_eq!(scenario.details["approved"]["status"], json!("approved"));
     assert_eq!(scenario.details["denied"]["status"], json!("denied"));
     assert_eq!(scenario.details["timedOut"]["status"], json!("timed_out"));
-    assert_eq!(scenario.details["scriptedLlmCalls"], json!(6));
+    assert_eq!(scenario.details["scriptedLlmCalls"], json!(7));
+    assert_ne!(
+        scenario.details["continuity"]["sessionId"],
+        scenario.details["continuity"]["sourceSessionId"]
+    );
+    assert_eq!(
+        scenario.details["continuity"]["modelRequestIncludedRecall"],
+        json!(true)
+    );
+    for event_type in ["text", "final"] {
+        assert!(
+            scenario.details["continuity"]["replayedEventTypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|kind| kind == event_type)
+        );
+    }
     for path in ["approved", "denied", "timedOut"] {
         assert!(
             scenario.details[path]["turnId"]

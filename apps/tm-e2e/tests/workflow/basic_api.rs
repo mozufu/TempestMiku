@@ -26,6 +26,8 @@ async fn scripted_workflow_drives_miku_public_api() {
     assert!(report.coding_final.contains("Decision:"));
     assert!(report.memory_record_uri.starts_with("memory://profile/"));
     assert_eq!(report.artifact_uri.as_deref(), Some("artifact://0"));
+    assert_ne!(report.continuity_session_id, report.session_id);
+    assert_eq!(report.continuity_project_uri, "project://tempestmiku");
     assert!(report.promoted_count >= 4);
     assert_eq!(report.rounds.len(), 2);
     assert_eq!(report.rounds[0].index, 1);
@@ -55,6 +57,14 @@ async fn scripted_workflow_drives_miku_public_api() {
     );
     assert_eq!(record["mode"], json!("scripted"));
     assert_eq!(record["sessionId"], json!(report.session_id));
+    assert_eq!(
+        record["continuitySessionId"],
+        json!(report.continuity_session_id)
+    );
+    assert_eq!(
+        record["continuityProjectUri"],
+        json!("project://tempestmiku")
+    );
     assert_eq!(record["rounds"].as_array().unwrap().len(), 2);
 
     server.abort();

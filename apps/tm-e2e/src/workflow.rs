@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::{E2eEvent, E2eSpeaker, MikuClient, WorkflowContext, WorkflowStep};
 
-pub const WORKFLOW_RECORD_SCHEMA_VERSION: u32 = 1;
+pub const WORKFLOW_RECORD_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorkflowOptions {
@@ -32,6 +32,8 @@ pub struct ConversationRound {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowReport {
     pub session_id: String,
+    pub continuity_session_id: String,
+    pub continuity_project_uri: String,
     pub personal_final: String,
     pub coding_final: String,
     pub memory_record_uri: String,
@@ -46,6 +48,8 @@ pub struct WorkflowRecord {
     pub schema_version: u32,
     pub mode: String,
     pub session_id: String,
+    pub continuity_session_id: String,
+    pub continuity_project_uri: String,
     pub personal_final: String,
     pub coding_final: String,
     pub memory_record_uri: String,
@@ -60,6 +64,8 @@ impl WorkflowReport {
             schema_version: WORKFLOW_RECORD_SCHEMA_VERSION,
             mode: mode.into(),
             session_id: self.session_id.clone(),
+            continuity_session_id: self.continuity_session_id.clone(),
+            continuity_project_uri: self.continuity_project_uri.clone(),
             personal_final: self.personal_final.clone(),
             coding_final: self.coding_final.clone(),
             memory_record_uri: self.memory_record_uri.clone(),
@@ -351,12 +357,63 @@ pub async fn run_workflow(
             .any(|entry| entry["uri"] == json!("project://tempestmiku/resources"))
     );
 
+    let continuity_session = client
+        .create_session_scoped(Some("serious_engineer"), Some("project:tempestmiku"))
+        .await?;
+    ensure!(
+        continuity_session.id != session.id,
+        "project continuity must be proven from a fresh session"
+    );
+    ensure!(
+        continuity_session.mode == "serious_engineer" && continuity_session.voice_cap == "off",
+        "fresh project session should preserve the Serious Engineer capability and voice envelope"
+    );
+    let continuity_project = client.project_overview(&continuity_session.id).await?;
+    ensure!(
+        continuity_project["projectUri"] == json!("project://tempestmiku")
+            && continuity_project["status"]
+                .as_str()
+                .is_some_and(|status| status.contains("LLM-to-Miku E2E hatch")),
+        "fresh project session did not recover the promoted summary: {continuity_project}"
+    );
+    ensure!(
+        continuity_project["openLoops"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+            && continuity_project["decisions"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+            && continuity_project["nextActions"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty()),
+        "fresh project session did not recover open loops, decisions, and next actions"
+    );
+    ensure!(
+        continuity_project["provenance"]["sessionId"] == json!(continuity_session.id),
+        "fresh project overview did not identify the attaching session"
+    );
+    let continuity_project_uri = continuity_project["projectUri"]
+        .as_str()
+        .context("fresh project overview omitted projectUri")?
+        .to_string();
+    let continuity_resource = client
+        .resolve_resource(&continuity_session.id, &continuity_project_uri)
+        .await?;
+    let continuity_content = continuity_resource["content"].as_str().unwrap_or_default();
+    ensure!(
+        continuity_content.contains("keep the LLM-to-Miku E2E hatch covered")
+            && continuity_content.contains("keep the hatch HTTP-only and approval-bound"),
+        "fresh project session could not open promoted project provenance"
+    );
+
     // Keep the variable live so future workflow edits do not accidentally stop proving replay
     // after the memory path.
     let _ = last_event_id;
 
     Ok(WorkflowReport {
         session_id: session.id,
+        continuity_session_id: continuity_session.id,
+        continuity_project_uri,
         personal_final,
         coding_final,
         memory_record_uri,

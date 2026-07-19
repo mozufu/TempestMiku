@@ -50,12 +50,14 @@ pub(super) async fn run_public_api_scenario(
         capture_resource(
             recorder,
             client,
-            &report.session_id,
-            "project://tempestmiku",
+            &report.continuity_session_id,
+            &report.continuity_project_uri,
         )
         .await?;
         Ok::<Value, anyhow::Error>(json!({
             "sessionId": report.session_id,
+            "continuitySessionId": report.continuity_session_id,
+            "continuityProjectUri": report.continuity_project_uri,
             "rounds": report.rounds.len(),
             "memoryRecordUri": report.memory_record_uri,
             "artifactUri": report.artifact_uri,

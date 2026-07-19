@@ -2621,6 +2621,8 @@ dependencies = [
  "tm-host",
  "tm-lang",
  "tm-llm",
+ "tm-memory",
+ "tm-modes",
  "tm-server",
  "tokio",
  "uuid",
@@ -2705,6 +2707,7 @@ name = "tm-modes"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "regex",
  "rustix",
  "serde",
  "serde_json",

@@ -390,6 +390,11 @@ fn negative_state_grounding_layers_health_first_posture_onto_general_mode() {
     assert!(
         prompt
             .system_prompt
+            .contains("State that time bound explicitly")
+    );
+    assert!(
+        prompt
+            .system_prompt
             .contains("Do not propose or request memory writes")
     );
     // general legitimately loads personal-assistant-state-capture (its heading contains

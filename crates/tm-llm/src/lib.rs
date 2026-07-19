@@ -25,6 +25,9 @@ pub struct OpenAiConfig {
     pub include_usage: bool,
     /// Optional OpenAI-compatible Chat Completions reasoning effort.
     pub reasoning_effort: Option<String>,
+    /// Reuse idle HTTP connections between completions. Some OpenAI-compatible reverse proxies
+    /// require a fresh connection for each streamed request; disable this only for those endpoints.
+    pub reuse_connections: bool,
     /// TCP/TLS connection deadline.
     pub connect_timeout: Duration,
     /// Maximum idle time between streamed response chunks.
@@ -47,6 +50,7 @@ impl fmt::Debug for OpenAiConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("include_usage", &self.include_usage)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("reuse_connections", &self.reuse_connections)
             .field("connect_timeout", &self.connect_timeout)
             .field("read_timeout", &self.read_timeout)
             .field("request_timeout", &self.request_timeout)
@@ -64,6 +68,7 @@ impl Default for OpenAiConfig {
             api_key: None,
             include_usage: true,
             reasoning_effort: None,
+            reuse_connections: true,
             connect_timeout: Duration::from_secs(10),
             read_timeout: Duration::from_secs(120),
             request_timeout: Duration::from_secs(300),
@@ -83,10 +88,14 @@ pub struct OpenAiClient {
 impl OpenAiClient {
     pub fn new(cfg: OpenAiConfig) -> Result<Self> {
         validate_config(&cfg)?;
-        let http = reqwest::Client::builder()
+        let mut http = reqwest::Client::builder()
             .connect_timeout(cfg.connect_timeout)
             .read_timeout(cfg.read_timeout)
-            .timeout(cfg.request_timeout)
+            .timeout(cfg.request_timeout);
+        if !cfg.reuse_connections {
+            http = http.pool_max_idle_per_host(0);
+        }
+        let http = http
             .build()
             .map_err(|error| Error::Llm(redact_transport_error(error)))?;
         Ok(Self { http, cfg })
@@ -95,7 +104,8 @@ impl OpenAiClient {
     /// Build from the environment:
     /// `OPENAI_BASE_URL` (default `https://api.openai.com/v1`), `OPENAI_API_KEY`,
     /// `OPENAI_STREAM_USAGE` (`0`/`false`/`no` disables `include_usage`), and
-    /// `OPENAI_REASONING_EFFORT`.
+    /// `OPENAI_REASONING_EFFORT`, and `OPENAI_CONNECTION_REUSE` (`0`/`false`/`no` disables the
+    /// idle connection pool for endpoints with broken keep-alive behavior).
     pub fn from_env() -> Result<Self> {
         let mut cfg = OpenAiConfig::default();
         if let Ok(base) = std::env::var("OPENAI_BASE_URL")
@@ -115,6 +125,11 @@ impl OpenAiClient {
             && !value.trim().is_empty()
         {
             cfg.reasoning_effort = Some(value.trim().to_ascii_lowercase());
+        }
+        if let Ok(value) = std::env::var("OPENAI_CONNECTION_REUSE")
+            && !value.trim().is_empty()
+        {
+            cfg.reuse_connections = parse_connection_reuse(&value)?;
         }
         Self::new(cfg)
     }
@@ -203,6 +218,16 @@ fn validate_config(cfg: &OpenAiConfig) -> Result<()> {
     Ok(())
 }
 
+fn parse_connection_reuse(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(Error::Llm(format!(
+            "invalid OPENAI_CONNECTION_REUSE {other:?}; expected a boolean"
+        ))),
+    }
+}
+
 async fn bounded_response_text(resp: reqwest::Response, cap: usize) -> String {
     let mut stream = resp.bytes_stream();
     let mut body = Vec::with_capacity(cap.min(8 * 1024));
@@ -264,6 +289,13 @@ mod tests {
             ..OpenAiConfig::default()
         };
         assert!(OpenAiClient::new(cfg).is_err());
+    }
+
+    #[test]
+    fn parses_connection_reuse_strictly() {
+        assert!(parse_connection_reuse("yes").unwrap());
+        assert!(!parse_connection_reuse("OFF").unwrap());
+        assert!(parse_connection_reuse("sometimes").is_err());
     }
 
     #[test]

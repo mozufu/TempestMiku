@@ -7,6 +7,7 @@ mod prompt;
 mod resource;
 mod skills;
 mod types;
+mod voice;
 
 pub use assets::{AssetStatus, ModeAssets, ModesConfig};
 pub use evolution::{
@@ -30,6 +31,9 @@ pub use prompt::ComposedPrompt;
 pub use resource::SkillResourceHandler;
 pub use skills::resolve_active_skills;
 pub use types::{Mode, ModeCatalog, ModeId, ModeProfile, ModeRoute, SkillActivation, SkillTrigger};
+pub use voice::{
+    VOICE_RUBRIC_SCHEMA_VERSION, VoiceCriterion, VoiceEvaluation, VoiceScenario, evaluate_voice,
+};
 
 #[cfg(test)]
 pub(crate) use assets::MISSING_SKILL_PROMPT_FALLBACK;

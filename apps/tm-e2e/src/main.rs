@@ -1,10 +1,11 @@
 use std::{env, path::PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use tm_e2e::{
     LiveSpeaker, MikuClient, RecordOptions, ScriptedSpeaker, WorkflowOptions, load_dotenv,
-    run_record_api, run_record_evolution_policy, run_record_live_api, run_record_native_actor,
-    run_record_native_coding, run_record_suite, run_record_ui, run_workflow, write_workflow_record,
+    run_p2_voice_live_eval, run_record_api, run_record_evolution_policy, run_record_live_api,
+    run_record_native_actor, run_record_native_coding, run_record_suite, run_record_ui,
+    run_workflow, write_p2_voice_live_report, write_workflow_record,
 };
 
 #[tokio::main]
@@ -19,7 +20,22 @@ async fn main() -> Result<()> {
         }
         Args::Legacy(args) => run_legacy(args).await,
         Args::Record(args) => run_record(args).await,
+        Args::VoiceEval(args) => run_voice_eval(args).await,
     }
+}
+
+async fn run_voice_eval(args: VoiceEvalArgs) -> Result<()> {
+    let client = MikuClient::from_env()?;
+    let report = run_p2_voice_live_eval(&client).await?;
+    write_p2_voice_live_report(&args.output, &report)?;
+    println!("P2 live voice evaluation record: {}", args.output.display());
+    ensure!(
+        report.passed,
+        "P2 live voice rubric failed; inspect {}",
+        args.output.display()
+    );
+    println!("P2 live voice evaluation passed");
+    Ok(())
 }
 
 async fn run_legacy(args: CliArgs) -> Result<()> {
@@ -88,6 +104,7 @@ async fn run_record(args: RecordCliArgs) -> Result<()> {
 enum Args {
     Legacy(CliArgs),
     Record(RecordCliArgs),
+    VoiceEval(VoiceEvalArgs),
     Help,
 }
 
@@ -103,7 +120,44 @@ impl Args {
         if raw.first().map(String::as_str) == Some("record") {
             return Ok(Self::Record(RecordCliArgs::parse(&raw[1..])?));
         }
+        if raw.first().map(String::as_str) == Some("voice-eval") {
+            return Ok(Self::VoiceEval(VoiceEvalArgs::parse(&raw[1..])?));
+        }
         Ok(Self::Legacy(CliArgs::parse_from(raw)?))
+    }
+}
+
+#[derive(Debug)]
+struct VoiceEvalArgs {
+    output: PathBuf,
+}
+
+impl VoiceEvalArgs {
+    fn parse(raw: &[String]) -> Result<Self> {
+        let mut output = None;
+        let mut args = raw.iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--output" | "--record-json" => {
+                    let Some(path) = args.next() else {
+                        bail!("{arg} requires a path");
+                    };
+                    output = Some(PathBuf::from(path));
+                }
+                value if value.starts_with("--output=") || value.starts_with("--record-json=") => {
+                    let Some((_, path)) = value.split_once('=') else {
+                        bail!("{value} requires a path");
+                    };
+                    ensure!(!path.is_empty(), "{value} requires a non-empty path");
+                    output = Some(PathBuf::from(path));
+                }
+                value => bail!("unsupported P2 voice-eval argument {value}"),
+            }
+        }
+        Ok(Self {
+            output: output
+                .unwrap_or_else(|| PathBuf::from("target/tm-e2e/p2-voice-live-latest.json")),
+        })
     }
 }
 
@@ -265,6 +319,7 @@ fn print_help() {
          Usage:\n  \
            cargo run -p tm-e2e -- scripted [--personal-message text] [--coding-message text] [--record-json path]\n  \
            TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- live [--record-json path]\n\n\
+           TM_P2_VOICE_LIVE=1 cargo run -p tm-e2e -- voice-eval [--output path]\n\n\
            cargo run -p tm-e2e -- record suite [--output-dir path] [--headed] [--skip-flutter-build]\n  \
            cargo run -p tm-e2e -- record api [--output-dir path]\n  \
            cargo run -p tm-e2e -- record ui [--output-dir path] [--headed]\n  \

@@ -1,7 +1,7 @@
 ---
 name: negative-state-grounding
 description: Use when Brian is overwhelmed, negative, self-deprecating, exhausted, spiraling, stuck, or says he feels useless; respond with grounding, evidence of output, health-first pushback, and one small next step.
-version: 1.0.0
+version: 1.0.1
 metadata:
   hermes:
     tags: [overwhelm, grounding, emotional-support, personal-assistant, miku]
@@ -31,7 +31,9 @@ Stabilize first, then reduce the situation to one concrete next action. This is 
 2. Validate the strain without turning it into a motivational speech.
 3. Reflect actual evidence of output or effort.
 4. Separate facts from feelings.
-5. Offer exactly one next action that takes 10 minutes or less.
+5. Offer exactly one next action that takes 10 minutes or less. State that time bound explicitly
+   in the user-visible reply (for example, 「這一步不超過 10 分鐘」); do not leave the bound
+   implicit even for a small action such as drinking water or breathing.
 6. If Brian is exhausted, recommend rest before productivity. Health-over-productivity wins even when it blocks the work plan.
 7. Do not propose or request memory writes from a negative-state prompt unless Brian explicitly asks you to remember a stable preference.
 
@@ -64,6 +66,6 @@ Negative-state language is usually a passing mood, not profile material. Do not 
 事實是：...
 不是事實的是：...
 
-現在只做一件事：...
+現在只做一件事（10 分鐘內）：...
 如果你已經累到做不了，今天的任務改成：休息。
 ```

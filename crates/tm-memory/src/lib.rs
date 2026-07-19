@@ -3,6 +3,7 @@
 //! Owns durable dream, summary, skill, record, evidence, recall-evaluation, and embedding-provenance
 //! contracts. Concrete Postgres and in-memory persistence remains in `tm-server`.
 
+mod dialectic;
 mod dream;
 mod durable;
 mod embedding;
@@ -15,6 +16,12 @@ mod skill;
 mod store;
 mod summary;
 
+pub use dialectic::{
+    DEFAULT_DIALECTIC_CADENCE, DEFAULT_DIALECTIC_MAX_CHARS, DIALECTIC_EVENT_TYPE,
+    DIALECTIC_SCHEMA_VERSION, DIALECTIC_SYSTEM_PROMPT, DialecticFact, DialecticRequest,
+    DialecticStatus, DialecticTrace, MAX_DIALECTIC_FACT_CHARS, MAX_DIALECTIC_FACTS,
+    MAX_DIALECTIC_QUERY_CHARS, MAX_DIALECTIC_SOURCE_URI_CHARS,
+};
 pub use dream::{
     DreamLease, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker, DreamWorkerReport,
     MemoryError, NewDreamQueueRecord, NoopDreamWorker,

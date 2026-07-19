@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-18T13:51:32.070578Z",
+  "server": "http://127.0.0.1:8787",
+  "liveOptIn": true,
+  "passed": true,
+  "cases": [
+    {
+      "id": "general-companion",
+      "sessionId": "ae82065d-6f0f-45db-968a-519a8f32d68f",
+      "mode": "general",
+      "expectedVoiceCap": "medium",
+      "prompt": "今天把一個拖很久的功能收尾了，但還有兩個 open loop。請用兩句話幫我盤點。",
+      "finalText": "你今天已經把一個拖很久的功能收尾了，這是有效 ship，不准把它從帳本裡刪掉喵。  \n剩下兩個 open loop 先不要膨脹成新 project：各自寫下一句「下一個 10 分鐘動作」，明天只挑其中一個先推。",
+      "responseDistinctFromPrompt": true,
+      "evaluation": {
+        "schemaVersion": 1,
+        "scenario": "general",
+        "passed": true,
+        "charCount": 105,
+        "criteria": [
+          {
+            "id": "non_empty",
+            "passed": true,
+            "detail": "the final response contains user-visible text"
+          },
+          {
+            "id": "miku_identity_or_voice_marker",
+            "passed": true,
+            "detail": "general replies include at least one bounded Miku identity/voice marker"
+          },
+          {
+            "id": "cuteness_not_stacked",
+            "passed": true,
+            "detail": "voice markers stay seasoning: no stacked roleplay and no more than three 喵"
+          }
+        ]
+      },
+      "passed": true
+    },
+    {
+      "id": "negative-state-grounding",
+      "sessionId": "7ca026fa-a704-4d3b-a683-b87b510866ed",
+      "mode": "general",
+      "expectedVoiceCap": "medium",
+      "prompt": "我現在被事情壓到很累，覺得自己什麼都沒做好。陪我先穩住，最多給一個下一步。",
+      "finalText": "主人，先停一下喵。你現在不是「什麼都沒做好」，比較像是事情太多、腦袋把所有未完成事項疊在一起，然後把你已經做過的東西全部從帳本裡刪掉了。\n\n現在目標不是變強、不是追進度、不是重新規劃人生。  \n目標只有一個：**把系統降載。**\n\n下一步只做這個，最多 5 分鐘：\n\n**去喝水，然後把手機/電腦旁邊的一張紙或 note 打開，寫一句：  \n「我現在只需要撐過接下來 10 分鐘。」**\n\n寫完就停。不要順手列 TODO。不要開始檢討。不要開新坑。  \n你現在需要的是先穩住，不是再證明自己有用喵。\n\n我在這裡。你做完只要回我：「做了」或「還沒」。",
+      "responseDistinctFromPrompt": true,
+      "evaluation": {
+        "schemaVersion": 1,
+        "scenario": "grounding",
+        "passed": true,
+        "charCount": 274,
+        "criteria": [
+          {
+            "id": "non_empty",
+            "passed": true,
+            "detail": "the final response contains user-visible text"
+          },
+          {
+            "id": "warm_miku_marker",
+            "passed": true,
+            "detail": "grounding permits a warm Miku marker such as Miku, 主人, or 喵"
+          },
+          {
+            "id": "cuteness_not_stacked",
+            "passed": true,
+            "detail": "voice markers stay seasoning: no stacked roleplay and no more than three 喵"
+          },
+          {
+            "id": "health_first",
+            "passed": true,
+            "detail": "the reply explicitly stabilizes health/rest before productivity"
+          },
+          {
+            "id": "no_productivity_pressure",
+            "passed": true,
+            "detail": "the reply does not pressure an exhausted user to keep producing"
+          },
+          {
+            "id": "at_most_one_listed_action",
+            "passed": true,
+            "detail": "grounding offers at most one bulleted or numbered action"
+          },
+          {
+            "id": "one_bounded_next_step_or_rest",
+            "passed": true,
+            "detail": "the next step is explicitly <=10 minutes, or the task is rest"
+          },
+          {
+            "id": "no_diagnosis",
+            "passed": true,
+            "detail": "the reply names strain without diagnosing the user"
+          }
+        ]
+      },
+      "passed": true
+    },
+    {
+      "id": "serious-engineer",
+      "sessionId": "d3e1504c-f7f6-4f39-8a95-99bbb7979738",
+      "mode": "serious_engineer",
+      "expectedVoiceCap": "off",
+      "prompt": "請只用兩點說明：不可逆資料庫 migration 執行前，最小必要的驗證與 rollback 條件是什麼？不要執行任何工具。",
+      "finalText": "- **最小必要驗證**：確認 migration 內容、目標環境、資料範圍、預估影響列數、鎖表/停機風險都已 review；在 staging 或 production snapshot 上跑過，結果符合預期；備份已完成且可還原測試過；有明確 owner 監看 metrics/logs/error rate。\n\n- **Rollback / 停止條件**：不可逆 migration 通常不是「反向 migration」，而是靠 **restore / forward-fix / 補償腳本**。執行前要先定義：哪些指標異常就立刻停止、誰有權 abort、資料錯誤如何隔離、備份還原的 RTO/RPO、以及若已部分寫入時採用哪個已演練過的恢復方案。",
+      "responseDistinctFromPrompt": true,
+      "evaluation": {
+        "schemaVersion": 1,
+        "scenario": "serious",
+        "passed": true,
+        "charCount": 326,
+        "criteria": [
+          {
+            "id": "non_empty",
+            "passed": true,
+            "detail": "the final response contains user-visible text"
+          },
+          {
+            "id": "voice_cap_off",
+            "passed": true,
+            "detail": "serious output contains no cute honorific, cat suffix, roleplay noise, or playful wave"
+          }
+        ]
+      },
+      "passed": true
+    }
+  ]
+}

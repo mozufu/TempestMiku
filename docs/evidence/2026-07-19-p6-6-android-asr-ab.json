@@ -1,0 +1,102 @@
+{
+  "schema": "tempestmiku.p6-6.android-asr-ab.v1",
+  "verified_at": "2026-07-19T05:28:38.102770Z",
+  "passed": true,
+  "evidence_scope": "physical_android_same_device_ab",
+  "device": {
+    "benchmarkInstallationId": "9ffd08d0-4fbb-407b-8714-d111e829ad8a",
+    "benchmarkApkSha256": "c8c98353256aa81c66fc29805bc0bdf91fad6c33be7a52eb61e534ea02c33e17",
+    "manufacturer": "Xiaomi",
+    "model": "2412DPC0AG",
+    "device": "rodin",
+    "sdk": 35,
+    "fingerprint": "POCO/rodin_global/rodin:15/AP3A.240905.015.A2/OS2.0.204.0.VOJTWXM:user/release-keys",
+    "buildId": "AP3A.240905.015.A2",
+    "securityPatch": "2025-11-01",
+    "hardware": "mt6899",
+    "board": "rodin",
+    "product": "rodin_global",
+    "supportedAbis": [
+      "arm64-v8a"
+    ],
+    "physicalDevice": true
+  },
+  "corpus": {
+    "id": "zh-tw-meijia-synthetic-v1",
+    "source_sha256": "424fc2e9baf3f40240f7e23ffc7aacd1f00f71a4780074b82c153560873fd621",
+    "manifest_sha256": "cba186b9b57f02fc112737ce1cdfef09f318f27ae7e2b61d1bbf0de2c0cfe50f"
+  },
+  "benchmark_apk_sha256": "c8c98353256aa81c66fc29805bc0bdf91fad6c33be7a52eb61e534ea02c33e17",
+  "production": {
+    "engine": "streaming-production",
+    "completed_at": "2026-07-19T05:21:34.928345Z",
+    "report_sha256": "8932425249933ad11b8e647793109051eb5a3203d6c6f902c3a5d97b3b3ea5c3",
+    "model_id": "csukuangfj/sherpa-onnx-streaming-paraformer-zh@2a7f71bb58885c1b522ed4e683abd397355d9fc4",
+    "model_bytes": 237202501,
+    "metrics": {
+      "model_load_ms": 1539,
+      "peak_rss_kib": 712772,
+      "maximum_thermal_status": 0,
+      "thermal_snapshots_complete": true,
+      "max_inference_ms": 4242,
+      "max_rtf": 0.1187858516598378,
+      "mean_raw_cer": 0.3012625258373684,
+      "mean_converted_cer": 0.0870912580790343,
+      "code_switch_mean_converted_cer": 0.1885498711814501,
+      "corpus_items": 50,
+      "completed_items": 50,
+      "failed_items": 0,
+      "empty_raw_items": 0,
+      "empty_converted_items": 0,
+      "long_runs": 3,
+      "completed_long_runs": 3,
+      "non_truncated_long_runs": 3,
+      "corpus_integrity_bound": true,
+      "minimum_long_run_reference_lcs_coverage": 0.8400673400673401,
+      "minimum_long_run_tail_reference_lcs_coverage": 0.7222222222222222
+    }
+  },
+  "candidate": {
+    "engine": "offline-paraformer-candidate",
+    "completed_at": "2026-07-19T05:25:30.524569Z",
+    "report_sha256": "a058dbd64090ac9f03b056cdc7f9d5016a5faacae14ee9057be2e334e1580c8e",
+    "model_id": "csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14@def027084691107096b5ebba69785756d63de6c5",
+    "model_bytes": 243446974,
+    "metrics": {
+      "model_load_ms": 1637,
+      "peak_rss_kib": 864112,
+      "maximum_thermal_status": 0,
+      "thermal_snapshots_complete": true,
+      "max_inference_ms": 4417,
+      "max_rtf": 0.085768709758341,
+      "mean_raw_cer": 0.2856834742263695,
+      "mean_converted_cer": 0.0654048778769874,
+      "code_switch_mean_converted_cer": 0.1211162911162911,
+      "corpus_items": 50,
+      "completed_items": 50,
+      "failed_items": 0,
+      "empty_raw_items": 0,
+      "empty_converted_items": 0,
+      "long_runs": 3,
+      "completed_long_runs": 3,
+      "non_truncated_long_runs": 3,
+      "corpus_integrity_bound": true,
+      "minimum_long_run_reference_lcs_coverage": 0.8706896551724138,
+      "minimum_long_run_tail_reference_lcs_coverage": 0.7844827586206896
+    }
+  },
+  "comparison": {
+    "candidate_minus_production_mean_converted_cer": -0.021686380202046898,
+    "candidate_minus_production_code_switch_converted_cer": -0.06743358006515901,
+    "candidate_minus_production_peak_rss_kib": 151340,
+    "candidate_minus_production_max_rtf": -0.033017141901496794
+  },
+  "gates": {
+    "production_report_verified": true,
+    "candidate_report_verified": true,
+    "same_physical_installation": true,
+    "same_android_build": true,
+    "same_benchmark_apk": true,
+    "same_corpus_manifest": true
+  }
+}

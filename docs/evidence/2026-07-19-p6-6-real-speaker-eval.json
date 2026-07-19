@@ -1,0 +1,192 @@
+{
+  "schema": "tempestmiku.p6-6.real-speaker-eval.v2",
+  "evaluated_at": "2026-07-19T06:58:38.953024Z",
+  "passed": true,
+  "evidence_scope": "consented_real_speaker_text_metrics",
+  "audio_retained": false,
+  "audio_uploaded": false,
+  "engine": "streaming-production",
+  "model_id": "csukuangfj/sherpa-onnx-streaming-paraformer-zh@2a7f71bb58885c1b522ed4e683abd397355d9fc4",
+  "conversion": "Android ICU Simplified-Traditional",
+  "release": {
+    "apk_sha256": "b9cede23fc918c2d1a76c3ce3ef5f72a3a1680716ef0c6b6b58c038997f56079",
+    "certificate_sha256": "503f865843464347cb2d2f90be3ab4dbf68bae690443bf8fd262e0dcc0b58ee1"
+  },
+  "input_binding": {
+    "algorithm": "sha256",
+    "canonicalization": "recursive_sorted_json_keys",
+    "sha256": "ad741d7c9c81a039295d98cf730e5c79032004a801cf747b57643f1d5fc063dc",
+    "includes_random_capture_ids": true
+  },
+  "privacy": {
+    "audio_retained": false,
+    "audio_uploaded": false,
+    "raw_device_fingerprint_retained": false,
+    "capture_ids_retained": false,
+    "reference_text_retained": false,
+    "hypothesis_text_retained": false,
+    "per_item_text_hashes_retained": false
+  },
+  "limits": {
+    "minimum_items": 10,
+    "minimum_normalized_reference_characters": 6,
+    "maximum_converted_mean_cer": 0.2,
+    "maximum_converted_p90_cer": 0.35,
+    "maximum_code_switch_converted_mean_cer": 0.3,
+    "required_tags": [
+      "code-switch",
+      "disfluent-corrected",
+      "fast",
+      "noisy",
+      "normal-pace",
+      "numeric",
+      "proper-name",
+      "quiet",
+      "taiwan-local"
+    ],
+    "empty_items": 0,
+    "truncated_items": 0,
+    "signal_quality_warning_items": 0
+  },
+  "metrics": {
+    "items": 10,
+    "converted_mean_cer": 0.13292244424811311,
+    "converted_p90_cer": 0.2413793103448276,
+    "code_switch_converted_mean_cer": 0.28197997775305894,
+    "empty_items": 0,
+    "truncated_items": 0,
+    "signal_quality_warning_items": 0
+  },
+  "gates": {
+    "passed": true,
+    "failures": []
+  },
+  "items": [
+    {
+      "id": "speaker-01",
+      "tags": [
+        "normal-pace",
+        "quiet"
+      ],
+      "normalized_reference_characters": 16,
+      "normalized_hypothesis_characters": 16,
+      "converted_cer": 0.0,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-02",
+      "tags": [
+        "noisy",
+        "normal-pace"
+      ],
+      "normalized_reference_characters": 16,
+      "normalized_hypothesis_characters": 16,
+      "converted_cer": 0.0625,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-03",
+      "tags": [
+        "fast"
+      ],
+      "normalized_reference_characters": 19,
+      "normalized_hypothesis_characters": 18,
+      "converted_cer": 0.21052631578947367,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-04",
+      "tags": [
+        "disfluent-corrected"
+      ],
+      "normalized_reference_characters": 19,
+      "normalized_hypothesis_characters": 18,
+      "converted_cer": 0.15789473684210525,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-05",
+      "tags": [
+        "taiwan-local"
+      ],
+      "normalized_reference_characters": 15,
+      "normalized_hypothesis_characters": 15,
+      "converted_cer": 0.06666666666666667,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-06",
+      "tags": [
+        "numeric"
+      ],
+      "normalized_reference_characters": 22,
+      "normalized_hypothesis_characters": 22,
+      "converted_cer": 0.045454545454545456,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-07",
+      "tags": [
+        "proper-name"
+      ],
+      "normalized_reference_characters": 18,
+      "normalized_hypothesis_characters": 18,
+      "converted_cer": 0.1111111111111111,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-08",
+      "tags": [
+        "code-switch"
+      ],
+      "normalized_reference_characters": 29,
+      "normalized_hypothesis_characters": 25,
+      "converted_cer": 0.2413793103448276,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-09",
+      "tags": [
+        "noisy",
+        "taiwan-local"
+      ],
+      "normalized_reference_characters": 18,
+      "normalized_hypothesis_characters": 18,
+      "converted_cer": 0.1111111111111111,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    },
+    {
+      "id": "speaker-10",
+      "tags": [
+        "code-switch",
+        "fast",
+        "numeric",
+        "proper-name"
+      ],
+      "normalized_reference_characters": 31,
+      "normalized_hypothesis_characters": 27,
+      "converted_cer": 0.3225806451612903,
+      "empty": false,
+      "truncated": false,
+      "quality_issue": null
+    }
+  ]
+}

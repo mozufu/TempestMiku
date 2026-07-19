@@ -1,0 +1,107 @@
+{
+  "schema": "tempestmiku.p6-6.host-eval.v1",
+  "date": "2026-07-18",
+  "status": "host_only_not_p6_6_acceptance",
+  "host": {
+    "os": "macOS 26.5",
+    "architecture": "arm64",
+    "peak_rss_bytes": 537362432
+  },
+  "runtime": {
+    "name": "sherpa_onnx",
+    "version": "1.13.4",
+    "provider": "cpu",
+    "threads": 2,
+    "chunk_seconds": 0.1,
+    "tail_padding_seconds": 1.0,
+    "load_seconds": 0.642163832904771
+  },
+  "model": {
+    "id": "csukuangfj/sherpa-onnx-streaming-paraformer-zh@2a7f71bb58885c1b522ed4e683abd397355d9fc4",
+    "license": "Apache-2.0",
+    "total_bytes": 237202501,
+    "files": [
+      {
+        "name": "encoder.int8.onnx",
+        "bytes": 165462184,
+        "sha256": "81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a"
+      },
+      {
+        "name": "decoder.int8.onnx",
+        "bytes": 71664561,
+        "sha256": "f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f"
+      },
+      {
+        "name": "tokens.txt",
+        "bytes": 75756,
+        "sha256": "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6"
+      }
+    ]
+  },
+  "corpus": {
+    "kind": "synthetic_tts",
+    "language": "zh-TW",
+    "items": 50,
+    "completed_items": 50,
+    "empty_outputs": 0,
+    "long_runs_at_least_59_seconds": 3,
+    "long_runs_completed": 3,
+    "long_runs_with_empty_output": 0,
+    "long_runs_with_wholesale_truncation": 0,
+    "long_run_truncation_definition": "the full input and one-second tail reached input_finished, output was non-empty, and manual review confirmed all repeated source sections were represented; ordinary character deletions remain counted in CER",
+    "long_run_results": [
+      {
+        "id": "zh-tw-synth-048-daily",
+        "duration_seconds": 59.5094375,
+        "decode_steps": 100,
+        "converted_cer": 0.0603448275862069,
+        "nonempty": true,
+        "input_finished": true,
+        "wholesale_truncation": false
+      },
+      {
+        "id": "zh-tw-synth-049-engineering",
+        "duration_seconds": 59.5114375,
+        "decode_steps": 100,
+        "converted_cer": 0.20563847429519072,
+        "nonempty": true,
+        "input_finished": true,
+        "wholesale_truncation": false
+      },
+      {
+        "id": "zh-tw-synth-050-companion",
+        "duration_seconds": 59.501,
+        "decode_steps": 100,
+        "converted_cer": 0.022408963585434174,
+        "nonempty": true,
+        "input_finished": true,
+        "wholesale_truncation": false
+      }
+    ],
+    "manifest_sha256": "1774b69db07994ac13aea3ee487dd60f889f3ecbeaba7a0f93e32abb37de3d79",
+    "traditional_conversion": "OpenCC s2twp host diagnostic; not equivalent to Android ICU Simplified-Traditional"
+  },
+  "metrics": {
+    "mean_raw_cer": 0.3024717444603801,
+    "mean_converted_cer": 0.08553634250414963,
+    "max_converted_cer": 0.5,
+    "max_inference_seconds": 2.3997396669583395,
+    "max_rtf": 0.055796794500060046,
+    "category_mean_converted_cer": {
+      "code-switch": 0.19985674948832843,
+      "companion": 0.04618665648077413,
+      "conversation": 0.0349002849002849,
+      "daily": 0.03891269388918292,
+      "engineering": 0.20563847429519072,
+      "numbers": 0.0326140873015873,
+      "taiwan-local": 0.09895104895104895
+    }
+  },
+  "limitations": [
+    "This is a macOS host reproduction of the production streaming configuration, not an Android measurement.",
+    "OpenCC s2twp is a host diagnostic and is not claimed to reproduce Android ICU phrase conversion exactly; the converted CER gate must be rerun on Android.",
+    "The corpus is deterministic synthetic TTS and does not establish accuracy for real speakers, microphones, accents, noise, or disfluencies.",
+    "Peak RSS is a macOS process value and cannot close the Android memory or thermal gates.",
+    "Real-speaker collection requires explicit user consent and remains unperformed."
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "consent": {
+    "recordingExplicitlyConsented": false,
+    "exactReferencesCaptured": false,
+    "audioUploaded": false,
+    "audioRetained": false
+  },
+  "device": {
+    "fingerprint": "REPLACE_WITH_ADB_BUILD_FINGERPRINT",
+    "apkSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "certificateSha256": "503f865843464347cb2d2f90be3ab4dbf68bae690443bf8fd262e0dcc0b58ee1"
+  },
+  "engine": "streaming-production",
+  "modelId": "csukuangfj/sherpa-onnx-streaming-paraformer-zh@2a7f71bb58885c1b522ed4e683abd397355d9fc4",
+  "conversion": "Android ICU Simplified-Traditional",
+  "items": [
+    {
+      "id": "speaker-01",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_01",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["quiet", "normal-pace"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-02",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_02",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["noisy"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-03",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_03",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["fast"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-04",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_04",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["disfluent-corrected"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-05",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_05",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["taiwan-local"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-06",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_06",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["numeric"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-07",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_07",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["proper-name"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-08",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_08",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["code-switch"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-09",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_09",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["normal-pace", "proper-name"],
+      "truncated": false,
+      "qualityIssue": null
+    },
+    {
+      "id": "speaker-10",
+      "captureId": "REPLACE_WITH_RANDOM_UUID_V4_10",
+      "reference": "REPLACE_WITH_EXACT_CONSENTED_SENTENCE",
+      "hypothesis": "",
+      "tags": ["noisy", "numeric", "code-switch"],
+      "truncated": false,
+      "qualityIssue": null
+    }
+  ]
+}

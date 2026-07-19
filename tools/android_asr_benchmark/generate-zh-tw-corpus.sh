@@ -30,6 +30,8 @@ mkdir -p "$CORPUS_DIR"
 rm -f "$CORPUS_DIR"/zh-tw-synth-*.wav "$CORPUS_DIR"/zh-tw-synth-*.txt
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/tm-zh-tw-corpus.XXXXXX")"
 trap 'rm -rf "$temporary"' EXIT
+cases_json="$temporary/cases.json"
+printf '[]\n' >"$cases_json"
 
 item_count=0
 long_count=0
@@ -73,6 +75,34 @@ while IFS=$'\t' read -r id length category repeats transcript; do
   fi
   printf '%s\n' "$utterance" >"$reference"
 
+  audio_bytes="$(wc -c <"$output" | tr -d '[:space:]')"
+  audio_sha256="$(shasum -a 256 "$output" | awk '{print $1}')"
+  reference_bytes="$(wc -c <"$reference" | tr -d '[:space:]')"
+  reference_sha256="$(shasum -a 256 "$reference" | awk '{print $1}')"
+
+  case_json="$temporary/cases.next.json"
+  jq \
+    --arg file "$(basename "$output")" \
+    --arg reference "$(basename "$reference")" \
+    --arg category "$category" \
+    --argjson long "$([[ "$length" == "long" ]] && echo true || echo false)" \
+    --argjson audio_bytes "$audio_bytes" \
+    --arg audio_sha256 "$audio_sha256" \
+    --argjson reference_bytes "$reference_bytes" \
+    --arg reference_sha256 "$reference_sha256" \
+    '. + [{
+      file: $file,
+      reference: $reference,
+      category: $category,
+      long: $long,
+      audioBytes: $audio_bytes,
+      audioSha256: $audio_sha256,
+      referenceBytes: $reference_bytes,
+      referenceSha256: $reference_sha256
+    }]' \
+    "$cases_json" >"$case_json"
+  mv "$case_json" "$cases_json"
+
   duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$output")"
   if [[ "$length" == "long" ]]; then
     awk -v duration="$duration" 'BEGIN { exit !(duration >= 59 && duration <= 60) }' || {
@@ -104,8 +134,9 @@ jq -n \
   --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg voice "$VOICE" \
   --argjson rate "$RATE" \
+  --slurpfile cases "$cases_json" \
   '{
-    schema: 1,
+    schema: 3,
     id: "zh-tw-meijia-synthetic-v1",
     kind: "synthetic_tts",
     locale: "zh_TW",
@@ -118,6 +149,7 @@ jq -n \
     items: 50,
     longItems: 3,
     targetLongDurationSeconds: 59.5,
+    cases: $cases[0],
     limitations: [
       "Synthetic TTS is a deterministic performance and orthography probe, not human-speech accuracy evidence.",
       "It does not cover microphones, environmental noise, spontaneous speech, disfluencies, or speaker diversity.",

@@ -249,7 +249,6 @@ in
         PrivateTmp = true;
         ProtectClock = true;
         ProtectHome = true;
-        ProtectHostname = true;
         ProtectKernelModules = true;
         ProtectSystem = "strict";
         ReadWritePaths = [ cfg.stateRoot ];

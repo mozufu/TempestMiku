@@ -1,0 +1,13 @@
+title = "TempestMiku secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deterministic public test material misclassified as a generic API key"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = [
+  '''^xS03Fi5ErfTNH_l9WHE9Ig$''',
+  '''^f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc$''',
+]

@@ -227,8 +227,8 @@ in
         "tailscaled.service"
       ];
       wants = [ "tailscaled.service" ];
+      path = [ cfg.isolationRuntime ];
       environment = {
-        PATH = "${cfg.isolationRuntime}/bin";
         TM_WORKER_CONFIG = workerConfig;
       };
       serviceConfig = {

@@ -43,6 +43,9 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
   x86_64 NixOS target, persistent `~/deployment-config` service, exact systemd/cgroup delegation, representative
   memory/pids/CPU sizing, retained live report, and post-switch restart proof under the accepted
   hostile-workload/trusted-host-kernel boundary.
+- **[M4 coordinator/worker deployment evidence](evidence/2026-07-19-m4-coordinator-worker.md)** — one
+  authoritative lumo coordinator, one signed durable homolab worker, lumo-owned approval transport,
+  idempotent live jobs, fail-no-fallback proof, and the final NixOS namespace compatibility boundary.
 - **[P8.1 recall baseline evidence](evidence/2026-07-15-p8-1-recall-baseline.md)** — frozen
   lexical/profile metrics, fixtures, acceptance policy, and versioned record/provenance contracts.
 - **[P8.2 durable memory evidence](evidence/2026-07-15-p8-2-durable-memory-spine.md)** — ordered

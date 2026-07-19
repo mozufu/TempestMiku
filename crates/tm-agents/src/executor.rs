@@ -53,9 +53,18 @@ pub async fn run_to_digest_with_budget(
     spec.validate_text_limits()
         .map_err(ActorError::InvalidSpec)?;
     let timeout = Duration::from_millis(spec.budget.wall_ms);
+    let deadline = tokio::time::Instant::now() + timeout;
     let cancellation = spec.cancellation.clone();
-    match tokio::time::timeout(timeout, executor.run_to_digest(spec)).await {
+    match tokio::time::timeout_at(deadline, executor.run_to_digest(spec)).await {
         Ok(Ok(mut digest)) => {
+            // `tokio::time::timeout` polls the inner future before checking the
+            // timer. If a busy runtime wakes both after the deadline, a late
+            // actor can therefore appear successful unless completion is
+            // fenced against the same absolute deadline here.
+            if tokio::time::Instant::now() >= deadline {
+                cancellation.cancel();
+                return Err(ActorError::Timeout);
+            }
             digest.enforce_text_limits();
             Ok(digest)
         }

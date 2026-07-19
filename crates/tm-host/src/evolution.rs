@@ -20,7 +20,7 @@ pub enum SelfEvolutionTier {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SelfEvolutionConfig {
     #[serde(default)]
     pub tier: SelfEvolutionTier,

@@ -79,14 +79,15 @@ evidenceTest('real Flutter UI remote-control flow records user-visible evidence'
     const approval = await waitForPendingApproval(page, sessionId);
     await waitForApprovalPaint(page);
     await page.screenshot({ path: path.join(uiDir, 'ui-approval-visible.png'), fullPage: true });
-    const approvalResponse = await page.request.post(
-      `/sessions/${sessionId}/approvals/${approval.approvalId}`,
-      { data: { decision: 'approve' } },
-    );
-    expect(approvalResponse.ok()).toBeTruthy();
+    await resolveApprovalThroughUi(page, approval.approvalId);
 
     await waitForAssistantFinal(page, sessionId, 'artifact://0');
     await page.screenshot({ path: path.join(uiDir, 'ui-final-visible.png'), fullPage: true });
+
+    await openArtifactThroughUi(page);
+    await page.screenshot({ path: path.join(uiDir, 'ui-resource-visible.png'), fullPage: true });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(350);
 
     const artifactPreview = await page.request.get(
       `/sessions/${sessionId}/resources/preview?uri=${encodeURIComponent('artifact://0')}`,
@@ -95,18 +96,13 @@ evidenceTest('real Flutter UI remote-control flow records user-visible evidence'
     const artifactJson = await artifactPreview.json();
     expect(JSON.stringify(artifactJson)).toContain('child smoke artifact');
 
-    const promote = await page.request.post(`/sessions/${sessionId}/promote`, {
-      data: {
-        summary: 'UI evidence promoted the actor artifact.',
-        openLoops: ['keep the UI recording evidence covered'],
-        decisions: ['use tm-e2e record suite as the UI evidence gate'],
-        resources: ['artifact://0'],
-      },
-    });
-    expect(promote.ok()).toBeTruthy();
-    const project = await page.request.get(`/sessions/${sessionId}/project`);
-    expect(project.ok()).toBeTruthy();
-    expect(JSON.stringify(await project.json())).toContain('project://tempestmiku');
+    await promoteSessionThroughUi(page, networkRecords);
+    await pollJson(async () => {
+      const project = await page.request.get(`/sessions/${sessionId}/project`);
+      expect(project.ok()).toBeTruthy();
+      const json = await project.json();
+      return JSON.stringify(json).includes('artifact://0') ? json : null;
+    }, 30_000);
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitForEventResume(networkRecords, sessionId);
@@ -121,6 +117,9 @@ evidenceTest('real Flutter UI remote-control flow records user-visible evidence'
         {
           ok: true,
           sessionId,
+          approvalResolvedViaUi: true,
+          resourceOpenedViaUi: true,
+          promotionTriggeredViaUi: true,
           screenshotPath,
           consolePath,
           networkPath,
@@ -164,9 +163,14 @@ async function sendPrompt(page: Page, prompt: string) {
 
 async function enableFlutterAccessibility(page: Page) {
   const button = page.getByRole('button', { name: 'Enable accessibility' });
-  if ((await button.count()) === 0) return;
-  await button.click({ force: true, timeout: 5_000 }).catch(() => {});
-  await page.waitForTimeout(250);
+  await button.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {});
+  if ((await button.count()) > 0 && (await button.isVisible().catch(() => false))) {
+    await page.evaluate(() => {
+      (document.querySelector('flt-semantics-placeholder') as HTMLElement | null)?.click();
+    });
+  }
+  const menu = page.getByRole('button', { name: /Open menu|開啟選單/i });
+  await expect(menu).toBeVisible({ timeout: 30_000 });
 }
 
 async function clickComposer(page: Page) {
@@ -183,7 +187,7 @@ async function clickComposer(page: Page) {
 async function clickSubmit(page: Page) {
   const submit = page.getByRole('button', { name: /submit|send|送出/i }).last();
   if ((await submit.count()) > 0 && (await submit.isVisible().catch(() => false))) {
-    await submit.click({ timeout: 5_000 });
+    await submit.evaluate((element: HTMLElement) => element.click());
     return;
   }
   const viewport = page.viewportSize();
@@ -220,6 +224,61 @@ async function setHandoffMode(page: Page, sessionId: string) {
 
 async function waitForApprovalPaint(page: Page) {
   await page.waitForTimeout(1_000);
+}
+
+async function resolveApprovalThroughUi(page: Page, approvalId: string) {
+  const card = page.getByRole('button', {
+    name: /Pending approval: proc\.run cargo clean|待核可：proc\.run cargo clean/i,
+  });
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await card.click();
+  const approve = page.getByRole('button', { name: /Approve once|核可一次/i }).last();
+  await expect(approve).toBeVisible({ timeout: 10_000 });
+  await approve.click();
+  await pollJson(async () => {
+    const response = await page.request.get(`/sessions/${await currentSessionId(page)}/messages`);
+    expect(response.ok()).toBeTruthy();
+    const json = await response.json();
+    const stillPending = (json.pendingEvents ?? []).some(
+      (item: any) => item.type === 'approval' && item.data?.approvalId === approvalId,
+    );
+    return stillPending ? null : true;
+  }, 15_000);
+}
+
+async function openArtifactThroughUi(page: Page) {
+  const resource = page.getByRole('button', {
+    name: /Open resource artifact:\/\/0|開啟資源 artifact:\/\/0/i,
+  }).first();
+  await expect(resource).toBeVisible({ timeout: 15_000 });
+  await resource.click();
+  await expect(page.getByText(/child smoke artifact/i).first()).toBeVisible({ timeout: 10_000 });
+}
+
+async function promoteSessionThroughUi(page: Page, networkRecords: unknown[]) {
+  const menu = page.getByRole('button', { name: /Open menu|開啟選單/i });
+  await expect(menu).toBeVisible({ timeout: 10_000 });
+  await menu.click();
+  const contextTab = page.getByRole('tab', { name: /Context|情境/i });
+  await expect(contextTab).toBeVisible({ timeout: 10_000 });
+  await contextTab.click();
+  const promote = page.getByRole('button', { name: /Promote Session|推廣 Session/i }).last();
+  await expect(promote).toBeVisible({ timeout: 10_000 });
+  await promote.click();
+  await pollJson(async () => {
+    const response = networkRecords.find(
+      (record: any) => record.kind === 'response' && `${record.url}`.endsWith('/promote'),
+    ) as any;
+    if (!response) return null;
+    expect(response.status).toBe(200);
+    return true;
+  }, 15_000);
+}
+
+async function currentSessionId(page: Page) {
+  const sessionId = await page.evaluate(() => window.localStorage.getItem('tempestmiku.sessionId'));
+  if (!sessionId) throw new Error('session id disappeared while resolving approval');
+  return sessionId;
 }
 
 type PendingApproval = {

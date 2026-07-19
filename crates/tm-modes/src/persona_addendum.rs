@@ -109,6 +109,8 @@ fn canonicalize_json(value: &mut serde_json::Value) {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ActivePointer {
     active_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rollback_from_digest: Option<String>,
 }
 
 pub(crate) fn install(
@@ -129,12 +131,6 @@ pub(crate) fn install(
     let _lock = lock_persona(&persona_root)?;
     let previous_digest =
         read_active_pointer_optional(&persona_root)?.and_then(|pointer| pointer.active_digest);
-    if previous_digest != install.expected_active_digest {
-        return Err(ManagedPersonaAddendumError::new(format!(
-            "managed persona addendum {} active version changed from {:?} to {:?}",
-            install.persona_id, install.expected_active_digest, previous_digest
-        )));
-    }
     let version = ManagedPersonaAddendumVersion {
         version: MANAGED_PERSONA_ADDENDUM_VERSION,
         persona_id: install.persona_id,
@@ -145,9 +141,28 @@ pub(crate) fn install(
         changes: install.changes,
     };
     validate_version(&version)?;
+    if previous_digest.as_deref() == Some(version.content_digest.as_str()) {
+        let existing = read_version(&persona_root, &version.content_digest)?;
+        if existing != version {
+            return Err(ManagedPersonaAddendumError::new(format!(
+                "managed persona addendum {} is already active with different content or provenance",
+                version.persona_id
+            )));
+        }
+        return Ok(ManagedPersonaAddendumActivation {
+            active: Some(existing),
+            previous_digest: install.expected_active_digest,
+        });
+    }
+    if previous_digest != install.expected_active_digest {
+        return Err(ManagedPersonaAddendumError::new(format!(
+            "managed persona addendum {} active version changed from {:?} to {:?}",
+            version.persona_id, install.expected_active_digest, previous_digest
+        )));
+    }
     let version_root = versions_root.join(digest_component(&version.content_digest)?);
     install_immutable_version(&versions_root, &version_root, &version)?;
-    write_active_pointer(&persona_root, Some(&version.content_digest))?;
+    write_active_pointer(&persona_root, Some(&version.content_digest), None)?;
     Ok(ManagedPersonaAddendumActivation {
         active: Some(version),
         previous_digest,
@@ -173,6 +188,17 @@ pub(crate) fn rollback(
             "managed persona addendum {persona_id} has no active pointer"
         ))
     })?;
+    if pointer.active_digest.as_deref() == target_digest
+        && pointer.rollback_from_digest.as_deref() == Some(expected_active_digest)
+    {
+        let active = target_digest
+            .map(|digest| read_version(&persona_root, digest))
+            .transpose()?;
+        return Ok(ManagedPersonaAddendumActivation {
+            active,
+            previous_digest: Some(expected_active_digest.to_string()),
+        });
+    }
     if pointer.active_digest.as_deref() != Some(expected_active_digest) {
         return Err(ManagedPersonaAddendumError::new(format!(
             "managed persona addendum {persona_id} active version changed from {expected_active_digest} to {:?}",
@@ -182,7 +208,7 @@ pub(crate) fn rollback(
     let active = target_digest
         .map(|digest| read_version(&persona_root, digest))
         .transpose()?;
-    write_active_pointer(&persona_root, target_digest)?;
+    write_active_pointer(&persona_root, target_digest, Some(expected_active_digest))?;
     Ok(ManagedPersonaAddendumActivation {
         active,
         previous_digest: Some(expected_active_digest.to_string()),
@@ -274,9 +300,11 @@ fn install_immutable_version(
 fn write_active_pointer(
     persona_root: &Path,
     active_digest: Option<&str>,
+    rollback_from_digest: Option<&str>,
 ) -> Result<(), ManagedPersonaAddendumError> {
     let bytes = serde_json::to_vec_pretty(&ActivePointer {
         active_digest: active_digest.map(str::to_string),
+        rollback_from_digest: rollback_from_digest.map(str::to_string),
     })
     .map_err(|error| ManagedPersonaAddendumError::new(error.to_string()))?;
     let path = persona_root.join("active.json");
@@ -309,6 +337,9 @@ fn read_active_pointer_optional(
         ManagedPersonaAddendumError::new(format!("invalid {}: {error}", path.display()))
     })?;
     if let Some(digest) = &pointer.active_digest {
+        validate_digest(digest)?;
+    }
+    if let Some(digest) = &pointer.rollback_from_digest {
         validate_digest(digest)?;
     }
     Ok(Some(pointer))
@@ -678,5 +709,83 @@ mod tests {
                 .to_string()
                 .contains("immutable manifest digest mismatch")
         );
+    }
+
+    #[test]
+    fn install_and_rollback_retries_are_idempotent_but_divergent_provenance_is_stale() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = ModesConfig::default().with_managed_persona_addenda_path(temp.path());
+        let base_digest = raw_digest('7');
+        let first_changes = changes("Prefer one concrete next step.");
+        let content_digest =
+            persona_addendum_content_digest("miku", 1, &base_digest, &first_changes).unwrap();
+        let install = ManagedPersonaAddendumInstall {
+            persona_id: "miku".to_string(),
+            content_digest: content_digest.clone(),
+            base_version: 1,
+            base_digest,
+            source_proposal_id: "55555555-5555-5555-5555-555555555555".to_string(),
+            expected_active_digest: None,
+            changes: first_changes,
+        };
+        let first = config
+            .install_managed_persona_addendum(install.clone())
+            .unwrap();
+        let retry = config
+            .install_managed_persona_addendum(install.clone())
+            .unwrap();
+        assert_eq!(retry, first);
+
+        let mut divergent = install;
+        divergent.source_proposal_id = "66666666-6666-6666-6666-666666666666".to_string();
+        let error = config
+            .install_managed_persona_addendum(divergent)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("different content or provenance")
+        );
+
+        let second_base_digest = raw_digest('9');
+        let second_changes = changes("Keep the conclusion bounded by evidence.");
+        let second_digest =
+            persona_addendum_content_digest("miku", 1, &second_base_digest, &second_changes)
+                .unwrap();
+        config
+            .install_managed_persona_addendum(ManagedPersonaAddendumInstall {
+                persona_id: "miku".to_string(),
+                content_digest: second_digest.clone(),
+                base_version: 1,
+                base_digest: second_base_digest,
+                source_proposal_id: "77777777-7777-7777-7777-777777777777".to_string(),
+                expected_active_digest: Some(content_digest.clone()),
+                changes: second_changes,
+            })
+            .unwrap();
+        let first_rollback = config
+            .rollback_managed_persona_addendum("miku", &second_digest, Some(&content_digest))
+            .unwrap();
+        let retry_rollback = config
+            .rollback_managed_persona_addendum("miku", &second_digest, Some(&content_digest))
+            .unwrap();
+        assert_eq!(retry_rollback, first_rollback);
+        let error = config
+            .rollback_managed_persona_addendum("miku", &raw_digest('8'), Some(&content_digest))
+            .unwrap_err();
+        assert!(error.to_string().contains("active version changed"));
+
+        let first_rollback = config
+            .rollback_managed_persona_addendum("miku", &content_digest, None)
+            .unwrap();
+        let retry_rollback = config
+            .rollback_managed_persona_addendum("miku", &content_digest, None)
+            .unwrap();
+        assert_eq!(retry_rollback, first_rollback);
+
+        let error = config
+            .rollback_managed_persona_addendum("miku", &raw_digest('6'), None)
+            .unwrap_err();
+        assert!(error.to_string().contains("active version changed"));
     }
 }

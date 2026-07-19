@@ -14,6 +14,10 @@ class _OverflowContent extends StatefulWidget {
     required this.onThemeModeChanged,
     required this.onLanguageToggle,
     required this.onModeSettings,
+    required this.voiceModelStatus,
+    required this.voiceAsrSummary,
+    required this.onVoiceAsr,
+    required this.onVoiceModel,
     this.onServerTarget,
     this.onDisconnect,
   });
@@ -27,6 +31,10 @@ class _OverflowContent extends StatefulWidget {
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final VoidCallback onLanguageToggle;
   final VoidCallback onModeSettings;
+  final LocalAsrModelStatus? voiceModelStatus;
+  final String voiceAsrSummary;
+  final VoidCallback onVoiceAsr;
+  final VoidCallback onVoiceModel;
   final VoidCallback? onServerTarget;
   final VoidCallback? onDisconnect;
 
@@ -161,6 +169,18 @@ class _OverflowContentState extends State<_OverflowContent> {
           const SizedBox(height: 8),
           _ActionRow(
             tok: tok,
+            icon: Icons.settings_voice_outlined,
+            label: copy.pick('Voice recognition', '語音辨識方式'),
+            supportingText: widget.voiceAsrSummary,
+            semanticLabel: copy.pick(
+              'Choose voice recognition engine. ${widget.voiceAsrSummary}',
+              '選擇語音辨識引擎。${widget.voiceAsrSummary}',
+            ),
+            onTap: widget.onVoiceAsr,
+          ),
+          const SizedBox(height: 8),
+          _ActionRow(
+            tok: tok,
             icon: Icons.refresh_rounded,
             label: copy.refreshProject,
             onTap: widget.onRefresh,
@@ -189,6 +209,28 @@ class _OverflowContentState extends State<_OverflowContent> {
               '進階 runtime 路由',
             ),
             onTap: widget.onModeSettings,
+          ),
+          const SizedBox(height: 8),
+          _ActionRow(
+            tok: tok,
+            icon: Icons.graphic_eq_rounded,
+            label: copy.pick('On-device voice model', '裝置端語音模型'),
+            supportingText: switch (widget.voiceModelStatus?.state) {
+              LocalAsrModelState.ready => copy.pick(
+                'Installed and verified',
+                '已安裝並驗證',
+              ),
+              LocalAsrModelState.corrupt => copy.pick(
+                'Corrupt — disabled',
+                '檔案毀損，已停用',
+              ),
+              LocalAsrModelState.unsupported => copy.pick('Unsupported', '不支援'),
+              _ => copy.pick(
+                'Not installed · explicit download only',
+                '尚未安裝 · 僅限明確下載',
+              ),
+            },
+            onTap: widget.onVoiceModel,
           ),
           if (widget.onServerTarget != null || widget.onDisconnect != null) ...[
             const SizedBox(height: 24),

@@ -251,6 +251,9 @@ class EvolutionReviewProposal {
     required this.preview,
     required this.resourceUri,
     required this.applyEnabled,
+    this.source = '',
+    this.candidateTrigger = '',
+    this.evidenceCount,
   });
 
   final String proposalId;
@@ -260,6 +263,11 @@ class EvolutionReviewProposal {
   final String preview;
   final String resourceUri;
   final bool applyEnabled;
+  final String source;
+  final String candidateTrigger;
+  final int? evidenceCount;
+
+  bool get isAutoCandidate => source == 'auto_mode';
 
   static EvolutionReviewProposal? fromEvent(Map<String, Object?> data) {
     if (_stringValue(data['kind']) != 'evolution_review') return null;
@@ -281,6 +289,9 @@ class EvolutionReviewProposal {
       preview: _stringValue(data['preview']),
       resourceUri: _stringValue(data['uri']),
       applyEnabled: data['applyEnabled'] == true,
+      source: _stringValue(data['source']),
+      candidateTrigger: _stringValue(data['candidateTrigger']),
+      evidenceCount: _intValue(data['evidenceCount']),
     );
   }
 }

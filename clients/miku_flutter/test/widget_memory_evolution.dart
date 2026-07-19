@@ -19,6 +19,27 @@ void _registerEvolutionReviewTests() {
     expect(proposal.resourceUri, startsWith('memory://review-proposals/'));
   });
 
+  test('parses bounded auto persona candidate provenance', () {
+    final proposal = EvolutionReviewProposal.fromEvent(const {
+      'kind': 'evolution_review',
+      'proposalId': 'proposal-auto',
+      'target': {'kind': 'persona', 'personaId': 'miku'},
+      'status': 'pending',
+      'preview': 'Concise routine replies.',
+      'uri': 'memory://review-proposals/proposal-auto',
+      'applyEnabled': true,
+      'source': 'auto_mode',
+      'candidateTrigger': 'repeated_preference',
+      'evidenceCount': 2,
+    });
+    expect(proposal, isNotNull);
+    expect(proposal!.isAutoCandidate, isTrue);
+    expect(proposal.targetKind, 'persona');
+    expect(proposal.targetId, 'miku');
+    expect(proposal.candidateTrigger, 'repeated_preference');
+    expect(proposal.evidenceCount, 2);
+  });
+
   testWidgets('renders server-owned moderate review lifecycle and approval', (
     WidgetTester tester,
   ) async {
@@ -114,6 +135,47 @@ void _registerEvolutionReviewTests() {
     await tester.tap(find.text('Apply mode addendum'));
     await tester.pump();
     expect(client.resolvedApprovals, contains('approval-review:approve'));
+  });
+
+  testWidgets('renders auto persona evidence without implying auto apply', (
+    WidgetTester tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(MikuApp(client: client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    const sessionId = 'scripted-0';
+    client.emitEvent(
+      sessionId,
+      const MikuEvent(
+        type: 'write_proposal',
+        id: 'persona-auto-1',
+        data: {
+          'kind': 'evolution_review',
+          'proposalId': 'proposal-auto',
+          'target': {'kind': 'persona', 'personaId': 'miku'},
+          'status': 'pending',
+          'preview': 'Concise routine replies.',
+          'uri': 'memory://review-proposals/proposal-auto',
+          'applyEnabled': true,
+          'source': 'auto_mode',
+          'candidateTrigger': 'repeated_preference',
+          'evidenceCount': 2,
+        },
+      ),
+    );
+    await tester.pump();
+
+    await _openActivitySheet(tester);
+    expect(find.textContaining('persona addendum · miku · pending'), findsWidgets);
+    expect(
+      find.textContaining('Auto proposal · repeated preference · 2 evidence records'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Apply enabled'), findsOneWidget);
+    expect(find.textContaining('auto applied'), findsNothing);
+    await _closeActivitySheet(tester);
   });
 }
 

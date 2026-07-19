@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'session_models.dart';
 
@@ -37,6 +38,47 @@ class ScriptedMikuClient implements MikuSessionClient {
   int _nextId = 0;
   int _nextEventId = 1;
   String? _currentId;
+
+  @override
+  Future<VoiceAsrEngineCatalog> voiceAsrEngines() async =>
+      VoiceAsrEngineCatalog.fromJson({
+        'engines': const [
+          {
+            'id': localVoiceAsrEngineId,
+            'kind': 'local',
+            'label': 'On-device',
+            'available': true,
+            'maxDurationSeconds': 60,
+          },
+          {
+            'id': selfHostedVoiceAsrEngineId,
+            'kind': 'remote',
+            'label': 'Home remote (self-hosted)',
+            'available': false,
+            'modelId': 'not-configured',
+            'maxDurationSeconds': 60,
+          },
+        ],
+      });
+
+  @override
+  Future<VoiceAsrTranscript> transcribeVoicePcm16({
+    required String engineId,
+    required String captureId,
+    required int sampleRate,
+    required Uint8List pcm16,
+  }) async {
+    validateVoiceAsrPcm16Request(
+      engineId: engineId,
+      captureId: captureId,
+      sampleRate: sampleRate,
+      pcm16: pcm16,
+    );
+    throw UnsupportedError('self-hosted voice ASR is not configured');
+  }
+
+  @override
+  Future<void> cancelVoiceAsrTranscription() async {}
 
   @override
   Future<ModeCatalog> modeCatalog() async => _scriptedModeCatalog;

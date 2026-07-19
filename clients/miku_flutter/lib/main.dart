@@ -8,10 +8,13 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ratex_formula.dart';
+import 'asr/local_asr_engine.dart';
+import 'asr/local_asr_model.dart';
 import 'notification_service.dart';
 import 'share_import_service.dart';
 import 'session_client.dart';
 import 'session_models.dart';
+import 'voice_capture_service.dart';
 
 part 'theme.dart';
 part 'theme_preferences.dart';
@@ -58,6 +61,8 @@ void main() {
       client: createDefaultClient(),
       notifications: createNotificationService(),
       shareImports: createShareImportService(),
+      voiceCapture: createVoiceCaptureService(),
+      localAsrModels: createLocalAsrModelManager(),
     ),
   );
 }

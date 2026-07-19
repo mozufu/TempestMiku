@@ -94,8 +94,15 @@ class _MikuComposer extends StatelessWidget {
     required this.isSending,
     required this.canSend,
     required this.sendError,
+    required this.voiceSupported,
+    required this.voiceEngineReady,
+    required this.voiceRecording,
+    required this.voiceProcessing,
     required this.onChanged,
     required this.onSend,
+    required this.onVoiceStart,
+    required this.onVoiceStop,
+    required this.onVoiceCancel,
   });
 
   final _Tok tok;
@@ -106,8 +113,15 @@ class _MikuComposer extends StatelessWidget {
   final bool isSending;
   final bool canSend;
   final String sendError;
+  final bool voiceSupported;
+  final bool voiceEngineReady;
+  final bool voiceRecording;
+  final bool voiceProcessing;
   final ValueChanged<String> onChanged;
   final VoidCallback onSend;
+  final VoidCallback onVoiceStart;
+  final VoidCallback onVoiceStop;
+  final VoidCallback onVoiceCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -191,6 +205,56 @@ class _MikuComposer extends StatelessWidget {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
+                        if (voiceSupported) ...[
+                          if (voiceRecording || voiceProcessing)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(6, 6, 0, 6),
+                              child: IconButton(
+                                key: const ValueKey('voiceCaptureCancel'),
+                                tooltip: copy.cancelVoice,
+                                onPressed: onVoiceCancel,
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(2, 6, 0, 6),
+                            child: IconButton(
+                              key: const ValueKey('voiceCaptureAction'),
+                              tooltip:
+                                  !voiceEngineReady
+                                      ? copy.voiceEngineUnavailable
+                                      : voiceRecording
+                                      ? copy.stopVoice
+                                      : voiceProcessing
+                                      ? copy.cancelVoice
+                                      : copy.recordVoice,
+                              onPressed:
+                                  voiceRecording
+                                      ? onVoiceStop
+                                      : voiceProcessing
+                                      ? null
+                                      : voiceEngineReady &&
+                                          !sessionEnded &&
+                                          !isSending
+                                      ? onVoiceStart
+                                      : null,
+                              color: voiceRecording ? tok.danger : tok.muted,
+                              icon:
+                                  voiceProcessing
+                                      ? const SizedBox.square(
+                                        dimension: 19,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                      : Icon(
+                                        voiceRecording
+                                            ? Icons.stop_circle_outlined
+                                            : Icons.mic_none_rounded,
+                                      ),
+                            ),
+                          ),
+                        ],
                         Expanded(
                           child: TextField(
                             controller: controller,

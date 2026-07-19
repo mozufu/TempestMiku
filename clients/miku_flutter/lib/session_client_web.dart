@@ -4,6 +4,7 @@ import 'dart:html';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_util' as js_util;
+import 'dart:typed_data';
 
 import 'session_models.dart';
 import 'session_sse.dart';
@@ -17,6 +18,63 @@ class _AmbiguousWebTransportFailure implements Exception {
 class WebMikuSessionClient implements MikuSessionClient {
   static const _sessionIdKey = 'tempestmiku.sessionId';
   static const _lastEventIdKey = 'tempestmiku.lastEventId';
+
+  @override
+  Future<VoiceAsrEngineCatalog> voiceAsrEngines() async {
+    final json = await _request('GET', '/voice/asr/engines');
+    return VoiceAsrEngineCatalog.fromJson(json);
+  }
+
+  @override
+  Future<VoiceAsrTranscript> transcribeVoicePcm16({
+    required String engineId,
+    required String captureId,
+    required int sampleRate,
+    required Uint8List pcm16,
+  }) async {
+    validateVoiceAsrPcm16Request(
+      engineId: engineId,
+      captureId: captureId,
+      sampleRate: sampleRate,
+      pcm16: pcm16,
+    );
+    late final HttpRequest response;
+    try {
+      response = await HttpRequest.request(
+        '/voice/asr/transcriptions',
+        method: 'POST',
+        requestHeaders: {
+          'content-type': 'application/octet-stream',
+          'accept': 'application/json',
+          'x-tm-asr-engine-id': engineId,
+          'x-tm-capture-id': captureId,
+          'x-tm-sample-rate': '$sampleRate',
+          'x-tm-channels': '$voiceAsrChannels',
+        },
+        sendData: pcm16,
+      );
+    } catch (_) {
+      throw const _AmbiguousWebTransportFailure();
+    }
+    final status = response.status ?? 0;
+    if (status == 0) throw const _AmbiguousWebTransportFailure();
+    if (status < 200 || status >= 300) {
+      throw StateError('request failed: $status ${response.responseText}');
+    }
+    final text = response.responseText;
+    if (text == null || text.isEmpty) {
+      throw const FormatException('voice ASR returned an empty response');
+    }
+    return VoiceAsrTranscript.fromJson(
+      (jsonDecode(text) as Map).cast<String, Object?>(),
+    );
+  }
+
+  @override
+  Future<void> cancelVoiceAsrTranscription() async {
+    // Browser voice capture is currently unsupported. Keep the shared client
+    // contract explicit without inventing a second web cancellation path.
+  }
 
   @override
   Future<ModeCatalog> modeCatalog() async {

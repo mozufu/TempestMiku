@@ -69,6 +69,7 @@ class _UiCopy {
   String get shareWithMiku => pick('Share with Miku', '分享給 Miku');
   String get askMikuAboutThis => pick('Ask Miku about this', '問問 Miku 這段內容');
   String get quickCapture => pick('Quick capture', '快速記錄');
+  String get voiceCapture => pick('Voice capture', '語音記錄');
   String get shareReviewHelper =>
       pick('Review and edit before anything is sent.', '送出前先確認並編輯內容。');
   String get shareTruncated => pick(
@@ -82,11 +83,102 @@ class _UiCopy {
   String get sharedContent => pick('Shared content', '分享內容');
   String get selectedText => pick('Selected text', '選取的文字');
   String get captureDraft => pick('Capture draft', '記錄草稿');
+  String get transcriptDraft => pick('Transcript draft', '轉錄草稿');
   String get sharedFromAndroid => pick('Shared from Android', '來自 Android 分享');
   String get selectedFromAndroid =>
       pick('Selected in another Android app', '從其他 Android 應用程式選取');
   String get quickCaptureFromAndroid =>
       pick('Opened from an Android shortcut or tile', '由 Android 捷徑或快速設定開啟');
+  String get voiceCapturedOnDevice =>
+      pick('Transcribed locally on this device', '已在此裝置本機轉錄');
+  String get voiceCapturedSelfHosted => pick(
+    'Transcribed by your fixed self-hosted home service',
+    '已由固定的家用自架服務轉錄',
+  );
+  String get recordVoice => pick('Record voice', '錄製語音');
+  String get stopVoice => pick('Stop and transcribe', '停止並轉錄');
+  String get cancelVoice => pick('Cancel voice capture', '取消語音記錄');
+  String get voiceEngineUnavailable =>
+      pick('The selected voice engine is unavailable', '目前選取的語音引擎無法使用');
+  String get voiceModelUnavailable =>
+      pick('On-device voice model is not installed', '尚未安裝裝置端語音模型');
+  String get voicePermissionDenied =>
+      pick('Microphone permission was not granted.', '未授予麥克風權限。');
+  String voiceCaptureFailed(Object error) =>
+      pick('Voice capture failed: $error', '語音記錄失敗：$error');
+  String get voiceTranscriptEmpty => pick(
+    'The selected engine returned an empty transcript.',
+    '目前選取的引擎沒有產生轉錄文字。',
+  );
+  String voiceCaptureQualityWarning(
+    VoiceCaptureQualityIssue issue,
+  ) => switch (issue) {
+    VoiceCaptureQualityIssue.tooShort => pick(
+      'The recording was very short. Check the draft or record it again.',
+      '錄音時間很短，請檢查草稿或重新錄製。',
+    ),
+    VoiceCaptureQualityIssue.tooQuiet => pick(
+      'The recording was nearly silent. Move closer to the microphone and try again.',
+      '收音幾乎沒有聲音，請靠近麥克風後重試。',
+    ),
+    VoiceCaptureQualityIssue.clipped => pick(
+      'The recording was clipped. Move slightly away from the microphone and try again.',
+      '收音有明顯爆音，請稍微遠離麥克風後重試。',
+    ),
+  };
+  String get voiceCaptureDiagnosticsTitle =>
+      pick('Recording diagnostics', '錄音診斷');
+  String voiceCaptureDiagnosticsPrivacy(
+    VoiceTranscriptProvenance provenance,
+  ) => switch (provenance) {
+    VoiceTranscriptProvenance.local => pick(
+      'Diagnostics contain aggregate measurements only. Audio uses app-private temporary storage during capture, is deleted during cleanup, and is never sent.',
+      '診斷僅包含彙總測量值。音訊只在錄音期間使用應用程式私有暫存，清理時會刪除，且絕不傳送。',
+    ),
+    VoiceTranscriptProvenance.selfHosted => pick(
+      'Diagnostics contain aggregate measurements only. This recording was sent through your paired TempestMiku server to the fixed home ASR service, then erased from the app during cleanup.',
+      '診斷僅包含彙總測量值。這段錄音已經由配對的 TempestMiku Server 傳到固定的家用 ASR 服務，並在清理時從應用程式抹除。',
+    ),
+  };
+  String voiceCaptureId(String captureId) =>
+      pick('Capture ID $captureId', '錄音 ID $captureId');
+  String get voiceBuildFingerprintTitle =>
+      pick('App build fingerprint', '應用程式版本指紋');
+  String get voiceBuildFingerprintUnavailable => pick(
+    'Build fingerprint unavailable. Transcription was not blocked.',
+    '無法讀取版本指紋；轉錄仍照常完成。',
+  );
+  String voiceBuildFingerprintSummary(VoiceAppBuildFingerprint fingerprint) =>
+      '${fingerprint.applicationId}\n'
+      '${fingerprint.versionName}+${fingerprint.versionCode} · '
+      '${fingerprint.buildType}\n'
+      'APK SHA-256 ${fingerprint.apkSha256}';
+  String voiceCaptureDiagnosticsSummary(VoiceCaptureDiagnostics diagnostics) {
+    final durationSeconds =
+        diagnostics.duration.inMilliseconds / Duration.millisecondsPerSecond;
+    final activePercent = diagnostics.activeFrameFraction * 100;
+    final clippedPercent = diagnostics.clippedFraction * 100;
+    final nearZeroPercent = diagnostics.nearZeroFraction * 100;
+    return pick(
+      'Duration ${durationSeconds.toStringAsFixed(2)} s · '
+          'RMS ${diagnostics.rmsDbfs.toStringAsFixed(1)} dBFS · '
+          'peak ${diagnostics.peakDbfs.toStringAsFixed(1)} dBFS · '
+          'active ${activePercent.toStringAsFixed(1)}% · '
+          'clipped ${clippedPercent.toStringAsFixed(2)}% · '
+          'near-zero ${nearZeroPercent.toStringAsFixed(1)}% · '
+          'lead/trail ${diagnostics.leadingSilence.inMilliseconds}/'
+          '${diagnostics.trailingSilence.inMilliseconds} ms',
+      '時長 ${durationSeconds.toStringAsFixed(2)} 秒 · '
+          'RMS ${diagnostics.rmsDbfs.toStringAsFixed(1)} dBFS · '
+          '峰值 ${diagnostics.peakDbfs.toStringAsFixed(1)} dBFS · '
+          '有效語音 ${activePercent.toStringAsFixed(1)}% · '
+          '削波 ${clippedPercent.toStringAsFixed(2)}% · '
+          '近零 ${nearZeroPercent.toStringAsFixed(1)}% · '
+          '前／後靜音 ${diagnostics.leadingSilence.inMilliseconds}/'
+          '${diagnostics.trailingSilence.inMilliseconds} 毫秒',
+    );
+  }
+
   String get sendTo => pick('Send to', '傳送到');
   String get currentChat => pick('Current chat', '目前對話');
   String get newChat => pick('New chat', '新對話');

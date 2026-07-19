@@ -6,11 +6,19 @@ class MikuHomePage extends StatefulWidget {
     required this.client,
     required this.notifications,
     required this.shareImports,
+    required this.voiceCapture,
+    this.localAsrWorkers,
+    this.localAsrModels,
+    this.voiceInferenceTimeout = const Duration(seconds: 45),
   });
 
   final MikuSessionClient client;
   final MikuNotificationService notifications;
   final MikuShareImportService shareImports;
+  final MikuVoiceCaptureService voiceCapture;
+  final LocalAsrWorkerFactory? localAsrWorkers;
+  final LocalAsrModelManager? localAsrModels;
+  final Duration voiceInferenceTimeout;
 
   @override
   State<MikuHomePage> createState() => _MikuHomePageState();
@@ -43,6 +51,18 @@ class _MikuHomePageState extends State<MikuHomePage>
   bool _processingNotificationActions = false;
   bool _processingNotificationRoutes = false;
   bool _processingShareImports = false;
+  bool _voiceRecording = false;
+  bool _voiceProcessing = false;
+  bool _voicePermissionPending = false;
+  bool _voiceModelOperation = false;
+  LocalAsrModelStatus? _voiceModelStatus;
+  VoiceAsrEngineCatalog _voiceAsrCatalog = VoiceAsrEngineCatalog.localOnly();
+  VoiceAsrEngineKind _voiceAsrSelection = VoiceAsrEngineKind.local;
+  VoiceAsrEngineKind? _activeVoiceAsrSelection;
+  bool _voiceAsrCatalogLoading = false;
+  String? _voiceCaptureId;
+  int _voiceOperationEpoch = 0;
+  Timer? _voiceLimitTimer;
   bool _sessionBootComplete = false;
   String? _sessionId;
   String? _lastEventId;
@@ -66,11 +86,14 @@ class _MikuHomePageState extends State<MikuHomePage>
   _ConversationRound? _pendingOptimisticRound;
   int _sessionHistoryRevision = 0;
   int _sessionNavigationEpoch = 0;
+  int _serverAuthorityEpoch = 0;
   int _sendEpoch = 0;
   _UiLanguage _language = _UiLanguage.en;
   AppLifecycleState _appLifecycle = AppLifecycleState.resumed;
 
   late final AnimationController _dotAnim;
+  LocalAsrTranscriber? _voiceTranscriber;
+  late final Future<VoiceAppBuildFingerprint?> _voiceBuildFingerprint;
 
   @override
   void initState() {
@@ -80,6 +103,25 @@ class _MikuHomePageState extends State<MikuHomePage>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
+    _voiceTranscriber =
+        widget.localAsrWorkers == null
+            ? null
+            : LocalAsrTranscriber(
+              workers: widget.localAsrWorkers!,
+              timeout: widget.voiceInferenceTimeout,
+            );
+    _voiceBuildFingerprint = _inspectVoiceBuild();
+    if (widget.localAsrWorkers != null) {
+      _voiceModelStatus = const LocalAsrModelStatus(
+        state: LocalAsrModelState.ready,
+        reason: 'injected worker factory',
+        encoder: 'injected',
+        decoder: 'injected',
+        tokens: 'injected',
+      );
+    } else if (widget.localAsrModels?.isSupported ?? false) {
+      unawaited(_refreshVoiceModel());
+    }
     _scrollCtrl.addListener(_handleThreadScroll);
     unawaited(_loadUiPreferences());
     unawaited(widget.notifications.initialize());
@@ -105,7 +147,23 @@ class _MikuHomePageState extends State<MikuHomePage>
         onError: (_) {},
       );
     }
+    if (widget.voiceCapture.isSupported) {
+      unawaited(widget.voiceCapture.recoverOrphans().catchError((_) => 0));
+    }
     unawaited(_boot());
+  }
+
+  Future<VoiceAppBuildFingerprint?> _inspectVoiceBuild() async {
+    if (!widget.voiceCapture.isSupported) return null;
+    try {
+      return await widget.voiceCapture.inspectBuild().timeout(
+        const Duration(seconds: 5),
+      );
+    } catch (_) {
+      // Build identity is diagnostic metadata. Its absence must never block
+      // recording, local inference, review, or explicit send.
+      return null;
+    }
   }
 
   @override
@@ -118,6 +176,14 @@ class _MikuHomePageState extends State<MikuHomePage>
     _notificationRouteSub?.cancel();
     _unifiedPushSub?.cancel();
     _shareImportSub?.cancel();
+    _voiceLimitTimer?.cancel();
+    _voiceOperationEpoch += 1;
+    unawaited(
+      widget.voiceCapture.cancel(_voiceCaptureId).catchError((_) => false),
+    );
+    unawaited(widget.client.cancelVoiceAsrTranscription());
+    final voiceTranscriber = _voiceTranscriber;
+    if (voiceTranscriber != null) unawaited(voiceTranscriber.cancel());
     _dotAnim.dispose();
     super.dispose();
   }
@@ -125,6 +191,10 @@ class _MikuHomePageState extends State<MikuHomePage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appLifecycle = state;
+    if (state != AppLifecycleState.resumed &&
+        (_voiceRecording || (_voiceProcessing && !_voicePermissionPending))) {
+      unawaited(_cancelVoiceCapture());
+    }
   }
 
   _Mode get _mode => _findMode(_modeId, _modes);
@@ -153,6 +223,31 @@ class _MikuHomePageState extends State<MikuHomePage>
           ? widget.client as NotificationReplyAuthorityClient
           : null;
   bool get _sessionEnded => _status == 'ended';
+  VoiceAsrEngine? get _selfHostedVoiceAsr => _voiceAsrCatalog.selfHosted;
+  bool get _selfHostedVoiceAsrAvailable =>
+      _selfHostedVoiceAsr?.available == true;
+  bool get _selectedVoiceAsrReady => switch (_voiceAsrSelection) {
+    VoiceAsrEngineKind.local => _voiceTranscriber != null,
+    VoiceAsrEngineKind.remote => _selfHostedVoiceAsrAvailable,
+  };
+  String get _selectedVoiceAsrSummary => switch (_voiceAsrSelection) {
+    VoiceAsrEngineKind.local => _copy.pick(
+      'On-device · audio stays here',
+      '本機 · 音訊留在裝置上',
+    ),
+    VoiceAsrEngineKind.remote when _voiceAsrCatalogLoading => _copy.pick(
+      'Checking home service…',
+      '正在檢查家用服務…',
+    ),
+    VoiceAsrEngineKind.remote when !_selfHostedVoiceAsrAvailable => _copy.pick(
+      'Home remote · unavailable',
+      '家用遠端 · 目前無法使用',
+    ),
+    VoiceAsrEngineKind.remote => _copy.pick(
+      'Home remote · ${_selfHostedVoiceAsr?.modelId ?? 'self-hosted'}',
+      '家用遠端 · ${_selfHostedVoiceAsr?.modelId ?? '自架'}',
+    ),
+  };
 
   void _handleThreadScroll() {
     if (!_scrollCtrl.hasClients) return;
@@ -201,6 +296,7 @@ class _MikuHomePageState extends State<MikuHomePage>
 
   Future<void> _boot() async {
     await _ensureSession();
+    await _refreshVoiceAsrEngines();
     _sessionBootComplete = true;
     await _drainNotificationActions();
     await _drainNotificationRoutes();
@@ -208,21 +304,24 @@ class _MikuHomePageState extends State<MikuHomePage>
   }
 
   void _enqueueShareImport(SharedContent content) {
-    if (content.source == SharedContentSource.quickCapture) {
+    if (content.source == SharedContentSource.quickCapture ||
+        content.source == SharedContentSource.voice) {
       final eventId = content.eventId;
       if (eventId == null || _recentQuickCaptureIds.contains(eventId)) return;
       _recentQuickCaptureIds.add(eventId);
       if (_recentQuickCaptureIds.length > 64) {
         _recentQuickCaptureIds.removeAt(0);
       }
-      final active = _activeShareImport;
-      if (active?.value.source == SharedContentSource.quickCapture) {
-        active!.value = content;
-        return;
+      if (content.source == SharedContentSource.quickCapture) {
+        final active = _activeShareImport;
+        if (active?.value.source == SharedContentSource.quickCapture) {
+          active!.value = content;
+          return;
+        }
+        _pendingShareImports.removeWhere(
+          (pending) => pending.source == SharedContentSource.quickCapture,
+        );
       }
-      _pendingShareImports.removeWhere(
-        (pending) => pending.source == SharedContentSource.quickCapture,
-      );
     }
     _pendingShareImports.add(content);
     if (_sessionBootComplete) unawaited(_drainShareImports());
@@ -282,9 +381,656 @@ class _MikuHomePageState extends State<MikuHomePage>
     }
   }
 
+  Future<void> _startVoiceCapture() async {
+    final selection = _voiceAsrSelection;
+    if (!widget.voiceCapture.isSupported || !_selectedVoiceAsrReady) {
+      _showSnack(_copy.voiceEngineUnavailable);
+      return;
+    }
+    if (_disconnecting ||
+        _voiceRecording ||
+        _voiceProcessing ||
+        _appLifecycle != AppLifecycleState.resumed) {
+      return;
+    }
+    final epoch = ++_voiceOperationEpoch;
+    setState(() => _voiceProcessing = true);
+    _voicePermissionPending = true;
+    try {
+      final permitted = await widget.voiceCapture.requestPermission();
+      if (!mounted || epoch != _voiceOperationEpoch) return;
+      _voicePermissionPending = false;
+      if (!permitted) {
+        _showSnack(_copy.voicePermissionDenied);
+        return;
+      }
+      if (_appLifecycle != AppLifecycleState.resumed) return;
+      final captureId = _newVoiceCaptureId();
+      await widget.voiceCapture.start(captureId);
+      if (!mounted || epoch != _voiceOperationEpoch) {
+        await widget.voiceCapture.cancel(captureId);
+        return;
+      }
+      setState(() {
+        _voiceCaptureId = captureId;
+        _activeVoiceAsrSelection = selection;
+        _voiceRecording = true;
+      });
+      _voiceLimitTimer?.cancel();
+      final durationSeconds =
+          selection == VoiceAsrEngineKind.remote
+              ? _selfHostedVoiceAsr?.maxDurationSeconds ??
+                  localAsrMaxDurationSeconds
+              : localAsrMaxDurationSeconds;
+      _voiceLimitTimer = Timer(Duration(seconds: durationSeconds), () {
+        if (mounted && _voiceCaptureId == captureId && _voiceRecording) {
+          unawaited(_stopVoiceCapture());
+        }
+      });
+    } catch (error) {
+      if (mounted && epoch == _voiceOperationEpoch) {
+        _showSnack(_copy.voiceCaptureFailed(error));
+      }
+    } finally {
+      if (mounted && epoch == _voiceOperationEpoch) {
+        _voicePermissionPending = false;
+        setState(() => _voiceProcessing = false);
+      }
+    }
+  }
+
+  Future<VoiceAsrEngineCatalog> _refreshVoiceAsrEngines() async {
+    final authorityEpoch = _serverAuthorityEpoch;
+    if (mounted) setState(() => _voiceAsrCatalogLoading = true);
+    VoiceAsrEngineCatalog catalog;
+    try {
+      catalog = await widget.client.voiceAsrEngines();
+    } catch (_) {
+      catalog = VoiceAsrEngineCatalog.localOnly();
+    }
+    if (mounted && authorityEpoch == _serverAuthorityEpoch) {
+      setState(() {
+        _voiceAsrCatalog = catalog;
+        _voiceAsrCatalogLoading = false;
+      });
+    }
+    return catalog;
+  }
+
+  Future<void> _showVoiceAsrDialog() async {
+    if (_disconnecting || _voiceRecording || _voiceProcessing) {
+      _showSnack(
+        _copy.pick(
+          'Finish the current recording or server change first.',
+          '請先完成目前的錄音或伺服器切換。',
+        ),
+      );
+      return;
+    }
+    final authorityEpoch = _serverAuthorityEpoch;
+    await _refreshVoiceAsrEngines();
+    if (!mounted ||
+        _disconnecting ||
+        authorityEpoch != _serverAuthorityEpoch) {
+      return;
+    }
+    final remote = _selfHostedVoiceAsr;
+    final remoteAvailable = remote?.available == true;
+    await showDialog<void>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            title: Text(_copy.pick('Voice recognition', '語音辨識方式')),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    key: const ValueKey('selectLocalVoiceAsr'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.phone_android_rounded),
+                    title: Text(_copy.pick('On-device', '本機')),
+                    subtitle: Text(
+                      _copy.pick(
+                        'Audio stays on this device. Requires the verified local model.',
+                        '音訊留在這台裝置；需要已驗證的本機模型。',
+                      ),
+                    ),
+                    trailing:
+                        _voiceAsrSelection == VoiceAsrEngineKind.local
+                            ? const Icon(Icons.check_circle_rounded)
+                            : null,
+                    onTap: () {
+                      setState(
+                        () => _voiceAsrSelection = VoiceAsrEngineKind.local,
+                      );
+                      Navigator.pop(dialogContext);
+                    },
+                  ),
+                  const Divider(),
+                  ListTile(
+                    key: const ValueKey('selectSelfHostedVoiceAsr'),
+                    enabled: remoteAvailable,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.home_work_outlined),
+                    title: Text(
+                      _copy.pick('Home remote (self-hosted)', '家用遠端（自架）'),
+                    ),
+                    subtitle: Text(
+                      remoteAvailable
+                          ? _copy.pick(
+                            'Configured · ${remote?.modelId ?? remote?.label}',
+                            '已設定 · ${remote?.modelId ?? remote?.label}',
+                          )
+                          : _copy.pick(
+                            'Unavailable on the paired server',
+                            '配對的 Server 目前未提供',
+                          ),
+                    ),
+                    trailing:
+                        _voiceAsrSelection == VoiceAsrEngineKind.remote
+                            ? const Icon(Icons.check_circle_rounded)
+                            : null,
+                    onTap:
+                        remoteAvailable
+                            ? () async {
+                              if (_voiceAsrSelection ==
+                                  VoiceAsrEngineKind.remote) {
+                                Navigator.pop(dialogContext);
+                                return;
+                              }
+                              final confirmed = await showDialog<bool>(
+                                context: dialogContext,
+                                barrierDismissible: false,
+                                builder:
+                                    (confirmContext) => AlertDialog(
+                                      title: Text(
+                                        _copy.pick(
+                                          'Use your home ASR service?',
+                                          '使用家裡的 ASR 服務？',
+                                        ),
+                                      ),
+                                      content: Text(
+                                        _copy.pick(
+                                          'Each recording will leave this device and travel through your paired TempestMiku server to its fixed self-hosted home ASR service. There is no cloud or local fallback. A transcript always opens for review and is never sent to Miku automatically.',
+                                          '每段錄音都會離開這台裝置，經由已配對的 TempestMiku Server 傳到它固定設定的家用自架 ASR 服務。不會改送雲端，也不會自動退回本機。轉錄一定先開啟供你確認，絕不會自動傳給 Miku。',
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed:
+                                              () => Navigator.pop(
+                                                confirmContext,
+                                                false,
+                                              ),
+                                          child: Text(_copy.cancel),
+                                        ),
+                                        FilledButton(
+                                          key: const ValueKey(
+                                            'confirmSelfHostedVoiceAsr',
+                                          ),
+                                          onPressed:
+                                              () => Navigator.pop(
+                                                confirmContext,
+                                                true,
+                                              ),
+                                          child: Text(
+                                            _copy.pick(
+                                              'Use home service',
+                                              '使用家用服務',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                              );
+                              if (confirmed != true ||
+                                  !mounted ||
+                                  _disconnecting ||
+                                  authorityEpoch != _serverAuthorityEpoch) {
+                                return;
+                              }
+                              setState(
+                                () =>
+                                    _voiceAsrSelection =
+                                        VoiceAsrEngineKind.remote,
+                              );
+                              if (dialogContext.mounted) {
+                                Navigator.pop(dialogContext);
+                              }
+                            }
+                            : null,
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text(_copy.close),
+              ),
+            ],
+          ),
+    );
+  }
+
+  Future<LocalAsrModelStatus?> _refreshVoiceModel() async {
+    final manager = widget.localAsrModels;
+    if (manager == null || !manager.isSupported) return null;
+    try {
+      final status = await manager.inspect();
+      if (!mounted) return status;
+      await _applyVoiceModelStatus(status);
+      return status;
+    } catch (error) {
+      if (mounted) _showSnack(_copy.voiceCaptureFailed(error));
+      return null;
+    }
+  }
+
+  Future<void> _applyVoiceModelStatus(LocalAsrModelStatus status) async {
+    final activeSelection = _activeVoiceAsrSelection ?? _voiceAsrSelection;
+    if (!status.ready &&
+        widget.localAsrWorkers == null &&
+        activeSelection == VoiceAsrEngineKind.local &&
+        (_voiceRecording || _voiceProcessing)) {
+      // A model transition must never detach the transcriber while leaving its
+      // native microphone capture behind. Cancel both sides before publishing
+      // the non-ready status.
+      final cancelled = await _cancelVoiceCapture();
+      if (!cancelled) {
+        throw StateError('voice cleanup did not finish');
+      }
+    }
+    final previous = _voiceTranscriber;
+    if (previous != null && widget.localAsrWorkers == null) {
+      await previous.cancel();
+    }
+    if (!mounted) return;
+    setState(() {
+      _voiceModelStatus = status;
+      _voiceTranscriber =
+          status.ready && widget.localAsrModels != null
+              ? LocalAsrTranscriber(
+                workers: widget.localAsrModels!,
+                timeout: widget.voiceInferenceTimeout,
+              )
+              : widget.localAsrWorkers == null
+              ? null
+              : _voiceTranscriber;
+    });
+  }
+
+  Future<void> _showVoiceModelDialog() async {
+    final manager = widget.localAsrModels;
+    if (manager == null || !manager.isSupported) {
+      _showSnack(_copy.voiceModelUnavailable);
+      return;
+    }
+    var status = await _refreshVoiceModel();
+    if (!mounted || status == null) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder:
+          (dialogContext) => StatefulBuilder(
+            builder: (dialogContext, setDialogState) {
+              final stateLabel = switch (status!.state) {
+                LocalAsrModelState.ready => _copy.pick(
+                  'Installed and verified',
+                  '已安裝並驗證',
+                ),
+                LocalAsrModelState.missing => _copy.pick(
+                  'Not installed',
+                  '尚未安裝',
+                ),
+                LocalAsrModelState.corrupt => _copy.pick(
+                  'Corrupt — disabled',
+                  '檔案毀損，已停用',
+                ),
+                LocalAsrModelState.unsupported => _copy.pick(
+                  'Unsupported',
+                  '不支援',
+                ),
+              };
+              Future<void> install() async {
+                final confirmed = await showDialog<bool>(
+                  context: dialogContext,
+                  barrierDismissible: false,
+                  builder:
+                      (confirmContext) => AlertDialog(
+                        title: Text(
+                          _copy.pick('Install local voice model?', '安裝本機語音模型？'),
+                        ),
+                        content: Text(
+                          _copy.pick(
+                            'This explicit owner action downloads 226 MiB from the commit-pinned csukuangfj model on Hugging Face. It is stored only in Android no-backup app storage under Apache-2.0. Recognition stays offline; transcripts still require review before sending.',
+                            '這個明確的擁有者操作會從 Hugging Face 下載固定 commit 的 csukuangfj 模型（226 MiB），依 Apache-2.0 存在 Android 不備份的應用程式私有空間。辨識保持離線，轉錄仍必須確認後才能送出。',
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed:
+                                () => Navigator.pop(confirmContext, false),
+                            child: Text(_copy.cancel),
+                          ),
+                          FilledButton(
+                            key: const ValueKey('confirmVoiceModelInstall'),
+                            onPressed:
+                                () => Navigator.pop(confirmContext, true),
+                            child: Text(
+                              _copy.pick('Download and verify', '下載並驗證'),
+                            ),
+                          ),
+                        ],
+                      ),
+                );
+                if (confirmed != true || !mounted) return;
+                setDialogState(() => _voiceModelOperation = true);
+                try {
+                  status = await manager.install();
+                  await _applyVoiceModelStatus(status!);
+                } catch (error) {
+                  if (mounted) _showSnack(_copy.voiceCaptureFailed(error));
+                  status = await manager.inspect();
+                  await _applyVoiceModelStatus(status!);
+                } finally {
+                  if (mounted) {
+                    setDialogState(() => _voiceModelOperation = false);
+                  }
+                }
+              }
+
+              Future<void> remove() async {
+                setDialogState(() => _voiceModelOperation = true);
+                try {
+                  if (_voiceRecording || _voiceProcessing) {
+                    final cancelled = await _cancelVoiceCapture();
+                    if (!cancelled) {
+                      throw StateError(
+                        'voice cleanup must finish before deleting the model',
+                      );
+                    }
+                  } else {
+                    await _voiceTranscriber?.cancel();
+                  }
+                  status = await manager.delete();
+                  await _applyVoiceModelStatus(status!);
+                } catch (error) {
+                  if (mounted) _showSnack(_copy.voiceCaptureFailed(error));
+                } finally {
+                  if (mounted) {
+                    setDialogState(() => _voiceModelOperation = false);
+                  }
+                }
+              }
+
+              return PopScope(
+                canPop: !_voiceModelOperation,
+                child: AlertDialog(
+                  title: Text(_copy.pick('On-device voice model', '裝置端語音模型')),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(stateLabel),
+                      const SizedBox(height: 8),
+                      Text(
+                        status!.reason,
+                        style: TextStyle(color: _tok.muted, fontSize: 12),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _copy.pick(
+                          'Local only · Traditional Chinese conversion on device · edit and confirm every transcript',
+                          '僅限本機 · 在裝置上轉為繁體中文 · 每次轉錄都要編輯並確認',
+                        ),
+                        style: TextStyle(color: _tok.muted, fontSize: 12),
+                      ),
+                      if (_voiceModelOperation) ...[
+                        const SizedBox(height: 16),
+                        const LinearProgressIndicator(),
+                      ],
+                    ],
+                  ),
+                  actions: [
+                    if (status!.ready ||
+                        status!.state == LocalAsrModelState.corrupt)
+                      TextButton(
+                        key: const ValueKey('deleteVoiceModel'),
+                        onPressed: _voiceModelOperation ? null : remove,
+                        child: Text(_copy.pick('Delete', '刪除')),
+                      ),
+                    if (!status!.ready &&
+                        status!.state != LocalAsrModelState.unsupported)
+                      FilledButton(
+                        key: const ValueKey('installVoiceModel'),
+                        onPressed: _voiceModelOperation ? null : install,
+                        child: Text(_copy.pick('Install', '安裝')),
+                      ),
+                    TextButton(
+                      onPressed:
+                          _voiceModelOperation
+                              ? null
+                              : () => Navigator.pop(dialogContext),
+                      child: Text(_copy.close),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+    );
+  }
+
+  Future<void> _stopVoiceCapture() async {
+    final captureId = _voiceCaptureId;
+    final selection = _activeVoiceAsrSelection ?? _voiceAsrSelection;
+    if (!_voiceRecording || captureId == null) return;
+    final epoch = ++_voiceOperationEpoch;
+    _voiceLimitTimer?.cancel();
+    _voiceLimitTimer = null;
+    setState(() {
+      _voiceRecording = false;
+      _voiceProcessing = true;
+      _voiceCaptureId = null;
+      _activeVoiceAsrSelection = null;
+    });
+    CapturedVoicePcm? captured;
+    LocalAsrAudio? audio;
+    try {
+      captured = await widget.voiceCapture.stop(captureId);
+      if (!mounted || epoch != _voiceOperationEpoch) return;
+      final qualityIssue = captured.diagnostics.qualityIssue;
+      if (captured.captureId != captureId) {
+        throw const FormatException('voice capture id changed while stopping');
+      }
+      late final String transcriptText;
+      late final VoiceTranscriptProvenance provenance;
+      switch (selection) {
+        case VoiceAsrEngineKind.local:
+          final transcriber = _voiceTranscriber;
+          if (transcriber == null) {
+            throw StateError('the on-device voice model became unavailable');
+          }
+          audio = LocalAsrAudio.fromPcm16(
+            captured.pcm16,
+            sampleRate: captured.sampleRate,
+          );
+          final transcript = await transcriber.transcribe(audio);
+          transcriptText = transcript.text;
+          provenance = VoiceTranscriptProvenance.local;
+          break;
+        case VoiceAsrEngineKind.remote:
+          final transcript = await widget.client.transcribeVoicePcm16(
+            engineId: selfHostedVoiceAsrEngineId,
+            captureId: captureId,
+            sampleRate: captured.sampleRate,
+            pcm16: captured.pcm16,
+          );
+          transcriptText = transcript.text;
+          provenance = VoiceTranscriptProvenance.selfHosted;
+          break;
+      }
+      if (!mounted || epoch != _voiceOperationEpoch) return;
+      final buildFingerprint = await _voiceBuildFingerprint;
+      if (!mounted || epoch != _voiceOperationEpoch) return;
+      final reviewed = SharedContent.fromEvent({
+        'source': 'voice',
+        'eventId': captureId,
+        'text': transcriptText,
+        'voiceTranscriptProvenance':
+            provenance == VoiceTranscriptProvenance.selfHosted
+                ? 'self_hosted'
+                : 'local',
+        if (qualityIssue != null) 'voiceQualityIssue': qualityIssue.name,
+        'voiceDiagnostics': captured.diagnostics,
+        if (buildFingerprint != null) 'voiceBuildFingerprint': buildFingerprint,
+      });
+      _enqueueShareImport(reviewed);
+    } on LocalAsrCancelledException {
+      // Explicit cancellation never creates a review or sends a message.
+    } on TimeoutException catch (error) {
+      if (mounted && epoch == _voiceOperationEpoch) {
+        _showSnack(_copy.voiceCaptureFailed(error));
+      }
+    } on FormatException catch (error) {
+      if (mounted && epoch == _voiceOperationEpoch) {
+        _showSnack(
+          error.message.toString().contains('empty')
+              ? _copy.voiceTranscriptEmpty
+              : _copy.voiceCaptureFailed(error),
+        );
+      }
+    } catch (error) {
+      if (mounted && epoch == _voiceOperationEpoch) {
+        _showSnack(_copy.voiceCaptureFailed(error));
+      }
+    } finally {
+      captured?.pcm16.fillRange(0, captured.pcm16.length, 0);
+      audio?.samples.fillRange(0, audio.samples.length, 0);
+      if (mounted && epoch == _voiceOperationEpoch) {
+        setState(() {
+          _voiceProcessing = false;
+          _activeVoiceAsrSelection = null;
+        });
+      }
+    }
+  }
+
+  Future<bool> _cancelVoiceCapture() async {
+    final captureId = _voiceCaptureId;
+    final epoch = ++_voiceOperationEpoch;
+    _voicePermissionPending = false;
+    _voiceLimitTimer?.cancel();
+    _voiceLimitTimer = null;
+    if (mounted) {
+      setState(() {
+        _voiceRecording = false;
+        _voiceProcessing = true;
+      });
+    }
+    final transcriber = _voiceTranscriber;
+    try {
+      final results = await Future.wait<Object?>([
+        widget.voiceCapture.cancel(captureId),
+        widget.client.cancelVoiceAsrTranscription(),
+        if (transcriber != null)
+          transcriber.cancel().then<Object?>((_) => null),
+      ]);
+      final nativeCancelled = results.first as bool;
+      if (captureId != null && !nativeCancelled) {
+        throw StateError('native voice recorder cleanup did not finish');
+      }
+      if (mounted && epoch == _voiceOperationEpoch) {
+        setState(() {
+          _voiceProcessing = false;
+          _voiceCaptureId = null;
+          _activeVoiceAsrSelection = null;
+        });
+      }
+      return true;
+    } catch (error) {
+      // Keep the cancel affordance and capture id visible so a retiring native
+      // recorder can be retried. The epoch already prevents any stale
+      // transcription result from entering review or send.
+      if (mounted && epoch == _voiceOperationEpoch) {
+        setState(() {
+          _voiceRecording = false;
+          _voiceProcessing = true;
+          _voiceCaptureId = captureId;
+        });
+        _showSnack(_copy.voiceCaptureFailed(error));
+      }
+      return false;
+    }
+  }
+
+  String _newVoiceCaptureId() {
+    final random = math.Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int value) => value.toRadixString(16).padLeft(2, '0');
+    final value = bytes.map(hex).join();
+    return '${value.substring(0, 8)}-'
+        '${value.substring(8, 12)}-'
+        '${value.substring(12, 16)}-'
+        '${value.substring(16, 20)}-'
+        '${value.substring(20)}';
+  }
+
+  Future<bool> _beginServerAuthorityTransition() async {
+    if (_disconnecting) return false;
+    _serverAuthorityEpoch += 1;
+    if (mounted) {
+      setState(() => _disconnecting = true);
+    } else {
+      return false;
+    }
+    final voiceActive =
+        _voiceRecording ||
+        _voiceProcessing ||
+        _voicePermissionPending ||
+        _voiceCaptureId != null ||
+        _activeVoiceAsrSelection != null;
+    if (!voiceActive) {
+      _resetVoiceAsrAuthority();
+      return true;
+    }
+    final cancelled = await _cancelVoiceCapture();
+    if (cancelled && mounted) {
+      _resetVoiceAsrAuthority();
+      return true;
+    }
+    if (mounted) {
+      setState(() {
+        _disconnecting = false;
+        _voiceAsrCatalogLoading = false;
+      });
+    }
+    return false;
+  }
+
+  void _resetVoiceAsrAuthority() {
+    if (!mounted) return;
+    setState(() {
+      _voiceAsrSelection = VoiceAsrEngineKind.local;
+      _activeVoiceAsrSelection = null;
+      _voiceAsrCatalog = VoiceAsrEngineCatalog.localOnly();
+      _voiceAsrCatalogLoading = false;
+    });
+  }
+
+  void _endServerAuthorityTransition() {
+    if (mounted) setState(() => _disconnecting = false);
+  }
+
   Future<bool> _applyPairingLink(String rawLink) async {
     final client = _serverTargetClient;
     if (client == null) return false;
+    var authorityTransitionStarted = false;
     try {
       final target = pairingTargetFromLink(rawLink);
       final proposedDeviceName = client.pairingDeviceName();
@@ -313,17 +1059,25 @@ class _MikuHomePageState extends State<MikuHomePage>
             ),
       );
       if (approved != true) return false;
+      if (!await _beginServerAuthorityTransition()) return false;
+      authorityTransitionStarted = true;
       await client.pairWithCode(target);
-      await _requestApprovalNotifications();
+      await _reconnectAfterPair(
+        successMessage: _copy.pairedToServer(target.serverBaseUrl),
+      );
+      try {
+        await _requestApprovalNotifications();
+      } catch (_) {
+        // Notification permission is optional and cannot invalidate a completed
+        // authority transition or restore the prior remote-ASR selection.
+      }
       final pushNotifications = _unifiedPushNotifications;
       if (pushNotifications != null) {
         await _initializeUnifiedPush(pushNotifications);
       }
-      await _reconnectAfterPair(
-        successMessage: _copy.pairedToServer(target.serverBaseUrl),
-      );
       return true;
     } catch (err) {
+      if (authorityTransitionStarted) _endServerAuthorityTransition();
       _showSnack(_copy.pairingLinkFailed(err));
       return false;
     }
@@ -1248,7 +2002,13 @@ class _MikuHomePageState extends State<MikuHomePage>
     final resources = <String>[];
     void add(String uri) {
       final normalized = _normalizeResourceUri(uri);
-      if (normalized.isEmpty || resources.contains(normalized)) return;
+      final supported =
+          normalized.startsWith('artifact://') ||
+          normalized.startsWith('workspace://session/') ||
+          normalized.startsWith('linked://') ||
+          (normalized.startsWith('project://') &&
+              normalized.contains('/workspace/'));
+      if (!supported || resources.contains(normalized)) return;
       resources.add(normalized);
     }
 
@@ -1630,11 +2390,14 @@ class _MikuHomePageState extends State<MikuHomePage>
         _projectStatus = '';
         _driveFeed = null;
         _driveError = '';
+        _voiceAsrSelection = VoiceAsrEngineKind.local;
+        _voiceAsrCatalog = VoiceAsrEngineCatalog.localOnly();
       });
     }
     final future = _connectSession(navigationEpoch);
     _sessionFuture = future;
     await future;
+    await _refreshVoiceAsrEngines();
     if (successMessage != null &&
         mounted &&
         navigationEpoch == _sessionNavigationEpoch) {
@@ -1696,8 +2459,8 @@ class _MikuHomePageState extends State<MikuHomePage>
           ),
     );
     if (approved != true) return;
+    if (!await _beginServerAuthorityTransition()) return;
     final navigationEpoch = _nextSessionNavigationEpoch();
-    _disconnecting = true;
     _sessionFuture = null;
     final previousSub = _sub;
     _sub = null;
@@ -1816,6 +2579,20 @@ class _MikuHomePageState extends State<MikuHomePage>
                     if (mounted) _showModeSheet();
                   });
                 },
+                voiceModelStatus: _voiceModelStatus,
+                voiceAsrSummary: _selectedVoiceAsrSummary,
+                onVoiceAsr: () {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  Timer(const Duration(milliseconds: 320), () {
+                    if (mounted) unawaited(_showVoiceAsrDialog());
+                  });
+                },
+                onVoiceModel: () {
+                  Scaffold.of(drawerCtx).closeDrawer();
+                  Timer(const Duration(milliseconds: 320), () {
+                    if (mounted) unawaited(_showVoiceModelDialog());
+                  });
+                },
                 onServerTarget:
                     serverTargetClient == null
                         ? null
@@ -1900,8 +2677,16 @@ class _MikuHomePageState extends State<MikuHomePage>
                           isSending: _isSending,
                           canSend: _canSend,
                           sendError: _sendError,
+                          voiceSupported: widget.voiceCapture.isSupported,
+                          voiceEngineReady:
+                              _selectedVoiceAsrReady && !_disconnecting,
+                          voiceRecording: _voiceRecording,
+                          voiceProcessing: _voiceProcessing,
                           onChanged: _handleComposerChanged,
                           onSend: () => unawaited(_send()),
+                          onVoiceStart: () => unawaited(_startVoiceCapture()),
+                          onVoiceStop: () => unawaited(_stopVoiceCapture()),
+                          onVoiceCancel: () => unawaited(_cancelVoiceCapture()),
                         ),
                       ],
                     ),

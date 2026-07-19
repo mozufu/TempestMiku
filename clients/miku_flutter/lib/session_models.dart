@@ -9,3 +9,4 @@ part 'session_models/json_helpers.dart';
 part 'session_models/modes_approvals_memory_evolution.dart';
 part 'session_models/resources_pairing.dart';
 part 'session_models/session_events.dart';
+part 'session_models/voice_asr.dart';

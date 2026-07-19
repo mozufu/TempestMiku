@@ -8,12 +8,20 @@ class MikuApp extends StatefulWidget {
     required this.client,
     this.notifications,
     this.shareImports,
+    this.voiceCapture,
+    this.localAsrWorkers,
+    this.localAsrModels,
+    this.voiceInferenceTimeout = const Duration(seconds: 45),
     this.themeController,
   });
 
   final MikuSessionClient client;
   final MikuNotificationService? notifications;
   final MikuShareImportService? shareImports;
+  final MikuVoiceCaptureService? voiceCapture;
+  final LocalAsrWorkerFactory? localAsrWorkers;
+  final LocalAsrModelManager? localAsrModels;
+  final Duration voiceInferenceTimeout;
   final MikuThemeController? themeController;
 
   @override
@@ -61,6 +69,10 @@ class _MikuAppState extends State<MikuApp> {
             client: widget.client,
             notifications: widget.notifications ?? createNotificationService(),
             shareImports: widget.shareImports ?? createShareImportService(),
+            voiceCapture: widget.voiceCapture ?? createVoiceCaptureService(),
+            localAsrWorkers: widget.localAsrWorkers,
+            localAsrModels: widget.localAsrModels,
+            voiceInferenceTimeout: widget.voiceInferenceTimeout,
           ),
         );
       },

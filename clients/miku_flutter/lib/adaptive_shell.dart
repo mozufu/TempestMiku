@@ -24,6 +24,10 @@ class _MikuDrawer extends StatelessWidget {
     required this.onThemeModeChanged,
     required this.onLanguageToggle,
     required this.onModeSettings,
+    required this.voiceModelStatus,
+    required this.voiceAsrSummary,
+    required this.onVoiceAsr,
+    required this.onVoiceModel,
     required this.onServerTarget,
     required this.onDisconnect,
   });
@@ -47,6 +51,10 @@ class _MikuDrawer extends StatelessWidget {
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final VoidCallback onLanguageToggle;
   final VoidCallback onModeSettings;
+  final LocalAsrModelStatus? voiceModelStatus;
+  final String voiceAsrSummary;
+  final VoidCallback onVoiceAsr;
+  final VoidCallback onVoiceModel;
   final VoidCallback? onServerTarget;
   final VoidCallback? onDisconnect;
 
@@ -159,6 +167,10 @@ class _MikuDrawer extends StatelessWidget {
                           onThemeModeChanged: onThemeModeChanged,
                           onLanguageToggle: onLanguageToggle,
                           onModeSettings: onModeSettings,
+                          voiceModelStatus: voiceModelStatus,
+                          voiceAsrSummary: voiceAsrSummary,
+                          onVoiceAsr: onVoiceAsr,
+                          onVoiceModel: onVoiceModel,
                           onServerTarget: onServerTarget,
                           onDisconnect: onDisconnect,
                         ),

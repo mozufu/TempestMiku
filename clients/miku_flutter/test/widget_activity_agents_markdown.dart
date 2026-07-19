@@ -72,15 +72,12 @@ void _registerActivityAgentAndMarkdownTests() {
       client.promotedSummaries.single,
       'Actor Worker0 completed child resource artifact://0',
     );
-    expect(client.promotedResources.single, [
-      'artifact://0',
-      'history://Worker0',
-    ]);
+    expect(client.promotedResources.single, ['artifact://0']);
 
     await _openContext(tester);
-    await tester.ensureVisible(find.text('project://tempestmiku · 3 promoted'));
+    await tester.ensureVisible(find.text('project://tempestmiku · 2 promoted'));
 
-    expect(find.text('project://tempestmiku · 3 promoted'), findsOneWidget);
+    expect(find.text('project://tempestmiku · 2 promoted'), findsOneWidget);
   });
 
   testWidgets('keeps activity trace visible after final', (

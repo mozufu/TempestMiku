@@ -10,6 +10,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.icu.text.Transliterator
+import android.util.Log
+import java.io.File
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -37,14 +40,36 @@ class MainActivity : FlutterActivity() {
             "org.mozufu.tempestmiku/unified-push-events"
         private const val SHARE_IMPORT_CHANNEL =
             "org.mozufu.tempestmiku/share-imports"
+        private const val VOICE_CAPTURE_CHANNEL =
+            "org.mozufu.tempestmiku/voice-capture"
+        private const val VOICE_MODEL_CHANNEL =
+            "org.mozufu.tempestmiku/voice-model"
         private const val REQUEST_NOTIFICATIONS = 701
+        private const val REQUEST_RECORD_AUDIO = 702
+        private val VOICE_CAPTURE_PROCESS_LOCK = Any()
+        private var processVoiceCapture: ForegroundVoiceCapture? = null
+        private val APP_BUILD_FINGERPRINT_CACHE = AppBuildFingerprintCache()
     }
 
     private var permissionResult: MethodChannel.Result? = null
+    private var voicePermissionResult: MethodChannel.Result? = null
+    private var isActivityForeground = false
+    @Volatile private var voiceModelOperationActive = false
     private var actionSink: EventChannel.EventSink? = null
     private var shareImportSink: EventChannel.EventSink? = null
     private val pendingShareImports = SinglePendingEventBuffer<Map<String, Any>>()
     private val pendingActions = mutableListOf<Map<String, Any>>()
+    private val voiceCapture: ForegroundVoiceCapture by lazy {
+        synchronized(VOICE_CAPTURE_PROCESS_LOCK) {
+            processVoiceCapture
+                ?: ForegroundVoiceCapture(
+                    VoiceCaptureFiles(File(noBackupFilesDir, "voice_capture")),
+                ).also { processVoiceCapture = it }
+        }
+    }
+    private val voiceModels: VoiceModelInstaller by lazy {
+        VoiceModelInstaller(File(noBackupFilesDir, "voice_models"))
+    }
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -156,8 +181,56 @@ class MainActivity : FlutterActivity() {
                     }
                 },
             )
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VOICE_CAPTURE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "inspectBuild" -> inspectVoiceBuild(result)
+                    "recover" -> recoverVoiceCapture(result)
+                    "requestPermission" -> requestVoicePermission(result)
+                    "start" -> startVoiceCapture(call.argument<String>("captureId"), result)
+                    "stop" -> stopVoiceCapture(call.argument<String>("captureId"), result)
+                    "cancel" -> cancelVoiceCapture(call.argument<String>("captureId"), result)
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VOICE_MODEL_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "inspect" -> runVoiceModelOperation(result) { voiceModels.inspect().toChannelValue() }
+                    "install" -> runVoiceModelOperation(result) { voiceModels.install().toChannelValue() }
+                    "delete" -> runVoiceModelOperation(result) { voiceModels.delete().toChannelValue() }
+                    "toTraditional" -> toTraditional(call.argument<String>("text"), result)
+                    else -> result.notImplemented()
+                }
+            }
+        try {
+            voiceCapture.recoverOrphans()
+        } catch (error: Exception) {
+            // Keep the app usable but leave the process-wide capture gate
+            // closed until its retiring recorder actually exits.
+            Log.e("TempestMikuVoice", "voice capture recovery is still pending", error)
+        }
         handleNotificationIntent(intent)
         handleTextImportIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isActivityForeground = true
+    }
+
+    override fun onPause() {
+        isActivityForeground = false
+        cancelVoiceCaptureForLifecycle("pause")
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        isActivityForeground = false
+        cancelVoiceCaptureForLifecycle("destroy")
+        voicePermissionResult?.success(false)
+        voicePermissionResult = null
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -173,10 +246,17 @@ class MainActivity : FlutterActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != REQUEST_NOTIFICATIONS) return
         val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        permissionResult?.success(granted)
-        permissionResult = null
+        when (requestCode) {
+            REQUEST_NOTIFICATIONS -> {
+                permissionResult?.success(granted)
+                permissionResult = null
+            }
+            REQUEST_RECORD_AUDIO -> {
+                voicePermissionResult?.success(granted)
+                voicePermissionResult = null
+            }
+        }
     }
 
     private fun requestNotificationPermission(result: MethodChannel.Result) {
@@ -196,6 +276,204 @@ class MainActivity : FlutterActivity() {
         }
         permissionResult = result
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+    }
+
+    private fun requestVoicePermission(result: MethodChannel.Result) {
+        if (!isActivityForeground) {
+            result.error("not_foreground", "voice permission requires the foreground app", null)
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            result.success(true)
+            return
+        }
+        if (voicePermissionResult != null) {
+            result.error("permission_in_progress", "voice permission request is already active", null)
+            return
+        }
+        voicePermissionResult = result
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+    }
+
+    private fun recoverVoiceCapture(result: MethodChannel.Result) {
+        try {
+            result.success(voiceCapture.recoverOrphans())
+        } catch (error: Exception) {
+            result.error("voice_recovery_failed", error.message ?: "voice recovery failed", null)
+        }
+    }
+
+    private fun startVoiceCapture(captureId: String?, result: MethodChannel.Result) {
+        if (!isActivityForeground) {
+            result.error("not_foreground", "voice capture requires the foreground app", null)
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            result.error("permission_denied", "microphone permission is required", null)
+            return
+        }
+        if (captureId == null) {
+            result.error("invalid_capture", "captureId is required", null)
+            return
+        }
+        try {
+            voiceCapture.start(captureId)
+            result.success(null)
+        } catch (error: Exception) {
+            result.error("voice_start_failed", error.message ?: "voice capture could not start", null)
+        }
+    }
+
+    private fun stopVoiceCapture(captureId: String?, result: MethodChannel.Result) {
+        if (!isActivityForeground) {
+            voiceCapture.cancel(captureId)
+            result.error("not_foreground", "voice capture left the foreground", null)
+            return
+        }
+        if (captureId == null) {
+            result.error("invalid_capture", "captureId is required", null)
+            return
+        }
+        Thread(
+            {
+                try {
+                    val completed = voiceCapture.stop(captureId)
+                    runOnUiThread {
+                        try {
+                            // StandardMethodCodec encodes success synchronously; erase the
+                            // native microphone copy immediately after it has been handed off.
+                            result.success(
+                                mapOf(
+                                    "captureId" to completed.captureId,
+                                    "sampleRate" to VOICE_SAMPLE_RATE,
+                                    "pcm16" to completed.pcm16,
+                                ),
+                            )
+                        } finally {
+                            completed.pcm16.fill(0)
+                        }
+                    }
+                } catch (error: Exception) {
+                    voiceCapture.cancel()
+                    runOnUiThread {
+                        result.error(
+                            "voice_stop_failed",
+                            error.message ?: "voice capture could not stop",
+                            null,
+                        )
+                    }
+                }
+            },
+            "miku-voice-stop",
+        ).start()
+    }
+
+    private fun inspectVoiceBuild(result: MethodChannel.Result) {
+        Thread(
+            {
+                try {
+                    val fingerprint =
+                        APP_BUILD_FINGERPRINT_CACHE.inspect(
+                            applicationId = BuildConfig.APPLICATION_ID,
+                            versionName = BuildConfig.VERSION_NAME,
+                            versionCode = BuildConfig.VERSION_CODE,
+                            buildType = BuildConfig.BUILD_TYPE,
+                            baseApk = File(applicationInfo.sourceDir),
+                        )
+                    runOnUiThread { result.success(fingerprint.toChannelValue()) }
+                } catch (_: Exception) {
+                    // Never couple package inspection to microphone capture, and
+                    // never disclose the installed APK path through channel errors.
+                    runOnUiThread {
+                        result.error(
+                            "build_fingerprint_failed",
+                            "app build fingerprint is unavailable",
+                            null,
+                        )
+                    }
+                }
+            },
+            "miku-build-fingerprint",
+        ).start()
+    }
+
+    private fun cancelVoiceCapture(captureId: String?, result: MethodChannel.Result) {
+        try {
+            result.success(voiceCapture.cancel(captureId))
+        } catch (error: Exception) {
+            result.error("voice_cancel_failed", error.message ?: "voice capture could not cancel", null)
+        }
+    }
+
+    private fun cancelVoiceCaptureForLifecycle(reason: String) {
+        try {
+            voiceCapture.cancel()
+        } catch (error: Exception) {
+            // ForegroundVoiceCapture retains the retiring handle, blocks the
+            // next start, and keeps monitoring it. Do not turn a failed join
+            // into a lifecycle success or crash the rest of the companion UI.
+            Log.e("TempestMikuVoice", "voice cleanup failed during $reason", error)
+        }
+    }
+
+    private fun runVoiceModelOperation(
+        result: MethodChannel.Result,
+        operation: () -> Map<String, Any>,
+    ) {
+        synchronized(this) {
+            if (voiceModelOperationActive) {
+                result.error("model_operation_active", "a voice model operation is already active", null)
+                return
+            }
+            voiceModelOperationActive = true
+        }
+        Thread(
+            {
+                try {
+                    val value = operation()
+                    runOnUiThread { result.success(value) }
+                } catch (error: Exception) {
+                    runOnUiThread {
+                        result.error(
+                            "voice_model_operation_failed",
+                            error.message ?: "voice model operation failed",
+                            null,
+                        )
+                    }
+                } finally {
+                    voiceModelOperationActive = false
+                }
+            },
+            "miku-voice-model",
+        ).start()
+    }
+
+    private fun toTraditional(text: String?, result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            result.error(
+                "traditional_conversion_unsupported",
+                "Traditional Chinese conversion requires Android 10 or newer",
+                null,
+            )
+            return
+        }
+        if (text == null || text.length > 16_384) {
+            result.error("invalid_transcript", "transcript was missing or oversized", null)
+            return
+        }
+        try {
+            result.success(Transliterator.getInstance("Simplified-Traditional").transliterate(text))
+        } catch (error: Exception) {
+            result.error(
+                "traditional_conversion_failed",
+                error.message ?: "Traditional Chinese conversion failed",
+                null,
+            )
+        }
     }
 
     private fun handleNotificationIntent(intent: Intent?) {

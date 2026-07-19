@@ -7,16 +7,28 @@ plugins {
 
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file("key.properties")
+def signingEnvironment = [
+    keyAlias: System.getenv("TM_ANDROID_RELEASE_KEY_ALIAS"),
+    keyPassword: System.getenv("TM_ANDROID_RELEASE_KEY_PASSWORD"),
+    storeFile: System.getenv("TM_ANDROID_RELEASE_STORE_FILE"),
+    storePassword: System.getenv("TM_ANDROID_RELEASE_STORE_PASSWORD"),
+]
+def environmentSigningConfigured = signingEnvironment.values().every {
+    it != null && !it.toString().trim().isEmpty()
+}
 def releaseRequested = gradle.startParameter.taskNames.any {
     it.toLowerCase().contains("release")
 }
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+} else if (environmentSigningConfigured) {
+    signingEnvironment.each { key, value -> keystoreProperties[key] = value }
 } else if (releaseRequested) {
     throw new GradleException(
-        "Release signing is required. Create android/key.properties; debug signing is never used for release builds."
+        "Release signing is required. Configure android/key.properties or all TM_ANDROID_RELEASE_* environment variables; debug signing is never used for release builds."
     )
 }
+def releaseSigningConfigured = keystorePropertiesFile.exists() || environmentSigningConfigured
 if (releaseRequested) {
     ["keyAlias", "keyPassword", "storeFile", "storePassword"].each { key ->
         if (!keystoreProperties[key]?.toString()?.trim()) {
@@ -67,7 +79,7 @@ android {
     }
 
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
+        if (releaseSigningConfigured) {
             release {
                 keyAlias = keystoreProperties["keyAlias"]
                 keyPassword = keystoreProperties["keyPassword"]
@@ -78,8 +90,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Keep development/device-canary installs isolated from the
+            // differently signed production package and its paired state.
+            applicationIdSuffix = ".uitest"
+            versionNameSuffix = "-uitest"
+        }
         release {
-            if (keystorePropertiesFile.exists()) {
+            if (releaseSigningConfigured) {
                 signingConfig = signingConfigs.release
             }
         }

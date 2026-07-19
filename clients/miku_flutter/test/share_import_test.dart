@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:miku_flutter/asr/local_asr_engine.dart';
 import 'package:miku_flutter/main.dart';
 import 'package:miku_flutter/session_client_stub.dart';
 import 'package:miku_flutter/share_import_service.dart';
+import 'package:miku_flutter/voice_capture_service.dart';
 
 class RecordingShareImportService implements MikuShareImportService {
   final controller = StreamController<SharedContent>.broadcast(sync: true);
@@ -64,6 +67,39 @@ void main() {
     expect(capture.source, SharedContentSource.quickCapture);
     expect(capture.eventId, '12345678-1234-4abc-8def-1234567890ab');
 
+    final voice = SharedContent.fromEvent({
+      'text': 'local draft',
+      'source': 'voice',
+      'eventId': '12345678-1234-4abc-8def-1234567890ab',
+      'voiceQualityIssue': 'tooQuiet',
+      'voiceTranscriptProvenance': 'self_hosted',
+      'voiceDiagnostics': const VoiceCaptureDiagnostics(
+        duration: Duration(seconds: 2),
+        rmsDbfs: -24,
+        peakDbfs: -3,
+        clippedFraction: 0,
+        nearZeroFraction: 0.1,
+        activeFrameFraction: 0.8,
+        leadingSilence: Duration(milliseconds: 100),
+        trailingSilence: Duration(milliseconds: 200),
+      ),
+      'voiceBuildFingerprint': VoiceAppBuildFingerprint(
+        applicationId: 'org.mozufu.tempestmiku',
+        versionName: '1.0.2',
+        versionCode: 3,
+        buildType: 'release',
+        apkSha256:
+            '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      ),
+    });
+    expect(voice.voiceQualityIssue, VoiceCaptureQualityIssue.tooQuiet);
+    expect(voice.voiceDiagnostics?.duration, const Duration(seconds: 2));
+    expect(voice.voiceBuildFingerprint?.versionCode, 3);
+    expect(
+      voice.voiceTranscriptProvenance,
+      VoiceTranscriptProvenance.selfHosted,
+    );
+
     final bounded = SharedContent.fromEvent({
       'text': 'x' * maxSharedTextLength,
       'subject': 'title',
@@ -84,6 +120,46 @@ void main() {
     );
     expect(
       () => SharedContent.fromEvent({'text': 'x', 'source': 'unknown'}),
+      throwsFormatException,
+    );
+    expect(
+      () => SharedContent.fromEvent({
+        'text': 'x',
+        'voiceQualityIssue': 'clipped',
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => SharedContent.fromEvent({
+        'text': 'x',
+        'source': 'voice',
+        'eventId': '12345678-1234-4abc-8def-1234567890ab',
+        'voiceTranscriptProvenance': 'cloud',
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => SharedContent.fromEvent({
+        'text': 'x',
+        'voiceBuildFingerprint': VoiceAppBuildFingerprint(
+          applicationId: 'org.mozufu.tempestmiku',
+          versionName: '1.0.2',
+          versionCode: 3,
+          buildType: 'release',
+          apkSha256:
+              '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        ),
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => SharedContent.fromEvent({
+        'text': 'x',
+        'voiceDiagnostics': VoiceCaptureDiagnostics.fromPcm16(
+          Uint8List.fromList([0, 0]),
+          sampleRate: localAsrSampleRate,
+        ),
+      }),
       throwsFormatException,
     );
     expect(

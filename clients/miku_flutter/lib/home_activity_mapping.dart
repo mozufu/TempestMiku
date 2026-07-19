@@ -170,6 +170,8 @@ _ActivityItem? _activityFromEvent(MikuEvent e) {
               '${review.targetKind} addendum · ${review.targetId} · ${review.status}',
           detail: _joinedDetail([
             review.preview,
+            if (review.isAutoCandidate)
+              'Auto proposal · ${review.candidateTrigger.replaceAll('_', ' ')} · ${review.evidenceCount ?? 0} evidence records',
             review.applyEnabled
                 ? 'Apply enabled'
                 : 'Review only · apply disabled',

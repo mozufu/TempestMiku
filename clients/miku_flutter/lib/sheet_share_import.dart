@@ -77,6 +77,15 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
     final copy = widget.copy;
     final isSelection = _content.source == SharedContentSource.selection;
     final isQuickCapture = _content.source == SharedContentSource.quickCapture;
+    final isVoice = _content.source == SharedContentSource.voice;
+    final voiceDiagnostics = isVoice ? _content.voiceDiagnostics : null;
+    final voiceBuildFingerprint =
+        isVoice ? _content.voiceBuildFingerprint : null;
+    final voiceTranscriptProvenance =
+        isVoice
+            ? _content.voiceTranscriptProvenance ??
+                VoiceTranscriptProvenance.local
+            : VoiceTranscriptProvenance.local;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final canSend = _controller.text.trim().isNotEmpty && _destination != null;
     return AnimatedPadding(
@@ -111,6 +120,8 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                   child: Icon(
                     isSelection
                         ? Icons.text_fields_rounded
+                        : isVoice
+                        ? Icons.graphic_eq_rounded
                         : isQuickCapture
                         ? Icons.edit_note_rounded
                         : Icons.share_outlined,
@@ -125,6 +136,8 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                       Text(
                         isSelection
                             ? copy.askMikuAboutThis
+                            : isVoice
+                            ? copy.voiceCapture
                             : isQuickCapture
                             ? copy.quickCapture
                             : copy.shareWithMiku,
@@ -175,6 +188,154 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                 ),
               ),
             ],
+            if (isVoice && _content.voiceQualityIssue != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                key: const ValueKey('voiceCaptureQualityWarning'),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: tok.warning.withValues(alpha: 0.12),
+                  border: Border.all(
+                    color: tok.warning.withValues(alpha: 0.35),
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: tok.warning,
+                      size: 19,
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Text(
+                        copy.voiceCaptureQualityWarning(
+                          _content.voiceQualityIssue!,
+                        ),
+                        style: TextStyle(color: tok.text, fontSize: 12.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (voiceDiagnostics != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                key: const ValueKey('voiceCaptureDiagnostics'),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: tok.raised,
+                  border: Border.all(color: tok.border),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.monitor_heart_outlined,
+                          color: tok.accentSoft,
+                          size: 19,
+                        ),
+                        const SizedBox(width: 9),
+                        Text(
+                          copy.voiceCaptureDiagnosticsTitle,
+                          style: TextStyle(
+                            color: tok.text,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      copy.voiceCaptureDiagnosticsSummary(voiceDiagnostics),
+                      key: const ValueKey('voiceCaptureDiagnosticsSummary'),
+                      style: TextStyle(
+                        color: tok.text,
+                        fontSize: 12,
+                        height: 1.45,
+                      ),
+                    ),
+                    if (_content.eventId != null) ...[
+                      const SizedBox(height: 6),
+                      SelectableText(
+                        copy.voiceCaptureId(_content.eventId!),
+                        key: const ValueKey('voiceCaptureId'),
+                        style: TextStyle(
+                          color: tok.text,
+                          fontSize: 11.5,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 6),
+                    Text(
+                      copy.voiceCaptureDiagnosticsPrivacy(
+                        voiceTranscriptProvenance,
+                      ),
+                      style: TextStyle(color: tok.muted, fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (isVoice) ...[
+              const SizedBox(height: 14),
+              Container(
+                key: const ValueKey('voiceBuildFingerprint'),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: tok.raised,
+                  border: Border.all(color: tok.border),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.fingerprint_rounded,
+                          color: tok.accentSoft,
+                          size: 19,
+                        ),
+                        const SizedBox(width: 9),
+                        Text(
+                          copy.voiceBuildFingerprintTitle,
+                          style: TextStyle(
+                            color: tok.text,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      voiceBuildFingerprint == null
+                          ? copy.voiceBuildFingerprintUnavailable
+                          : copy.voiceBuildFingerprintSummary(
+                            voiceBuildFingerprint,
+                          ),
+                      key: const ValueKey('voiceBuildFingerprintSummary'),
+                      style: TextStyle(
+                        color:
+                            voiceBuildFingerprint == null
+                                ? tok.muted
+                                : tok.text,
+                        fontSize: 12,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             TextField(
               key: const ValueKey('shareImportEditor'),
@@ -187,12 +348,19 @@ class _ShareImportSheetState extends State<_ShareImportSheet> {
                 labelText:
                     isSelection
                         ? copy.selectedText
+                        : isVoice
+                        ? copy.transcriptDraft
                         : isQuickCapture
                         ? copy.captureDraft
                         : copy.sharedContent,
                 helperText:
                     isSelection
                         ? copy.selectedFromAndroid
+                        : isVoice
+                        ? voiceTranscriptProvenance ==
+                                VoiceTranscriptProvenance.selfHosted
+                            ? copy.voiceCapturedSelfHosted
+                            : copy.voiceCapturedOnDevice
                         : isQuickCapture
                         ? copy.quickCaptureFromAndroid
                         : copy.sharedFromAndroid,

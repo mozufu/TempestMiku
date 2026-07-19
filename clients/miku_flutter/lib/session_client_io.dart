@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -15,6 +16,7 @@ part 'session_client_io/drive.dart';
 part 'session_client_io/events.dart';
 part 'session_client_io/sessions.dart';
 part 'session_client_io/transport.dart';
+part 'session_client_io/voice_asr.dart';
 
 MikuSessionClient createClient() => NativeMikuSessionClient();
 
@@ -24,8 +26,11 @@ class NativeMikuSessionClient
         ServerTargetClient,
         PushRegistrationClient,
         NotificationReplyAuthorityClient {
-  NativeMikuSessionClient({DeviceTokenStore? tokenStore})
-    : _tokenStore = tokenStore ?? SecureDeviceTokenStore();
+  NativeMikuSessionClient({
+    DeviceTokenStore? tokenStore,
+    this.voiceAsrRequestTimeout = const Duration(seconds: 50),
+    this.openVoiceAsrRequestForTesting,
+  }) : _tokenStore = tokenStore ?? SecureDeviceTokenStore();
 
   static const _serverBaseUrlKey = 'tempestmiku.serverBaseUrl';
   static const _sessionIdKey = 'tempestmiku.sessionId';
@@ -37,8 +42,17 @@ class NativeMikuSessionClient
 
   final HttpClient _http = HttpClient();
   final DeviceTokenStore _tokenStore;
+  final Duration voiceAsrRequestTimeout;
+  @visibleForTesting
+  final Future<HttpClientRequest> Function(String method, Uri uri)?
+  openVoiceAsrRequestForTesting;
   DeviceCredential? _cachedCredential;
   bool _tokenLoaded = false;
+  bool _voiceAsrRequestActive = false;
+  int _voiceAsrRequestEpoch = 0;
+  HttpClientRequest? _activeVoiceAsrRequest;
+  Completer<void>? _activeVoiceAsrDone;
+  Completer<Map<String, Object?>>? _activeVoiceAsrCancellation;
 
   @override
   String pairingDeviceName() => _pairingDeviceNameImpl();
@@ -73,6 +87,26 @@ class NativeMikuSessionClient
 
   @override
   Future<void> unregisterPush() => _unregisterPushImpl();
+
+  @override
+  Future<VoiceAsrEngineCatalog> voiceAsrEngines() => _voiceAsrEnginesImpl();
+
+  @override
+  Future<VoiceAsrTranscript> transcribeVoicePcm16({
+    required String engineId,
+    required String captureId,
+    required int sampleRate,
+    required Uint8List pcm16,
+  }) => _transcribeVoicePcm16Impl(
+    engineId: engineId,
+    captureId: captureId,
+    sampleRate: sampleRate,
+    pcm16: pcm16,
+  );
+
+  @override
+  Future<void> cancelVoiceAsrTranscription() =>
+      _cancelVoiceAsrTranscriptionImpl();
 
   @override
   Future<ModeCatalog> modeCatalog() => _modeCatalogImpl();

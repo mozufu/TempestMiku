@@ -1,7 +1,11 @@
+import 'voice_capture_service_platform.dart';
+
 const maxSharedTextLength = 16384;
 const maxSharedSubjectLength = 240;
 
-enum SharedContentSource { share, selection, quickCapture }
+enum SharedContentSource { share, selection, quickCapture, voice }
+
+enum VoiceTranscriptProvenance { local, selfHosted }
 
 class SharedContent {
   const SharedContent({
@@ -10,6 +14,10 @@ class SharedContent {
     this.truncated = false,
     this.source = SharedContentSource.share,
     this.eventId,
+    this.voiceQualityIssue,
+    this.voiceDiagnostics,
+    this.voiceBuildFingerprint,
+    this.voiceTranscriptProvenance,
   });
 
   factory SharedContent.fromEvent(Map<Object?, Object?> event) {
@@ -17,6 +25,7 @@ class SharedContent {
       null || 'share' => SharedContentSource.share,
       'selection' => SharedContentSource.selection,
       'quick_capture' => SharedContentSource.quickCapture,
+      'voice' => SharedContentSource.voice,
       _ => throw const FormatException('shared content has an invalid source'),
     };
     final rawText = event['text'];
@@ -32,11 +41,78 @@ class SharedContent {
       throw const FormatException('shared content is empty');
     }
     final eventId =
-        source == SharedContentSource.quickCapture ? event['eventId'] : null;
-    if (source == SharedContentSource.quickCapture &&
+        source == SharedContentSource.quickCapture ||
+                source == SharedContentSource.voice
+            ? event['eventId']
+            : null;
+    if ((source == SharedContentSource.quickCapture ||
+            source == SharedContentSource.voice) &&
         (eventId is! String || !_isQuickCaptureId(eventId))) {
-      throw const FormatException('quick capture is missing its event id');
+      throw const FormatException('capture is missing its event id');
     }
+    final voiceQualityIssue = switch ((
+      source: source,
+      value: event['voiceQualityIssue'],
+    )) {
+      (source: SharedContentSource.voice, value: null) => null,
+      (source: SharedContentSource.voice, value: 'tooShort') =>
+        VoiceCaptureQualityIssue.tooShort,
+      (source: SharedContentSource.voice, value: 'tooQuiet') =>
+        VoiceCaptureQualityIssue.tooQuiet,
+      (source: SharedContentSource.voice, value: 'clipped') =>
+        VoiceCaptureQualityIssue.clipped,
+      (source: _, value: null) => null,
+      _ =>
+        throw const FormatException(
+          'shared content has an invalid voice quality issue',
+        ),
+    };
+    final voiceDiagnostics = switch ((
+      source: source,
+      value: event['voiceDiagnostics'],
+    )) {
+      (
+        source: SharedContentSource.voice,
+        value: VoiceCaptureDiagnostics diagnostics,
+      ) =>
+        diagnostics,
+      (source: SharedContentSource.voice, value: null) => null,
+      (source: _, value: null) => null,
+      _ =>
+        throw const FormatException(
+          'shared content has invalid voice diagnostics',
+        ),
+    };
+    final voiceBuildFingerprint = switch ((
+      source: source,
+      value: event['voiceBuildFingerprint'],
+    )) {
+      (
+        source: SharedContentSource.voice,
+        value: VoiceAppBuildFingerprint fingerprint,
+      ) =>
+        fingerprint,
+      (source: SharedContentSource.voice, value: null) => null,
+      (source: _, value: null) => null,
+      _ =>
+        throw const FormatException(
+          'shared content has invalid voice build fingerprint',
+        ),
+    };
+    final voiceTranscriptProvenance = switch ((
+      source: source,
+      value: event['voiceTranscriptProvenance'],
+    )) {
+      (source: SharedContentSource.voice, value: null || 'local') =>
+        VoiceTranscriptProvenance.local,
+      (source: SharedContentSource.voice, value: 'self_hosted') =>
+        VoiceTranscriptProvenance.selfHosted,
+      (source: _, value: null) => null,
+      _ =>
+        throw const FormatException(
+          'shared content has invalid voice transcript provenance',
+        ),
+    };
     final rawSubject =
         source == SharedContentSource.share ? event['subject'] : null;
     final sanitizedSubject =
@@ -58,6 +134,10 @@ class SharedContent {
       truncated: wasTruncated,
       source: source,
       eventId: eventId as String?,
+      voiceQualityIssue: voiceQualityIssue,
+      voiceDiagnostics: voiceDiagnostics,
+      voiceBuildFingerprint: voiceBuildFingerprint,
+      voiceTranscriptProvenance: voiceTranscriptProvenance,
     );
   }
 
@@ -66,6 +146,10 @@ class SharedContent {
   final bool truncated;
   final SharedContentSource source;
   final String? eventId;
+  final VoiceCaptureQualityIssue? voiceQualityIssue;
+  final VoiceCaptureDiagnostics? voiceDiagnostics;
+  final VoiceAppBuildFingerprint? voiceBuildFingerprint;
+  final VoiceTranscriptProvenance? voiceTranscriptProvenance;
 }
 
 bool _isQuickCaptureId(String value) => RegExp(

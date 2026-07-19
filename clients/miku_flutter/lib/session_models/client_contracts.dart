@@ -31,6 +31,17 @@ Future<void> sendIdempotentMessageWithRetry({
 }
 
 abstract class MikuSessionClient {
+  Future<VoiceAsrEngineCatalog> voiceAsrEngines();
+
+  Future<VoiceAsrTranscript> transcribeVoicePcm16({
+    required String engineId,
+    required String captureId,
+    required int sampleRate,
+    required Uint8List pcm16,
+  });
+
+  Future<void> cancelVoiceAsrTranscription();
+
   Future<ModeCatalog> modeCatalog();
 
   Future<MikuSession> createOrReuseSession();

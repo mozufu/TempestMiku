@@ -53,7 +53,7 @@ android {
     buildFeatures {
         buildConfig = true
     }
-    // flutter_secure_storage 10.x and mobile_scanner's CameraX graph require API 36 headers.
+    // The retained platform bridges and their pinned Android dependencies require API 36 headers.
     compileSdk = 36
     ndkVersion = "26.1.10909125"
 

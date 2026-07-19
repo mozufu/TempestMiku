@@ -38,8 +38,6 @@ impl EvidenceRecorder {
         let root = root.into();
         fs::create_dir_all(root.join("resources"))
             .with_context(|| format!("creating evidence resources dir {}", root.display()))?;
-        fs::create_dir_all(root.join("ui"))
-            .with_context(|| format!("creating evidence ui dir {}", root.display()))?;
         let root = fs::canonicalize(&root)
             .with_context(|| format!("canonicalizing evidence dir {}", root.display()))?;
         let events_file = ndjson_file(root.join("events.ndjson"))?;

@@ -8,9 +8,11 @@
 The core declared UI / deployment out of scope (design README). This is the deliberate expansion
 (decision A): the Rust core runs as a long-lived service; clients are thin views over its event stream.
 
-**Implementation status (2026-07-10):** the audit hardening described here has landed, but production
-completion remains gated on the full Rust, two-process Postgres, Flutter/Playwright, authenticated
-Android release, certificate, and secret-leak verification matrix.
+**Implementation status (2026-07-19):** the server/API and historical client acceptance evidence
+remain valid, but the previous Flutter/Web presentation layer has been intentionally removed for a
+clean rewrite. The repository retains the typed Dart HTTP/SSE transports, wire models, credential
+handling, and native notification/share/voice/ASR bridges. This section still specifies the target
+client contract; it no longer describes a checked-in runnable UI.
 
 ## 27.0 Design stance
 
@@ -518,8 +520,9 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   homolab HTTP executor. The coordinator registers the connector into each tm-lang sandbox through
   the existing `SessionHostConnector`; the worker reuses `tm-host` policy, linked-path, approval,
   artifact, and Linux-isolation implementations rather than defining a second capability system.
-- Clients live **outside** the Rust workspace: `clients/miku_flutter` (one codebase targeting
-  Web/PWA and Android) plus `clients/miku_web` smoke/evidence tests (§28).
+- Client contracts live **outside** the Rust workspace in `clients/miku_flutter`. The previous app
+  entrypoint, presentation widgets, Web shell, and `clients/miku_web` Playwright suite were removed
+  before the UI rewrite; `lib/miku_api.dart` is the retained public boundary.
 
 ## 27.8 Failure modes & degradation
 
@@ -545,7 +548,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 ## 27.9 Local E2E hatch
 
 `apps/tm-e2e` is a local/dev harness that lets a scripted or opt-in live LLM actor speak to Miku
-through the same authenticated session API as the Web/PWA client. It creates sessions, sends durable turns,
+through the same authenticated session API as future clients. It creates sessions, sends durable turns,
 reads SSE with `Last-Event-ID`, resolves approvals, verifies memory resources, promotes project
 state, and reads resource views without adding a privileged debug endpoint or a second execution path.
 The `evolution-policy` recording also runs real post-session dreaming, recovers pending install and
@@ -553,10 +556,10 @@ rollback approvals, activates two immutable versions, reads `skill://` through t
 and proves catalog reload plus rollback.
 
 The preferred manual/dev gate is `cargo run -p tm-e2e -- record suite`. It starts an in-process
-`tm-server` fixture, records raw SSE and HTTP evidence, captures referenced resources, drives the real
-Flutter Web UI through Playwright, and writes a human-openable evidence bundle under
+`tm-server` fixture, records raw SSE and HTTP evidence, captures referenced resources, and writes a
+human-openable evidence bundle under
 `target/tm-e2e/runs/<timestamp>-suite/` (`manifest.json`, `events.ndjson`, `http.ndjson`,
-`transcript.md`, resource captures, UI screenshots/video/trace, `report.md`, and `index.html`).
+`transcript.md`, resource captures, `report.md`, and `index.html`).
 
 Normal `cargo test` uses scripted API/actor coverage and an in-process `tm-server` fixture, so it stays
 network-free and does not require Flutter or Playwright. Live actor recordings require
@@ -567,16 +570,9 @@ one offline evidence run. It patches a disposable linked crate, runs a targeted 
 resolves the resulting process-output spill through `artifact://`, proves denied/timed-out writes do
 not apply, and preserves the message turn id on every replayed approval/cell/final event.
 
-Client smoke is split by cost:
-
-- `cd clients/miku_flutter && nix develop --command flutter test` runs the phone/widget smoke,
-  including dream-origin memory proposal approval.
-- `cd clients/miku_flutter/android && nix develop --command ./gradlew ... assembleDebug` packages the
-  Android debug APK from the same client code; see `docs/running-miku.md` for the full command.
-- `cd clients/miku_web && npm test` runs the normal Playwright API/web smoke. The heavier UI evidence
-  recording is opt-in: set `TM_E2E_RUN_DIR=<run-dir>` and `TM_E2E_BASE_URL=<server-url>` and run
-  `npm run test:evidence`.
-- `TM_WEB_SMOKE_PORT` overrides the normal web-smoke server port; by default it uses `8787`.
+During the UI rewrite, client validation is contract-only: run `flutter analyze` and `flutter test`
+from `clients/miku_flutter`. App builds and browser automation resume only after a new entrypoint and
+presentation layer are deliberately added.
 
 ## 27.10 Mechanism provenance
 

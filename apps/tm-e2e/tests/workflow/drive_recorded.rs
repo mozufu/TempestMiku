@@ -41,8 +41,6 @@ async fn recorded_api_suite_writes_evidence_bundle() {
 
     let manifest = run_record_api(RecordOptions {
         output_dir: Some(run_dir.clone()),
-        headed: false,
-        skip_flutter_build: true,
     })
     .await
     .unwrap();
@@ -136,8 +134,6 @@ async fn recorded_native_coding_proves_public_api_edit_test_approval_and_replay(
 
     let manifest = run_record_native_coding(RecordOptions {
         output_dir: Some(run_dir.clone()),
-        headed: false,
-        skip_flutter_build: true,
     })
     .await
     .unwrap();

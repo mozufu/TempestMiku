@@ -1,7 +1,7 @@
 # tm-e2e
 
 `tm-e2e` is the local/dev E2E hatch for letting an LLM-driven actor speak to
-Miku through the same HTTP/SSE session API as the Flutter/Web clients.
+Miku through the public HTTP/SSE session API used by client implementations.
 
 It does not add a production endpoint or model-visible capability. The driver
 only calls:
@@ -112,20 +112,13 @@ Useful variants:
 
 ```sh
 cargo run -p tm-e2e -- record api
-cargo run -p tm-e2e -- record ui --headed
 cargo run -p tm-e2e -- record native-coding
 TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api
 TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record native-actor
 ```
 
-The normal `suite` run starts an in-process `tm-server` fixture, uses the
-deterministic echo/scripted backends, drives the real Flutter Web UI through
-Playwright, and stays network-free. If the Flutter Web build already exists,
-skip rebuilding it with:
-
-```sh
-TM_E2E_SKIP_FLUTTER_BUILD=1 cargo run -p tm-e2e -- record suite
-```
+The normal `suite` run starts an in-process `tm-server` fixture, uses deterministic
+echo/scripted backends, exercises the public and actor APIs, and stays network-free.
 
 Each evidence bundle includes:
 
@@ -135,8 +128,6 @@ Each evidence bundle includes:
 - `http.ndjson` — public API requests/responses observed by the Rust client path.
 - `transcript.md` — readable scenario timeline.
 - `resources/` — captured previews/resolved resource envelopes.
-- `ui/` — Playwright screenshots, videos/traces, console logs, network logs, and
-  UI result JSON.
 - `report.md` and `index.html` — human-openable summaries.
 
 ## Actor Smoke

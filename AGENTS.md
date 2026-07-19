@@ -41,7 +41,9 @@
     it is not a second session/model server.
   - `apps/tm-e2e`: local/dev public-API workflow harness for scripted and opt-in live session smoke
     coverage. The retired TypeScript-versus-tm runner survives only as historical evidence/corpus.
-  - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.
+  - `clients/miku_flutter`: retained Dart HTTP/SSE contracts, wire models, credential storage, and
+    native notification/share/voice/ASR bridges for a clean frontend rewrite. It intentionally has
+    no app entrypoint or presentation widgets; the old `clients/miku_web` UI smoke was removed.
 - The P4/P5 production-hardening implementation has landed: ordered checksummed migrations,
   transactional session end, durable approval effects, fenced dream/cron leases, `api|worker|all`
   supervision, Postgres drive metadata/link tombstones, server-owned memory authority, durable turns,

@@ -4,6 +4,11 @@ TempestMiku is a Rust rewrite of the running `hermes-agent` Tempest Miku deploym
 self-hosted, single-user, characterful AI companion built on a streaming code-execution agent
 runtime.
 
+The previous Flutter/Web presentation layer was removed on 2026-07-19 for a clean rewrite.
+`clients/miku_flutter` currently retains only the typed HTTP/SSE client, wire models, credential
+handling, and native notification/share/voice/ASR bridges. There is no application entrypoint or
+checked-in Web UI; `tm-server` remains the authoritative API.
+
 Current implementation status: M0-M4 and P0-P10 are closed. P6.6 has a production local
 voice-draft implementation and an explicit, default-disabled option for
 an owner-controlled home ASR service. The two engines never silently fall back to one another, and
@@ -25,7 +30,7 @@ uses ordered checksummed migrations
 and backs sessions, turns, approvals/effects, dream/cron leases, drive metadata/link tombstones, and
 the durable memory/embedding spine. `tm-server` supports explicit `api`, `worker`, and `all` roles,
 durable `202` message turns, one replayable `session_event` SSE envelope, and secure single-owner
-device pairing for Web and Android.
+device pairing for future Web and Android clients.
 
 The established P0-P10 audit and current software-integration matrix pass: strict Rust checks,
 clean-schema Postgres tests, split API/worker restart recovery, Flutter tests, signed Android APK

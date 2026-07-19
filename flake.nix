@@ -1,8 +1,8 @@
 {
-  description = "TempestMiku — code-execution agent runtime and Flutter client";
+  description = "TempestMiku — code-execution agent runtime and Flutter client contracts";
 
   inputs = {
-    # Flutter on 25.05 carries Dart 3.7+, required by the pinned offline QR scanner.
+    # Flutter on 25.05 carries Dart 3.7+, required by the retained client contracts.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";

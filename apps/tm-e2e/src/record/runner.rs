@@ -1,15 +1,11 @@
 use super::*;
 
 pub async fn run_record_suite(options: RecordOptions) -> Result<EvidenceManifest> {
-    run_recorded("suite", options, true, true, true, false).await
+    run_recorded("suite", options, true, true, false).await
 }
 
 pub async fn run_record_api(options: RecordOptions) -> Result<EvidenceManifest> {
-    run_recorded("api", options, true, true, false, false).await
-}
-
-pub async fn run_record_ui(options: RecordOptions) -> Result<EvidenceManifest> {
-    run_recorded("ui", options, false, false, true, false).await
+    run_recorded("api", options, true, true, false).await
 }
 
 pub async fn run_record_live_api(options: RecordOptions) -> Result<EvidenceManifest> {
@@ -18,7 +14,7 @@ pub async fn run_record_live_api(options: RecordOptions) -> Result<EvidenceManif
         env::var("TM_LLM_E2E_LIVE").ok().as_deref() == Some("1"),
         "record live-api is gated by TM_LLM_E2E_LIVE=1"
     );
-    run_recorded("live-api", options, true, false, false, true).await
+    run_recorded("live-api", options, true, false, true).await
 }
 
 pub async fn run_record_native_actor(options: RecordOptions) -> Result<EvidenceManifest> {
@@ -51,7 +47,6 @@ async fn run_recorded(
     options: RecordOptions,
     include_public_api: bool,
     include_actor_api: bool,
-    include_ui: bool,
     live_api: bool,
 ) -> Result<EvidenceManifest> {
     crate::load_dotenv();
@@ -64,10 +59,8 @@ async fn run_recorded(
     let result = run_recorded_inner(
         label,
         &recorder,
-        &options,
         include_public_api,
         include_actor_api,
-        include_ui,
         live_api,
     )
     .await;
@@ -84,10 +77,8 @@ async fn run_recorded(
 async fn run_recorded_inner(
     label: &str,
     recorder: &EvidenceRecorder,
-    options: &RecordOptions,
     include_public_api: bool,
     include_actor_api: bool,
-    include_ui: bool,
     live_api: bool,
 ) -> Result<()> {
     recorder.append_transcript(format!("- Run `{label}` started at `{}`.", timestamp()));
@@ -120,10 +111,5 @@ async fn run_recorded_inner(
     if include_actor_api {
         run_actor_api_scenario(recorder, &client).await?;
     }
-    if include_ui {
-        let server_url = client.base_url().to_string();
-        run_ui_scenario(recorder, &client, &server_url, options).await?;
-    }
-
     Ok(())
 }

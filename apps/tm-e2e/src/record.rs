@@ -13,7 +13,6 @@ use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::stream::{self, BoxStream};
-use serde::Deserialize;
 use serde_json::{Value, json, to_value};
 use tm_agents::{ActorBudget, ActorId, ActorRecord, ActorStatus, FailureReason, MailboxRegistry};
 use tm_core::{
@@ -30,13 +29,13 @@ use tm_server::{
     RosterCodingEventSink, ServerDreamWorker, ServerError, Store, StoreEvent, StoreMemoryProvider,
     app,
 };
-use tokio::{process::Command, sync::broadcast};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::{
     E2eConfig, EvidenceManifest, EvidenceRecorder, LiveSpeaker, MikuClient, ScriptedSpeaker,
-    ServerEvidence, UiEvidence, WorkflowOptions, default_run_dir, run_actor_smoke, run_workflow,
-    timestamp, write_workflow_record,
+    ServerEvidence, WorkflowOptions, default_run_dir, run_actor_smoke, run_workflow, timestamp,
+    write_workflow_record,
 };
 
 mod api_scenarios;
@@ -46,24 +45,55 @@ mod native_actor_scenario;
 mod native_actor_server;
 mod runner;
 mod server;
-mod ui_scenario;
 
 use api_scenarios::{run_actor_api_scenario, run_public_api_scenario};
 use backend::RecordingBackend;
 pub use evolution_policy::run_record_evolution_policy;
 use native_actor_scenario::{ensure_live_llm_env, run_record_native_actor_inner};
 use native_actor_server::NativeActorRecordingServer;
-pub use runner::{
-    run_record_api, run_record_live_api, run_record_native_actor, run_record_suite, run_record_ui,
-};
+pub use runner::{run_record_api, run_record_live_api, run_record_native_actor, run_record_suite};
 use server::RecordingServer;
-use ui_scenario::{capture_resource, record_scenario_result, run_ui_scenario};
 
 #[derive(Debug, Clone, Default)]
 pub struct RecordOptions {
     pub output_dir: Option<PathBuf>,
-    pub headed: bool,
-    pub skip_flutter_build: bool,
+}
+
+async fn capture_resource(
+    recorder: &EvidenceRecorder,
+    client: &MikuClient,
+    session_id: &str,
+    uri: &str,
+) -> Result<()> {
+    let preview = client
+        .preview_resource(session_id, uri)
+        .await
+        .with_context(|| format!("previewing resource {uri}"))?;
+    let resolved = client
+        .resolve_resource(session_id, uri)
+        .await
+        .with_context(|| format!("resolving resource {uri}"))?;
+    recorder.record_resource(session_id, uri, &preview, &resolved)?;
+    Ok(())
+}
+
+fn record_scenario_result(
+    recorder: &EvidenceRecorder,
+    name: &str,
+    started_at: String,
+    result: &Result<Value>,
+) {
+    recorder.record_scenario(crate::RecordedScenario {
+        name: name.to_string(),
+        ok: result.is_ok(),
+        started_at,
+        finished_at: timestamp(),
+        details: result
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|_| json!({ "status": "failed" })),
+        error: result.as_ref().err().map(|err| err.to_string()),
+    });
 }
 
 const LIVE_PREFLIGHT_TOKEN: &str = "TEMPEST_MIKU_E2E_OK";

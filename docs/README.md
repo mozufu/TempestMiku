@@ -7,7 +7,7 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
 ## Start here
 
 - **[Design docs](design/README.md)** — the full specification, split by section.
-- **[Running Miku](running-miku.md)** — local server, browser app, CLI, and e2e run paths.
+- **[Running Miku](running-miku.md)** — local server, retained client contracts, CLI, and e2e run paths.
 - **[Coordinator/worker deployment](deploy-coordinator-worker.md)** — environment-neutral build,
   networking, secret-file, supervisor, configuration, isolation, rollout, and recovery contract.
 - **[Roadmap](../ROADMAP.md)** — canonical milestones and execution order.

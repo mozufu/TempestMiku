@@ -4,8 +4,8 @@ use anyhow::{Result, bail, ensure};
 use tm_e2e::{
     LiveSpeaker, MikuClient, RecordOptions, ScriptedSpeaker, WorkflowOptions, load_dotenv,
     run_p2_voice_live_eval, run_record_api, run_record_evolution_policy, run_record_live_api,
-    run_record_native_actor, run_record_native_coding, run_record_suite, run_record_ui,
-    run_workflow, write_p2_voice_live_report, write_workflow_record,
+    run_record_native_actor, run_record_native_coding, run_record_suite, run_workflow,
+    write_p2_voice_live_report, write_workflow_record,
 };
 
 #[tokio::main]
@@ -75,20 +75,17 @@ async fn run_legacy(args: CliArgs) -> Result<()> {
 async fn run_record(args: RecordCliArgs) -> Result<()> {
     let options = RecordOptions {
         output_dir: args.output_dir,
-        headed: args.headed,
-        skip_flutter_build: args.skip_flutter_build,
     };
     let manifest = match args.mode.as_str() {
         "suite" => run_record_suite(options).await?,
         "api" => run_record_api(options).await?,
-        "ui" => run_record_ui(options).await?,
         "live-api" => run_record_live_api(options).await?,
         "native-actor" => run_record_native_actor(options).await?,
         "native-coding" => run_record_native_coding(options).await?,
         "evolution-policy" => run_record_evolution_policy(options).await?,
         other => {
             bail!(
-                "unsupported tm-e2e record mode {other}; expected suite, api, ui, live-api, native-actor, native-coding, or evolution-policy"
+                "unsupported tm-e2e record mode {other}; expected suite, api, live-api, native-actor, native-coding, or evolution-policy"
             )
         }
     };
@@ -263,16 +260,12 @@ impl CliArgs {
 struct RecordCliArgs {
     mode: String,
     output_dir: Option<PathBuf>,
-    headed: bool,
-    skip_flutter_build: bool,
 }
 
 impl RecordCliArgs {
     fn parse(raw: &[String]) -> Result<Self> {
         let mut mode = None;
         let mut output_dir = None;
-        let mut headed = false;
-        let mut skip_flutter_build = false;
         let mut args = raw.iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -288,8 +281,6 @@ impl RecordCliArgs {
                     };
                     output_dir = Some(PathBuf::from(path));
                 }
-                "--headed" => headed = true,
-                "--skip-flutter-build" => skip_flutter_build = true,
                 value if value.starts_with('-') => bail!("unsupported tm-e2e record flag {value}"),
                 value => {
                     if mode.replace(value.to_string()).is_some() {
@@ -301,8 +292,6 @@ impl RecordCliArgs {
         Ok(Self {
             mode: mode.unwrap_or_else(|| "suite".to_string()),
             output_dir,
-            headed,
-            skip_flutter_build,
         })
     }
 }
@@ -320,9 +309,8 @@ fn print_help() {
            cargo run -p tm-e2e -- scripted [--personal-message text] [--coding-message text] [--record-json path]\n  \
            TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- live [--record-json path]\n\n\
            TM_P2_VOICE_LIVE=1 cargo run -p tm-e2e -- voice-eval [--output path]\n\n\
-           cargo run -p tm-e2e -- record suite [--output-dir path] [--headed] [--skip-flutter-build]\n  \
+           cargo run -p tm-e2e -- record suite [--output-dir path]\n  \
            cargo run -p tm-e2e -- record api [--output-dir path]\n  \
-           cargo run -p tm-e2e -- record ui [--output-dir path] [--headed]\n  \
   TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record live-api [--output-dir path]\n  \
   TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... cargo run -p tm-e2e -- record native-actor [--output-dir path]\n\n\
            cargo run -p tm-e2e -- record native-coding [--output-dir path]\n\n\
@@ -333,7 +321,6 @@ fn print_help() {
            TM_MIKU_E2E_TIMEOUT_MS    SSE wait timeout, default 15000\n  \
            TM_E2E_REQUIRE_ARTIFACT   set 1 to require an artifact event/resource\n  \
            TM_E2E_RECORD_PATH        JSON transcript path, default target/tm-e2e/<mode>-latest.json\n  \
-           TM_E2E_SPEAKER_MODEL      live-mode speaker model, default OPENAI_MODEL\n  \
-           TM_E2E_SKIP_FLUTTER_BUILD set 1 to reuse clients/miku_flutter/build/web for record ui/suite"
+           TM_E2E_SPEAKER_MODEL      live-mode speaker model, default OPENAI_MODEL"
     );
 }

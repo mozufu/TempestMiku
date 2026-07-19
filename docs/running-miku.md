@@ -2,7 +2,7 @@
 
 This guide covers the local development run paths for TempestMiku:
 
-- the browser app served by `tm-server`
+- the retained Flutter client contracts used by the UI rewrite
 - the HTTP/SSE API
 - the one-shot `tm` CLI
 - the local e2e harness
@@ -50,13 +50,14 @@ If both `OPENAI_API_KEY` and `OPENAI_BASE_URL` are unset or empty, `tm-server` s
 mode. Echo mode is useful for UI/API smoke tests, but it is not live Miku. The CLI always uses the
 OpenAI-compatible client and needs a reachable endpoint.
 
-## Browser App
+## Frontend rewrite status
 
-Build the Flutter Web client:
+The previous Flutter/Web UI has been removed. `clients/miku_flutter` is currently a contract package:
+it retains the HTTP/SSE clients, wire models, credential handling, and native platform bridges, but
+deliberately has no `lib/main.dart`, screens, widgets, theme, or Web shell. See its package README
+before starting the replacement UI.
 
-```sh
-nix develop --command bash -lc 'cd clients/miku_flutter && flutter build web'
-```
+The API server remains runnable during the rewrite:
 
 For a functional local server, use Postgres and the combined API/worker role:
 
@@ -66,16 +67,14 @@ TM_SERVER_ROLE=all \
 nix develop --command cargo run -p tm-server
 ```
 
-Open:
+The minimal server-owned pairing bootstrap remains available at:
 
 ```text
 http://127.0.0.1:8787/pair
 ```
 
-For the first loopback browser, click **Pair this web browser**, then continue to `/`. The server
-sets an HttpOnly device cookie; application API calls are not anonymously accessible.
-
-`tm-server` serves `clients/miku_flutter/build/web` by default. To serve a different build:
+There is no application at `/` until the replacement frontend is added. The static hosting hook is
+retained so a replacement Web build can be tested without changing the API server:
 
 ```sh
 TM_WEBUI_DIR=/absolute/path/to/web-build nix develop --command cargo run -p tm-server
@@ -246,7 +245,11 @@ canonical identity; missing, moved, symlink-replaced, revoked, or invalid roots 
 no-database in-memory metadata path is a historical local-development exception: old in-memory drive
 metadata cannot be reconstructed from blobs, and Postgres persistence is forward-authoritative.
 
-## Android Debug Client
+## Historical Android client runbook
+
+The following section records the previously closed Android packaging and physical-device contract.
+It is not a current build path while `lib/main.dart` and the presentation layer are absent. The
+native bridges and security boundaries remain in the tree for the replacement UI to integrate.
 
 The Android app is the same Flutter remote-control client as Web/PWA: it connects to `tm-server` over
 authenticated HTTP/SSE, sends discrete POST controls, and keeps execution on the server.
@@ -891,15 +894,11 @@ For a scripted public-API run against an already running `tm-server`:
 nix develop --command cargo run -p tm-e2e -- scripted
 ```
 
-For the full local evidence suite, including an in-process server fixture and Flutter Web UI
-scenario:
+For the full local API evidence suite with an in-process server fixture:
 
 ```sh
 nix develop --command cargo run -p tm-e2e -- record suite
 ```
-
-The UI part of `record suite` runs `npm exec playwright` from `clients/miku_web`. If
-`clients/miku_web/node_modules` is absent, install the Node dependencies in that directory first.
 
 For the offline native tm coding-backend gate (linked-repo patch, targeted
 test, artifact spill, approval approve/deny/timeout, and durable turn replay):

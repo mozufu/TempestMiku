@@ -8,6 +8,8 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
 
 - **[Design docs](design/README.md)** — the full specification, split by section.
 - **[Running Miku](running-miku.md)** — local server, browser app, CLI, and e2e run paths.
+- **[Coordinator/worker deployment](deploy-coordinator-worker.md)** — environment-neutral build,
+  networking, secret-file, supervisor, configuration, isolation, rollout, and recovery contract.
 - **[Roadmap](../ROADMAP.md)** — canonical milestones and execution order.
 - **[tm-lang T0-T7 closeout evidence](evidence/2026-07-16-tm-lang-closeout.md)** — language/runtime cutover,
   real host/resource/approval adapter, public/Postgres product seam, comparative fluency, and
@@ -40,7 +42,7 @@ swappable capability modes, built on a code-execution agent runtime. A **rewrite
   showing lumo fails closed without `memory`; the owner-approved homolab native x86_64 bundle is
   retained and locally revalidated.
 - **[M4 homolab production evidence](evidence/2026-07-19-m4-production-homolab.md)** — selected native
-  x86_64 NixOS target, persistent `~/deployment-config` service, exact systemd/cgroup delegation, representative
+  x86_64 NixOS target, persistent service, exact systemd/cgroup delegation, representative
   memory/pids/CPU sizing, retained live report, and post-switch restart proof under the accepted
   hostile-workload/trusted-host-kernel boundary.
 - **[M4 coordinator/worker deployment evidence](evidence/2026-07-19-m4-coordinator-worker.md)** — one

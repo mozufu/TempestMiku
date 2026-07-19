@@ -40,8 +40,9 @@ credentials, query data, or fragments in the loopback endpoint.
 
 ## PR review hardening replay
 
-The current follow-up hardening leaves the frozen P8.1 manifest, thresholds, and recorded lumo
-metrics unchanged. Ordered migrations 0017–0018 add durable authority guard rows, revocation/write
+The current follow-up hardening leaves the frozen P8.1 manifest and thresholds unchanged and
+preserves the historical closeout metrics rather than rewriting them; the current hardening replay
+is recorded separately below. Ordered migrations 0017–0018 add durable authority guard rows, revocation/write
 serialization, scope revisions, monotonic generation activation, pinned dense queries, and input
 limit/failure provenance. Approved legacy and typed memory effects now commit atomically. Prompt
 admission reserves two profile facts, two ranked recalls, and one recent summary before bounded
@@ -78,7 +79,7 @@ overall p95. The cold/warm probes were `3865/708 ms`, provider loss returned the
 1/1 generation. The restart assertion now checks the same frozen baseline-relative acceptance
 contract as the primary live gate instead of hard-coding the historical pre-allocation nDCG of `1.0`.
 
-## Frozen quality result
+## Historical frozen closeout quality result
 
 The same nine-case P8.1 manifest (`d8da1bd…70903`) was replayed through the real turn provider and
 prompt budgeter. The hybrid run used the self-hosted lumo model, not the deterministic test double.
@@ -93,7 +94,8 @@ held-out cohorts. All unsupported, stale, corrected, superseded, cross-owner, an
 inclusion counts are zero. Final context remained at most 5 records and 382 estimated tokens under
 the 1,600-token budget.
 
-The P8.1 50 ms ceiling remains the clean-schema **lexical/Postgres control** and is not rewritten to
+For this historical closeout run, the P8.1 50 ms ceiling remains the clean-schema
+**lexical/Postgres control** and is not rewritten to
 hide local CPU cost. The lumo end-to-end provider run has its own recorded 5,000 ms local ceiling:
 overall p50 was 773.211 ms and p95 was 902.987 ms over seven samples per case. Direct lumo cold/warm
 probes were 3,765/632 ms; a cold probe after provider restart was 3,857 ms. This keeps real turn cost
@@ -119,7 +121,7 @@ visible while staying within the local transport timeout.
   `69e273e00c3f7d530932f3e370a0ab14ce4fa4a837f8b29a9aa0ab971a7ccbe5`.
 - Resumable re-embedding: one live job lease was deliberately abandoned, reclaimed after expiry by
   another worker, embedded through lumo, and promoted to a `ready` generation with 1/1 coverage.
-- Server restart: a second Rust test process reconnected to the same isolated Postgres schema and
+- Historical closeout server restart: a second Rust test process reconnected to the same isolated Postgres schema and
   active embedding generation. It reproduced nDCG@5/Recall@5 = 1.0, zero unsafe inclusions, the same
   candidate bounds, and 899.478 ms overall p95, then removed the evidence schema.
 

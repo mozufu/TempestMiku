@@ -55,6 +55,9 @@ Honcho host id `hermes`; Honcho workspace `tempest-miku`, peer `brian`.
   commitments/deadlines, decisions, shipped artifacts, and workflows; transient moods, secrets, raw
   logs, one-off complaints, large notes, and obvious sensitive PII are skipped before proposal creation
   (§22.8 / §27.6).
+- **Adds bounded P2 ToM:** approved profile facts feed a redacted, no-tool every-third-turn dialectic
+  outside Serious/engineering modes; a confirmed trace is replayed on retry and its output remains
+  untrusted user-channel context (§22.4).
 - **Adds P5 local-first drive/research as post-parity expansion:** `drive.*`, `drive://`, project
   linked-folder/memory views, drive-derived recall chunks, and `research.drive(...)` are new Rust
   surfaces layered on the existing approval/resource model. They must not weaken the inherited Hermes
@@ -70,3 +73,7 @@ P0–P4 (§28) are not "done" until they reproduce the current behavior for thei
 works through the single `execute` SDK (§25), project continuity survives across sessions (§22/§27),
 Miku replies in-voice (§21), the mode router fires (§21.2), memory recall + user profile work (§22),
 and approvals gate the same actions (§21.3). New capabilities layer on **after** parity, not before.
+The deterministic voice fixture calibrates the rubric but does not close live parity: an actual
+non-echo General/grounding/Serious `tm-e2e voice-eval` run must pass and retain its JSON evidence.
+That gate passed on 2026-07-18 and the exact report is retained in
+[`P2 live voice evidence`](../../evidence/2026-07-18-p2-voice-live.json).

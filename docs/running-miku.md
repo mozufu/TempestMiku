@@ -42,6 +42,8 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 # Optional. Use for OpenAI-compatible servers that reject stream_options.include_usage.
 OPENAI_STREAM_USAGE=0
+# Set only for an OpenAI-compatible proxy with broken keep-alive behavior:
+OPENAI_CONNECTION_REUSE=0
 ```
 
 If both `OPENAI_API_KEY` and `OPENAI_BASE_URL` are unset or empty, `tm-server` starts in local echo
@@ -99,6 +101,24 @@ TM_OMP_ACP_ENABLED=0
 TM_PUSH_PROVIDER=disabled # set unifiedpush only after configuring the exact endpoint origin
 ```
 
+The optional home-hosted voice recognizer is disabled unless all three fixed values are present:
+
+```sh
+TM_SELF_HOSTED_ASR_ENDPOINT=https://asr.example.ts.net/transcribe
+TM_SELF_HOSTED_ASR_LABEL='Home TEA-ASR (Taiwan Mandarin)'
+TM_SELF_HOSTED_ASR_MODEL_ID=JacobLinCool/TEA-ASR-1.1-mini
+```
+
+The endpoint is trusted operator configuration; Android never receives it and cannot replace it.
+The server accepts HTTPS, or plain HTTP only when the URL host is an exact literal address inside
+Tailscale's `100.64.0.0/10` CGNAT range. User info, query strings, fragments, redirects, ambient
+proxies, and other private/public HTTP destinations fail startup. Omitting all three values disables
+the remote engine; a partial configuration also fails startup so a misspelled label/model cannot
+silently enable a weaker mode. The Flutter drawer still defaults to the on-device model and requires
+an explicit disclosure before selecting this engine. Each recording is a separate foreground
+upload through the paired authenticated server; failure never falls back to local recognition, and
+neither audio nor transcript is persisted by `tm-server`.
+
 Without `TM_DATABASE_URL`, sessions, memory, and drive metadata use non-durable in-memory stores.
 Drive blobs still use the configured artifact root, but entries, attributes/tags, organizer state,
 version counters, corrections, and dynamic link tombstones do not survive a restart. This historical
@@ -125,8 +145,9 @@ and promote a generation only after active-record coverage is complete. The endp
 accepts only plain HTTP on a loopback host without user info, query data, or fragments; the client
 bypasses ambient proxies and refuses redirects. Provider loss, missing/partial generations, and
 configuration mismatch remain visible as typed lexical fallback;
-`openai_compatible` is rejected until the P9 egress/opaque-secret boundary exists. The checked-in
-lumo deployment binds the embedding service only to `127.0.0.1:11434`; see the
+`openai_compatible` remains rejected even though P9 now exists: the memory provider has not been
+migrated to the opaque-secret broker, so enabling it would bypass the closed boundary. The checked-in
+lumo deployment binds the local embedding service only to `127.0.0.1:11434`; see the
 [P8 closeout evidence](evidence/2026-07-15-p8-5-fuller-memory.md) for pinned provenance and gates.
 
 Approved P7.1 skill proposals are stored as immutable digest-addressed versions beneath
@@ -326,6 +347,63 @@ ended with exactly two messages. Re-delivering the same capture UUID opened no r
 message count. Killing the process while a draft was visible, then relaunching normally, restored
 the authenticated chat without replaying the draft.
 
+P6.6 keeps voice capture foreground-only and review-only. Local is the default: install the pinned
+model from the in-app drawer only after reviewing its provenance and license; the APK contains no
+model weights. When the server advertises a configured home-hosted engine, the same drawer offers it
+only after an explicit disclosure that audio will leave the phone for the owner's service. Both
+engines open the same editable current/new-session review sheet. Cancel, an unselected destination,
+a capture failure, or a recognition failure sends nothing; neither engine falls back to the other.
+The final package shows
+only aggregate duration/level/clipping/silence diagnostics plus its installed app/version/build type
+and installed-base-APK SHA-256; it neither retains nor uploads the waveform, and fingerprint failure
+never blocks transcription. If evaluating real speech, record only with explicit consent and
+preserve the exact spoken reference separately so quality can be measured without keeping audio.
+
+The exact production model retained its verified state across force-stop plus airplane-mode cold
+start. A consented intermediate-build recording reached editable review without sending but failed
+quality. On 2026-07-19 the final diagnostics-bearing APK `1.0.2+3`
+(`1c68fad452bd0525f21c50aeb389825e51a9893126c6c94679ea8004401c3407`) installed in place and the
+device `base.apk` matched that host hash. One consented exact-reference recording then reached
+editable review with healthy aggregate signal diagnostics and no send. This is install/review
+evidence, not the still-open synthetic A/B, lifecycle/resource/thermal, routing, or full
+real-speaker matrix.
+
+The self-hosted selector and server-authority cancellation fences are packaged in the later signed
+arm64 release `1.0.3+4` (52,300,150 bytes, SHA-256
+`b9cede23fc918c2d1a76c3ce3ef5f72a3a1680716ef0c6b6b58c038997f56079`, the same retained release
+certificate). That artifact passed host inspection with no bundled model/audio. It has not yet been
+installed: the post-build ADB check returned no connected device, so it carries no physical canary
+claim.
+
+The standalone device A/B harness compares the production streaming contract with the pinned
+offline Paraformer candidate without changing production app storage or authority:
+
+```sh
+ADB_SERIAL=<serial> nix develop --command \
+  tools/android_asr_benchmark/benchmark.sh all streaming-production
+# Tap "Run benchmark" on the device, then independently verify the report:
+ADB_SERIAL=<serial> nix develop --command \
+  tools/android_asr_benchmark/benchmark.sh verify-result streaming-production \
+  >target/streaming-paraformer-android.json
+
+ADB_SERIAL=<serial> nix develop --command \
+  tools/android_asr_benchmark/benchmark.sh all offline-paraformer-candidate
+# Tap "Run benchmark" again, then independently verify the report:
+ADB_SERIAL=<serial> nix develop --command \
+  tools/android_asr_benchmark/benchmark.sh verify-result offline-paraformer-candidate \
+  >target/offline-paraformer-android.json
+
+nix develop --command tools/android_asr_benchmark/benchmark.sh verify-pair \
+  target/streaming-paraformer-android.json \
+  target/offline-paraformer-android.json \
+  >target/android-asr-ab.json
+```
+
+The harness requires a real Android process and marks host results ineligible. Its APK has no
+microphone, network, session, or send path. See
+[`tools/android_asr_benchmark/README.md`](../tools/android_asr_benchmark/README.md) and the
+[P6.6 resumption evidence](evidence/2026-07-18-p6-6-on-device-asr-resumption.md).
+
 ```sh
 nix develop --command bash -lc \
   'cd clients/miku_flutter && flutter build apk --debug'
@@ -338,18 +416,26 @@ If `adb` is not on `PATH`, use the SDK copy directly:
 ~/Library/Android/sdk/platform-tools/adb devices
 ```
 
-Release builds never fall back to the debug key. Create the untracked
+Release builds never fall back to the debug key. Either create the untracked
 `clients/miku_flutter/android/key.properties` with `storeFile`, `storePassword`, `keyAlias`, and
-`keyPassword`, then build and inspect its certificate:
+`keyPassword`, or provide all four `TM_ANDROID_RELEASE_STORE_FILE`,
+`TM_ANDROID_RELEASE_STORE_PASSWORD`, `TM_ANDROID_RELEASE_KEY_ALIAS`, and
+`TM_ANDROID_RELEASE_KEY_PASSWORD` environment variables from a local secret manager. Then build and
+run the repository's authoritative release verifier:
 
 ```sh
 nix develop --command bash -lc \
-  'cd clients/miku_flutter && flutter build apk --release'
-~/Library/Android/sdk/build-tools/<version>/apksigner verify --print-certs \
-  clients/miku_flutter/build/app/outputs/flutter-apk/app-release.apk
+  'cd clients/miku_flutter && flutter build apk --release --split-per-abi --target-platform android-arm64'
+nix develop --command tools/verify-p6-6-release-apk.sh
 ```
 
-Verify the reported release signer is the intended certificate and is not Android's debug signer.
+`tools/verify-p6-6-release-apk.sh` is the authoritative P6.6 package check. By default it verifies
+the final split `app-arm64-v8a-release.apk`: application id and pubspec version, non-debuggable and
+backup/cleartext policy, exact permissions, arm64-only native payload, the selected sherpa-onnx
+runtime, absence of bundled model/audio files, APK signature schemes, retained release certificate,
+byte count, and SHA-256. Its printed SHA-256 is the independently supplied build identity for the
+real-speaker scorer; a manual `apksigner` inspection is supplementary and does not replace this
+script.
 
 ## API Smoke
 
@@ -466,6 +552,9 @@ turn boundaries, and the final answer; it remains usable after a nonzero turn-bu
 
 By default, `fs.*`, `code.*`, and `proc.*` fail closed because no linked folders are configured.
 Create `.tempestmiku/config.json`, or point `TM_CONFIG` / `TM_HOST_CONFIG` at another JSON file.
+Unknown fields at the host, linked-folder, approval, self-evolution, egress, and isolation policy
+boundaries are rejected. A misspelled hardening key therefore fails startup instead of silently
+selecting a default-disabled authority profile.
 
 Minimal repo-linked config:
 
@@ -487,6 +576,7 @@ Minimal repo-linked config:
     "tier": "conservative"
   },
   "proc_run_timeout_ms": 180000,
+  "proc_isolation": { "provider": "disabled" },
   "artifact_root": ".tempestmiku/artifacts"
 }
 ```
@@ -496,8 +586,8 @@ Notes:
 - `path` must resolve to an existing directory.
 - `mode` is `ro` or `rw`.
 - `commands` is an allowlist of executable names for `proc.run`.
-- `safe_args` remains accepted for config compatibility, but does not bypass approval while
-  `proc.run` lacks OS-level filesystem and network isolation. Every command requires approval.
+- `safe_args` remains accepted for config compatibility but never bypasses approval. Every command
+  requires approval, including when the optional Linux isolation profile is enabled.
 - Child processes receive only a small explicit environment allowlist for tool discovery,
   temporary files, locale, Rust/Nix toolchains, and macOS SDK selection. Arbitrary server
   environment variables are not inherited. Empty and relative `PATH` entries are dropped; the
@@ -515,7 +605,7 @@ Notes:
 - On Unix, each `proc.run` command owns a fresh process group and enters its linked cwd through a
   no-follow directory descriptor. Timeout or turn cancellation kills that group and ordinary
   descendants. A process that deliberately calls `setsid(2)` can escape portable group containment;
-  every `proc.run` therefore remains approval-gated until stronger platform isolation exists.
+  every `proc.run` therefore remains approval-gated.
 - Linked roots pin their device/inode identity; replacing the configured path with another real
   directory fails until it is explicitly relinked. Reads, recursive list/find/search, and mutation
   commits use descriptor-relative no-follow traversal on Unix and fail closed elsewhere. Mutation
@@ -546,6 +636,239 @@ Notes:
 - Benchmark adapters may pass `--turn-budget-ok`: the CLI records a
   `turn_budget_exhausted` JSONL event and exits successfully after the final cell result. Without
   that opt-in flag, turn-budget exhaustion remains a nonzero CLI error.
+
+On a reviewed Linux host, `proc_isolation` can opt into the required bubblewrap profile:
+
+```json
+{
+  "proc_isolation": {
+    "provider": "linux_bubblewrap",
+    "launcher": "/opt/tempestmiku-isolation-runtime/bin/bwrap",
+    "runtime_roots": ["/opt/tempestmiku-isolation-runtime"],
+    "limits": {
+      "address_space_bytes": 2147483648,
+      "process_count": 128,
+      "open_files": 1024
+    }
+  }
+}
+```
+
+The launcher and every explicit runtime root must be absolute, root-owned, and not group/world
+writable; broad or host-sensitive roots are rejected. The profile mounts only the descriptor-pinned
+linked root plus those read-only runtime roots, unshares user/mount/PID/IPC/UTS/network namespaces,
+drops capabilities, clears ambient environment, and applies bounded `RLIMIT_AS`, `RLIMIT_NPROC`, and
+`RLIMIT_NOFILE`. If the launcher/profile disappears or changes while approval is pending, execution
+fails before host spawn and never falls back to the disabled path. It is optional and disabled by
+default. See the [Linux isolation canary](evidence/2026-07-18-m4-linux-proc-isolation.md).
+
+For the repo-owned fixed seccomp policy plus cgroup-v2 enforcement, opt into the stronger profile
+only after the service manager has delegated an exclusive cgroup-v2 subtree with `cpu`, `memory`,
+`pids`, and `cgroup.kill` support:
+
+```json
+{
+  "proc_isolation": {
+    "provider": "linux_hardened_v1",
+    "launcher": "/opt/tempestmiku-isolation-runtime/bin/bwrap",
+    "runtime_roots": ["/opt/tempestmiku-isolation-runtime"],
+    "limits": {
+      "address_space_bytes": 2147483648,
+      "process_count": 128,
+      "open_files": 1024
+    },
+    "cgroup_root": "/sys/fs/cgroup/tempestmiku",
+    "cgroup_limits": {
+      "memory_max_bytes": 2147483648,
+      "memory_swap_max_bytes": 0,
+      "pids_max": 128,
+      "cpu_quota_micros": 100000,
+      "cpu_period_micros": 100000
+    }
+  }
+}
+```
+
+`linux_hardened_v1` fails before approval if the policy, launcher/runtime roots, or delegated subtree
+cannot be pinned and verified; it never falls back to the lower profile or direct execution. Every
+run gets its own cgroup leaf and cleanup kills and drains that leaf after success, timeout,
+cancellation, or drop. `tm-server` invokes `ProcIsolationConfig::recover_orphans_at_startup`
+automatically, before constructing either its API or worker runtime, and fails startup if recovery
+cannot prove and drain the configured subtree. A supervisor must assign a different exclusive
+delegated root to every concurrently running `tm-server` instance; sharing one root would let one
+instance's startup recovery terminate another instance's work. The disposable Linux/aarch64 canary
+passes, but its limits are examples rather than production sizing. M4 still needs a canary under the
+chosen production service identity and architecture plus measured workload sizing. It covers a
+hostile workload only while trusting the host kernel; if the host kernel is in scope, a
+separate-kernel microVM and its production canary are mandatory. See the [hardened Linux
+evidence](evidence/2026-07-18-m4-linux-hardened-v1.md).
+
+### M4 production acceptance contract
+
+The checked-in acceptance kit and disposable software canary are not a deployment claim or a
+production pass. `linux_hardened_v1` has one precise threat boundary: it contains a hostile workload
+while trusting the host kernel. If the host kernel itself is in the threat model, a microVM with a
+separate kernel is mandatory; this profile, its container namespace, and the M4 acceptance report do
+not claim that assurance.
+
+Start from [`tools/m4-deployment-contract.example.json`](../tools/m4-deployment-contract.example.json)
+and its strict [v1 schema](../tools/m4-deployment-contract.schema.json). Replace every example path,
+identity, UID, GID, architecture, runtime artifact identity, and service-manager detail with the
+selected deployment's final values. Validate it portably before touching the target:
+
+```sh
+python3 tools/m4_acceptance.py validate-contract /path/to/m4-deployment-contract.json
+```
+
+Before enabling this profile, record and verify all of the following on the selected target:
+
+1. Declare a trusted host kernel plus hostile workload in the contract. If a hostile host kernel is
+   in scope, stop: select a mandatory microVM and collect its separate evidence before making that
+   claim. A container namespace is not a microVM and does not provide a separate kernel.
+2. Give each concurrently running `tm-server` process its own empty cgroup-v2 subtree. The service
+   process itself must remain outside that subtree; only its `proc.run` children enter per-run
+   leaves. Enable and delegate `cpu`, `memory`, and `pids`, and retain `cgroup.kill`. Do not share a
+   root between `api`, `worker`, or `all` instances.
+3. Keep the final deployment contract, `TM_HOST_CONFIG`, service-manager config, `tm-server`
+   binary, bubblewrap launcher, every runtime root, and their ancestry root-owned and non-writable
+   by the service identity. File inputs must be regular non-symlink files. Mount only explicitly
+   linked project roots; do not expose an ambient home directory or the whole cgroup filesystem.
+4. Choose cgroup and rlimit values from a measured representative coding workload. The example
+   2-GiB/128-pid/one-CPU values are test inputs, not production sizing.
+5. Start `tm-server` once with the final config and verify the structured startup recovery record.
+   Any config, controller, identity, probe, or orphan-cleanup error must abort startup.
+6. Under the exact final service UID/GID, architecture, source revision, image/runtime roots,
+   linked mount, cgroup namespace, and kernel, run the wrapper from the retained source checkout.
+   The UID/GID/architecture below are operator-authored literals copied from the reviewed service
+   contract. Do not populate them with `id`, `uname`, command substitution, or discovery inside the
+   canary process:
+
+   ```sh
+   TM_M4_EXPECTED_UID=10001 \
+   TM_M4_EXPECTED_GID=10001 \
+   TM_M4_EXPECTED_ARCH=x86_64 \
+   TM_HOST_CONFIG=/etc/tempestmiku/host.json \
+   TM_M4_DEPLOYMENT_CONTRACT=/etc/tempestmiku/m4-deployment-contract.json \
+   TM_M4_EVIDENCE_OUTPUT=/var/lib/tempestmiku/evidence/m4-acceptance.json \
+     tools/m4-linux-hardened-canary.sh
+   ```
+
+   Preflight requires the service process to be outside the empty, service-owned, exclusive
+   delegated root; verifies controller delegation, `cgroup.kill`, linked-root access, all trusted
+   identities and modes; and makes the exact Rust canary parse `TM_HOST_CONFIG` through
+   `P0HostConfig`, consume its rlimits/cgroup limits, and read those limits back. It rechecks all
+   identities, source digests, and zero children/processes after the run.
+   A versioned report is atomically created only after success and records the contract/config/
+   runtime hashes, Git dirty state, source hashes, cgroup namespace/controllers/limits, assertions,
+   captured exact-test output, and explicit claim boundary. Refusal or test failure leaves no
+   report. Validate a retained successful report with:
+
+   ```sh
+   python3 tools/m4_acceptance.py validate-report /var/lib/tempestmiku/evidence/m4-acceptance.json
+   ```
+
+   The report deliberately keeps workload sizing, hostile host-kernel containment, and microVM
+   isolation under `scopeBoundary.notProven`. Passing with example limits does not close those
+   external choices or measurements.
+
+For the separate native x86_64 architecture gate, manually dispatch
+`.github/workflows/m4-native-x86-canary.yml`. It uses a disposable contract and the same exact
+wrapper, then uploads only a successful validated JSON report. The workflow definition or an
+unexecuted/failed run is not evidence and cannot close production deployment acceptance.
+
+For systemd, controller delegation must be explicit and must yield the empty writable child
+described above; merely placing the service in a resource-controlled unit is insufficient. For
+OpenRC or a container supervisor, provision and verify the subtree explicitly before dropping to
+the service UID. A container-wide `--pids-limit` is useful defense in depth but is not per-run
+cgroup delegation. Do not compensate by running the steady-state application privileged or by
+mounting the host's entire cgroup tree writable.
+
+## Selected MCP and live research
+
+MCP is disabled unless a trusted MCP config explicitly selects both the transport and individual
+objects. First add an exact P9 destination and optional opaque secret to the normal host config:
+
+```json
+{
+  "egress": {
+    "enabled": true,
+    "destinations": [
+      {
+        "id": "mcp_docs",
+        "scheme": "https",
+        "host": "mcp.example.com",
+        "port": 443,
+        "path_prefixes": ["/rpc"],
+        "methods": ["POST"],
+        "allowed_request_headers": [
+          "accept",
+          "content-type",
+          "mcp-protocol-version",
+          "mcp-session-id"
+        ]
+      }
+    ],
+    "secrets": [
+      {
+        "id": "mcp_docs_token",
+        "env": "MCP_DOCS_TOKEN",
+        "destinations": ["mcp_docs"],
+        "injection": { "kind": "authorization_bearer" }
+      }
+    ]
+  }
+}
+```
+
+Then create `.tempestmiku/mcp.json` (or set `TM_MCP_CONFIG` to another path):
+
+```json
+{
+  "enabled": true,
+  "servers": [
+    {
+      "alias": "docs",
+      "url": "https://mcp.example.com/rpc",
+      "destination_id": "mcp_docs",
+      "secret_id": "mcp_docs_token",
+      "timeout_ms": 15000,
+      "allow": {
+        "tools": {
+          "lookup": { "mutation": false }
+        },
+        "resources": ["docs://guide"],
+        "prompts": []
+      }
+    }
+  ]
+}
+```
+
+The names and resource URIs must exactly match the remote catalog; a missing object, collision,
+protocol mismatch, malformed schema, or budget violation aborts startup without partially activating
+the catalog. The config stores only the environment-variable name; `MCP_DOCS_TOKEN` itself remains
+inside the P9 secret broker.
+
+Run either surface with both configs:
+
+```sh
+MCP_DOCS_TOKEN='...' \
+  TM_CONFIG=.tempestmiku/config.json \
+  TM_MCP_CONFIG=.tempestmiku/mcp.json \
+  cargo run -p tm-cli -- "Research the selected source and preserve citations."
+
+MCP_DOCS_TOKEN='...' \
+  TM_HOST_CONFIG=.tempestmiku/config.json \
+  TM_MCP_CONFIG=.tempestmiku/mcp.json \
+  cargo run -p tm-server
+```
+
+Imported calls remain code APIs discoverable through `tools.search` / `tools.docs`; no new
+chat-native tool is added. Remote results are explicit `mcp_untrusted_data` envelopes with bounded
+catalog and payload provenance. Locally mapped resources can be listed through
+`/sessions/:id/resources/list?uri=mcp://docs` and read by the returned hashed `mcp://` URI. Locally
+configured mutations still require manual approval. The catalog is immutable for one process;
+restart after changing the trusted config so cached interpreter state cannot retain old bindings.
 
 ## E2E Harness
 
@@ -580,7 +903,7 @@ and replay continuity):
 nix develop --command cargo run -p tm-e2e -- record evolution-policy
 ```
 
-For a credentialed live speaker run:
+For a credentialed live LLM-provider e2e run:
 
 ```sh
 TM_LLM_E2E_LIVE=1 OPENAI_API_KEY=... OPENAI_MODEL=gpt-4o-mini \
@@ -610,8 +933,9 @@ Evidence bundles are written under `target/tm-e2e/`.
   migration or restore the exact applied file.
 - Android rejects the server URL: release builds require HTTPS. Keep raw HTTP limited to debug/profile
   emulator development, and pair again after changing origins.
-- Android release build fails before compilation: provide `android/key.properties`; release builds
-  intentionally refuse debug-signing fallback.
+- Android release build fails before compilation: provide `android/key.properties` or all four
+  `TM_ANDROID_RELEASE_*` values from a local secret manager; release builds intentionally refuse
+  debug-signing fallback.
 - Code tools say no linked folders are configured: add a host config and set `TM_CONFIG` or
   `TM_HOST_CONFIG`.
 - An OpenAI-compatible endpoint rejects the request body: try `OPENAI_STREAM_USAGE=0`.

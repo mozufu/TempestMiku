@@ -173,6 +173,12 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   TempestMiku these roles resolve against the **self-built `tm-memory`** (§22) — the alias system is
   unchanged, the backend is ours.
 
+**Current implementation boundary.** Interactive calls use the configured `OPENAI_MODEL`; the P2
+dialectic pass currently uses that same client/model with its own no-tool, low-temperature, bounded
+request. Dream role names are validated configuration, but the generic alias/fallback resolver
+described above is not yet a deployed runtime switch. Documentation and live evidence must not claim
+a dedicated cheap dialectic model until that resolver is wired.
+
 ## 27.4 Clients
 
 - **Flutter client (single codebase).** P1 has shipped a **project-manager dogfooding** client on top of
@@ -285,29 +291,58 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   without replaying that draft. There is still **no on-device sandbox**, added model authority,
   background send, or second execution path.
 
-  If P6.6 resumes, it records at most 60 seconds / 1,920,000 raw bytes of PCM16-LE, 16 kHz, mono
-  audio and runs a replaceable `LocalAsrEngine` in a killable on-device worker. Raw audio never
-  leaves the phone and no server transcription endpoint or automatic platform/cloud/lumo fallback
-  exists. A versioned model is installed only after explicit owner action, verified by SHA-256,
+  P6.6 resumed on 2026-07-18. It records at most 60 seconds / 1,920,000 raw bytes of PCM16-LE,
+  16 kHz, mono audio. **Local** remains the default engine and runs a replaceable `LocalAsrEngine`
+  in a killable on-device worker; in that mode raw audio never leaves the phone. A versioned model
+  is installed only after explicit owner action, verified by SHA-256,
   capped at 350 MiB, kept app-private outside backup, and deletable. Its manifest pins the governing
-  license version/URL, source/author attribution, and retained model name. SenseVoice Small INT8
-  through sherpa-onnx is the first benchmark baseline, not a selected production model; NVIDIA
-  Parakeet zh-TW remains an equally unproven candidate until portable weights, redistribution,
-  Android conversion, and the same device gates are proven. Inference times out at
-  45 seconds, cancel/timeout/process death delete any audio cache, and retry is explicit. The
-  editable transcript still requires explicit current/new-session send. This must preserve device
+  license version/URL, source/author attribution, and retained model name. The selected production
+  route is commit-pinned `csukuangfj/sherpa-onnx-streaming-paraformer-zh` through `sherpa_onnx`
+  `1.13.4`: 237,202,501 bytes installed outside the APK after exact size/hash verification. It runs
+  two CPU threads over 0.1-second chunks and adds one second of local zero padding to flush final
+  tokens without extending the 60-second microphone allowance. Inference times out at 45 seconds;
+  cancel/timeout/process death delete any audio cache, and retry is explicit.
+
+  An optional **self-hosted remote** engine is available only when the paired TempestMiku server has
+  an operator-configured fixed ASR destination. It is disabled by default, accepts no client-supplied
+  URL, and appears as a separate drawer choice. Switching to it requires an explicit confirmation
+  that the next recordings will leave the phone for the owner's home service. The authenticated
+  broker accepts only bounded 16 kHz mono PCM16 with a fresh capture id, wraps it as WAV in memory,
+  and calls the configured upstream with bounded request/response sizes and a 45-second timeout.
+  Redirects, ambient proxies, arbitrary destinations, persistence, transcript/audio logging, and
+  automatic fallback in either direction are forbidden. HTTPS is required except for an exact
+  literal address inside Tailscale's `100.64.0.0/10` CGNAT range; that narrow exception relies on the
+  owner-controlled encrypted tailnet and does not extend the general P9 egress policy. If either hop
+  fails, the capture produces no review or send and the selected engine does not silently change.
+  Re-pairing, disconnect, and logout are authority transitions: they must retire any recording or
+  in-flight transcription before changing credentials, immediately reset the engine to local, and
+  reject stale catalog, confirmation, or transcript results from the previous server.
+
+  Local and self-hosted transcripts enter the same editable review, which names their provenance;
+  both still require explicit current/new-session send. This must preserve device
   auth, revocation, signed upgrades, airplane-mode operation after model installation, cold-start
   exact-once behavior, and authority-free imported content. P6 closes only after deterministic
   runtime tests, pinned-model RTF/RSS/thermal proof, APK inspection, and signed physical evidence
   rather than accumulating open-ended OS integrations.
 
-  P6.6 was explicitly deferred on 2026-07-15. The interface spike and isolated harness do not alter
-  the production APK or authority surface, select a production model, or close P6.6/P6. The
-  benchmark provenance, Android 15 results, Taiwan-Mandarin quality findings, packaging boundaries,
-  raw artifact hashes, open gates, and resume contract are centralized in the independent
-  [P6.6 on-device ASR deferment evidence](../../evidence/2026-07-15-p6-6-on-device-asr-deferment.md)
-  note. Resume only after an explicit owner decision; until then there is no production microphone,
-  ASR runtime, model installer, fallback, or send path.
+  The original SenseVoice feasibility run and its limitations remain in the historical
+  [P6.6 deferment evidence](../../evidence/2026-07-15-p6-6-on-device-asr-deferment.md). The resumed
+  production boundary, selected-model provenance, frozen synthetic/real-speaker quality contract,
+  production-exact host result, signed arm64 split, and physical closeout are centralized in
+  the [P6.6 resumption evidence](../../evidence/2026-07-18-p6-6-on-device-asr-resumption.md). The
+  software slice, exact model activation, and airplane-mode cold-start inspection pass. A consented
+  recording reached editable review without sending but failed quality. The latest `1.0.3+4`
+  diagnostics/self-hosted package installed in place on 2026-07-19, matched the host APK hash byte
+  for byte, retained pairing, exposed the configured production TEA-ASR label/model, and required an
+  explicit disclosure/selection that sent no audio. A same-device, same-build, same-APK, same-corpus
+  streaming/offline-candidate synthetic A/B passes all frozen text/resource/thermal gates.
+  Permission denial, delete/reinstall, interrupted/corrupt recovery, restart persistence, backup/
+  external-residue, production background/process-death cleanup, healthy and stopped-upstream
+  self-hosted paths, and distinct exact-once current/new sends also pass. The consented 10-item
+  production-local corpus passes mean CER `0.132922`, p90 `0.241379`, and code-switch mean `0.281980`
+  with no empty/truncated/signal-warning item; its privacy-stripped retained report is
+  [machine-readable](../../evidence/2026-07-19-p6-6-real-speaker-eval.json). P6.6 and full P6 are
+  closed without broadening the no-fallback, editable-review, explicit-send boundary.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 
@@ -390,12 +425,14 @@ the terminal `write_proposal` append and effect `applied` transition commit atom
 post-commit, so a crash or local publish failure is recovered through durable event replay.
 
 - **Baseline (parity §29):** `approvals.mode: manual`, `approvals.timeout: 60`, `cron_mode: deny`,
-  `skills.write_approval: true`, `memory.write_approval: true`. `mcp_reload_confirm` remains a parity
-  setting for the deferred `tm-mcp` lifecycle, not a currently enabled effect.
+  `skills.write_approval: true`, `memory.write_approval: true`. P10 catalog changes are deliberately
+  process-scoped: restart rebuilds the selected catalog, so `mcp_reload_confirm` is not an in-process
+  mutation effect.
 - **Enforced as `ApprovalPolicy` / approval-broker prompts** (§08) for: destructive / external /
   spend actions, **model-proposed mode switches** (§21 `modes.suggest`), **memory-write** (§22
   `memory.note`), **skill-write** (§26), **project promotion** when Miku proposes it, **drive-link**
-  + auto-file (§24). MCP reload remains out of scope.
+  + auto-file (§24), and locally annotated mutating MCP calls (P10). MCP hot reload remains out of
+  scope; operator restart is the explicit reload/stale-binding invalidation seam.
 - **Mode switches:** a chat model invokes `await modes.suggest(targetMode, reason)` through the
   one `execute` tool. The grant-controlled host capability emits an `approval` event with backend
   `"mode"` and does not change the session until Brian approves. Approved suggestions persist

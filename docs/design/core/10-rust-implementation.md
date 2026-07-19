@@ -14,15 +14,17 @@ tempest-miku/
 │   ├── tm-agents/      # actor lifecycle, mailbox, agents.* host fns, agent:// + history:// resources
 │   ├── tm-memory/      # P4 recall, summaries, dream queue/worker, redaction helpers
 │   ├── tm-drive/       # P5 local-first drive metadata, transducers, vdirs, resources, host fns
+│   ├── tm-egress/      # P9 exact HTTPS policy, durable budgets/effects, opaque secret handles
+│   ├── tm-mcp/         # P10 selected catalog, schemas, Streamable HTTP, untrusted bindings
 │   └── tm-server/      # auth, migrations, durable turns/SSE, supervised workers, product stores/backends
 └── apps/
     ├── tm-cli/         # binary: wiring, config, REPL/chat entrypoint
     └── tm-e2e/         # public-API local/dev workflow harness
 ```
 
-Client scaffolds live under `clients/` (`miku_flutter` for Web/PWA now and Android later, plus web
-smoke coverage). Planned product/support crates after P5 remain `tm-mcp` and `tm-trace`; they should
-be extracted only when the settled server/resource surface has two concrete users.
+Clients live under `clients/` (`miku_flutter` for Web/PWA and Android, plus web smoke coverage).
+`tm-egress` and `tm-mcp` are now concrete P9/P10 boundaries shared by CLI/server. `tm-trace` remains
+demand-triggered and should be extracted only with a second concrete audit/replay consumer.
 
 ### 10.2 Key types & traits
 

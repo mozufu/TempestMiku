@@ -136,10 +136,10 @@ distinguished without changing the result envelope.
 handler, and the result reports the effective budget. `workerTimeoutMs` and `totalTimeoutMs` remain
 in the result contract for bounded compatibility, but the tm-only implementation reports zero
 agent documents and an empty `workerFailures` list. Explicit actor research can still be composed
-with `agents.*` by tm code when a turn holds those grants. External/network
-research, publishing, and sending remain deferred to the future live-egress slice; P5 only has
-default-deny/allowlisted `http.get`, absent publish/send namespaces, and the existing approval gates
-for destructive local mutations.
+with `agents.*` by tm code when a turn holds those grants. External/network research is now available
+only through operator-selected P10 MCP objects crossing the default-disabled P9 egress/opaque-secret
+boundary. P5 itself remains local-first and still has no ambient publish/send namespace; destructive
+local mutations retain the existing approval gates.
 
 ## 24.3 Auto-organize — transducers + virtual directories + user model
 

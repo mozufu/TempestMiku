@@ -2,12 +2,17 @@
 
 Decision date: **2026-07-15** (`Asia/Taipei`).
 
-Status: **DEFERRED — feasible benchmark, incomplete product milestone**.
+Historical status: **DEFERRED — feasible benchmark, incomplete product milestone**.
+
+Superseded for scheduling on 2026-07-18 by the
+[P6.6 resumption evidence](2026-07-18-p6-6-on-device-asr-resumption.md). This note remains the
+unaltered baseline for the earlier SenseVoice feasibility run; the resumed production software does
+not retroactively turn its synthetic corpus into real-speaker acceptance.
 
 The owner explicitly deferred P6.6 after the feasibility and Taiwan Mandarin benchmark work. This
 is a sequencing decision, not acceptance: P6.1–P6.5 remain closed, P6.6 remains incomplete, and P6
-is not marked fully closed. P8 fuller memory subsequently closed; P7.2b is now active. Resume P6.6 only after an
-explicit owner decision.
+is not marked fully closed. P8 fuller memory subsequently closed; P7.2b was the next active slice at
+the time and has since closed. P6.6 resumed only after the explicit 2026-07-18 whole-roadmap request.
 
 ## Scope preserved at deferment
 

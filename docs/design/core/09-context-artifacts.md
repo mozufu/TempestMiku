@@ -96,11 +96,12 @@ outputs out of both the model context and the mobile client render path.
 
 ## 9.3 Resource catalog
 
-Internal schemes (v1). The implemented P0-P7.1 session gateway currently registers `artifact://`,
+Internal and selected read-through schemes (v1). The implemented P0-P10 session gateway currently registers `artifact://`,
 `workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, `history://`, `cron://`,
 `drive://` when the local-first drive store is configured, and `skill://` when the managed catalog is
-configured. Other catalog entries are reserved designs and must fail closed until their backing
-subsystem registers a handler and grant.
+configured. P10 additionally registers `mcp://` only when a trusted selected-import config passes P9
+validation and startup discovery. Other catalog entries are reserved designs and must fail closed
+until their backing subsystem registers a handler and grant.
 
 | scheme | resolves | backing subsystem | registered by |
 |---|---|---|---|
@@ -114,6 +115,7 @@ subsystem registers a handler and grant.
 | `workspace://session/<path>` | current session workspace read/list/preview | workspace §07 / §08 | `tm-server` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
 | `project://<id>/<view>` | aggregate project surface: status, open loops, decisions, linked folders, artifacts, agents | server project layer §27 / memory §22 / host §25 | `tm-server` |
+| `mcp://<server>/resources/<source-uri-digest>` | selected remote MCP resource returned as bounded untrusted data with catalog/target/payload provenance; the remote source URI is not exposed | MCP P10 / egress P9 | `tm-mcp` + `tm-server` when configured |
 
 P7.1 promotes approved managed skills to a first-class resource scheme without opening a `skills.*`
 write namespace. `skill://` lists active managed entries; `skill://<name>` reads the active body;
@@ -169,13 +171,20 @@ server reads the session workspace file, stores it in the local drive under
 `workspace://session/...` source URI, source session, timestamp, and actor. Existing drive targets
 default to keep-both; overwrites require explicit approval.
 
-### Parked — external read-through resources (§15)
+### Selected external read-through resources (§15)
 
-`issue://` · `pr://` (GitHub) and `mcp://` (MCP server **resources**, §25.1) are **deferred**. They
-differ in kind from the internal schemes: a **network-egress read-through proxy** needs the egress
-allowlist (§08), a credential via the **secret broker** (§08.3), and a **disk cache** — and the core
-declared UI / deployment out of scope. They slot into the **same registry behind the same handler
-contract** when enabled; until then they remain an open question (§15).
+P10 enables operator-selected `mcp://` resources through the same handler contract. The handler is
+registered only after bounded startup discovery succeeds; reads require the exact selected resource,
+P9 destination, and optional opaque-secret grants. Remote content is wrapped as
+`mcp_untrusted_resource` / `mcp_untrusted_data` with protocol revision, catalog generation/digest,
+local server alias, object identity, target/payload digests, and bounded byte count. The authenticated
+session gateway persists its MCP and egress audit sequence in the normal replayable event log, while
+list/preview receive no network or secret grants.
+
+The first production slice deliberately has no offline content cache: a peer outage or revocation
+fails closed. Process startup is the configuration/reload boundary, preventing cached interpreter
+sessions from retaining an older binding generation. `issue://` and `pr://` remain parked until a
+concrete consumer supplies their own selected handler and cache semantics.
 
 ## 9.4 Failure modes & degradation
 
@@ -184,4 +193,7 @@ contract** when enabled; until then they remain an open question (§15).
 - **Capability denied** → **fail closed** (§08); the read never runs.
 - **Handler resolves nothing** (id / path missing) → not-found error listing available ids / paths
   (mirrors the artifact-store behavior, §25.5).
-- **(Parked external)** offline → return cache; credential missing → fail closed.
+- **Configured MCP peer offline / invalid / revoked, or credential missing** → fail closed; no
+  stale content, ambient credential, or redirect fallback is returned.
+- **MCP result** → always bounded and marked untrusted with local provenance; remote descriptions
+  and initialize instructions never become local docs or instructions.

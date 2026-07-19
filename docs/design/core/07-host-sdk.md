@@ -40,7 +40,8 @@ name, and 2 KiB total.
 - `artifacts.put` — intrinsic content-addressed session output and spill references.
 - `artifacts.get`, `artifacts.slice`, `artifacts.list` — session artifact inspection, available only
   with the explicit `resources.read:artifact` grant.
-- `http.get` — allowlisted HTTP read; P9 owns production DNS/IP/redirect/budget hardening.
+- `http.get`, `http.request`, `secrets.use` — P9's default-disabled, exact-destination HTTPS egress
+  and opaque-secret boundary. Non-GET requests require approval.
 - `fs.read/write/list/find`, `code.search/edit`, `proc.run` — curated linked-repo reach.
 - `drive.put/get/ls/move/search/tag/link/unlink/organize` — local-first drive operations.
 - `research.drive` — bounded deterministic local digests and `drive://` citations. It is a Rust
@@ -53,6 +54,45 @@ name, and 2 KiB total.
 Server-owned memory, managed-skill activation, persona evolution, approval resolution, and secret
 material are intentionally not ambient language namespaces. Their readable evidence may be exposed
 through capability-gated resources.
+
+### 7.3.1 Production egress
+
+`tm-egress` is the concrete transport behind `http.get`, `http.request`, and `secrets.use`. An enabled
+destination fixes HTTPS scheme, host, port, path prefixes, methods, redirect edges, caller header
+names, request/response limits, and a positive policy version. Calls require the SDK capability plus
+the exact `egress.destination:<id>` grant; opaque secret handles additionally require
+`secrets.use:<id>`. Configuration never emits wildcard authority, and a child actor receives these
+names only through explicit delegation from a parent that already holds them.
+
+Every hop resolves and validates DNS before connecting, pins the validated address set, disables
+automatic redirects, and re-authorizes the next origin/path/method. Private, loopback, non-routable,
+link-local, and metadata addresses fail closed; link-local and known metadata endpoints remain hard
+denied even when a destination explicitly opts into private addresses. Atomic session and
+destination reservations cover request count, request bytes, maximum response bytes, and timeout.
+The server persists those counters and outstanding reservations transactionally, keyed by session
+and destination id, so an active session cannot reset a cap through process restart, policy-version
+rotation, or concurrent API instances. Only bounded UTF-8 response text is returned.
+
+Every non-GET `http.request` first resolves a value-free immutable policy/handle snapshot, then
+shows a bounded redacted query/body semantic preview plus canonical query, request, and target
+digests and non-secret destination/secret id/version metadata. The snapshot is resolved again after
+approval. A changed, revoked, expired, or differently scoped handle fails before DNS. The durable
+effect row is inserted before transport and reaches `succeeded`, `failed`, or `uncertain` before the
+completion audit. Retrying an identical host-owned turn effect returns its receipt; a persisted
+`started`/`uncertain` effect is never resent after origin loss.
+
+`secrets.use` returns a session/actor/version-bound opaque token. The actual environment value is
+resolved only while constructing an authorized host request, held in zeroizing memory, scoped to its
+configured destinations, and redacted from returned text and bounded host-only metadata. A restart
+does not restore tokens. Runtime policy uses immutable per-request snapshots, so revocation/reload
+does not wait for a slow peer and all later requests see the new generation before DNS. P9 closeout
+evidence is recorded in `docs/evidence/2026-07-18-p9-egress-secret-broker.md`.
+
+Literal occurrences of the injected value are removed from bounded response fields. This is not a
+general information-flow proof: an authenticated peer can transform, encode, hash, or summarize a
+credential before reflecting data, which exact-value redaction cannot identify. Destinations that
+receive credentials are therefore owner-trusted endpoints; untrusted fetched content remains data
+and must not be granted an authenticated destination merely to rely on response redaction.
 
 Artifact storage bounds both bytes and namespace shape: per-session artifact/blob counts,
 aggregate artifact metadata, blob-reference metadata, and directory entries all fail closed.
@@ -93,10 +133,31 @@ presence, raw byte count, SHA-256 of the raw bytes, and a redacted preview cappe
 an explicit truncation marker. On Unix, a final allocation-free `pre_exec` hook re-stats the
 canonical executable and rejects a device/inode mismatch immediately before path exec. Platforms
 without an fd-based exec primitive still have an unavoidable stat-to-exec race after that final
-check, so process execution remains a manually approved, non-isolated boundary. Cancellation and
-timeout kill the fresh process group and its ordinary descendants. A deliberately detached
-descendant that calls `setsid(2)` can escape portable process-group containment; every invocation
-therefore remains approval-gated until stronger platform isolation exists.
+check. Cancellation and timeout kill the fresh process group and its ordinary descendants. A
+deliberately detached descendant that calls `setsid(2)` can escape portable process-group
+containment, so every invocation remains manually approval-gated.
+
+Linux deployments may additionally select the fail-closed `linux_bubblewrap` profile. It requires a
+root-owned non-writable launcher and explicit root-owned runtime roots, descriptor-pins the linked
+root and cwd into bubblewrap, exposes only those mounts, unshares user/mount/PID/IPC/UTS/network
+namespaces, drops capabilities, clears ambient environment, and applies bounded address-space,
+process-count, and open-file rlimits. A missing or changed profile aborts before approval/spawn and
+never falls back to direct host execution. The profile is disabled by default and does not remove
+manual approval. Its executable canary is evidence for this namespace/rlimit level only.
+
+The stronger opt-in `linux_hardened_v1` profile retains that boundary and additionally requires a
+sealed repo-owned architecture-specific `developer_v1` seccomp program plus an exclusive writable
+delegated cgroup-v2 subtree. Each execution receives an unpredictable leaf with CPU, memory, swap,
+and pids limits; the child joins before exec, and success/timeout/cancel/drop kill, drain, account,
+and remove the leaf. Startup exposes an explicit orphan-recovery operation for exact service-owned
+leaf names; `tm-server` invokes it before constructing its API or worker runtime and aborts startup
+on failure. Policy version/digest/architecture, delegated-root identity, and all limits are bound
+into approval/profile identity. Missing policy, controllers, delegation, or pinned roots fail before
+approval with no lower-profile fallback. Disposable Linux/aarch64 and native x86_64 canaries close
+the software profiles. The selected homolab production contract additionally proves persistent
+systemd delegation, representative sizing/headroom, clean cgroup ownership, native execution, and
+restart stability. That accepted boundary is a hostile workload on a trusted owner-controlled host
+kernel; hostile-kernel containment and microVM isolation are not claimed.
 
 Mutations and unsafe process shapes use `ApprovalPolicy`; default denial and timeout are denial.
 Approvals resume the same tm effect continuation and retain the node/session/actor/turn provenance
@@ -114,6 +175,5 @@ return a bounded reference/preview rather than entering model context wholesale.
 tm exposes no raw filesystem, process, network, environment, package manager, native module,
 dynamic evaluation, or secret-value access. Capability handlers receive JSON-shaped arguments and
 return JSON-shaped values. `ToolDocs.sensitive` marks trace/persistence privacy and does not imply
-approval; sensitive argument/result previews are redacted in runtime events. Future MCP
-imports must remain catalog capabilities behind the P9 egress/secret boundary and must not add
-chat-native tools.
+approval; sensitive argument/result previews are redacted in runtime events. MCP imports remain
+catalog capabilities behind the same P9 egress/secret boundary and do not add chat-native tools.

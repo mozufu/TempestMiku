@@ -8,8 +8,8 @@ flowchart TD
     S -->|host calls| H[Host capability registry]
     H --> NET[HTTP egress -- allowlist]
     H --> FSY[Filesystem -- root-jailed]
-    H -.future.-> MCP[tm-mcp -- deferred]
-    H -.future.-> SEC[Secret broker -- deferred]
+    H --> MCP[tm-mcp -- selected imports]
+    H --> SEC[tm-egress secret broker -- opaque handles]
     S --> ART[Artifact store]
     O --> ART
     S -->|read uri| RR[Resource resolver registry]
@@ -28,9 +28,17 @@ Components:
 - **Artifact store** — content-addressed storage for large outputs; hands back `artifact://` refs.
 - **Resource resolver registry** — one scheme-dispatched `read(uri)` over registered handlers
   (currently `artifact://` / `workspace://session` / `linked://` / `project://` / `memory://` /
-  `agent://` / `history://` / `cron://`, configured `drive://`, and P7.1 managed `skill://` versions;
-  every optional handler still requires its scheme grant); §9.2.
-- **Secret broker** — deferred P7 surface for resolving opaque handles only at the host boundary.
+  `agent://` / `history://` / `cron://`, configured `drive://`, P7.1 managed `skill://` versions,
+  and configured P10 `mcp://` resources; every optional handler still requires its scheme grant);
+  §9.2.
+- **MCP import runtime** — `tm-mcp` discovers only operator-selected tools, prompts, and resources
+  through the P9 egress/opaque-secret boundary, then exposes lazy `mcp.<alias>.*` code capabilities
+  and `mcp://` resources without adding another model-visible tool. Production bindings are immutable
+  for one server/CLI process; restart is the explicit reload and stale-binding invalidation seam.
+- **Secret broker** — P9 `tm-egress` resolves exact session/actor/destination-scoped opaque handles
+  only at the authorized host request boundary. Values do not intentionally enter tm values,
+  approval payloads, artifacts, events, or model results; exact literal reflection is redacted, but
+  this is not a transformed-information-flow guarantee.
 - **Transcript / tracing** — current structured events/artifacts provide audit evidence; a dedicated
   `tm-trace` replay crate remains deferred.
 

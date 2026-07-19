@@ -94,6 +94,14 @@ Each turn, only a small block is auto-injected; everything else is pull-on-deman
 3. **Operational summary** — compact, at session start (separate cap; the OMP
    `summaryInjectionTokenLimit`, set far below its 5k default).
 
+The P2 implementation counts durable user turns, plans this pass only every third turn when approved
+profile facts are present, and disables it for Serious/engineering/coding and scheduler work. The
+redacted request is capped and digest-bound. A no-tool auxiliary call produces a confirmed
+`memory_dialectic` trace before the main response; retries reuse an exact applied trace, while a
+durably empty/unavailable pass fails open without repeated auxiliary calls. Any synthesis is
+JSON-quoted as untrusted user-channel context and cannot override approved recall or the system
+prompt.
+
 ## 22.5 Write path + "dreaming"
 
 - **Turn-time (sync-light):** append to episodic + enqueue; the turn **never blocks** on memory
@@ -256,11 +264,13 @@ follow-up hardening.
   P6.6 on 2026-07-15; that sequencing decision does not close P6.6 or P6. P8 enables a self-hosted
   local embedding path on lumo, combines Postgres FTS and pgvector candidates through bounded fusion
   and reranking, and adds scoped episodic/semantic records, evidence, confidence,
-  correction/supersession history, and recall-quality fixtures. `openai_compatible` remains an
-  optional replaceable fallback, never a production requirement. LLM-backed extraction produces
+  correction/supersession history, and recall-quality fixtures. `openai_compatible` remains a
+  reserved replaceable option and is rejected until that provider itself is migrated through P9;
+  it is never a production requirement. LLM-backed extraction produces
   candidates and cannot silently promote unsupported inference into owner facts. P8
-  provenance/correction gates must pass before Auto mode can begin P7.2b persona proposals. P8.1–P8.5
-  are closed; P7.2b approval-backed persona addenda is the active slice.
+  provenance/correction gates had to pass before Auto mode could begin P7.2b persona proposals.
+  P8.1–P8.5 and P7.2b are closed; Auto proposals consume only bounded active P8 evidence and never
+  approve or activate their own persona guidance.
 - **Scope:** `owner_subject` and `memory_scope` are server-owned session authority. A session starts in
   `global` or an active linked `project:<slug>` scope; changing modes never changes memory authority.
   Exact read/list/recall operations compare their subject/scope to the authorized invocation context
@@ -315,7 +325,7 @@ The current knobs become our config (now we own every one — none is an externa
 | `recallMode: hybrid` | the §22.3 fusion (dense ⊕ sparse ⊕ facts ⊕ graph, RRF) |
 | `contextTokens: 1600` | working-context budget (§22.4) |
 | `dialecticCadence: 3` / `dialecticMaxChars: 800` | ToM-synthesis cadence + cap (§22.4) |
-| `dialecticReasoningLevel` / `reasoningLevelCap` | model-role + effort for the ToM pass (§27.3) |
+| `dialecticReasoningLevel` / `reasoningLevelCap` | target model-role + effort for the ToM pass (§27.3); the current P2 pass uses the configured interactive client until generic role resolution lands |
 | `writeFrequency: async` | enqueue + background dreaming (§22.5) |
 | `sessionStrategy: per-session` | one episodic session-scope per chat |
 | `observationMode` / `pinUserPeer` | single-user: Brian is the only modeled peer; pin = always-in core block |
@@ -354,12 +364,12 @@ The current knobs become our config (now we own every one — none is an externa
   with `valid_to` rather than deleting it. Approved writes emit previewable
   `memory://profile/<subject>/facts/<id>` and `memory://scopes/<scope>/chunks/<id>` record URIs.
 
-## 22.9 `memory.*` capability + `memory://` resources
+## 22.9 Target `memory.*` capability + implemented `memory://` resources
 
 | Call | Effect |
 |---|---|
 | `memory.recall(query, opts?)` | unified hybrid + stream recall (§22.3) |
-| `memory.ask(query)` | ToM synthesis about Brian (self-built dialectic) |
+| `memory.ask(query)` | Target pull surface; not registered in P2. The implemented dialectic is an automatic server-owned every-third-turn pass (§22.4). |
 | `memory.note(text, tags?)` | durable operational note (approval-gated) |
 | `memory.fact(assertion)` | upsert a profile assertion (approval-gated, dedup/contradiction) |
 | `memory.edit(block, op)` | self-edit a core block (MemGPT-style) |

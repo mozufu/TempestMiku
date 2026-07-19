@@ -198,3 +198,11 @@ real persona in Serious Engineer and project-manager form first; P2 broadens int
 General baseline without replacing the identity. Voice mechanics (喵 density, 主人 honorific,
 self-reference, catchphrases, example lines) live in `miku-voice` and load as a **voice overlay at
 context-appropriate intensity** — never baked into a mode addendum, so seriousness can dial it down.
+
+P2 verifies the output boundary in two layers. `tm-modes::evaluate_voice` and the frozen
+`p2_voice_rubric_v1.json` fixture deterministically calibrate positive and negative General,
+negative-state grounding, and Serious examples. Actual model parity is a separate opt-in
+`tm-e2e voice-eval` public-API run over exact final responses; passing prompt-composition tests or the
+frozen fixture alone does not prove that live model output is in voice. The retained 2026-07-18
+non-echo run passes all three scenarios; see
+[`P2 live voice evidence`](../../evidence/2026-07-18-p2-voice-live.json).

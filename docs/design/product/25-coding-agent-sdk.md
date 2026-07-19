@@ -22,9 +22,11 @@ Engaged by **Serious Engineer** and **Handoff** modes (§21). Reference: **Oh My
   (jail) and §08 (approval / budgets) provide.
 - **Translating *from* MCP** (Anthropic Model Context Protocol, Nov 2024 — JSON-RPC; hosts / clients /
   servers; **resources / prompts / tools**; LSP-inspired). MCP/OMP-style multi-tool is the *source*;
-  our SDK namespaces (`fs.*` / `code.*` / `proc.*` / future `agents.*` / `memory.*` / `skills.*` /
-  `artifacts.*`) are the *target* — same capabilities, made code-callable and **progressively
-  disclosed** (`tools.search` / `docs`, §07) rather than all-loaded.
+  our SDK namespaces (`fs.*` / `code.*` / `proc.*` / `agents.*` / selected
+  `mcp.<server>.*` / `artifacts.*`) and resource routes are the *target* — same capabilities, made
+  code-callable and **progressively disclosed** (`tools.search` / `docs`, §07) rather than
+  all-loaded. P10 imports only an operator allowlist through P9; it does not expose an MCP multi-tool
+  surface to the model.
 - This is the core bet (§01) realized at the product layer; the engineer modes are its heaviest users.
 
 ## 25.0.1 P0a transitional OMP ACP backend
@@ -77,6 +79,8 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 | skills | `skills.*` remains reserved; approved managed versions are read-only through capability-gated `skill://...` resources | §07, §26 |
 | `artifact://` | session artifacts via `tm-artifacts` | §25.3 |
 | `agent://` / `history://` | actor resources via `tm-agents`, with large payloads stored out of context | §23 / §25.3 |
+| selected MCP tools / prompts | lazy `mcp.<server>.*` SDK functions discovered through `tools.search` / `docs` | P10 through the P9 egress boundary |
+| selected MCP resources | hashed `mcp://<server>/resources/<source-uri-digest>` routes through the shared resource registry | §09 / P10 |
 
 ## 25.2 Engineer reach: raw terminal → curated `proc.run` (a deliberate tightening)
 
@@ -93,7 +97,9 @@ honoring principle #8 (no generic shell / escape hatch):
   **linked** folder (restricted cwd, §24.4), least-privilege. New-file writes can run within exact
   configured grants, while overwrites and destructive actions require approval. Because an
   allowlisted build/test command can still execute repository-controlled code, every `proc.run`
-  invocation requires approval until the host adds OS-level filesystem and network isolation.
+  invocation requires approval. A reviewed Linux deployment may add the fail-closed bubblewrap
+  namespace/rlimit profile as defense in depth, but it does not turn repository code into a safe
+  no-approval shape.
 - The in-sandbox package ecosystem stays the long-tail safety net; `proc.run` is the narrow, audited
   door to real-repo build / test.
 - **Behavioral parity is kept** (build / test still work); the escape hatch is not. One of the
@@ -113,14 +119,23 @@ name = "tempestmiku"
 path = "/path/to/repo"
 mode = "rw"
 commands = ["cargo", "pnpm"]
-# Accepted for config compatibility, but not an approval bypass before OS isolation.
+# Accepted for config compatibility, but never an approval bypass.
 safe_args = []
 ```
 
 The exact config format may be TOML/YAML/JSON, but the semantics are fixed: linked root, project
 alias, `ro` / `rw` attenuation, and a command allowlist. `proc.run(cmd, args)` never parses a shell
-string. Until it has OS-level filesystem and network isolation, every invocation requires manual
-approval; legacy `safe_args` config entries are retained only for compatibility and auditing.
+string. Every invocation requires manual approval; legacy `safe_args` config entries are retained
+only for compatibility and auditing. The optional Linux bubblewrap profile restricts mounts,
+network namespaces, capabilities, environment, and rlimits and fails closed if unavailable, while
+the stronger `linux_hardened_v1` profile adds a fixed sealed seccomp program and per-run delegated
+cgroup-v2 CPU/memory/pids enforcement, cleanup, accounting, and startup recovery. Both remain
+manual-approval-gated and default-disabled. `tm-server` runs hardened orphan recovery before
+constructing an API or worker runtime and refuses startup on failure. Disposable Linux canaries
+close their software levels. The selected homolab production service also passes persistent
+delegation, sizing/headroom, cgroup exclusivity, native x86_64, retained-report, and restart gates
+under the hostile-workload/trusted-host-kernel boundary. Hostile-kernel and microVM containment are
+not claimed.
 
 Model-visible paths should prefer linked-folder aliases (`tempestmiku:crates/...`) over raw host
 absolute paths. On Unix the adaptor opens every linked path component relative to a held root/parent
@@ -151,6 +166,12 @@ Product-layer scope is intentionally narrower than the full translation map:
   `resources` namespace includes the P2 `memory://` gateway where the server registers the handler
   and grants `resources.read:memory`; P3/P3-plus Handoff and orchestration sessions also expose
   grant-gated `agents.run/spawn/parallel/msg/send/wait/inbox/list`.
+- **Configured P10 imports:** trusted operator config may add exact `mcp.<server>.*` tool/prompt
+  functions and `mcp://` resource routes. They are registered lazily, remain behind exact imported
+  object plus P9 destination/opaque-secret grants, and are available only to a mode that already has
+  network authority. Remote descriptions and initialize instructions are untrusted data, never
+  system instructions or local SDK documentation. Production server/CLI catalogs are immutable for
+  the process lifetime; restart builds and atomically activates a fresh bounded catalog.
 - **Closed by default:** `secrets`, `memory`, `skills`, and `agents` are explicitly set to
   `undefined` in the base prelude so optional chaining and feature checks do not throw
   `ReferenceError`. The `memory` global staying undefined is intentional; present P2 memory reads are
@@ -248,6 +269,10 @@ model above. This section owns the **storage tiers** only; the **read / routing*
   `artifact://` handler into the §9.2 registry.
 - `tm-agents` (§23) — `agents.*` host functions plus `agent://` and `history://` handlers; large actor
   payloads may spill through `tm-artifacts`.
+- `tm-mcp` (P10) — bounded MCP discovery and catalog generations, local allowlist/annotation policy,
+  lazy imported tool/prompt bindings, the `mcp://` resource handler, untrusted-result provenance,
+  and a Streamable HTTP transport that can reach peers only through P9 egress and opaque-secret
+  handles. `tm-server` and `tm-cli` install one immutable generation at startup.
 - Future `memory.*` / `skills.*` live in their own crates (§22 / §07 + §26); §25
   is the **engineer-facing SDK + the artifact spine**.
 
@@ -261,6 +286,15 @@ model above. This section owns the **storage tiers** only; the **read / routing*
   degraded, and preserve the raw backend ref if one exists.
 - **Native approval route unavailable / timed out** — approval-gated SDK calls return
   `ApprovalDeniedError` or `ApprovalTimeoutError`; the effect is skipped and the loop continues.
+- **MCP config/catalog invalid, too large, or colliding** — startup rejects the complete staged
+  catalog; the previous generation remains active in the catalog core, and production restart does
+  not publish partial bindings.
+- **MCP peer offline/protocol-invalid, destination revoked, or secret unavailable** — the request
+  fails closed through P9. No fallback credential, redirect authority, cached instruction, or ambient
+  network path is introduced.
+- **MCP mutation denied/timed out** — the terminal audit records denial and the peer is never called.
+  Successful results remain bounded `mcp_untrusted_data` with local alias, object identity, catalog
+  generation/digest, target/payload digests, and byte count.
 
 - **Non-allowlisted command** — `proc.run` rejects it (fail-closed); **no linked folder** → no
   real-FS reach (sandbox only); **destructive/external/out-of-grant action** → approval or fail-closed;

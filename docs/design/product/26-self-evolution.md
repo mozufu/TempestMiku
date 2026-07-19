@@ -209,23 +209,30 @@ version bodies from that catalog; native reads require `resources.read:skill`. T
 namespace, MCP import/reload, arbitrary filesystem writes, persona apply, direct mode
 file/capability changes, and aggressive evolution remain disabled.
 
-**P7.2b implementation direction (P8 fuller-memory evidence is closed):** the first landed slice
-extends the durable review path with a separate immutable persona-addendum catalog. Only typed tone,
-address, and interaction-preference sections can receive the `versioned_persona_addendum` apply
-contract. Approval atomically activates a digest-addressed version, the next prompt composes it
-after the hand-authored `SOUL.md`, and a separate durable manual approval rolls back to an older
-proposal-backed version or the hand-authored base. Legacy behavior/voice review sections remain
-readable but cannot activate.
+**P7.2b shipped contract (closed 2026-07-18):** the durable review path has a separate immutable
+persona-addendum catalog. Only typed tone, address, and interaction-preference sections can receive
+the `versioned_persona_addendum` apply contract. Approval atomically activates a digest-addressed
+version, the next prompt composes it after the hand-authored `SOUL.md`, and a separate durable manual
+approval rolls back to an older proposal-backed version or the hand-authored base. Legacy
+behavior/voice review sections remain readable but cannot activate.
 
-The remaining P7.2b slice lets Auto mode detect repeated owner
-preferences or a persona mismatch and create a typed persona-addendum proposal automatically. It may
-decide *when to propose*, never when to approve or activate. Candidates require bounded evidence,
-deduplication, cooldown, redacted previews, a stable base digest, and the same durable manual
-approval/default-deny path. An approved immutable version may affect only tone, address, and
-interaction-preference guidance on the next prompt; a separate manual approval rolls back to a prior
-version or the hand-authored base. `SOUL.md`, core Miku identity, safety rules, capabilities, voice
-caps, mode scopes, route triggers, source code, configuration, and deployment remain immutable. Auto
-approval, aggressive evolution, and direct persona-file writes are permanent non-goals.
+Unlocked Auto-mode turns at the Moderate tier can detect a small typed set of repeated owner
+preferences or explicit persona mismatches after a turn completes. Repeated preferences require two
+distinct active, included P8 records with evidence; an explicit correction requires one. Detection
+is bounded to five retrieval candidates and stores at most three evidence records with bounded,
+redacted references. Legacy lexical recall and records lacking current evidence cannot drive a
+candidate. A stable normalized SHA-256 key deduplicates pending/approved candidates and imposes a
+seven-day cooldown after terminal outcomes. PostgreSQL serializes the check and insert with a
+transaction-scoped advisory lock acquired before the duplicate query, so separate server instances
+cannot race the same candidate into existence.
+
+Auto mode decides only *when to propose*, never when to approve or activate. The proposal records a
+stable base digest and uses the same durable manual approval/default-deny, stale-base, immutable
+version, next-turn composition, and separate rollback path as a manual proposal. `SOUL.md`, core
+Miku identity, safety rules, capabilities, voice caps, mode scopes, route triggers, source code,
+configuration, and deployment remain immutable. Auto approval, aggressive evolution, and direct
+persona-file writes are permanent non-goals. The exact closeout matrix is in the
+[P7.2b evidence note](../../evidence/2026-07-18-p7-2b-persona-addenda.md).
 
 ## 26.5 Crate layout
 

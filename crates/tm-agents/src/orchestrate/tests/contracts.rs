@@ -80,6 +80,41 @@ fn child_grants_are_an_explicit_bounded_parent_subset() {
         child_agent_grants(&ctx, Some(&json!({"capabilities": too_many}))),
         Err(HostError::InvalidArgs(_))
     ));
+
+    let egress_parent = InvocationCtx::new(CapabilityGrants::default().allow_many([
+        "agents.*",
+        "http.get",
+        "egress.destination:research",
+        "secrets.use",
+        "secrets.use:research_api",
+    ]));
+    let egress_child = child_agent_grants(
+        &egress_parent,
+        Some(&json!({"capabilities": [
+            "http.get",
+            "egress.destination:research",
+            "secrets.use",
+            "secrets.use:research_api"
+        ]})),
+    )
+    .unwrap();
+    assert_eq!(
+        egress_child.names().collect::<Vec<_>>(),
+        vec![
+            "egress.destination:research",
+            "http.get",
+            "secrets.use",
+            "secrets.use:research_api",
+        ]
+    );
+    assert!(!egress_child.permits("egress.destination:other"));
+    assert!(matches!(
+        child_agent_grants(
+            &egress_parent,
+            Some(&json!({"capabilities": ["egress.destination:other"]}))
+        ),
+        Err(HostError::CapabilityDenied(message)) if message.contains("not held by the parent")
+    ));
 }
 
 #[tokio::test]

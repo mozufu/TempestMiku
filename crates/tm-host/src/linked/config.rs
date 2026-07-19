@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tm_artifacts::{ResourceContent, preview};
 use tokio::sync::{Mutex, MutexGuard};
 
-use crate::{HostError, Result, SelfEvolutionConfig};
+use crate::{EgressConfig, HostError, Result, SelfEvolutionConfig};
 
 use super::secure_fs::{FileIdentity, SecureKind, open_existing, pin_root_identity};
 use super::util::{
@@ -32,6 +32,8 @@ pub struct P0HostConfig {
     pub proc_run_timeout_ms: u64,
     #[serde(default)]
     pub self_evolution: SelfEvolutionConfig,
+    #[serde(default)]
+    pub egress: EgressConfig,
 }
 
 impl P0HostConfig {
@@ -51,6 +53,7 @@ impl P0HostConfig {
                 "proc_run_timeout_ms must be between 1 and 900000".to_string(),
             ));
         }
+        self.egress.validate()?;
         LinkedFolders::from_configs(self.linked_folders.clone()).map(|_| ())
     }
 

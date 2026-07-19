@@ -20,6 +20,7 @@ tm-agents = { path = "crates/tm-agents" }
 tm-memory = { path = "crates/tm-memory" }
 tm-drive = { path = "crates/tm-drive" }
 tm-lang = { path = "crates/tm-lang" }
+tm-egress = { path = "crates/tm-egress" }
 
 # async + runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time", "process", "signal"] }
@@ -37,6 +38,7 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
 bytes = "1"
 libc = "0.2"
+ipnet = "2.12"
 
 # http + serde
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

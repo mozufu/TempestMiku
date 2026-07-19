@@ -1,0 +1,33 @@
+[package]
+name = "tm-egress"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Destination-scoped audited HTTP egress and opaque secret broker for TempestMiku."
+
+[features]
+test-http = []
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+getrandom = "0.3"
+hex.workspace = true
+ipnet.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tm-host.workspace = true
+tokio = { workspace = true, features = ["net"] }
+url.workspace = true
+zeroize = "1"
+
+[dev-dependencies]
+axum.workspace = true
+reqwest = { workspace = true, features = ["system-proxy"] }
+serial_test = "3"
+tower.workspace = true

@@ -236,6 +236,13 @@ impl InvocationCtx {
 #[async_trait]
 pub trait HostEventSink: Send + Sync {
     async fn emit(&self, event_type: &str, payload_json: Value) -> Result<()>;
+
+    /// Stable host-owned id for the currently executing durable effect scope, normally a turn UUID.
+    /// Mutation-capable integrations use it for replay-safe intent keys; non-durable callers leave
+    /// it unset and must not invoke those effects.
+    fn effect_scope_id(&self) -> Option<String> {
+        None
+    }
 }
 
 pub struct NoopHostEventSink;

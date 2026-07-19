@@ -7,6 +7,12 @@ use std::{future::Future, pin::Pin};
 /// preserve these callbacks by default while allowing bounded transports to fail the agent turn
 /// instead of silently dropping an event.
 pub trait EventSink: Send + Sync {
+    /// Stable host-owned id for the current durable effect scope. Durable server sinks return the
+    /// turn UUID; process-local and presentation-only sinks leave it unset.
+    fn effect_scope_id(&self) -> Option<String> {
+        None
+    }
+
     /// A fragment of private assistant reasoning (chain-of-thought) just arrived. Providers
     /// that stream `reasoning` / `reasoning_content` deltas produce these; they are never
     /// sent back to the model. Default drops them so existing sinks keep compiling.

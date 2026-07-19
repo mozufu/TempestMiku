@@ -138,6 +138,7 @@ fn serious_engineer_config_sets_voice_cap_and_budget() {
         artifact_root: None,
         proc_run_timeout_ms: tm_host::default_proc_run_timeout_ms(),
         self_evolution: Default::default(),
+        egress: Default::default(),
     };
     let linked = host_config.linked_folders().unwrap();
     let cfg = build_agent_config(
@@ -228,6 +229,7 @@ async fn multi_folder_default_session_id_stays_fail_closed() {
         artifact_root: Some(artifacts.path().to_path_buf()),
         proc_run_timeout_ms: tm_host::default_proc_run_timeout_ms(),
         self_evolution: Default::default(),
+        egress: Default::default(),
     };
     let linked = host_config.linked_folders().unwrap();
     let sandbox = build_sandbox(

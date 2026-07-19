@@ -250,9 +250,7 @@ in
         ProtectClock = true;
         ProtectHome = true;
         ProtectHostname = true;
-        ProtectKernelLogs = true;
         ProtectKernelModules = true;
-        ProtectKernelTunables = true;
         ProtectSystem = "strict";
         ReadWritePaths = [ cfg.stateRoot ];
         RestrictRealtime = true;

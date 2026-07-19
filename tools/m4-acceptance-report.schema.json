@@ -1,0 +1,507 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tempestmiku.local/schemas/m4-acceptance-report-v1.json",
+  "title": "TempestMiku M4 disposable native-architecture report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "reportType",
+    "status",
+    "recordedAt",
+    "evidenceClass",
+    "threatModel",
+    "microvm",
+    "workloadSizing",
+    "contract",
+    "hostConfig",
+    "service",
+    "tools",
+    "isolation",
+    "canary",
+    "git",
+    "sourceSha256",
+    "assertions",
+    "scopeBoundary",
+    "bindingSha256"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "reportType": { "const": "tempestmiku.m4.linux_hardened_v1.acceptance" },
+    "status": { "const": "passed" },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "evidenceClass": { "const": "disposable_native_architecture" },
+    "threatModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostKernel", "workload", "hostileHostKernelClaimed"],
+      "properties": {
+        "hostKernel": { "const": "trusted" },
+        "workload": { "const": "hostile" },
+        "hostileHostKernelClaimed": { "const": false }
+      }
+    },
+    "microvm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "selected", "provider", "evidencePath"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "selected": { "type": "boolean" },
+        "provider": { "type": ["string", "null"], "minLength": 1 },
+        "evidencePath": {
+          "oneOf": [
+            { "$ref": "#/$defs/absolutePath" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "workloadSizing": { "$ref": "#/$defs/pending" },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "schemaVersion", "canonicalSha256"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/fileIdentity" },
+        "schemaVersion": { "const": 1 },
+        "canonicalSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "hostConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "provider", "rlimits", "cgroupLimits"],
+      "properties": {
+        "identity": { "$ref": "#/$defs/fileIdentity" },
+        "provider": { "const": "linux_hardened_v1" },
+        "rlimits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["addressSpaceBytes", "processCount", "openFiles"],
+          "properties": {
+            "addressSpaceBytes": { "type": "integer", "minimum": 1 },
+            "processCount": { "type": "integer", "minimum": 1 },
+            "openFiles": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "cgroupLimits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "memoryMaxBytes",
+            "memorySwapMaxBytes",
+            "pidsMax",
+            "cpuQuotaMicros",
+            "cpuPeriodMicros"
+          ],
+          "properties": {
+            "memoryMaxBytes": { "type": "integer", "minimum": 1 },
+            "memorySwapMaxBytes": { "type": "integer", "minimum": 0 },
+            "pidsMax": { "type": "integer", "minimum": 1 },
+            "cpuQuotaMicros": { "type": "integer", "minimum": 1 },
+            "cpuPeriodMicros": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "role",
+        "uid",
+        "gid",
+        "architecture",
+        "kernel",
+        "runtimeArtifactIdentity",
+        "environment",
+        "semantics",
+        "serverBinary",
+        "serviceManagerConfig",
+        "currentCgroupPath",
+        "cgroupNamespace"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["api", "worker", "all"] },
+        "uid": { "type": "integer", "minimum": 1 },
+        "gid": { "type": "integer", "minimum": 1 },
+        "architecture": { "enum": ["aarch64", "x86_64"] },
+        "kernel": { "type": "string", "minLength": 1 },
+        "runtimeArtifactIdentity": {
+          "type": "string",
+          "pattern": "(?:^|@)sha256:[0-9a-f]{64}$"
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["TM_HOST_CONFIG", "TM_SERVER_ROLE"],
+          "properties": {
+            "TM_HOST_CONFIG": { "$ref": "#/$defs/absolutePath" },
+            "TM_SERVER_ROLE": { "enum": ["api", "worker", "all"] }
+          }
+        },
+        "semantics": { "const": "disposable_fixture_only" },
+        "serverBinary": { "$ref": "#/$defs/fileIdentity" },
+        "serviceManagerConfig": { "$ref": "#/$defs/fileIdentity" },
+        "currentCgroupPath": { "$ref": "#/$defs/absolutePath" },
+        "cgroupNamespace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["device", "inode"],
+          "properties": {
+            "device": { "type": "integer", "minimum": 0 },
+            "inode": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python",
+        "git",
+        "bash",
+        "wrapper",
+        "acceptanceProgram",
+        "canaryExecutable"
+      ],
+      "properties": {
+        "python": { "$ref": "#/$defs/fileIdentity" },
+        "git": { "$ref": "#/$defs/fileIdentity" },
+        "bash": { "$ref": "#/$defs/fileIdentity" },
+        "wrapper": { "$ref": "#/$defs/fileIdentity" },
+        "acceptanceProgram": { "$ref": "#/$defs/fileIdentity" },
+        "canaryExecutable": { "$ref": "#/$defs/fileIdentity" }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "launcher", "runtimeRoots", "linkedRoots", "cgroup"],
+      "properties": {
+        "provider": { "const": "linux_hardened_v1" },
+        "launcher": { "$ref": "#/$defs/fileIdentity" },
+        "runtimeRoots": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/treeIdentity" }
+        },
+        "linkedRoots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "identity"],
+            "properties": {
+              "mode": { "enum": ["ro", "rw"] },
+              "identity": { "$ref": "#/$defs/directoryIdentity" }
+            }
+          }
+        },
+        "cgroup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "device",
+            "inode",
+            "uid",
+            "gid",
+            "mountPoint",
+            "controllers",
+            "subtreeControl",
+            "killWritable",
+            "emptyBefore",
+            "emptyAfter",
+            "unknownChildrenBefore",
+            "unknownChildrenAfter",
+            "exclusivity"
+          ],
+          "properties": {
+            "path": { "$ref": "#/$defs/absolutePath" },
+            "device": { "type": "integer", "minimum": 0 },
+            "inode": { "type": "integer", "minimum": 0 },
+            "uid": { "type": "integer", "minimum": 0 },
+            "gid": { "type": "integer", "minimum": 0 },
+            "mountPoint": { "$ref": "#/$defs/absolutePath" },
+            "controllers": { "$ref": "#/$defs/controllerArray" },
+            "subtreeControl": { "$ref": "#/$defs/controllerArray" },
+            "killWritable": { "const": true },
+            "emptyBefore": { "const": true },
+            "emptyAfter": { "const": true },
+            "unknownChildrenBefore": { "type": "array", "maxItems": 0 },
+            "unknownChildrenAfter": { "type": "array", "maxItems": 0 },
+            "exclusivity": { "$ref": "#/$defs/notProven" }
+          }
+        }
+      }
+    },
+    "canary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arguments",
+        "status",
+        "durationMs",
+        "timeoutSeconds",
+        "outputBytes",
+        "outputSha256",
+        "outputRetained",
+        "successSummaryMatched",
+        "environmentKeys",
+        "environmentSha256"
+      ],
+      "properties": {
+        "arguments": {
+          "const": [
+            "linked::tests::linux_isolation::gated_linux_hardened_v1_enforces_seccomp_and_cgroup_lifecycle",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ]
+        },
+        "status": { "const": "passed" },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "outputBytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "outputSha256": { "$ref": "#/$defs/sha256" },
+        "outputRetained": { "const": false },
+        "successSummaryMatched": { "const": true },
+        "environmentKeys": {
+          "const": [
+            "HOME",
+            "PATH",
+            "TMPDIR",
+            "TM_HOST_CONFIG",
+            "TM_LINUX_HARDENED_TESTS"
+          ]
+        },
+        "environmentSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "dirty", "statusShort"],
+      "properties": {
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "dirty": { "const": false },
+        "statusShort": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "sourceSha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        ".github/workflows/m4-native-x86-canary.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "crates/tm-host/Cargo.toml",
+        "crates/tm-host/src/linked/config.rs",
+        "crates/tm-host/src/linked/isolation.rs",
+        "crates/tm-host/src/linked/isolation/cgroup.rs",
+        "crates/tm-host/src/linked/isolation/seccomp.rs",
+        "crates/tm-host/src/linked/tools/proc.rs",
+        "crates/tm-host/src/linked/tools/proc/bounded_io.rs",
+        "crates/tm-host/src/linked/tools/proc/environment.rs",
+        "crates/tm-host/src/linked/tools/proc/process_group.rs",
+        "crates/tm-host/src/linked/tests/linux_isolation.rs",
+        "tools/m4-linux-hardened-canary.sh",
+        "tools/m4-native-x86-disposable-canary.sh",
+        "tools/m4-resource-probe.c",
+        "tools/m4-thread-probe.c",
+        "tools/m4_acceptance.py",
+        "tools/m4-deployment-contract.schema.json",
+        "tools/m4-acceptance-report.schema.json",
+        "tools/m4-deployment-contract.example.json",
+        "tools/tests/test_m4_acceptance.py"
+      ],
+      "properties": {
+        ".github/workflows/m4-native-x86-canary.yml": { "$ref": "#/$defs/sha256" },
+        "Cargo.lock": { "$ref": "#/$defs/sha256" },
+        "Cargo.toml": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/Cargo.toml": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/config.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/isolation.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/isolation/cgroup.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/isolation/seccomp.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/tools/proc.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/tools/proc/bounded_io.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/tools/proc/environment.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/tools/proc/process_group.rs": { "$ref": "#/$defs/sha256" },
+        "crates/tm-host/src/linked/tests/linux_isolation.rs": { "$ref": "#/$defs/sha256" },
+        "tools/m4-linux-hardened-canary.sh": { "$ref": "#/$defs/sha256" },
+        "tools/m4-native-x86-disposable-canary.sh": { "$ref": "#/$defs/sha256" },
+        "tools/m4-resource-probe.c": { "$ref": "#/$defs/sha256" },
+        "tools/m4-thread-probe.c": { "$ref": "#/$defs/sha256" },
+        "tools/m4_acceptance.py": { "$ref": "#/$defs/sha256" },
+        "tools/m4-deployment-contract.schema.json": { "$ref": "#/$defs/sha256" },
+        "tools/m4-acceptance-report.schema.json": { "$ref": "#/$defs/sha256" },
+        "tools/m4-deployment-contract.example.json": { "$ref": "#/$defs/sha256" },
+        "tools/tests/test_m4_acceptance.py": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "assertions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractValidated",
+        "operatorIdentityMatched",
+        "trustedFilesConstrained",
+        "hostConfigMatchedContract",
+        "hostKernelThreatModelTrusted",
+        "cleanExpectedRevision",
+        "toolIdentitiesStable",
+        "canaryEnvironmentSanitized",
+        "serviceOutsideDelegatedRoot",
+        "delegatedRootObservedEmptyBefore",
+        "delegatedRootObservedEmptyAfter",
+        "cgroupExclusivityNotClaimed",
+        "controllersDelegated",
+        "rlimitsReadBack",
+        "cgroupLimitsReadBack",
+        "runtimeContentsStable",
+        "sourceStableDuringCanary",
+        "boundedExactCanaryPassed",
+        "outputNotRetained",
+        "reportValidated"
+      ],
+      "properties": {
+        "contractValidated": { "const": "passed" },
+        "operatorIdentityMatched": { "const": "passed" },
+        "trustedFilesConstrained": { "const": "passed" },
+        "hostConfigMatchedContract": { "const": "passed" },
+        "hostKernelThreatModelTrusted": { "const": "passed" },
+        "cleanExpectedRevision": { "const": "passed" },
+        "toolIdentitiesStable": { "const": "passed" },
+        "canaryEnvironmentSanitized": { "const": "passed" },
+        "serviceOutsideDelegatedRoot": { "const": "passed" },
+        "delegatedRootObservedEmptyBefore": { "const": "passed" },
+        "delegatedRootObservedEmptyAfter": { "const": "passed" },
+        "cgroupExclusivityNotClaimed": { "const": "passed" },
+        "controllersDelegated": { "const": "passed" },
+        "rlimitsReadBack": { "const": "passed" },
+        "cgroupLimitsReadBack": { "const": "passed" },
+        "runtimeContentsStable": { "const": "passed" },
+        "sourceStableDuringCanary": { "const": "passed" },
+        "boundedExactCanaryPassed": { "const": "passed" },
+        "outputNotRetained": { "const": "passed" },
+        "reportValidated": { "const": "passed" }
+      }
+    },
+    "scopeBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proven", "notProven"],
+      "properties": {
+        "proven": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "notProven": {
+          "type": "array",
+          "minItems": 5,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "bindingSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "absolutePath": { "type": "string", "pattern": "^/", "minLength": 2 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "pending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "const": "pending" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "notProven": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "const": "not_proven" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "baseIdentity": {
+      "type": "object",
+      "required": [
+        "configuredPath",
+        "canonicalPath",
+        "device",
+        "inode",
+        "uid",
+        "gid",
+        "mode",
+        "identitySha256"
+      ],
+      "properties": {
+        "configuredPath": { "$ref": "#/$defs/absolutePath" },
+        "canonicalPath": { "$ref": "#/$defs/absolutePath" },
+        "device": { "type": "integer", "minimum": 0 },
+        "inode": { "type": "integer", "minimum": 0 },
+        "uid": { "type": "integer", "minimum": 0 },
+        "gid": { "type": "integer", "minimum": 0 },
+        "mode": { "type": "integer", "minimum": 0 },
+        "identitySha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "directoryIdentity": {
+      "allOf": [
+        { "$ref": "#/$defs/baseIdentity" }
+      ],
+      "unevaluatedProperties": false
+    },
+    "fileIdentity": {
+      "allOf": [
+        { "$ref": "#/$defs/baseIdentity" },
+        {
+          "type": "object",
+          "required": ["contentSha256", "sizeBytes"],
+          "properties": {
+            "contentSha256": { "$ref": "#/$defs/sha256" },
+            "sizeBytes": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "treeIdentity": {
+      "allOf": [
+        { "$ref": "#/$defs/baseIdentity" },
+        {
+          "type": "object",
+          "required": ["treeSha256", "entryCount", "totalBytes"],
+          "properties": {
+            "treeSha256": { "$ref": "#/$defs/sha256" },
+            "entryCount": { "type": "integer", "minimum": 1 },
+            "totalBytes": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "controllerArray": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "allOf": [
+        { "contains": { "const": "cpu" } },
+        { "contains": { "const": "memory" } },
+        { "contains": { "const": "pids" } }
+      ]
+    }
+  }
+}

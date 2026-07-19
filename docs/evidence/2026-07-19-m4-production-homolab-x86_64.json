@@ -1,0 +1,175 @@
+{
+  "evidenceClass": "production_service",
+  "generatedAtUnixMs": 1784436379575,
+  "isolation": {
+    "cgroupRoot": "/sys/fs/cgroup/system.slice/tempestmiku-m4.service",
+    "delegateSubgroup": "service",
+    "delegatedControllers": [
+      "cpu",
+      "memory",
+      "pids"
+    ],
+    "exclusiveChildrenBeforeAndAfter": [
+      "service"
+    ],
+    "provider": "linux_hardened_v1",
+    "runtime": "/nix/store/a6w201si6a00sq4r128p3j39v5n0cfa6-source",
+    "threatBoundary": "hostile workload on a trusted host kernel"
+  },
+  "notClaimed": [
+    "Containment of a hostile or compromised host kernel.",
+    "MicroVM isolation; the selected owner-controlled target trusts its host kernel.",
+    "P6.6 physical Android speech-quality acceptance."
+  ],
+  "reportType": "tempestmiku.m4.production_service.acceptance",
+  "schemaVersion": 1,
+  "service": {
+    "fragment": {
+      "canonicalPath": "/nix/store/xz6045ykkb2y8pakadv70r77p5brm5gq-unit-tempestmiku-m4.service/tempestmiku-m4.service",
+      "device": 66311,
+      "gid": 0,
+      "inode": 17705698,
+      "mode": 292,
+      "path": "/nix/store/xz6045ykkb2y8pakadv70r77p5brm5gq-unit-tempestmiku-m4.service/tempestmiku-m4.service",
+      "sha256": "3d3aecb084e9e19e88c5df8a52ebd4b15af5bb7c1289e43117ef09b8fbb5d806",
+      "sizeBytes": 1777,
+      "uid": 0
+    },
+    "gid": 23017,
+    "hostConfig": {
+      "config": {
+        "approvals": {
+          "mode": "deny",
+          "timeout_ms": 60000
+        },
+        "artifact_root": "/var/lib/tempestmiku-m4/artifacts",
+        "linked_folders": [
+          {
+            "commands": [
+              "cat",
+              "env",
+              "mount",
+              "resource-probe",
+              "sh",
+              "sleep",
+              "test",
+              "thread-probe",
+              "touch",
+              "unshare",
+              "wget"
+            ],
+            "mode": "rw",
+            "name": "tempestmiku",
+            "path": "/var/lib/tempestmiku-m4/linked",
+            "safe_args": []
+          }
+        ],
+        "proc_isolation": {
+          "cgroup_limits": {
+            "cpu_period_micros": 100000,
+            "cpu_quota_micros": 100000,
+            "memory_max_bytes": 1073741824,
+            "memory_swap_max_bytes": 0,
+            "pids_max": 64
+          },
+          "cgroup_root": "/sys/fs/cgroup/system.slice/tempestmiku-m4.service",
+          "launcher": "/nix/store/a6w201si6a00sq4r128p3j39v5n0cfa6-source/bin/bwrap",
+          "limits": {
+            "address_space_bytes": 2147483648,
+            "open_files": 256,
+            "process_count": 64
+          },
+          "provider": "linux_hardened_v1",
+          "runtime_roots": [
+            "/nix/store/a6w201si6a00sq4r128p3j39v5n0cfa6-source"
+          ]
+        },
+        "proc_run_timeout_ms": 180000
+      },
+      "identity": {
+        "canonicalPath": "/nix/store/aq9wdnkam49287c97g70k6swz8jbbbnv-tempestmiku-m4-host.json",
+        "device": 66311,
+        "gid": 0,
+        "inode": 16818697,
+        "mode": 292,
+        "path": "/nix/store/aq9wdnkam49287c97g70k6swz8jbbbnv-tempestmiku-m4-host.json",
+        "sha256": "e40918af2313f17960b4a22606c6c1a12e853a5abfbf17025d27acf43c58e5c3",
+        "sizeBytes": 831,
+        "uid": 0
+      }
+    },
+    "mainPid": 72299,
+    "properties": {
+      "ActiveState": "active",
+      "Delegate": "yes",
+      "DelegateControllers": "cpu memory pids",
+      "DelegateSubgroup": "service",
+      "Environment": "LOCALE_ARCHIVE=/nix/store/pg0h4abp75vwjrv8ndiy21cxln7ijibz-glibc-locales-2.42-61/lib/locale/locale-archive PATH=/nix/store/9ypz3flqsrl5xl495mm8h645gadjsxi1-coreutils-9.11/bin:/nix/store/c1cjgg6p8m8fssivzrc2p13mwwml3p3v-findutils-4.10.0/bin:/nix/store/gn94gpcp5q08x4v6g8mvw8v4r65rcjzk-gnugrep-3.12/bin:/nix/store/kgxafhycw2kybbqih759ykc2043qyi5j-gnused-4.9/bin:/nix/store/a8avqfxd649rfgfpqldja6v38ljb8fj5-systemd-260.1/bin:/nix/store/9ypz3flqsrl5xl495mm8h645gadjsxi1-coreutils-9.11/sbin:/nix/store/c1cjgg6p8m8fssivzrc2p13mwwml3p3v-findutils-4.10.0/sbin:/nix/store/gn94gpcp5q08x4v6g8mvw8v4r65rcjzk-gnugrep-3.12/sbin:/nix/store/kgxafhycw2kybbqih759ykc2043qyi5j-gnused-4.9/sbin:/nix/store/a8avqfxd649rfgfpqldja6v38ljb8fj5-systemd-260.1/sbin TM_HOST_CONFIG=/nix/store/aq9wdnkam49287c97g70k6swz8jbbbnv-tempestmiku-m4-host.json TM_SERVER_ADDR=127.0.0.1:8787 TM_SERVER_ROLE=api TZDIR=/nix/store/v2hsfkf03b3l79rhcxw4nq7w79kr3qkw-tzdata-2026b/share/zoneinfo",
+      "ExecStart": "{ path=/nix/store/ghh7z9nx5q7552vpdanc4msi9644xpyq-tempestmiku-m4-launch ; argv[]=/nix/store/ghh7z9nx5q7552vpdanc4msi9644xpyq-tempestmiku-m4-launch ; ignore_errors=no ; start_time=[Sun 2026-07-19 12:45:36 CST] ; stop_time=[n/a] ; pid=72299 ; code=(null) ; status=0/0 }",
+      "FragmentPath": "/etc/systemd/system/tempestmiku-m4.service",
+      "Group": "tempestmiku-m4",
+      "MainPID": "72299",
+      "NRestarts": "0",
+      "SubState": "running",
+      "UnitFileState": "enabled",
+      "User": "tempestmiku-m4"
+    },
+    "serverBinary": {
+      "canonicalPath": "/nix/store/n05m4vcsqq6pywn5fkwphppc5nqx724i-source/bin/tm-server",
+      "device": 66311,
+      "gid": 0,
+      "inode": 17705213,
+      "mode": 365,
+      "path": "/nix/store/n05m4vcsqq6pywn5fkwphppc5nqx724i-source/bin/tm-server",
+      "sha256": "d77d55eb3734ca128c6afcb0d70207ee3da9204cc9b52223fda56016fb65ea75",
+      "sizeBytes": 33714464,
+      "uid": 0
+    },
+    "uid": 23017,
+    "unit": "tempestmiku-m4.service"
+  },
+  "source": {
+    "remote": "/Users/operator/code/mozufu/TempestMiku/.",
+    "revision": "6822077058994d10a796f3d2cffa369e01a05108",
+    "tree": "4b0ff81ca0f59453203a12afa8556275a80774d2"
+  },
+  "status": "passed",
+  "target": {
+    "architecture": "x86_64",
+    "hostname": "homolab",
+    "kernelRelease": "7.0.10",
+    "machineIdSha256": "8e64dcf7cd9b6706090bcab2be0e8e505182657334f9cf07945ff1fa6c5c6c02",
+    "nixosVersion": "26.05.20260528.ec942ba (Yarara)",
+    "systemGeneration": "/nix/store/cnlkzs0c0l5fyhi55kw8if97za64flxj-nixos-system-homolab-26.05.20260528.ec942ba"
+  },
+  "workloadSizing": {
+    "configuredHeadroom": {
+      "cpuQuotaCores": 1.0,
+      "memoryRatioAtLeast": 4.0,
+      "pidsRatioAtLeast": 3.764705882352941
+    },
+    "observed": {
+      "maxCpuUsageUsec": 753204,
+      "maxMemoryCurrentBytes": 269959168,
+      "maxPidsCurrent": 19,
+      "observations": 865
+    },
+    "scenarios": {
+      "childProcesses": 16,
+      "cpuBusyMilliseconds": 750,
+      "memoryBytes": 268435456
+    },
+    "test": "linked::tests::linux_isolation::gated_linux_hardened_v1_enforces_seccomp_and_cgroup_lifecycle",
+    "testBinary": {
+      "canonicalPath": "/tmp/tempestmiku-m4-tm-host-test-6822077",
+      "device": 66311,
+      "gid": 0,
+      "inode": 10132916,
+      "mode": 365,
+      "path": "/tmp/tempestmiku-m4-tm-host-test-6822077",
+      "sha256": "e288cf7f012c35ba0f90253ccc8d8c266eb47902a3ca319bd1dcd2d81a6ea440",
+      "sizeBytes": 80747872,
+      "uid": 0
+    }
+  }
+}

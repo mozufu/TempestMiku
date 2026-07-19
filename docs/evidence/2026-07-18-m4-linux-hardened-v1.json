@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "gate": "M4 linux_hardened_v1 seccomp and cgroup-v2 canary",
+  "recordedAt": "2026-07-18T22:39:52+08:00",
+  "baseCommit": "27fac3145b109d627e4f0246e3b148a6c5ef0e2d",
+  "worktreeState": "roadmap completion changes uncommitted",
+  "environment": {
+    "containerRuntime": "Docker via OrbStack",
+    "containerPrivileged": true,
+    "cgroupNamespace": "host namespace with a dedicated sibling delegated subtree",
+    "delegatedCgroupRoot": "/sys/fs/cgroup/tm-m4-final-20260718/delegated",
+    "delegatedCgroupRootRemovedAfterRun": true,
+    "image": "rust:1.88-trixie",
+    "imageId": "sha256:f2a17efbe58b00470be6e73dbea79705a789ee20ee8de2dcdaf73c0c6091f1db",
+    "kernel": "Linux 7.0.5-orbstack-00330-ge3df4e19b0a0-dirty aarch64 GNU/Linux",
+    "architecture": "aarch64",
+    "rustc": "1.88.0 (6b00bc388 2025-06-23)",
+    "cargo": "1.88.0 (873a06493 2025-05-10)",
+    "bubblewrap": "0.11.0-2+deb13u1",
+    "busyboxStatic": "1:1.37.0-6+b8"
+  },
+  "command": "docker run --rm --privileged --cgroupns=host --cgroup-parent=/tm-m4-final-20260718/runner -v <workspace>:/workspace:ro -w /workspace -e TM_LINUX_HARDENED_TESTS=1 -e TM_LINUX_HARDENED_CGROUP_ROOT=/sys/fs/cgroup/tm-m4-final-20260718/delegated -e TM_LINUX_HARDENED_RUNTIME_ROOTS=/opt/tempestmiku-isolation-runtime:/usr:/lib:/bin:/sbin rust:1.88-trixie sh -c '<install pinned bubblewrap and BusyBox plus the Rust thread/child probe, then run the exact focused cargo test>'",
+  "result": {
+    "status": "passed",
+    "tests": 1,
+    "failed": 0,
+    "filteredOut": 82,
+    "durationSeconds": 2.55
+  },
+  "assertions": {
+    "offlineCargoInsideSandbox": "passed",
+    "ordinaryRustThreadAndChild": "passed",
+    "unshareDenied": "passed",
+    "mountDenied": "passed",
+    "activeLeafLimitsReadBack": "passed",
+    "successLeafCleanup": "passed",
+    "timeoutLeafCleanup": "passed",
+    "cancellationLeafCleanup": "passed",
+    "crashOrphanKilledAndRemoved": "passed",
+    "approvalBindsSeccompAndCgroupMetadata": "passed",
+    "missingDelegatedRootDeniedBeforeApprovalWithoutFallback": "passed"
+  },
+  "profile": {
+    "provider": "linux_hardened_v1",
+    "seccompVersion": "developer_v1",
+    "seccompPolicyBytes": 560,
+    "seccompPolicySha256": "a0199be3c1a1aa40b387946bd05ae72771f44119074e84cad4b118b565a9d60a",
+    "cgroupControllers": ["cpu", "memory", "pids"],
+    "limits": {
+      "memoryMaxBytes": 1073741824,
+      "memorySwapMaxBytes": 0,
+      "pidsMax": 64,
+      "cpuQuotaMicros": 100000,
+      "cpuPeriodMicros": 100000
+    }
+  },
+  "sourceSha256": {
+    "crates/tm-host/src/linked/isolation.rs": "6ef76d223496cfdad9646232a4f95783b7880efe29e0e4c8e2fe817752a81db0",
+    "crates/tm-host/src/linked/isolation/seccomp.rs": "ffb4c01f15e0b3a048d13492d8fb83592e4991d7473f1072ae903838e46ed2b0",
+    "crates/tm-host/src/linked/isolation/cgroup.rs": "e8d250d84c246354ca3e5bc7ab1d288e3be37565ee99fbb087d382a5cb1a5a67",
+    "crates/tm-host/src/linked/tools/proc.rs": "ed6fb365f1c75a0732cbc021c12952c4347890c2889bd0ad8c54e4cd4f13eb72",
+    "crates/tm-host/src/linked/tests/linux_isolation.rs": "b23fa956ec972c370b8c8c19e7e716eddb8718b665f4f0670288d422eb6feb48"
+  },
+  "scopeBoundary": {
+    "proven": "current-source fixed seccomp policy and per-run cgroup-v2 lifecycle through the real approval-gated proc.run path in a disposable native aarch64 Linux environment",
+    "notProven": [
+      "production service delegation or workload sizing",
+      "native x86_64 kernel execution",
+      "hostile-kernel containment",
+      "microVM isolation",
+      "a production-host service-identity canary"
+    ]
+  }
+}

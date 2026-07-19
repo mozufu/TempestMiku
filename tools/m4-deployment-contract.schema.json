@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tempestmiku.local/schemas/m4-deployment-contract-v1.json",
+  "title": "TempestMiku M4 disposable native-architecture contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "evidenceClass",
+    "threatModel",
+    "microvm",
+    "service",
+    "isolation",
+    "tools",
+    "execution",
+    "source",
+    "workloadSizing"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "evidenceClass": { "const": "disposable_native_architecture" },
+    "threatModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostKernel", "workload", "hostileHostKernelClaimed"],
+      "properties": {
+        "hostKernel": { "const": "trusted" },
+        "workload": { "const": "hostile" },
+        "hostileHostKernelClaimed": { "const": false }
+      }
+    },
+    "microvm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "selected", "provider", "evidencePath"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "selected": { "type": "boolean" },
+        "provider": { "type": ["string", "null"], "minLength": 1 },
+        "evidencePath": {
+          "oneOf": [
+            { "$ref": "#/$defs/absolutePath" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "role",
+        "expectedUid",
+        "expectedGid",
+        "expectedArchitecture",
+        "hostConfigPath",
+        "serviceManagerConfigPath",
+        "serverBinaryPath",
+        "runtimeArtifactIdentity",
+        "expectedEnvironment"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["api", "worker", "all"] },
+        "expectedUid": { "type": "integer", "minimum": 1 },
+        "expectedGid": { "type": "integer", "minimum": 1 },
+        "expectedArchitecture": { "enum": ["aarch64", "x86_64"] },
+        "hostConfigPath": { "$ref": "#/$defs/absolutePath" },
+        "serviceManagerConfigPath": { "$ref": "#/$defs/absolutePath" },
+        "serverBinaryPath": { "$ref": "#/$defs/absolutePath" },
+        "runtimeArtifactIdentity": {
+          "type": "string",
+          "pattern": "(?:^|@)sha256:[0-9a-f]{64}$"
+        },
+        "expectedEnvironment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["TM_HOST_CONFIG", "TM_SERVER_ROLE"],
+          "properties": {
+            "TM_HOST_CONFIG": { "$ref": "#/$defs/absolutePath" },
+            "TM_SERVER_ROLE": { "enum": ["api", "worker", "all"] }
+          }
+        }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "cgroupRoot",
+        "launcher",
+        "runtimeRoots",
+        "linkedRoots",
+        "exclusivity"
+      ],
+      "properties": {
+        "provider": { "const": "linux_hardened_v1" },
+        "cgroupRoot": { "type": "string", "pattern": "^/sys/fs/cgroup/.+" },
+        "launcher": { "$ref": "#/$defs/absolutePath" },
+        "runtimeRoots": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/absolutePath" }
+        },
+        "linkedRoots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "mode"],
+            "properties": {
+              "path": { "$ref": "#/$defs/absolutePath" },
+              "mode": { "enum": ["ro", "rw"] }
+            }
+          }
+        },
+        "exclusivity": { "$ref": "#/$defs/notProven" }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python",
+        "git",
+        "bash",
+        "wrapper",
+        "acceptanceProgram",
+        "canaryExecutable"
+      ],
+      "properties": {
+        "python": { "$ref": "#/$defs/toolSpec" },
+        "git": { "$ref": "#/$defs/toolSpec" },
+        "bash": { "$ref": "#/$defs/toolSpec" },
+        "wrapper": { "$ref": "#/$defs/toolSpec" },
+        "acceptanceProgram": { "$ref": "#/$defs/toolSpec" },
+        "canaryExecutable": { "$ref": "#/$defs/toolSpec" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeoutSeconds", "environment"],
+      "properties": {
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["PATH", "HOME", "TMPDIR"],
+          "properties": {
+            "PATH": { "type": "string", "pattern": "^/" },
+            "HOME": { "$ref": "#/$defs/absolutePath" },
+            "TMPDIR": { "$ref": "#/$defs/absolutePath" }
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositoryRoot", "expectedRevision", "requireClean"],
+      "properties": {
+        "repositoryRoot": { "$ref": "#/$defs/absolutePath" },
+        "expectedRevision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "requireClean": { "const": true }
+      }
+    },
+    "workloadSizing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "const": "pending" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": { "type": "string", "pattern": "^/", "minLength": 2 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "toolSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/absolutePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "notProven": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "const": "not_proven" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

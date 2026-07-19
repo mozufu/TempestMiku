@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "evidenceClass": "disposable_native_architecture",
+  "threatModel": {
+    "hostKernel": "trusted",
+    "workload": "hostile",
+    "hostileHostKernelClaimed": false
+  },
+  "microvm": {
+    "required": false,
+    "selected": false,
+    "provider": null,
+    "evidencePath": null
+  },
+  "service": {
+    "name": "tempestmiku-m4-disposable",
+    "role": "all",
+    "expectedUid": 23017,
+    "expectedGid": 23017,
+    "expectedArchitecture": "x86_64",
+    "hostConfigPath": "/etc/tempestmiku/m4-host.json",
+    "serviceManagerConfigPath": "/etc/systemd/system/tempestmiku-m4-disposable.service",
+    "serverBinaryPath": "/usr/local/libexec/tempestmiku/tm-server",
+    "runtimeArtifactIdentity": "tm-server@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "expectedEnvironment": {
+      "TM_HOST_CONFIG": "/etc/tempestmiku/m4-host.json",
+      "TM_SERVER_ROLE": "all"
+    }
+  },
+  "isolation": {
+    "provider": "linux_hardened_v1",
+    "cgroupRoot": "/sys/fs/cgroup/tempestmiku-m4-disposable",
+    "launcher": "/opt/tempestmiku-isolation-runtime/bin/bwrap",
+    "runtimeRoots": [
+      "/opt/tempestmiku-isolation-runtime"
+    ],
+    "linkedRoots": [
+      {
+        "path": "/srv/tempestmiku-linked",
+        "mode": "rw"
+      }
+    ],
+    "exclusivity": {
+      "status": "not_proven",
+      "reason": "No production supervisor lease or unique cgroup binding is represented by this disposable contract."
+    }
+  },
+  "tools": {
+    "python": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "git": {
+      "path": "/usr/bin/git",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "bash": {
+      "path": "/bin/bash",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "wrapper": {
+      "path": "/opt/tempestmiku-m4-kit/m4-linux-hardened-canary.sh",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "acceptanceProgram": {
+      "path": "/opt/tempestmiku-m4-kit/m4_acceptance.py",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "canaryExecutable": {
+      "path": "/opt/tempestmiku-m4-kit/tm-host-canary",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "execution": {
+    "timeoutSeconds": 300,
+    "environment": {
+      "PATH": "/opt/tempestmiku-isolation-runtime/bin",
+      "HOME": "/var/lib/tempestmiku-m4-disposable/home",
+      "TMPDIR": "/var/lib/tempestmiku-m4-disposable/tm-m4-acceptance-run"
+    }
+  },
+  "source": {
+    "repositoryRoot": "/workspace",
+    "expectedRevision": "0000000000000000000000000000000000000000",
+    "requireClean": true
+  },
+  "workloadSizing": {
+    "status": "pending",
+    "reason": "Representative memory.peak, pids.peak, CPU, timeout, and production headroom measurements remain open."
+  }
+}

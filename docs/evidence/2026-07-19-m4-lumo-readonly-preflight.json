@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "m4_lumo_readonly_preflight",
+  "capturedAt": "2026-07-19",
+  "host": "lumo",
+  "readOnly": true,
+  "operatingSystem": {
+    "kernel": "6.18.35-0-rpi",
+    "architecture": "aarch64"
+  },
+  "cgroup": {
+    "filesystem": "cgroup2fs",
+    "controllers": [
+      "cpuset",
+      "cpu",
+      "io",
+      "pids"
+    ],
+    "rootSubtreeControl": [
+      "cpuset",
+      "cpu",
+      "io",
+      "pids"
+    ],
+    "memoryControllerAvailable": false
+  },
+  "service": {
+    "name": "lumo-tempestmiku",
+    "status": "started",
+    "image": "localhost/tempestmiku:bb8689ec593b",
+    "serviceUid": 10001,
+    "containerCgroup": "/libpod_parent/libpod-d036e9283028ec30db6769f56e45cc7cc172a058d583457a35f3d75a6a513f07"
+  },
+  "acceptance": {
+    "linuxHardenedV1Eligible": false,
+    "reason": "The fixed profile requires a delegated cgroup-v2 memory controller, but lumo exposes only cpuset, cpu, io, and pids."
+  }
+}

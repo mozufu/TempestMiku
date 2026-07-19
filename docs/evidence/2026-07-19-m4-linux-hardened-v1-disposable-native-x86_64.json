@@ -1,0 +1,344 @@
+{
+  "assertions": {
+    "boundedExactCanaryPassed": "passed",
+    "canaryEnvironmentSanitized": "passed",
+    "cgroupExclusivityNotClaimed": "passed",
+    "cgroupLimitsReadBack": "passed",
+    "cleanExpectedRevision": "passed",
+    "contractValidated": "passed",
+    "controllersDelegated": "passed",
+    "delegatedRootObservedEmptyAfter": "passed",
+    "delegatedRootObservedEmptyBefore": "passed",
+    "hostConfigMatchedContract": "passed",
+    "hostKernelThreatModelTrusted": "passed",
+    "operatorIdentityMatched": "passed",
+    "outputNotRetained": "passed",
+    "reportValidated": "passed",
+    "rlimitsReadBack": "passed",
+    "runtimeContentsStable": "passed",
+    "serviceOutsideDelegatedRoot": "passed",
+    "sourceStableDuringCanary": "passed",
+    "toolIdentitiesStable": "passed",
+    "trustedFilesConstrained": "passed"
+  },
+  "bindingSha256": "7f6882e33928dd62f823dfbd17b12d33a33c079c5b6be1abc6daecd059d06824",
+  "canary": {
+    "arguments": [
+      "linked::tests::linux_isolation::gated_linux_hardened_v1_enforces_seccomp_and_cgroup_lifecycle",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "durationMs": 2755,
+    "environmentKeys": [
+      "HOME",
+      "PATH",
+      "TMPDIR",
+      "TM_HOST_CONFIG",
+      "TM_LINUX_HARDENED_TESTS"
+    ],
+    "environmentSha256": "19fe68fcb55a2c7c27b9255ffe5da2c54c97484c683991dfeac0ee52fd13e97f",
+    "outputBytes": 219,
+    "outputRetained": false,
+    "outputSha256": "ba934d6253063d674032208a4ec8aa547b9244f8d8878dac44f91e61381bc7b1",
+    "status": "passed",
+    "successSummaryMatched": true,
+    "timeoutSeconds": 300
+  },
+  "contract": {
+    "canonicalSha256": "df595aaeee3c432adc86bc8767bebbe75fe3f2e02b88a120841a61f7193a12db",
+    "identity": {
+      "canonicalPath": "/etc/tempestmiku/m4-deployment-contract.json",
+      "configuredPath": "/etc/tempestmiku/m4-deployment-contract.json",
+      "contentSha256": "12a59a547dc3506d3b87d7ae86273c143695531607543853ca460d9a8f6096f6",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "2bae21d26ececdcb99df3d15ef0d011d99c0d88fc27d3978dd089d0fd98a09de",
+      "inode": 16949379,
+      "mode": 420,
+      "sizeBytes": 3138,
+      "uid": 0
+    },
+    "schemaVersion": 1
+  },
+  "evidenceClass": "disposable_native_architecture",
+  "git": {
+    "dirty": false,
+    "revision": "5455f14ecd7552277d6bd67e4a3f613acac7e2c5",
+    "statusShort": []
+  },
+  "hostConfig": {
+    "cgroupLimits": {
+      "cpuPeriodMicros": 100000,
+      "cpuQuotaMicros": 100000,
+      "memoryMaxBytes": 1073741824,
+      "memorySwapMaxBytes": 0,
+      "pidsMax": 64
+    },
+    "identity": {
+      "canonicalPath": "/etc/tempestmiku/m4-host.json",
+      "configuredPath": "/etc/tempestmiku/m4-host.json",
+      "contentSha256": "d37950e0bdb5fd3ff3fc7ae3b9087219a197f7ce781d070f874596e8cdd72eb0",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "53ce36b98d457f5ceea64cf27240d78511e47e182ed550fc887b740ab1f2e104",
+      "inode": 16949378,
+      "mode": 420,
+      "sizeBytes": 923,
+      "uid": 0
+    },
+    "provider": "linux_hardened_v1",
+    "rlimits": {
+      "addressSpaceBytes": 2147483648,
+      "openFiles": 256,
+      "processCount": 64
+    }
+  },
+  "isolation": {
+    "cgroup": {
+      "controllers": [
+        "cpu",
+        "memory",
+        "pids"
+      ],
+      "device": 23,
+      "emptyAfter": true,
+      "emptyBefore": true,
+      "exclusivity": {
+        "reason": "Disposable empty-root observation only; no production supervisor lease or unique binding is represented.",
+        "status": "not_proven"
+      },
+      "gid": 23017,
+      "inode": 14747,
+      "killWritable": true,
+      "mountPoint": "/sys/fs/cgroup",
+      "path": "/sys/fs/cgroup/system.slice/docker-ec5ffdaf24994e7abb223523250dc9977ea557f4a22329bdb57cfa9296c535eb.scope/tm-m4-delegated-v1/tm-m4-runtime-v1",
+      "subtreeControl": [
+        "cpu",
+        "memory",
+        "pids"
+      ],
+      "uid": 23017,
+      "unknownChildrenAfter": [],
+      "unknownChildrenBefore": []
+    },
+    "launcher": {
+      "canonicalPath": "/opt/tempestmiku-isolation-runtime/bin/bwrap",
+      "configuredPath": "/opt/tempestmiku-isolation-runtime/bin/bwrap",
+      "contentSha256": "0dfa36b98ada69568aaaa741fe210d2150a1441433bd13c428137d6a972a959c",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "21e03d8e0f0577f0c0a63ecdc7b89443dee3d8c4bbcf78d34cea6b44a7d638fb",
+      "inode": 16945262,
+      "mode": 493,
+      "sizeBytes": 80272,
+      "uid": 0
+    },
+    "linkedRoots": [
+      {
+        "identity": {
+          "canonicalPath": "/srv/tempestmiku-linked",
+          "configuredPath": "/srv/tempestmiku-linked",
+          "device": 53,
+          "gid": 23017,
+          "identitySha256": "1df0dac82075da077b7ebef263c58b0a0de98101deb6508cf573bc489db0ec10",
+          "inode": 16945290,
+          "mode": 488,
+          "uid": 23017
+        },
+        "mode": "rw"
+      }
+    ],
+    "provider": "linux_hardened_v1",
+    "runtimeRoots": [
+      {
+        "canonicalPath": "/opt/tempestmiku-isolation-runtime",
+        "configuredPath": "/opt/tempestmiku-isolation-runtime",
+        "device": 53,
+        "entryCount": 15,
+        "gid": 0,
+        "identitySha256": "e78eee59db69907204c2b5d1131c63187a05db59f961bdf7e73e1fdfecec2c4a",
+        "inode": 16944345,
+        "mode": 493,
+        "totalBytes": 3003728,
+        "treeSha256": "f4bb451e71288e0b5b88c40477a01b1efc650ec25f10b4c19639f0b90f904582",
+        "uid": 0
+      }
+    ]
+  },
+  "microvm": {
+    "evidencePath": null,
+    "provider": null,
+    "required": false,
+    "selected": false
+  },
+  "recordedAt": "2026-07-19T02:39:58Z",
+  "reportType": "tempestmiku.m4.linux_hardened_v1.acceptance",
+  "schemaVersion": 1,
+  "scopeBoundary": {
+    "notProven": [
+      "Production service deployment semantics, supervisor activation, or production-host acceptance.",
+      "Production cgroup exclusivity; no operator/supervisor lease or unique binding is present in acceptance-kit v1.",
+      "Production workload sizing, representative memory.peak and pids.peak metrics, or selected headroom.",
+      "Hostile host-kernel containment; linux_hardened_v1 assumes a trusted host kernel.",
+      "microVM isolation or separate-kernel assurance.",
+      "Native x86_64 acceptance until the manual workflow actually retains a validated report.",
+      "Full M4 milestone closeout from this disposable report alone."
+    ],
+    "proven": [
+      "The pinned prebuilt exact canary passed under a hostile-workload and trusted-host-kernel boundary.",
+      "The clean operator-pinned revision, contract, host config, runtime contents, tools, and fixture identities remained stable.",
+      "The delegated cgroup root was observed empty before and after, with cpu, memory, and pids controllers enabled.",
+      "The canary ran with a bounded wall time, bounded streamed output, and an exact non-secret environment allowlist."
+    ]
+  },
+  "service": {
+    "architecture": "x86_64",
+    "cgroupNamespace": {
+      "device": 5,
+      "inode": 4026531835
+    },
+    "currentCgroupPath": "/sys/fs/cgroup/system.slice/docker-ec5ffdaf24994e7abb223523250dc9977ea557f4a22329bdb57cfa9296c535eb.scope/tm-m4-delegated-v1/tm-m4-service-v1",
+    "environment": {
+      "TM_HOST_CONFIG": "/etc/tempestmiku/m4-host.json",
+      "TM_SERVER_ROLE": "all"
+    },
+    "gid": 23017,
+    "kernel": "7.0.10",
+    "name": "tempestmiku-m4-disposable-native-x86_64",
+    "role": "all",
+    "runtimeArtifactIdentity": "tm-server@sha256:250c7ba11e4ba1a6f8ca6d622cd168220845e43dece7ae34470ecd6e6fdd7452",
+    "semantics": "disposable_fixture_only",
+    "serverBinary": {
+      "canonicalPath": "/usr/local/libexec/tempestmiku/tm-server",
+      "configuredPath": "/usr/local/libexec/tempestmiku/tm-server",
+      "contentSha256": "250c7ba11e4ba1a6f8ca6d622cd168220845e43dece7ae34470ecd6e6fdd7452",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "507e7bca46d5ceab51239d7c2b96cbef9fee6a2f434ac4b2889e3f9a0fd479af",
+      "inode": 16949374,
+      "mode": 493,
+      "sizeBytes": 328382760,
+      "uid": 0
+    },
+    "serviceManagerConfig": {
+      "canonicalPath": "/etc/systemd/system/tempestmiku-m4-disposable.service",
+      "configuredPath": "/etc/systemd/system/tempestmiku-m4-disposable.service",
+      "contentSha256": "ad20a8c165f3c6c745d32ae53c0301d7f6cb71bc26168facb8a8e4f6e91edc75",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "a72ce90c3a0bb8f2d9510137d5031dfac2b8efbcab2dd54ca55e28ec81512270",
+      "inode": 17062235,
+      "mode": 420,
+      "sizeBytes": 252,
+      "uid": 0
+    },
+    "uid": 23017
+  },
+  "sourceSha256": {
+    ".github/workflows/m4-native-x86-canary.yml": "6cb63e54c2003a81b661958fcd2ac13fd5ed80d4e19b3f075b6e9c8a4580b198",
+    "Cargo.lock": "08c1668fc83b7968bf9e82e436bb0bdfb9effb95de52a0d5b6df426d20e30464",
+    "Cargo.toml": "e7fafe94216dd417dd01f5ef30229b2e35c7105c6470d6f860477e88371543b5",
+    "crates/tm-host/Cargo.toml": "029d0063332b82a3387ef5443f25e41406472df298a5383089bcfcdb2189fc41",
+    "crates/tm-host/src/linked/config.rs": "7ecc9775263bedf8c7f4e6b3d1508a6e4cecf57920c095b9fa4c22c96de8efc7",
+    "crates/tm-host/src/linked/isolation.rs": "6ef76d223496cfdad9646232a4f95783b7880efe29e0e4c8e2fe817752a81db0",
+    "crates/tm-host/src/linked/isolation/cgroup.rs": "e8d250d84c246354ca3e5bc7ab1d288e3be37565ee99fbb087d382a5cb1a5a67",
+    "crates/tm-host/src/linked/isolation/seccomp.rs": "ffb4c01f15e0b3a048d13492d8fb83592e4991d7473f1072ae903838e46ed2b0",
+    "crates/tm-host/src/linked/tests/linux_isolation.rs": "94286e4602d25df3dfdab7d2cd9b91c5b338db708920809035c14332419cf1f2",
+    "crates/tm-host/src/linked/tools/proc.rs": "ed6fb365f1c75a0732cbc021c12952c4347890c2889bd0ad8c54e4cd4f13eb72",
+    "crates/tm-host/src/linked/tools/proc/bounded_io.rs": "7060aed9b76743a7d1c115e0984089f21b9055511914cc96eeacd580303f29d3",
+    "crates/tm-host/src/linked/tools/proc/environment.rs": "3d3b85ea48eaba82dcb91124b62db30806813a01f21954d493dee5c8c062b6d7",
+    "crates/tm-host/src/linked/tools/proc/process_group.rs": "359fc9d19e4b9d5f78809e68967ed96c769e6257feec19bb13affd0c385bd9e1",
+    "tools/m4-acceptance-report.schema.json": "d4246970d5466e46458572b8a4d371b81fe92b957e19bde649e7541e86117b8a",
+    "tools/m4-deployment-contract.example.json": "949b0a5010f56d384ea5bd08bd51d61242f20a5c6905a9be672828603905ccd2",
+    "tools/m4-deployment-contract.schema.json": "7ea0f874a9f44d0472a4df9dea6402914d8916243721137bf38b070e5c301e0a",
+    "tools/m4-linux-hardened-canary.sh": "0555c5a3289234b661d2f9739023841b08145fb8724b3465ad458019c1a379ea",
+    "tools/m4-native-x86-disposable-canary.sh": "2169e530c90952c06df88d0c74c9a4c225ab30c462d3a903f9657e6cb986b8fc",
+    "tools/m4_acceptance.py": "7b6dc4124f73f65eacacef2d4ba127d5e7948ff8634bb85091e5ced29224ca5d",
+    "tools/tests/test_m4_acceptance.py": "987159877aac11bda94862431eed3b0d7e7365ad54317fe9790105badeb5e16a"
+  },
+  "status": "passed",
+  "threatModel": {
+    "hostKernel": "trusted",
+    "hostileHostKernelClaimed": false,
+    "workload": "hostile"
+  },
+  "tools": {
+    "acceptanceProgram": {
+      "canonicalPath": "/opt/tempestmiku-m4-kit/m4_acceptance.py",
+      "configuredPath": "/opt/tempestmiku-m4-kit/m4_acceptance.py",
+      "contentSha256": "7b6dc4124f73f65eacacef2d4ba127d5e7948ff8634bb85091e5ced29224ca5d",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "3117cdf97c6e921fa0db224a04b0129b2e722093fa71b61899b2f514fee99493",
+      "inode": 16949377,
+      "mode": 420,
+      "sizeBytes": 95295,
+      "uid": 0
+    },
+    "bash": {
+      "canonicalPath": "/usr/bin/bash",
+      "configuredPath": "/bin/bash",
+      "contentSha256": "223fe8564b60636bc738b6178d3ba9a50ef7d791266b0efae6363bb716e4c47f",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "eb350126606efc1fdb605960c430f6f1569411ce9cfd63d576593e702253279d",
+      "inode": 12361484,
+      "mode": 493,
+      "sizeBytes": 1298416,
+      "uid": 0
+    },
+    "canaryExecutable": {
+      "canonicalPath": "/opt/tempestmiku-m4-kit/tm-host-canary",
+      "configuredPath": "/opt/tempestmiku-m4-kit/tm-host-canary",
+      "contentSha256": "19289fc584155960f9c52691339202992699ab062a2f67a7bd5f4e2ba7331e17",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "0a4378b348026c6cfebeea75ac89e3e0a58c2b1bb595800877e48daf90cff313",
+      "inode": 16949375,
+      "mode": 493,
+      "sizeBytes": 75605872,
+      "uid": 0
+    },
+    "git": {
+      "canonicalPath": "/usr/bin/git",
+      "configuredPath": "/usr/bin/git",
+      "contentSha256": "356db14e102d68a1a37d8a1ac577dfd678d45d46e92f468bef8b7154e7bfdc60",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "4922dc4cbc76618f91228e6c6742a6eb884149191ac78d3a4313937f1c98bc75",
+      "inode": 15507361,
+      "mode": 493,
+      "sizeBytes": 4082768,
+      "uid": 0
+    },
+    "python": {
+      "canonicalPath": "/usr/bin/python3.13",
+      "configuredPath": "/usr/bin/python3.13",
+      "contentSha256": "e59d0124ff06c248546876e01fcfb1ea3cda63534949f94a9372bfcfe3bfc3f5",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "bc597319c6144ed265e5e94f9c75b56e846d1ec5bb4af17ce8bfe1b1f1f93d0e",
+      "inode": 16921065,
+      "mode": 493,
+      "sizeBytes": 6828688,
+      "uid": 0
+    },
+    "wrapper": {
+      "canonicalPath": "/opt/tempestmiku-m4-kit/m4-linux-hardened-canary.sh",
+      "configuredPath": "/opt/tempestmiku-m4-kit/m4-linux-hardened-canary.sh",
+      "contentSha256": "0555c5a3289234b661d2f9739023841b08145fb8724b3465ad458019c1a379ea",
+      "device": 53,
+      "gid": 0,
+      "identitySha256": "cbd6903a4326b5901c5307b02fafcad32b45948e1f64a748e8285dfcc0972aa7",
+      "inode": 16949376,
+      "mode": 493,
+      "sizeBytes": 2790,
+      "uid": 0
+    }
+  },
+  "workloadSizing": {
+    "reason": "Disposable native-architecture canary only; representative memory.peak, pids.peak, and production headroom are not measured.",
+    "status": "pending"
+  }
+}

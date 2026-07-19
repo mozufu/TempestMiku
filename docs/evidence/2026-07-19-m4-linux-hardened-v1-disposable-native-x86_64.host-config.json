@@ -1,0 +1,29 @@
+{
+  "linked_folders": [
+    {
+      "name": "tempestmiku",
+      "path": "/srv/tempestmiku-linked",
+      "mode": "rw",
+      "commands": ["cat", "env", "mount", "sh", "sleep", "test", "thread-probe", "touch", "unshare", "wget"],
+      "safe_args": []
+    }
+  ],
+  "proc_isolation": {
+    "provider": "linux_hardened_v1",
+    "launcher": "/opt/tempestmiku-isolation-runtime/bin/bwrap",
+    "runtime_roots": ["/opt/tempestmiku-isolation-runtime"],
+    "limits": {
+      "address_space_bytes": 2147483648,
+      "process_count": 64,
+      "open_files": 256
+    },
+    "cgroup_root": "/sys/fs/cgroup/system.slice/docker-ec5ffdaf24994e7abb223523250dc9977ea557f4a22329bdb57cfa9296c535eb.scope/tm-m4-delegated-v1/tm-m4-runtime-v1",
+    "cgroup_limits": {
+      "memory_max_bytes": 1073741824,
+      "memory_swap_max_bytes": 0,
+      "pids_max": 64,
+      "cpu_quota_micros": 100000,
+      "cpu_period_micros": 100000
+    }
+  }
+}

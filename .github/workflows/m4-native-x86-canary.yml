@@ -1,0 +1,60 @@
+name: M4 disposable native x86_64 canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m4-disposable-native-x86_64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-x86_64:
+    name: linux_hardened_v1 disposable native x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Require a native x86_64 runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+
+      - name: Run the exact hardened canary in a disposable cgroup-v2 environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_directory="${{ runner.temp }}/m4-native-x86-evidence"
+          install -d -m 0755 "$evidence_directory"
+          bash tools/m4-native-x86-disposable-canary.sh "$evidence_directory"
+
+      - name: Validate retained disposable architecture evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_directory="${{ runner.temp }}/m4-native-x86-evidence"
+          report="$evidence_directory/m4-linux-hardened-v1-disposable-native-x86_64.json"
+          contract="$evidence_directory/m4-linux-hardened-v1-disposable-native-x86_64.contract.json"
+          host_config="$evidence_directory/m4-linux-hardened-v1-disposable-native-x86_64.host-config.json"
+          runtime_artifact="$(python3 -c \
+            'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["service"]["runtimeArtifactIdentity"])' \
+            "$contract")"
+          python3 tools/m4_acceptance.py validate-report "$report" \
+            --expected-contract "$contract" \
+            --expected-host-config "$host_config" \
+            --expected-revision "${{ github.sha }}" \
+            --expected-runtime-artifact "$runtime_artifact"
+
+      - name: Upload disposable native x86_64 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4-linux-hardened-v1-disposable-native-x86_64-${{ github.run_id }}
+          path: ${{ runner.temp }}/m4-native-x86-evidence/
+          if-no-files-found: error
+          retention-days: 90

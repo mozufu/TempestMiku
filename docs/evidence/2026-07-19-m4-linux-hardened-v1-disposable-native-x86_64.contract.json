@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "evidenceClass": "disposable_native_architecture",
+  "threatModel": {
+    "hostKernel": "trusted",
+    "workload": "hostile",
+    "hostileHostKernelClaimed": false
+  },
+  "microvm": {
+    "required": false,
+    "selected": false,
+    "provider": null,
+    "evidencePath": null
+  },
+  "service": {
+    "name": "tempestmiku-m4-disposable-native-x86_64",
+    "role": "all",
+    "expectedUid": 23017,
+    "expectedGid": 23017,
+    "expectedArchitecture": "x86_64",
+    "hostConfigPath": "/etc/tempestmiku/m4-host.json",
+    "serviceManagerConfigPath": "/etc/systemd/system/tempestmiku-m4-disposable.service",
+    "serverBinaryPath": "/usr/local/libexec/tempestmiku/tm-server",
+    "runtimeArtifactIdentity": "tm-server@sha256:250c7ba11e4ba1a6f8ca6d622cd168220845e43dece7ae34470ecd6e6fdd7452",
+    "expectedEnvironment": {
+      "TM_HOST_CONFIG": "/etc/tempestmiku/m4-host.json",
+      "TM_SERVER_ROLE": "all"
+    }
+  },
+  "isolation": {
+    "provider": "linux_hardened_v1",
+    "cgroupRoot": "/sys/fs/cgroup/system.slice/docker-ec5ffdaf24994e7abb223523250dc9977ea557f4a22329bdb57cfa9296c535eb.scope/tm-m4-delegated-v1/tm-m4-runtime-v1",
+    "launcher": "/opt/tempestmiku-isolation-runtime/bin/bwrap",
+    "runtimeRoots": ["/opt/tempestmiku-isolation-runtime"],
+    "linkedRoots": [
+      {
+        "path": "/srv/tempestmiku-linked",
+        "mode": "rw"
+      }
+    ],
+    "exclusivity": {
+      "status": "not_proven",
+      "reason": "Disposable empty-root observation only; no production supervisor lease or unique binding is represented."
+    }
+  },
+  "tools": {
+    "python": {
+      "path": "/usr/bin/python3.13",
+      "sha256": "e59d0124ff06c248546876e01fcfb1ea3cda63534949f94a9372bfcfe3bfc3f5"
+    },
+    "git": {
+      "path": "/usr/bin/git",
+      "sha256": "356db14e102d68a1a37d8a1ac577dfd678d45d46e92f468bef8b7154e7bfdc60"
+    },
+    "bash": {
+      "path": "/bin/bash",
+      "sha256": "223fe8564b60636bc738b6178d3ba9a50ef7d791266b0efae6363bb716e4c47f"
+    },
+    "wrapper": {
+      "path": "/opt/tempestmiku-m4-kit/m4-linux-hardened-canary.sh",
+      "sha256": "0555c5a3289234b661d2f9739023841b08145fb8724b3465ad458019c1a379ea"
+    },
+    "acceptanceProgram": {
+      "path": "/opt/tempestmiku-m4-kit/m4_acceptance.py",
+      "sha256": "7b6dc4124f73f65eacacef2d4ba127d5e7948ff8634bb85091e5ced29224ca5d"
+    },
+    "canaryExecutable": {
+      "path": "/opt/tempestmiku-m4-kit/tm-host-canary",
+      "sha256": "19289fc584155960f9c52691339202992699ab062a2f67a7bd5f4e2ba7331e17"
+    }
+  },
+  "execution": {
+    "timeoutSeconds": 300,
+    "environment": {
+      "PATH": "/opt/tempestmiku-isolation-runtime/bin",
+      "HOME": "/var/lib/tempestmiku-m4-disposable/home",
+      "TMPDIR": "/var/lib/tempestmiku-m4-disposable/tm-m4-acceptance-native-x86_64"
+    }
+  },
+  "source": {
+    "repositoryRoot": "/workspace",
+    "expectedRevision": "5455f14ecd7552277d6bd67e4a3f613acac7e2c5",
+    "requireClean": true
+  },
+  "workloadSizing": {
+    "status": "pending",
+    "reason": "Disposable native-architecture canary only; representative memory.peak, pids.peak, and production headroom are not measured."
+  }
+}

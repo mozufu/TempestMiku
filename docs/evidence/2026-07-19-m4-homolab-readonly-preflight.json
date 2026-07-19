@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "m4_homolab_readonly_preflight",
+  "capturedAt": "2026-07-19",
+  "host": "homolab",
+  "readOnly": true,
+  "operatingSystem": {
+    "kernel": "7.0.10",
+    "architecture": "x86_64"
+  },
+  "cgroup": {
+    "filesystem": "cgroup2fs",
+    "controllers": [
+      "cpuset",
+      "cpu",
+      "io",
+      "memory",
+      "hugetlb",
+      "pids",
+      "rdma",
+      "misc",
+      "dmem"
+    ],
+    "rootSubtreeControl": [
+      "cpuset",
+      "cpu",
+      "io",
+      "memory",
+      "hugetlb",
+      "pids",
+      "rdma",
+      "misc",
+      "dmem"
+    ]
+  },
+  "tools": {
+    "docker": {
+      "path": "/run/current-system/sw/bin/docker",
+      "serverVersion": "29.5.1",
+      "serverArchitecture": "amd64",
+      "cgroupVersion": "2",
+      "cgroupDriver": "systemd",
+      "root": "/mnt/storage/docker",
+      "access": "non-interactive sudo required"
+    },
+    "bubblewrap": "/run/current-system/sw/bin/bwrap"
+  },
+  "availableResources": {
+    "memoryBytes": 30036590592,
+    "dockerFilesystemBytes": 30043099136
+  },
+  "acceptance": {
+    "disposableNativeX86CanaryEligible": true,
+    "productionTargetSelected": false,
+    "nextAction": "Run the checked-in disposable privileged Docker canary only after explicit owner approval."
+  }
+}

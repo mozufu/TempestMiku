@@ -215,6 +215,7 @@ in
       "d ${cfg.stateRoot} 0750 ${cfg.user} ${cfg.user} -"
       "d ${cfg.stateRoot}/artifacts 0700 ${cfg.user} ${cfg.user} -"
       "d ${cfg.stateRoot}/jobs 0700 ${cfg.user} ${cfg.user} -"
+      "d ${cfg.stateRoot}/linked 0750 root root -"
     ]
     ++ map (folder: "d ${folder.path} 0700 ${cfg.user} ${cfg.user} -") cfg.linkedFolders;
 

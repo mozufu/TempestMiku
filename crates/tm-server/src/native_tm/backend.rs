@@ -400,7 +400,10 @@ async fn run_cached_native_turn(
         cfg.system_prompt = request.turn.system_prompt.clone();
         let agent = Agent::new(Arc::clone(llm), Arc::clone(&cached.sandbox), cfg);
         let (event_tx, event_rx) = mpsc::channel(event_channel_capacity);
-        let event_sink = Arc::new(ForwardingEventSink { sender: event_tx });
+        let event_sink = Arc::new(ForwardingEventSink {
+            sender: event_tx,
+            effect_scope_id: request.turn.durable_turn_id.map(|id| id.to_string()),
+        });
         let host_event_sink: Arc<dyn HostEventSink> = event_sink.clone();
         cached.host_event_proxy.bind(host_event_sink);
         let forwarder = tokio::spawn(forward_events(event_rx, Arc::clone(&request.sink)));

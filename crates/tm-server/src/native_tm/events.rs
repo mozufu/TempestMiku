@@ -25,6 +25,7 @@ pub(super) enum NativeEvent {
 
 pub(super) struct ForwardingEventSink {
     pub(super) sender: mpsc::Sender<NativeEvent>,
+    pub(super) effect_scope_id: Option<String>,
 }
 
 impl ForwardingEventSink {
@@ -44,6 +45,10 @@ impl ForwardingEventSink {
 }
 
 impl EventSink for ForwardingEventSink {
+    fn effect_scope_id(&self) -> Option<String> {
+        self.effect_scope_id.clone()
+    }
+
     fn on_text(&self, delta: &str) {
         let _ = self.try_on_text(delta);
     }
@@ -126,6 +131,10 @@ impl HostEventSink for ForwardingEventSink {
             .await
             .map_err(|_| HostError::HostCall("native tm event forwarder stopped".into()))?
             .map_err(HostError::HostCall)
+    }
+
+    fn effect_scope_id(&self) -> Option<String> {
+        self.effect_scope_id.clone()
     }
 }
 

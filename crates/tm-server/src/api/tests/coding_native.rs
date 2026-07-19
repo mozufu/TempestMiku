@@ -2,6 +2,7 @@ mod actors;
 mod approval_backend;
 mod backend_basics;
 mod drive;
+mod omp_acp_live;
 mod postgres_replay;
 mod resources;
 mod runtime_cells;

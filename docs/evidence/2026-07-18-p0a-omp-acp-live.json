@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "gate": "p0a-omp-acp-live",
+  "capturedAt": "2026-07-18",
+  "command": "TM_OMP_ACP_LIVE=1 TM_OMP_ACP_LIVE_EXPECTED_VERSION=omp/16.4.8 cargo test -p tm-server --lib api::tests::coding_native::omp_acp_live::gated_live_omp_acp_patches_tests_approves_and_replays -- --exact --test-threads=1 --nocapture",
+  "result": {
+    "passed": 1,
+    "failed": 0,
+    "durationSeconds": 31.56
+  },
+  "ompVersion": "omp/16.4.8",
+  "tempestMikuRevision": "27fac3145b109d627e4f0246e3b148a6c5ef0e2d",
+  "approvalsResolvedThroughPublicApi": 1,
+  "eventTypesObserved": [
+    "mode",
+    "progress",
+    "text",
+    "tool_call",
+    "tool_call_update",
+    "diff",
+    "approval",
+    "approval_resolved",
+    "artifact",
+    "final"
+  ],
+  "artifactCount": 2,
+  "lastEventIdReplayPassed": true,
+  "systemPromptMarkerObserved": true,
+  "targetedTest": "cargo test -p tm-core shape::tests::shapes_result_and_stdout -- --exact",
+  "targetedTestPassed": true,
+  "exactSourceRestored": true,
+  "changedFilesAfterRepair": [],
+  "notes": [
+    "The run used an explicitly approved network connection to the configured provider.",
+    "Per-turn OMP data, state, cache, logs, and session writes were isolated under private bridge-owned directories and removed after the turn.",
+    "No provider credential or OMP private database was copied into evidence."
+  ]
+}

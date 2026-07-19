@@ -92,4 +92,12 @@ impl HostEventSink for SwappableHostEventSink {
             })?;
         target.emit(event_type, payload_json).await
     }
+
+    fn effect_scope_id(&self) -> Option<String> {
+        self.target
+            .lock()
+            .expect("host sink proxy lock poisoned")
+            .as_ref()
+            .and_then(|target| target.effect_scope_id())
+    }
 }

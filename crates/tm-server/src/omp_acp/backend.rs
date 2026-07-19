@@ -22,6 +22,7 @@ pub struct OmpAcpBackend {
 
 impl OmpAcpBackend {
     pub fn new(config: OmpAcpConfig, approval_broker: Arc<ApprovalBroker>) -> Result<Self> {
+        config.validate()?;
         verify_omp_version(&config)?;
         Ok(Self {
             config,

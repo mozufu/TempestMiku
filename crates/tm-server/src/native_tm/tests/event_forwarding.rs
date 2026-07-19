@@ -16,7 +16,10 @@ use crate::CodingEventSink;
 #[tokio::test]
 async fn sensitive_cell_boundary_forwards_only_structured_previews() {
     let (sender, receiver) = mpsc::channel(8);
-    let forwarding = Arc::new(ForwardingEventSink { sender });
+    let forwarding = Arc::new(ForwardingEventSink {
+        sender,
+        effect_scope_id: None,
+    });
     let recorded = Arc::new(RecordingCodingSink::default());
     let target: Arc<dyn CodingEventSink> = recorded.clone();
     let writer = tokio::spawn(forward_events(receiver, target));

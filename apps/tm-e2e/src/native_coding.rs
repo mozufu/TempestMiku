@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use serde_json::{Value, json};
 use tm_core::{
-    AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Result as CoreResult,
-    StreamEvent,
+    AgentConfig, CellBudget, ChatRequest, Error as CoreError, LlmClient, Message,
+    Result as CoreResult, StreamEvent,
 };
 use tm_host::{FsMode, LinkedFolderConfig, LinkedFolders};
 use tm_lang::TmSandboxOptions;
@@ -33,6 +33,8 @@ const LINK_ALIAS: &str = "repo";
 const APPROVED_FINAL: &str = "native coding approved path complete";
 const DENIED_FINAL: &str = "native coding denied path complete";
 const TIMEOUT_FINAL: &str = "native coding timeout path complete";
+const CONTINUITY_QUERY: &str = APPROVED_FINAL;
+const CONTINUITY_FINAL: &str = "native coding next-session recall complete";
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub async fn run_record_native_coding(options: RecordOptions) -> Result<EvidenceManifest> {
@@ -123,11 +125,32 @@ async fn run_native_coding_paths(
         Some(denied.last_event_id),
     )
     .await?;
+    let mut continuity = run_continuity_path(client, &session_id).await?;
     let llm_calls = server.llm_calls.load(Ordering::SeqCst);
     ensure!(
-        llm_calls == 6,
-        "three native turns should use one execute and one final LLM call each; saw {llm_calls}"
+        llm_calls == 7,
+        "three native tool turns plus one next-session recall turn should use seven LLM calls; saw {llm_calls}"
     );
+    let requests = server
+        .llm_requests
+        .lock()
+        .map_err(|_| anyhow::anyhow!("native coding request capture lock poisoned"))?;
+    let continuity_request = requests
+        .last()
+        .context("next-session recall did not reach the native coding LLM")?;
+    let continuity_prompt = continuity_request
+        .iter()
+        .rev()
+        .find(|message| message.content.contains(CONTINUITY_QUERY))
+        .map(|message| message.content.as_str())
+        .context("next-session native request omitted the continuity query")?;
+    ensure!(
+        continuity_prompt.contains("[recall]")
+            && continuity_prompt.contains("Project summary/open loop from session")
+            && continuity_prompt.contains(&session_id),
+        "next-session native request omitted prior project recall: {continuity_prompt}"
+    );
+    continuity.model_request_included_recall = true;
 
     let source_path = server.linked_root.join("src/lib.rs");
     let guard_path = server.linked_root.join("guard.txt");
@@ -143,13 +166,40 @@ async fn run_native_coding_paths(
         "- Native coding spill resource: `{}`; edited linked resource: `{}`.",
         approved.artifact_uri, approved.linked_uri
     ));
+    recorder.append_transcript(format!(
+        "- Fresh Serious Engineer session `{}` received source session `{}` in its model recall block and replayed `{}`.",
+        continuity.session_id,
+        continuity.source_session_id,
+        continuity.replayed_event_types.join("`, `")
+    ));
 
     Ok(json!({
         "approved": approved.to_json(),
         "denied": denied.to_json(),
         "timedOut": timed_out.to_json(),
+        "continuity": continuity.to_json(),
         "scriptedLlmCalls": llm_calls,
     }))
+}
+
+struct ContinuityPathReport {
+    session_id: String,
+    source_session_id: String,
+    turn_id: String,
+    model_request_included_recall: bool,
+    replayed_event_types: Vec<String>,
+}
+
+impl ContinuityPathReport {
+    fn to_json(&self) -> Value {
+        json!({
+            "sessionId": self.session_id,
+            "sourceSessionId": self.source_session_id,
+            "turnId": self.turn_id,
+            "modelRequestIncludedRecall": self.model_request_included_recall,
+            "replayedEventTypes": self.replayed_event_types,
+        })
+    }
 }
 
 struct PathReport {
@@ -350,6 +400,38 @@ async fn run_timeout_path(
     })
 }
 
+async fn run_continuity_path(
+    client: &MikuClient,
+    source_session_id: &str,
+) -> Result<ContinuityPathReport> {
+    let (session_id, replay_anchor) = start_native_session(client).await?;
+    ensure!(
+        session_id != source_session_id,
+        "continuity proof must use a fresh session"
+    );
+    let turn_id = client.send_message(&session_id, CONTINUITY_QUERY).await?;
+    let replayed = client.read_until_final(&session_id, replay_anchor).await?;
+    ensure_turn_provenance(&replayed, &turn_id)?;
+    ensure!(
+        final_text(&replayed)? == CONTINUITY_FINAL,
+        "next-session native turn did not complete the recall path"
+    );
+    let replayed_event_types = event_types(&replayed);
+    for expected in ["text", "final"] {
+        ensure!(
+            replayed_event_types.iter().any(|kind| kind == expected),
+            "next-session Last-Event-ID replay is missing {expected}: {replayed_event_types:?}"
+        );
+    }
+    Ok(ContinuityPathReport {
+        session_id,
+        source_session_id: source_session_id.to_string(),
+        turn_id,
+        model_request_included_recall: false,
+        replayed_event_types,
+    })
+}
+
 struct ApprovedPathReport {
     session_id: String,
     turn_id: String,
@@ -501,6 +583,7 @@ struct NativeCodingRecordingServer {
     artifact_root: PathBuf,
     linked_root: PathBuf,
     llm_calls: Arc<AtomicUsize>,
+    llm_requests: Arc<Mutex<Vec<Vec<Message>>>>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -532,9 +615,11 @@ impl NativeCodingRecordingServer {
             text_script(DENIED_FINAL),
             execute_script("native_timeout", timeout_code()),
             text_script(TIMEOUT_FINAL),
+            text_script(CONTINUITY_FINAL),
         ];
         let llm = Arc::new(OfflineScriptedLlm::new(scripts));
         let llm_calls = Arc::clone(&llm.calls);
+        let llm_requests = Arc::clone(&llm.requests);
         let llm_for_backend: Arc<dyn LlmClient> = llm;
         let cfg = AgentConfig {
             model: "offline-native-coding-script".to_string(),
@@ -595,6 +680,7 @@ impl NativeCodingRecordingServer {
             artifact_root,
             linked_root,
             llm_calls,
+            llm_requests,
             handle,
         })
     }
@@ -692,6 +778,7 @@ fn text_script(text: &str) -> Vec<StreamEvent> {
 struct OfflineScriptedLlm {
     scripts: Mutex<VecDeque<Vec<StreamEvent>>>,
     calls: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<Vec<Message>>>>,
 }
 
 impl OfflineScriptedLlm {
@@ -699,6 +786,7 @@ impl OfflineScriptedLlm {
         Self {
             scripts: Mutex::new(scripts.into()),
             calls: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -707,9 +795,13 @@ impl OfflineScriptedLlm {
 impl LlmClient for OfflineScriptedLlm {
     async fn chat_stream(
         &self,
-        _request: &ChatRequest,
+        request: &ChatRequest,
     ) -> CoreResult<BoxStream<'static, CoreResult<StreamEvent>>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.requests
+            .lock()
+            .map_err(|_| CoreError::Llm("native coding request lock poisoned".to_string()))?
+            .push(request.messages.clone());
         let script = self
             .scripts
             .lock()

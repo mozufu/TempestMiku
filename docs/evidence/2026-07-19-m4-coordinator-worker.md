@@ -26,7 +26,7 @@ hostile-workload/trusted-host-kernel M4 boundary.
   coordinator or worker Rust binaries.
 - deployment-config production revision: `4774c08`.
 - Homolab generation:
-  `/nix/store/j74sdcaqxm6yk61wgyq282sp992b9723-nixos-system-homolab-26.05.20260717.293d6ab`.
+  `/nix/store/4p0jzs1bdm69v35rj974a8bjl8waa8vy-nixos-system-homolab-26.05.20260717.293d6ab`.
 
 ## Automated gates
 

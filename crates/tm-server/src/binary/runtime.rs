@@ -1,6 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tm_agents::MailboxRegistry;
+use tm_artifacts::ArtifactStore;
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
 use tm_egress::{EgressAdmin, EgressRuntime, register_egress_functions};
 use tm_host::{
@@ -19,6 +20,7 @@ use tm_server::{
     EchoChatRunner, HttpApprovalPolicy, NativeApprovalMode, NativeTmBackend, OmpAcpBackend,
     OmpAcpConfig, RosterCodingEventSink, ServerChatRunner,
 };
+use tm_worker_protocol::{RemoteWorkerConfig, RemoteWorkerConnector};
 
 use super::{BoxError, config::load_host_config};
 
@@ -27,6 +29,8 @@ pub(super) struct BuiltRuntime {
     pub(super) native_tm: Option<NativeTmBackendConfig>,
     pub(super) mcp: Option<BuiltMcpRuntime>,
     pub(super) egress_admin: EgressAdmin,
+    pub(super) linked_aliases: Vec<String>,
+    pub(super) linked_resource_handler: Option<Arc<dyn tm_host::ResourceHandler>>,
 }
 
 pub(super) struct BuiltMcpRuntime {
@@ -45,6 +49,7 @@ pub(super) struct NativeTmBackendConfig {
 pub(super) struct RuntimePolicies<'a> {
     pub(super) host: &'a P0HostConfig,
     pub(super) mcp: &'a McpRuntimeConfig,
+    pub(super) remote_worker: Option<&'a RemoteWorkerConfig>,
 }
 
 pub(super) async fn build_runtime(
@@ -62,6 +67,21 @@ pub(super) async fn build_runtime(
     let egress_runtime = EgressRuntime::new(host_config.egress.clone())?;
     let egress_admin = egress_runtime.admin_handle();
     let mcp = build_mcp_runtime(policies.mcp, egress_runtime.clone()).await?;
+    let remote_connector = policies
+        .remote_worker
+        .map(|config| RemoteWorkerConnector::from_config(config.clone()))
+        .transpose()?;
+    let linked_aliases = remote_connector
+        .as_ref()
+        .map(|connector| connector.linked_aliases().to_vec())
+        .unwrap_or_default();
+    let linked_resource_handler = remote_connector
+        .as_ref()
+        .map(|connector| {
+            ArtifactStore::open(&artifact_root, "remote-gateway")
+                .map(|artifacts| connector.linked_resource_handler(artifacts))
+        })
+        .transpose()?;
     let api_key_set = std::env::var("OPENAI_API_KEY")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
@@ -76,6 +96,8 @@ pub(super) async fn build_runtime(
             native_tm: None,
             mcp,
             egress_admin,
+            linked_aliases,
+            linked_resource_handler,
         });
     }
 
@@ -103,6 +125,10 @@ pub(super) async fn build_runtime(
         proc_isolation: host_config.proc_isolation.clone(),
         ..TmSandboxOptions::default()
     };
+    if let Some(connector) = remote_connector {
+        sandbox_options.linked_aliases = connector.linked_aliases().to_vec();
+        sandbox_options.host_connectors.push(Arc::new(connector));
+    }
     tm_agents::register(
         &mut sandbox_options.host_registry,
         &mut sandbox_options.resource_registry,
@@ -181,6 +207,8 @@ pub(super) async fn build_runtime(
         }),
         mcp,
         egress_admin,
+        linked_aliases,
+        linked_resource_handler,
     })
 }
 
@@ -284,10 +312,18 @@ pub(super) fn configure_coding_backend<S, M, C>(
     linked_folders: &LinkedFolders,
     artifact_root: PathBuf,
     native_tm: Option<NativeTmBackendConfig>,
+    remote_linked_aliases: &[String],
+    remote_linked_resource_handler: Option<Arc<dyn tm_host::ResourceHandler>>,
 ) -> Result<AppState<S, M, C>, BoxError> {
+    let linked_folders = linked_folders
+        .clone()
+        .with_virtual_aliases(remote_linked_aliases.iter().cloned())?;
     state = state
         .with_artifact_root(artifact_root)
-        .with_linked_folders(linked_folders.clone());
+        .with_linked_folders(linked_folders);
+    if let Some(handler) = remote_linked_resource_handler {
+        state = state.with_linked_resource_handler(handler);
+    }
     if std::env::var("TM_OMP_ACP_ENABLED").ok().as_deref() == Some("1") {
         let backend: Arc<dyn CodingBackend> = Arc::new(OmpAcpBackend::new(
             OmpAcpConfig::from_env()?,

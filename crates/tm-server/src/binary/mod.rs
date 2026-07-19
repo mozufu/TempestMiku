@@ -20,8 +20,9 @@ use self::{
     auth::server_auth_config,
     config::{
         apply_managed_persona_paths, database_dsn_from_env, load_host_config, load_mcp_config,
-        modes_config_from_env, owner_subject_from_env, self_hosted_asr_config_from_env,
-        server_addr_from_env, server_artifact_root, server_role_from_env,
+        load_remote_worker_config, modes_config_from_env, owner_subject_from_env,
+        self_hosted_asr_config_from_env, server_addr_from_env, server_artifact_root,
+        server_role_from_env,
     },
     drive_links::hydrate_drive_links,
     embedding::embedding_setup_from_env,
@@ -67,6 +68,13 @@ pub(super) async fn run() -> Result<(), BoxError> {
     };
     let persona = modes_config_from_env();
     let host_config = load_host_config()?;
+    let remote_worker_config = load_remote_worker_config()?;
+    if remote_worker_config.is_some() && !host_config.linked_folders.is_empty() {
+        return Err(
+            "local and remote linked-folder hosts cannot be enabled together in worker protocol v1"
+                .into(),
+        );
+    }
     recover_proc_isolation_orphans_at_startup(&host_config)?;
     let mcp_config = load_mcp_config(&host_config)?;
     let linked_folders = host_config.linked_folders()?;
@@ -93,6 +101,7 @@ pub(super) async fn run() -> Result<(), BoxError> {
             RuntimePolicies {
                 host: &host_config,
                 mcp: &mcp_config,
+                remote_worker: remote_worker_config.as_ref(),
             },
             &linked_folders,
             &persona,
@@ -172,6 +181,8 @@ pub(super) async fn run() -> Result<(), BoxError> {
             &linked_folders,
             artifact_root.clone(),
             runtime.native_tm,
+            &runtime.linked_aliases,
+            runtime.linked_resource_handler,
         )?;
         state.wire_lifecycle_sink();
         run_server(addr, state, role, RuntimeConfig::default()).await?;
@@ -186,6 +197,7 @@ pub(super) async fn run() -> Result<(), BoxError> {
             RuntimePolicies {
                 host: &host_config,
                 mcp: &mcp_config,
+                remote_worker: remote_worker_config.as_ref(),
             },
             &linked_folders,
             &persona,
@@ -229,6 +241,8 @@ pub(super) async fn run() -> Result<(), BoxError> {
             &linked_folders,
             artifact_root.clone(),
             runtime.native_tm,
+            &runtime.linked_aliases,
+            runtime.linked_resource_handler,
         )?;
         state.wire_lifecycle_sink();
         run_server(addr, state, role, RuntimeConfig::default()).await?;

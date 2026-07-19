@@ -5,6 +5,7 @@ use tm_host::P0HostConfig;
 use tm_mcp::{McpBounds, McpRuntimeConfig};
 use tm_modes::ModesConfig;
 use tm_server::{SelfHostedAsrConfig, ServerRole};
+use tm_worker_protocol::RemoteWorkerConfig;
 
 use super::BoxError;
 
@@ -123,6 +124,21 @@ pub(super) fn load_host_config() -> Result<P0HostConfig, BoxError> {
             egress: Default::default(),
         }),
     }
+}
+
+pub(super) fn load_remote_worker_config() -> Result<Option<RemoteWorkerConfig>, BoxError> {
+    let Some(path) = std::env::var_os("TM_REMOTE_WORKER_CONFIG").map(PathBuf::from) else {
+        return Ok(None);
+    };
+    let config: RemoteWorkerConfig =
+        serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
+            format!(
+                "loading remote worker config from {}: {error}",
+                path.display()
+            )
+        })?;
+    config.validate()?;
+    Ok(Some(config))
 }
 
 pub(super) fn load_mcp_config(host_config: &P0HostConfig) -> Result<McpRuntimeConfig, BoxError> {

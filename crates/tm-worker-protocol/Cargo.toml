@@ -1,0 +1,27 @@
+[package]
+name = "tm-worker-protocol"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Authenticated coordinator/worker protocol for remote TempestMiku host calls."
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hex.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+tm-artifacts.workspace = true
+tm-host.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

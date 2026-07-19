@@ -32,7 +32,15 @@ where
         Some("linked") => {
             let session = state.store.get_session(session_id).await?;
             super::util::authorized_linked_alias(&session, uri)?;
-            read_linked_resource(&state.linked_folders, uri, selector).await
+            read_linked_resource(
+                &state.linked_folders,
+                state.linked_resource_handler.as_ref(),
+                uri,
+                selector,
+                session_id,
+                &session.memory_scope,
+            )
+            .await
         }
         Some("project") => {
             super::util::read_project_resource(state, session_id, uri, selector).await
@@ -123,7 +131,14 @@ where
         Some("linked") => {
             let session = state.store.get_session(session_id).await?;
             super::util::authorized_linked_alias(&session, uri)?;
-            list_linked_resources(&state.linked_folders, Some(uri)).await
+            list_linked_resources(
+                &state.linked_folders,
+                state.linked_resource_handler.as_ref(),
+                Some(uri),
+                session_id,
+                &session.memory_scope,
+            )
+            .await
         }
         Some("project") => super::util::list_project_resources(state, session_id, uri).await,
         Some("memory") => list_memory_resources(state, session_id, uri).await,

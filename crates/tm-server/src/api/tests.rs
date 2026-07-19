@@ -16,7 +16,7 @@ use tm_core::{
 };
 use tm_host::{
     CapabilityGrants, FsMode, HostError, InvocationCtx, LinkedFolderConfig, LinkedFolders,
-    ResourceRegistry,
+    ResourceEntry, ResourceHandler, ResourceRegistry,
 };
 use tm_lang::TmSandboxOptions;
 use tower::ServiceExt;

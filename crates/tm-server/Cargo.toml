@@ -17,6 +17,7 @@ tm-drive.workspace = true
 tm-lang.workspace = true
 tm-egress.workspace = true
 tm-mcp.workspace = true
+tm-worker-protocol.workspace = true
 axum.workspace = true
 tower-http.workspace = true
 tokio.workspace = true

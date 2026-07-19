@@ -20,9 +20,11 @@ pub(crate) fn validate_authorized_memory_scope(
                 "scope must be global or project:<active-linked-alias>".to_string(),
             )
         })?;
-    linked_folders
-        .policy(project)
-        .map_err(|_| ServerError::NotFound(format!("active linked project scope {scope}")))?;
+    if !linked_folders.contains_alias(project) {
+        return Err(ServerError::NotFound(format!(
+            "active linked project scope {scope}"
+        )));
+    }
     Ok(())
 }
 
@@ -113,8 +115,15 @@ where
         && let Some(linked_uri) = project_linked_uri(view)
     {
         ensure_project_linked_alias_active(&project_id, view, &state.linked_folders)?;
-        let mut content =
-            read_linked_resource(&state.linked_folders, &linked_uri, selector).await?;
+        let mut content = read_linked_resource(
+            &state.linked_folders,
+            state.linked_resource_handler.as_ref(),
+            &linked_uri,
+            selector,
+            session_id,
+            &session.memory_scope,
+        )
+        .await?;
         content.uri = uri.to_string();
         return Ok(content);
     }
@@ -201,7 +210,14 @@ where
         }
         if let Some(linked_uri) = project_linked_uri(view) {
             ensure_project_linked_alias_active(&project_id, view, &state.linked_folders)?;
-            let entries = list_linked_resources(&state.linked_folders, Some(&linked_uri)).await?;
+            let entries = list_linked_resources(
+                &state.linked_folders,
+                state.linked_resource_handler.as_ref(),
+                Some(&linked_uri),
+                session_id,
+                &session.memory_scope,
+            )
+            .await?;
             return Ok(entries
                 .into_iter()
                 .map(|entry| ResourceEntry {
@@ -254,14 +270,14 @@ fn project_linked_folder_entries(
     linked_folders: &LinkedFolders,
 ) -> Vec<ResourceEntry> {
     linked_folders
-        .policies()
+        .aliases()
         .into_iter()
-        .filter(|policy| linked_alias_matches_project(project_id, &policy.alias))
-        .map(|policy| ResourceEntry {
-            uri: format!("project://{project_id}/linked-folders/{}/", policy.alias),
-            name: policy.alias.clone(),
+        .filter(|alias| linked_alias_matches_project(project_id, alias))
+        .map(|alias| ResourceEntry {
+            uri: format!("project://{project_id}/linked-folders/{alias}/"),
+            name: alias.clone(),
             kind: "linked_folder".to_string(),
-            title: Some(format!("linked://{}/", policy.alias)),
+            title: Some(format!("linked://{alias}/")),
             size_bytes: None,
             modified_at: None,
         })
@@ -319,7 +335,11 @@ fn ensure_project_linked_alias_active(
             "linked folder {alias} is not in project {project_id}"
         )));
     }
-    linked_folders.policy(alias).map_err(map_host_error)?;
+    if !linked_folders.contains_alias(alias) {
+        return Err(ServerError::Policy(format!(
+            "linked folder {alias} is not active"
+        )));
+    }
     Ok(())
 }
 

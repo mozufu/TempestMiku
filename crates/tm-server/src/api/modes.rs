@@ -357,15 +357,22 @@ fn linked_folder_capability_notes(linked_folders: &LinkedFolders) -> String {
             .to_string();
     }
 
+    let policies = linked_folders
+        .policies()
+        .into_iter()
+        .map(|policy| (policy.alias.clone(), policy))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let mut notes = String::new();
-    for policy in linked_folders.policies() {
-        let mode = match policy.mode {
-            tm_host::FsMode::Ro => "ro",
-            tm_host::FsMode::Rw => "rw",
-        };
+    for alias in linked_folders.aliases() {
+        let mode = policies
+            .get(&alias)
+            .map(|policy| match policy.mode {
+                tm_host::FsMode::Ro => "ro",
+                tm_host::FsMode::Rw => "rw",
+            })
+            .unwrap_or("remote policy");
         notes.push_str(&format!(
-            "Linked folders: {} ({mode}) at linked://{}/\n",
-            policy.alias, policy.alias
+            "Linked folders: {alias} ({mode}) at linked://{alias}/\n"
         ));
     }
     notes

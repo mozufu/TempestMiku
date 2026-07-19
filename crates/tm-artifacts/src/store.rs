@@ -365,6 +365,43 @@ impl ArtifactStore {
         })
     }
 
+    /// Read one complete text artifact for a trusted transport boundary.
+    ///
+    /// Model-visible resource reads must continue to use [`Self::read`] so they remain paged.
+    /// This method preserves exact bytes while retaining the store's per-artifact bound.
+    pub fn read_all_text(&self, uri: &str) -> Result<(ArtifactRef, String)> {
+        let id = ArtifactId::parse_uri(uri)?;
+        let (artifact, available) = {
+            let inner = self.inner.lock();
+            (
+                inner
+                    .refs
+                    .iter()
+                    .find(|artifact| artifact.id == id.to_string())
+                    .cloned(),
+                inner
+                    .refs
+                    .iter()
+                    .map(|artifact| artifact.uri.clone())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let artifact = artifact.ok_or_else(|| ArtifactError::NotFound {
+            uri: uri.to_string(),
+            available,
+        })?;
+        let artifact_dir = self.validated_session_artifact_dir()?;
+        let content_path = artifact_dir.join(format!("{id}.txt"));
+        ensure_managed_file(&artifact_dir, &content_path, uri)?;
+        let bytes = read_bounded_file(&content_path, self.limits.max_artifact_bytes, uri)?;
+        if bytes.len() != artifact.size_bytes {
+            return Err(ArtifactError::Integrity(uri.to_string()));
+        }
+        let content =
+            String::from_utf8(bytes).map_err(|_| ArtifactError::Integrity(uri.to_string()))?;
+        Ok((artifact, content))
+    }
+
     /// Return the in-memory bounded namespace snapshot loaded by this handle.
     ///
     /// Model-visible and async callers should prefer [`Self::list_page`], which

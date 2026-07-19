@@ -129,6 +129,7 @@ pub struct FsPolicy {
 #[derive(Debug, Clone, Default)]
 pub struct LinkedFolders {
     policies: Arc<RwLock<BTreeMap<String, RegisteredPolicy>>>,
+    virtual_aliases: Arc<RwLock<BTreeSet<String>>>,
     /// Orders policy replacement/removal against the final filesystem commit or process spawn.
     /// Readers hold this only for a bounded synchronous filesystem operation; approval waits never
     /// retain it.
@@ -165,6 +166,7 @@ impl LinkedFolders {
         }
         Ok(Self {
             policies: Arc::new(RwLock::new(policies)),
+            virtual_aliases: Arc::new(RwLock::new(BTreeSet::new())),
             policy_gate: Arc::new(RwLock::new(())),
             mutations: Arc::new(Mutex::new(())),
             revision: Arc::new(AtomicU64::new(1)),
@@ -172,10 +174,57 @@ impl LinkedFolders {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.policies
+        let local_empty = self
+            .policies
             .read()
             .map(|policies| policies.is_empty())
-            .unwrap_or(true)
+            .unwrap_or(true);
+        let virtual_empty = self
+            .virtual_aliases
+            .read()
+            .map(|aliases| aliases.is_empty())
+            .unwrap_or(true);
+        local_empty && virtual_empty
+    }
+
+    pub fn with_virtual_aliases(self, aliases: impl IntoIterator<Item = String>) -> Result<Self> {
+        let mut validated = BTreeSet::new();
+        for alias in aliases {
+            validate_alias(&alias)?;
+            if self.policy(&alias).is_ok() || !validated.insert(alias.clone()) {
+                return Err(HostError::InvalidArgs(format!(
+                    "duplicate linked folder alias {alias}"
+                )));
+            }
+        }
+        *self.virtual_aliases.write().map_err(|error| {
+            HostError::HostCall(format!("virtual linked alias registry poisoned: {error}"))
+        })? = validated;
+        Ok(self)
+    }
+
+    pub fn contains_alias(&self, alias: &str) -> bool {
+        self.policies
+            .read()
+            .map(|policies| policies.contains_key(alias))
+            .unwrap_or(false)
+            || self
+                .virtual_aliases
+                .read()
+                .map(|aliases| aliases.contains(alias))
+                .unwrap_or(false)
+    }
+
+    pub fn aliases(&self) -> Vec<String> {
+        let mut aliases = self
+            .policies
+            .read()
+            .map(|policies| policies.keys().cloned().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
+        if let Ok(virtual_aliases) = self.virtual_aliases.read() {
+            aliases.extend(virtual_aliases.iter().cloned());
+        }
+        aliases.into_iter().collect()
     }
 
     pub fn first_alias(&self) -> Option<String> {

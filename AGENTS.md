@@ -29,12 +29,16 @@
     secret handles.
   - `crates/tm-mcp`: selected MCP `2025-11-25` catalog/lifecycle, strict bounded schemas/results,
     Streamable HTTP JSON/SSE/resume, untrusted provenance envelopes, and durable approved mutations.
+  - `crates/tm-worker-protocol`: signed coordinator/worker jobs, durable status contracts, remote
+    host/resource registration, lumo-owned approval resolution, and verified artifact localization.
   - `crates/tm-lang`: the sole `execute(code)` runtime: `tm` lexer, parser, checker, persistent
     interpreter, effect machine, host/resource/artifact wiring, and `Sandbox` adapter. Its T0-T7
     public HTTP/SSE, approval, runtime-loss, real-Postgres replay, client, and historical comparative
     fluency gates pass.
   - `crates/tm-server`: authenticated axum session API, durable turn queue, replayable SSE/event store, ordered Postgres migrations including the P8.3 scoped hybrid-memory spine, supervised runtime roles, durable approvals/dreams/cron/drive state, artifact routes, Serious Engineer backend path, and OMP ACP bridge.
   - `apps/tm-cli`: CLI wiring the LLM client, streaming agent loop, and sole tm-lang sandbox.
+  - `apps/tm-worker`: minimal authenticated remote linked-host executor for the M4 homolab profile;
+    it is not a second session/model server.
   - `apps/tm-e2e`: local/dev public-API workflow harness for scripted and opt-in live session smoke
     coverage. The retired TypeScript-versus-tm runner survives only as historical evidence/corpus.
   - `clients/miku_flutter` / `clients/miku_web`: client scaffolds and smoke coverage.
@@ -89,7 +93,10 @@
   retained identity-bound reporting, switch persistence, and restart stability. Its threat model is
   a hostile workload on the trusted owner-controlled host kernel; hostile-kernel containment and
   microVM isolation are explicitly unclaimed. The earlier lumo preflight remains a useful
-  fail-closed result because that host lacks the `memory` controller. `tm-trace`,
+  fail-closed result because that host lacks the `memory` controller. Production now keeps lumo as
+  the sole authoritative `tm-server` and exposes homolab's linked host through one signed
+  `tm-worker`; there is no peer election, local fallback, or second session/memory authority.
+  `tm-trace`,
   cloud sync, AST/LSP, and any future second
   sandbox backend are demand-triggered; aggressive self-evolution is out.
 

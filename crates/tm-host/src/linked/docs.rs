@@ -334,6 +334,22 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
     }
 }
 
+pub fn linked_tool_docs(name: &str) -> Option<ToolDocs> {
+    let (namespace, summary) = match name {
+        "fs.read" => ("fs", "Read UTF-8 text from a linked folder"),
+        "fs.write" => ("fs", "Write UTF-8 text under a writable linked folder"),
+        "fs.patch" => ("fs", "Atomically patch a linked UTF-8 file"),
+        "fs.move" => ("fs", "Move a linked file"),
+        "fs.remove" => ("fs", "Remove a linked file"),
+        "fs.ls" => ("fs", "List linked-folder entries"),
+        "fs.find" => ("fs", "Find linked-folder entries"),
+        "code.search" => ("code", "Search UTF-8 linked files"),
+        "proc.run" => ("proc", "Run allowlisted argv-vector commands"),
+        _ => return None,
+    };
+    Some(docs(name, namespace, summary, true))
+}
+
 fn linked_grant(description: &str) -> GrantDoc {
     GrantDoc {
         kind: "linked-folder".to_string(),

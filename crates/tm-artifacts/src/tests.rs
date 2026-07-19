@@ -48,6 +48,20 @@ fn stores_artifact_and_resolves_by_uri() {
 }
 
 #[test]
+fn trusted_full_text_read_preserves_exact_bounded_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ArtifactStore::open(dir.path(), "transport").unwrap();
+    let expected = format!("{}\r\nlast-line\n", "x".repeat(300 * 1024));
+    let artifact = store
+        .put_text(&expected, Some("transport".into()), "text/plain")
+        .unwrap();
+
+    let (resolved, content) = store.read_all_text(&artifact.uri).unwrap();
+    assert_eq!(resolved, artifact);
+    assert_eq!(content, expected);
+}
+
+#[test]
 fn blobs_are_content_addressed() {
     let dir = tempfile::tempdir().unwrap();
     let store = ArtifactStore::open(dir.path(), "default").unwrap();

@@ -34,7 +34,7 @@ use tm_drive::{IntoSharedDriveStore, SharedDriveStore};
 use tm_egress::EgressAdmin;
 use tm_host::{
     CapabilityGrants, EgressConfig, HostError, HostEventSink, InvocationCtx, LinkedFolders,
-    LinkedResourceHandler, ResourceEntry, ResourceRegistry, SelfEvolutionTier,
+    LinkedResourceHandler, ResourceEntry, ResourceHandler, ResourceRegistry, SelfEvolutionTier,
 };
 use tm_mcp::{McpBindings, McpCatalogView, McpHttpServerConfig, McpResourceHandler};
 use tm_memory::DreamQueueRecord;
@@ -121,6 +121,7 @@ pub struct AppState<S, M, C> {
     pub approval_broker: Arc<ApprovalBroker>,
     pub artifact_root: PathBuf,
     pub linked_folders: LinkedFolders,
+    pub linked_resource_handler: Option<Arc<dyn ResourceHandler>>,
     pub drive_store: Option<SharedDriveStore>,
     pub actor_roster: Arc<MailboxRegistry>,
     pub push: Option<Arc<crate::PushService>>,
@@ -153,6 +154,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             approval_broker: Arc::clone(&self.approval_broker),
             artifact_root: self.artifact_root.clone(),
             linked_folders: self.linked_folders.clone(),
+            linked_resource_handler: self.linked_resource_handler.clone(),
             drive_store: self.drive_store.clone(),
             actor_roster: Arc::clone(&self.actor_roster),
             push: self.push.clone(),
@@ -197,6 +199,7 @@ impl<S, M, C> AppState<S, M, C> {
             approval_broker,
             artifact_root: tm_artifacts::default_root(),
             linked_folders: LinkedFolders::default(),
+            linked_resource_handler: None,
             drive_store: None,
             actor_roster: Arc::new(MailboxRegistry::new()),
             push: None,
@@ -250,6 +253,11 @@ impl<S, M, C> AppState<S, M, C> {
 
     pub fn with_linked_folders(mut self, linked_folders: LinkedFolders) -> Self {
         self.linked_folders = linked_folders;
+        self
+    }
+
+    pub fn with_linked_resource_handler(mut self, handler: Arc<dyn ResourceHandler>) -> Self {
+        self.linked_resource_handler = Some(handler);
         self
     }
 

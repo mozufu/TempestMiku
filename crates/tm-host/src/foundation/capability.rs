@@ -8,7 +8,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::error::{HostError, Result};
+use super::{
+    error::{HostError, Result},
+    registry::ResourceRegistry,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -263,6 +266,17 @@ pub trait HostFn: Send + Sync {
     }
 
     async fn call(&self, args: Value, ctx: &InvocationCtx) -> Result<Value>;
+}
+
+/// Application-supplied host boundary installed for each sandbox session after its artifact
+/// namespace is opened. Remote connectors use this seam without teaching tm-lang about transport.
+pub trait SessionHostConnector: Send + Sync {
+    fn register(
+        &self,
+        host: &mut HostRegistry,
+        resources: &mut ResourceRegistry,
+        artifacts: tm_artifacts::ArtifactStore,
+    ) -> Result<()>;
 }
 
 #[derive(Default, Clone)]

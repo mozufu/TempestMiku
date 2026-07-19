@@ -306,26 +306,47 @@ pub(super) fn resource_scheme(uri: &str) -> Option<String> {
 
 pub(super) async fn read_linked_resource(
     linked_folders: &LinkedFolders,
+    remote_handler: Option<&Arc<dyn tm_host::ResourceHandler>>,
     uri: &str,
     selector: Option<&str>,
+    session_id: Uuid,
+    session_scope: &str,
 ) -> Result<ResourceContent> {
-    let mut registry = ResourceRegistry::new();
-    registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"));
-    registry
-        .read(uri, selector, &ctx)
-        .await
-        .map_err(map_host_error)
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"))
+        .with_session_id(session_id.to_string())
+        .with_session_scope(session_scope.to_string());
+    if let Some(handler) = remote_handler {
+        handler
+            .read(uri, selector, &ctx)
+            .await
+            .map_err(map_host_error)
+    } else {
+        let mut registry = ResourceRegistry::new();
+        registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
+        registry
+            .read(uri, selector, &ctx)
+            .await
+            .map_err(map_host_error)
+    }
 }
 
 pub(super) async fn list_linked_resources(
     linked_folders: &LinkedFolders,
+    remote_handler: Option<&Arc<dyn tm_host::ResourceHandler>>,
     uri: Option<&str>,
+    session_id: Uuid,
+    session_scope: &str,
 ) -> Result<Vec<ResourceEntry>> {
-    let mut registry = ResourceRegistry::new();
-    registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"));
-    registry.list(uri, &ctx).await.map_err(map_host_error)
+    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"))
+        .with_session_id(session_id.to_string())
+        .with_session_scope(session_scope.to_string());
+    if let Some(handler) = remote_handler {
+        handler.list(uri, &ctx).await.map_err(map_host_error)
+    } else {
+        let mut registry = ResourceRegistry::new();
+        registry.register(Arc::new(LinkedResourceHandler::new(linked_folders.clone())));
+        registry.list(uri, &ctx).await.map_err(map_host_error)
+    }
 }
 
 pub(super) async fn read_drive_resource<S, M, C>(

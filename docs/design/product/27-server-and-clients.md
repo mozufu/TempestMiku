@@ -44,7 +44,32 @@ flowchart TD
   SCHED[P4 scheduler cron] -.start session.-> SRV
   SRV --> CORE[agent loop + sandbox + registry]
   CORE --> SUBS[persona / memory / agents / drive]
+  CORE -->|signed bounded jobs over Tailnet| WORKER[tm-worker<br/>linked host on homolab]
+  WORKER -->|fs.* / code.search / proc.run / linked://| REPO[operator-provisioned linked repo]
 ```
+
+There is exactly one authoritative `tm-server` in the production topology: lumo owns auth,
+sessions, Postgres state, memory, model calls, SSE, capability grants, and approval decisions.
+Homolab runs `tm-worker`, not a second `tm-server`. The worker has no client API, model, persona,
+memory authority, scheduler, or independent approval policy; it is a bounded remote implementation
+of the existing host/resource traits. `tm-server`'s internal `api|worker|all` supervision roles still
+refer to durable turn/dream/cron processing inside the coordinator and are unrelated to the external
+`tm-worker` binary.
+
+The v1 coordinator/worker contract is deliberately asymmetric:
+
+- lumo creates UUID job ids and sends exact per-turn grants and scope through a versioned JSON
+  envelope authenticated with HMAC-SHA256, timestamp, nonce, method, path, and body digest;
+- homolab accepts plain HTTP only on loopback or Tailnet addresses, rejects replayed nonces and
+  mismatched worker identity/protocol, and persists each state transition in an atomic job ledger;
+- approval-gated host calls pause in `awaiting_approval`; only lumo may resolve the exact action
+  digest through the existing user approval broker;
+- retries with the same job id return the durable status instead of executing twice; interrupted
+  non-terminal work becomes `indeterminate` after restart and is never silently replayed;
+- worker artifacts cross the authenticated boundary with exact size/SHA-256 verification and are
+  re-homed into the coordinator session artifact namespace; cancellation is forwarded best-effort;
+- when homolab is asleep or unavailable, the host call fails visibly. There is no local linked-host
+  fallback on lumo and no master/slave election or peer-to-peer worker coordination.
 
 A session is one long-lived SSE stream, but the event name is deliberately singular:
 
@@ -489,6 +514,10 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 - `coding_backend` / `native_tm` / `omp_acp` — the common backend interface, native Serious
   Engineer tm backend, and P0a adapter that owns the `omp acp` subprocess, JSON-RPC framing, event
   normalization, permission translation, and bridge health/version checks.
+- `tm-worker-protocol` / `apps/tm-worker` — versioned signed remote host jobs plus the minimal
+  homolab HTTP executor. The coordinator registers the connector into each tm-lang sandbox through
+  the existing `SessionHostConnector`; the worker reuses `tm-host` policy, linked-path, approval,
+  artifact, and Linux-isolation implementations rather than defining a second capability system.
 - Clients live **outside** the Rust workspace: `clients/miku_flutter` (one codebase targeting
   Web/PWA and Android) plus `clients/miku_web` smoke/evidence tests (§28).
 
@@ -509,6 +538,9 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   blocks the server.
 - **Postgres unavailable/migration mismatch** — worker roles stop claiming and readiness fails; the
   server never silently downgrades production state to process-local storage.
+- **Remote host unavailable or restarted** — the current host call fails visibly. A retained
+  terminal job remains queryable by id; an interrupted non-terminal job is `indeterminate`, never
+  re-executed automatically. Coordinator state and unrelated chat/memory features stay on lumo.
 
 ## 27.9 Local E2E hatch
 

@@ -2835,6 +2835,7 @@ dependencies = [
  "tm-mcp",
  "tm-memory",
  "tm-modes",
+ "tm-worker-protocol",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
@@ -2842,6 +2843,52 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "tm-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tm-artifacts",
+ "tm-host",
+ "tm-worker-protocol",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "tm-worker-protocol"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "hmac 0.12.1",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tm-artifacts",
+ "tm-host",
+ "tokio",
  "url",
  "uuid",
 ]

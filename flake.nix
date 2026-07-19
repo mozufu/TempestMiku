@@ -51,6 +51,19 @@
           buildInputs = [ pkgs.openssl ];
           doCheck = false;
         };
+        tmWorker = rustPlatform.buildRustPackage {
+          pname = "tm-worker";
+          version = "0.1.0";
+          src = pkgs.lib.cleanSource ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          cargoBuildFlags = [
+            "-p"
+            "tm-worker"
+          ];
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl ];
+          doCheck = false;
+        };
         m4IsolationRuntime = pkgs.pkgsStatic.stdenv.mkDerivation {
           pname = "tempestmiku-m4-isolation-runtime";
           version = "1";
@@ -78,9 +91,10 @@
       in
       {
         packages = {
-          inherit tmServer;
+          inherit tmServer tmWorker;
           default = tmServer;
           "tm-server" = tmServer;
+          "tm-worker" = tmWorker;
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           inherit m4IsolationRuntime;
@@ -117,6 +131,6 @@
       }
     ))
     // {
-      nixosModules.m4Production = import ./nix/m4-production-module.nix;
+      nixosModules.m4Worker = import ./nix/m4-worker-module.nix;
     };
 }

@@ -7,7 +7,8 @@ use tm_drive::SharedDriveStore;
 use tm_host::{
     ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy,
     HostEventSink, HostRegistry, InvocationCtx, LinkedFolders, NoopHostEventSink,
-    ProcIsolationConfig, ResourceRegistry, register_p0_linked_folder_functions_with_isolation,
+    ProcIsolationConfig, ResourceRegistry, SessionHostConnector,
+    register_p0_linked_folder_functions_with_isolation,
 };
 
 use crate::{Interpreter, RuntimeLimits, catalog_from_registry};
@@ -23,6 +24,8 @@ pub struct TmSandboxOptions {
     pub resource_registry: ResourceRegistry,
     pub grants: CapabilityGrants,
     pub linked_folders: Option<LinkedFolders>,
+    pub linked_aliases: Vec<String>,
+    pub host_connectors: Vec<Arc<dyn SessionHostConnector>>,
     pub drive_store: Option<SharedDriveStore>,
     pub approval_policy: Arc<dyn ApprovalPolicy>,
     pub approval_timeout: Duration,
@@ -47,6 +50,8 @@ impl Default for TmSandboxOptions {
             // supply every externally authoritative capability for this exact turn/actor.
             grants: CapabilityGrants::default(),
             linked_folders: None,
+            linked_aliases: Vec::new(),
+            host_connectors: Vec::new(),
             drive_store: None,
             approval_policy: Arc::new(DefaultDenyApprovalPolicy),
             approval_timeout: Duration::from_secs(60),
@@ -91,6 +96,11 @@ impl Sandbox for TmSandbox {
         }
         let mut resources = self.options.resource_registry.clone();
         resources.register(Arc::new(ArtifactResourceHandler::new(artifacts.clone())));
+        for connector in &self.options.host_connectors {
+            connector
+                .register(&mut registry, &mut resources, artifacts.clone())
+                .map_err(|error| tm_core::Error::Sandbox(error.to_string()))?;
+        }
         let linked_folders = self.options.linked_folders.clone().or_else(|| {
             self.options
                 .drive_store
@@ -152,6 +162,13 @@ impl Sandbox for TmSandbox {
                     .filter(|alias| invocation.require_linked_alias(alias).is_ok()),
             );
         }
+        catalog_schemes.extend(
+            self.options
+                .linked_aliases
+                .iter()
+                .filter(|alias| invocation.require_linked_alias(alias).is_ok())
+                .cloned(),
+        );
         catalog_schemes.sort();
         catalog_schemes.dedup();
         for operation in [

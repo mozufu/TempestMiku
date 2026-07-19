@@ -6,36 +6,41 @@
 }:
 
 let
-  cfg = config.services.tempestmikuM4;
-  hostConfig = pkgs.writeText "tempestmiku-m4-host.json" (
+  cfg = config.services.tempestmikuM4Worker;
+  linkedFolderType = lib.types.submodule {
+    options = {
+      name = lib.mkOption { type = lib.types.str; };
+      path = lib.mkOption { type = lib.types.path; };
+      mode = lib.mkOption {
+        type = lib.types.enum [
+          "ro"
+          "rw"
+        ];
+        default = "rw";
+      };
+      commands = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+      };
+    };
+  };
+  hostConfig = pkgs.writeText "tempestmiku-m4-worker-host.json" (
     builtins.toJSON {
-      linked_folders = [
-        {
-          name = "tempestmiku";
-          path = cfg.linkedRoot;
-          mode = "rw";
-          commands = [
-            "cat"
-            "env"
-            "mount"
-            "resource-probe"
-            "sh"
-            "sleep"
-            "test"
-            "thread-probe"
-            "touch"
-            "unshare"
-            "wget"
-          ];
-          safe_args = [ ];
-        }
-      ];
+      linked_folders = map (folder: {
+        inherit (folder)
+          name
+          path
+          mode
+          commands
+          ;
+        safe_args = [ ];
+      }) cfg.linkedFolders;
       approvals = {
         mode = "deny";
-        timeout_ms = 60000;
+        timeout_ms = cfg.approvalTimeoutMs;
       };
       artifact_root = "${cfg.stateRoot}/artifacts";
-      proc_run_timeout_ms = 180000;
+      proc_run_timeout_ms = cfg.procRunTimeoutMs;
       proc_isolation = {
         provider = "linux_hardened_v1";
         launcher = "${cfg.isolationRuntime}/bin/bwrap";
@@ -56,7 +61,21 @@ let
       };
     }
   );
-  launchServer = pkgs.writeShellScript "tempestmiku-m4-launch" ''
+  credentialPath = "/run/credentials/${cfg.unitName}.service/signing-key";
+  workerConfig = pkgs.writeText "tempestmiku-m4-worker.json" (
+    builtins.toJSON {
+      workerId = cfg.workerId;
+      listenAddr = cfg.listenAddress;
+      signingKeyFile = credentialPath;
+      hostConfigFile = hostConfig;
+      ledgerRoot = cfg.stateRoot;
+      approvalTimeoutMs = cfg.approvalTimeoutMs;
+      maxConcurrentJobs = 4;
+      maxConcurrentProcRuns = 1;
+      retentionSeconds = 86400;
+    }
+  );
+  launchWorker = pkgs.writeShellScript "tempestmiku-m4-worker-launch" ''
     set -euo pipefail
 
     cgroup_root=/sys/fs/cgroup/system.slice/${cfg.unitName}.service
@@ -90,28 +109,71 @@ let
           ;;
       esac
     done
-    exec ${cfg.package}/bin/tm-server
+    exec ${cfg.package}/bin/tm-worker
   '';
 in
 {
-  options.services.tempestmikuM4 = {
-    enable = lib.mkEnableOption "the TempestMiku M4 production hardening target";
+  options.services.tempestmikuM4Worker = {
+    enable = lib.mkEnableOption "the TempestMiku M4 hardened linked-host worker";
     package = lib.mkOption {
       type = lib.types.package;
-      description = "tm-server package used by the production hardening target.";
+      description = "tm-worker package.";
     };
     isolationRuntime = lib.mkOption {
       type = lib.types.package;
       description = "Root-owned immutable bubblewrap and static command runtime.";
     };
+    signingKeyFile = lib.mkOption {
+      type = lib.types.path;
+      description = "Root-readable file containing the 64-character lowercase hex HMAC key.";
+    };
+    listenAddress = lib.mkOption {
+      type = lib.types.str;
+      default = "127.0.0.1:18787";
+    };
+    workerId = lib.mkOption {
+      type = lib.types.str;
+      default = "homolab-m4";
+    };
+    linkedFolders = lib.mkOption {
+      type = lib.types.listOf linkedFolderType;
+      default = [
+        {
+          name = "tempestmiku";
+          path = "${cfg.stateRoot}/linked/tempestmiku";
+          mode = "rw";
+          commands = [
+            "cat"
+            "env"
+            "mount"
+            "resource-probe"
+            "sh"
+            "sleep"
+            "test"
+            "thread-probe"
+            "touch"
+            "unshare"
+            "wget"
+          ];
+        }
+      ];
+    };
+    approvalTimeoutMs = lib.mkOption {
+      type = lib.types.ints.between 1000 300000;
+      default = 60000;
+    };
+    procRunTimeoutMs = lib.mkOption {
+      type = lib.types.ints.between 1 900000;
+      default = 180000;
+    };
     unitName = lib.mkOption {
       type = lib.types.str;
-      default = "tempestmiku-m4";
+      default = "tempestmiku-m4-worker";
       readOnly = true;
     };
     user = lib.mkOption {
       type = lib.types.str;
-      default = "tempestmiku-m4";
+      default = "tempestmiku-worker";
       readOnly = true;
     };
     uid = lib.mkOption {
@@ -124,12 +186,7 @@ in
     };
     stateRoot = lib.mkOption {
       type = lib.types.path;
-      default = "/var/lib/tempestmiku-m4";
-      readOnly = true;
-    };
-    linkedRoot = lib.mkOption {
-      type = lib.types.path;
-      default = "/var/lib/tempestmiku-m4/linked";
+      default = "/var/lib/tempestmiku-worker";
       readOnly = true;
     };
   };
@@ -138,7 +195,11 @@ in
     assertions = [
       {
         assertion = pkgs.stdenv.hostPlatform.isLinux;
-        message = "services.tempestmikuM4 requires Linux";
+        message = "services.tempestmikuM4Worker requires Linux";
+      }
+      {
+        assertion = cfg.linkedFolders != [ ];
+        message = "services.tempestmikuM4Worker requires at least one linked folder";
       }
     ];
 
@@ -153,29 +214,32 @@ in
     systemd.tmpfiles.rules = [
       "d ${cfg.stateRoot} 0750 ${cfg.user} ${cfg.user} -"
       "d ${cfg.stateRoot}/artifacts 0700 ${cfg.user} ${cfg.user} -"
-      "d ${cfg.linkedRoot} 0700 ${cfg.user} ${cfg.user} -"
-      "d ${cfg.stateRoot}/acceptance 0700 ${cfg.user} ${cfg.user} -"
-    ];
+      "d ${cfg.stateRoot}/jobs 0700 ${cfg.user} ${cfg.user} -"
+    ]
+    ++ map (folder: "d ${folder.path} 0700 ${cfg.user} ${cfg.user} -") cfg.linkedFolders;
 
     systemd.services.${cfg.unitName} = {
-      description = "TempestMiku M4 production hardening target";
+      description = "TempestMiku M4 hardened linked-host worker";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
+      after = [
+        "network.target"
+        "tailscaled.service"
+      ];
+      wants = [ "tailscaled.service" ];
       environment = {
-        TM_HOST_CONFIG = hostConfig;
-        TM_SERVER_ADDR = "127.0.0.1:8787";
-        TM_SERVER_ROLE = "api";
+        TM_WORKER_CONFIG = workerConfig;
       };
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
         Group = cfg.user;
-        ExecStart = launchServer;
+        ExecStart = launchWorker;
         Restart = "on-failure";
         RestartSec = "2s";
         Delegate = "cpu memory pids";
         DelegateSubgroup = "service";
-        StateDirectory = "tempestmiku-m4";
+        LoadCredential = "signing-key:${cfg.signingKeyFile}";
+        StateDirectory = "tempestmiku-worker";
         StateDirectoryMode = "0750";
         UMask = "0077";
         NoNewPrivileges = true;
@@ -196,6 +260,6 @@ in
       };
     };
 
-    environment.etc."tempestmiku/m4-host.json".source = hostConfig;
+    environment.etc."tempestmiku/m4-worker-host.json".source = hostConfig;
   };
 }

@@ -16,7 +16,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **M1 — real REPL** ✓ | Persistent tm-lang runtime; `display`, allowlisted `http.get`, artifacts/resources, result shaping, and spill. The original Deno/V8 implementation is historical and no longer ships. |
 | **M2 — disclosure + tools** ✓ | `tools.search/docs/call`; the catalog/SDK translation contract for external tools. `tools.call` re-enters the registered host boundary with the target capability rechecked, and selected production `tm-mcp` imports ship through the closed P9 boundary. |
 | **M3 — production loop** ✓ | Approval gates, audit log, session pooling, deterministic replay. (Streaming landed in M0.) |
-| **M4 — runtime hardening** ✓ | P9 egress hardening and both opt-in Linux `proc.run` profiles are implemented and canaried. `linux_hardened_v1` adds a fixed repo-owned seccomp policy plus per-run cgroup-v2 CPU/memory/pids enforcement and crash-orphan recovery without fallback. Disposable native aarch64/x86_64 executions and the selected homolab production service pass. The retained native x86_64 report proves exact systemd delegation, cgroup exclusivity, representative workload sizing/headroom, immutable identities, persistence, and restart stability under the selected hostile-workload/trusted-host-kernel boundary. Hostile host-kernel containment and microVM isolation are not claimed. |
+| **M4 — runtime hardening** ✓ | P9 egress hardening and both opt-in Linux `proc.run` profiles are implemented and canaried. `linux_hardened_v1` adds a fixed repo-owned seccomp policy plus per-run cgroup-v2 CPU/memory/pids enforcement and crash-orphan recovery without fallback. Production has one authoritative lumo `tm-server`; the selected homolab boundary is exposed by one signed, durable `tm-worker`, not a second server. The retained native x86_64 report proves exact systemd delegation, cgroup exclusivity, representative workload sizing/headroom, immutable identities, persistence, and restart stability under the selected hostile-workload/trusted-host-kernel boundary. Hostile host-kernel containment and microVM isolation are not claimed. |
 
 ## Product roadmap (§28)
 
@@ -58,7 +58,7 @@ explicitly unclaimed rather than being prerequisites of the selected contract.
 
 Current implementation has advanced past the original M0-only substrate. The workspace now includes
 `tm-core`, `tm-llm`, `tm-lang`, `tm-artifacts`, `tm-host`, `tm-modes`, `tm-agents`, `tm-server`,
-`apps/tm-cli`, and client scaffolds under
+`tm-worker-protocol`, `apps/tm-cli`, `apps/tm-worker`, and client scaffolds under
 `clients/`. The implemented path covers M0, M1, host/approval/resource foundations, P0a OMP ACP
 bridging, the native P0 Serious Engineer dogfood slice, the CLI native cutover proof for
 linked-repo edit/run/artifact workflows, native tm HTTP approvals for the Serious Engineer backend,

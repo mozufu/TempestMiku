@@ -783,6 +783,49 @@ the service UID. A container-wide `--pids-limit` is useful defense in depth but 
 cgroup delegation. Do not compensate by running the steady-state application privileged or by
 mounting the host's entire cgroup tree writable.
 
+### M4 coordinator/worker deployment
+
+The production topology has one `tm-server`, on lumo, and one external linked-host worker, on
+homolab. Do not run `tm-server` on homolab. The names are intentionally different from the
+coordinator's internal `TM_SERVER_ROLE=api|worker|all` setting: lumo may remain `all` so it owns its
+durable turn/dream/cron daemons, while homolab runs only the separate `tm-worker` binary.
+
+On homolab, import `nixosModules.m4Worker` and configure the signed worker service:
+
+```nix
+services.tempestmikuM4Worker = {
+  enable = true;
+  package = inputs.tempestmiku.packages.${pkgs.system}.tmWorker;
+  isolationRuntime = inputs.tempestmiku.packages.${pkgs.system}.m4IsolationRuntime;
+  signingKeyFile = config.sops.secrets.tempestmiku-worker-signing-key.path;
+  listenAddress = "100.110.95.111:18787";
+};
+```
+
+The module creates the dedicated UID/GID, durable job/artifact directories, exact systemd cgroup
+delegation, root-owned configs, credential mount, and a default writable `tempestmiku` linked root.
+Provision the intended checkout or worktree into that root as the worker identity before granting
+real project turns; the service never clones repositories and never widens an empty directory into
+ambient host access.
+
+On lumo, mount the same decrypted HMAC key read-only into the container and set
+`TM_REMOTE_WORKER_CONFIG` to a mounted JSON file:
+
+```json
+{
+  "workerId": "homolab-m4",
+  "endpoint": "http://100.110.95.111:18787",
+  "signingKeyFile": "/run/secrets/tempestmiku-worker-signing-key",
+  "linkedAliases": ["tempestmiku"]
+}
+```
+
+Do not also set local `linked_folders` in `TM_HOST_CONFIG`; startup refuses mixed local and remote
+linked hosts in protocol v1. Health is intentionally separate from execution:
+`GET /v1/health` proves worker identity/readiness, while every job, status, approval, cancellation,
+and artifact request is signed. Keep port 18787 reachable only on the Tailnet. If homolab sleeps,
+remote host calls fail instead of falling back to lumo.
+
 ## Selected MCP and live research
 
 MCP is disabled unless a trusted MCP config explicitly selects both the transport and individual

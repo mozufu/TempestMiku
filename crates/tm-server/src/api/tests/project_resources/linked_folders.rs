@@ -1,5 +1,112 @@
 use super::*;
 
+struct RemoteLinkedFixture;
+
+#[async_trait]
+impl ResourceHandler for RemoteLinkedFixture {
+    fn scheme(&self) -> &str {
+        "linked"
+    }
+
+    fn capability(&self) -> &str {
+        "resources.read:linked"
+    }
+
+    async fn read(
+        &self,
+        uri: &str,
+        selector: Option<&str>,
+        ctx: &InvocationCtx,
+    ) -> tm_host::Result<tm_artifacts::ResourceContent> {
+        assert_eq!(ctx.session_scope.as_deref(), Some("project:tempestmiku"));
+        Ok(tm_artifacts::ResourceContent {
+            uri: uri.to_string(),
+            kind: "text".to_string(),
+            mime: "text/plain".to_string(),
+            title: Some("README.md".to_string()),
+            size_bytes: 13,
+            selector: selector.map(str::to_string),
+            has_more: false,
+            preview: "remote worker".to_string(),
+            content: "remote worker".to_string(),
+        })
+    }
+
+    async fn list(
+        &self,
+        _uri: Option<&str>,
+        ctx: &InvocationCtx,
+    ) -> tm_host::Result<Vec<ResourceEntry>> {
+        assert_eq!(ctx.session_scope.as_deref(), Some("project:tempestmiku"));
+        Ok(vec![ResourceEntry {
+            uri: "linked://tempestmiku/README.md".to_string(),
+            name: "README.md".to_string(),
+            kind: "text".to_string(),
+            title: None,
+            size_bytes: Some(13),
+            modified_at: None,
+        }])
+    }
+}
+
+#[tokio::test]
+async fn virtual_linked_alias_uses_remote_resource_handler() {
+    let linked = LinkedFolders::default()
+        .with_virtual_aliases(["tempestmiku".to_string()])
+        .unwrap();
+    let store = Arc::new(InMemoryStore::default());
+    let state = AppState::new(
+        store.clone(),
+        Arc::new(StoreMemoryProvider::new(store)),
+        Arc::new(EchoChatRunner),
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_linked_folders(linked)
+    .with_linked_resource_handler(Arc::new(RemoteLinkedFixture));
+    let (app, _) = test_app_with_state(state);
+    let session = create_project_session(&app).await;
+
+    let resolved = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri=linked://tempestmiku/README.md&selector=1-1",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(resolved).await["content"],
+        json!("remote worker")
+    );
+
+    let listed = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=linked://tempestmiku/",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(listed).await.as_array().unwrap()[0]["uri"],
+        json!("linked://tempestmiku/README.md")
+    );
+}
+
 #[tokio::test]
 async fn project_linked_folder_view_lists_and_reads_shared_links() {
     let temp = tempfile::tempdir().unwrap();

@@ -26,7 +26,100 @@ void main() {
     expect(find.text('晚上好。我在這裡。'), findsOneWidget);
     expect(find.byKey(const Key('conversation-composer')), findsOneWidget);
     expect(find.byTooltip('送出'), findsOneWidget);
+    expect(find.byTooltip('開啟對話選單'), findsOneWidget);
     expect(find.byIcon(Icons.attach_file), findsNothing);
+  });
+
+  testWidgets('opens the left conversation drawer by swiping right', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    expect(await client.listSessions(), hasLength(1));
+    final scaffold = tester.state<ScaffoldState>(find.byType(Scaffold));
+    expect(scaffold.isDrawerOpen, isFalse);
+
+    await tester.dragFrom(const Offset(1, 280), const Offset(300, 0));
+    await tester.pumpAndSettle();
+
+    expect(scaffold.isDrawerOpen, isTrue);
+    expect(find.byKey(const Key('left-conversation-drawer')), findsOneWidget);
+    expect(find.byKey(const Key('left-drawer-title')), findsOneWidget);
+    expect(find.text('Miku'), findsWidgets);
+    expect(find.byKey(const Key('drawer-drive')), findsOneWidget);
+    expect(find.byKey(const Key('drawer-project')), findsOneWidget);
+    expect(find.byKey(const Key('drawer-history')), findsOneWidget);
+    expect(find.byKey(const Key('drawer-settings')), findsOneWidget);
+    expect(find.byKey(const Key('drawer-new-conversation')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('close-left-drawer')));
+    await tester.pumpAndSettle();
+    expect(scaffold.isDrawerOpen, isFalse);
+
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    expect(scaffold.isDrawerOpen, isTrue);
+
+    await tester.tap(find.byKey(const Key('drawer-new-conversation')));
+    await tester.pumpAndSettle();
+    expect(scaffold.isDrawerOpen, isFalse);
+    expect(await client.listSessions(), hasLength(2));
+  });
+
+  testWidgets('expands server project and history and switches sessions', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    final first = await client.createSession();
+    await client.sendMessage(
+      first.id,
+      '第一段對話',
+      clientMessageId: 'history-first-message',
+    );
+    final second = await client.createSession();
+    await loadApp(tester, client);
+
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('drawer-project-content')), findsOneWidget);
+    expect(find.text('Scripted project status'), findsOneWidget);
+    expect(find.text('Continue from latest session result'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('drawer-history')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('drawer-history-content')), findsOneWidget);
+    expect(find.byKey(Key('history-session-${first.id}')), findsOneWidget);
+    expect(find.byKey(Key('history-session-${second.id}')), findsOneWidget);
+    expect(
+      find.byKey(const Key('drawer-project-content')),
+      findsOneWidget,
+      reason: 'Project and History should stay independently expanded.',
+    );
+
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(Key('history-session-${first.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('history-session-${first.id}')));
+    await tester.pumpAndSettle();
+
+    final scaffold = tester.state<ScaffoldState>(find.byType(Scaffold));
+    expect(scaffold.isDrawerOpen, isFalse);
+    expect(find.text('第一段對話'), findsOneWidget);
+    expect((await client.createOrReuseSession()).id, first.id);
   });
 
   testWidgets('keeps the enabled send arrow high contrast in dark mode', (

@@ -72,6 +72,7 @@ class _NoticeItem extends _ConversationItem {
 }
 
 class _ConversationScreenState extends State<ConversationScreen> {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _composerController = TextEditingController();
   final _composerFocus = FocusNode();
   final _scrollController = ScrollController();
@@ -83,6 +84,15 @@ class _ConversationScreenState extends State<ConversationScreen> {
   _ServerConnectionState _serverConnection = _ServerConnectionState.connecting;
   bool _sending = false;
   String? _connectionError;
+  bool _projectExpanded = false;
+  bool _historyExpanded = false;
+  bool _projectLoading = false;
+  bool _historyLoading = false;
+  ProjectOverview? _projectOverview;
+  List<SessionSummary>? _sessionHistory;
+  String? _projectError;
+  String? _historyError;
+  int _connectionGeneration = 0;
   int _localSequence = 0;
 
   @override
@@ -107,21 +117,40 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if (mounted) setState(() {});
   }
 
+  void _cancelEventStream() {
+    final subscription = _eventSubscription;
+    _eventSubscription = null;
+    if (subscription != null) unawaited(subscription.cancel());
+  }
+
   String _nextKey(String prefix) => '$prefix-${_localSequence++}';
 
-  Future<void> _connect() async {
-    await _eventSubscription?.cancel();
+  Future<void> _connect({bool createNew = false, String? sessionId}) async {
+    assert(!createNew || sessionId == null);
+    final generation = ++_connectionGeneration;
     if (mounted) {
       setState(() {
         _presence = _PresenceState.loading;
         _serverConnection = _ServerConnectionState.connecting;
         _connectionError = null;
+        _sending = false;
       });
     }
     try {
-      final session = await widget.client.createOrReuseSession();
-      final loaded = await widget.client.loadSession(session.id);
-      if (!mounted) return;
+      late final LoadedSession loaded;
+      if (createNew) {
+        final session = await widget.client.createSession();
+        _cancelEventStream();
+        loaded = await widget.client.loadSession(session.id);
+      } else if (sessionId != null) {
+        _cancelEventStream();
+        loaded = await widget.client.loadSession(sessionId);
+      } else {
+        _cancelEventStream();
+        final session = await widget.client.createOrReuseSession();
+        loaded = await widget.client.loadSession(session.id);
+      }
+      if (!mounted || generation != _connectionGeneration) return;
       final restored = <_ConversationItem>[
         for (final message in loaded.messages)
           _MessageItem(
@@ -146,6 +175,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 ? _PresenceState.ended
                 : _PresenceState.here;
         _serverConnection = _ServerConnectionState.connected;
+        _projectOverview = null;
+        _projectError = null;
+        _projectLoading = false;
       });
       for (final event in loaded.pendingEvents) {
         _handleEvent(event, remember: false);
@@ -154,14 +186,103 @@ class _ConversationScreenState extends State<ConversationScreen> {
         _listenForEvents(loaded.session.id, loaded.session.lastEventId);
       }
       _scheduleScroll(force: true);
+      if (_projectExpanded) unawaited(_loadProject());
+      if (_historyExpanded || _sessionHistory != null) {
+        unawaited(_loadHistory());
+      }
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _connectionGeneration) return;
       setState(() {
         _presence = _PresenceState.offline;
         _serverConnection = _ServerConnectionState.offline;
         _connectionError = _friendlyError(error);
       });
     }
+  }
+
+  void _showDrawerDestination(String label) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('$label 入口已準備好，內容下一步接上。'),
+          duration: const Duration(milliseconds: 1600),
+        ),
+      );
+  }
+
+  void _startNewConversation() {
+    _composerController.clear();
+    unawaited(_connect(createNew: true));
+  }
+
+  void _toggleProject() {
+    setState(() => _projectExpanded = !_projectExpanded);
+    if (_projectExpanded && _projectOverview == null) {
+      unawaited(_loadProject());
+    }
+  }
+
+  void _toggleHistory() {
+    setState(() => _historyExpanded = !_historyExpanded);
+    if (_historyExpanded && _sessionHistory == null) {
+      unawaited(_loadHistory());
+    }
+  }
+
+  Future<void> _loadProject() async {
+    final session = _session;
+    if (session == null || _projectLoading) return;
+    setState(() {
+      _projectLoading = true;
+      _projectError = null;
+    });
+    try {
+      final overview = await widget.client.projectOverview(session.id);
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _projectOverview = overview);
+    } catch (error) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() {
+        if (_isMissingProject(error)) {
+          _projectOverview = const ProjectOverview(
+            status: '這段對話還沒有 Project。',
+            nextActions: [],
+          );
+        } else {
+          _projectError = 'Project 暫時讀不到，請再試一次。';
+        }
+      });
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _projectLoading = false);
+      }
+    }
+  }
+
+  Future<void> _loadHistory() async {
+    if (_historyLoading) return;
+    setState(() {
+      _historyLoading = true;
+      _historyError = null;
+    });
+    try {
+      final sessions = await widget.client.listSessions(limit: 30);
+      if (!mounted) return;
+      setState(() => _sessionHistory = sessions);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _historyError = 'History 暫時讀不到，請再試一次。');
+    } finally {
+      if (mounted) setState(() => _historyLoading = false);
+    }
+  }
+
+  void _openHistorySession(String sessionId) {
+    if (sessionId == _session?.id) return;
+    _composerController.clear();
+    unawaited(_connect(sessionId: sessionId));
   }
 
   void _listenForEvents(String sessionId, String? lastEventId) {
@@ -564,6 +685,28 @@ class _ConversationScreenState extends State<ConversationScreen> {
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
     return Scaffold(
+      key: _scaffoldKey,
+      drawer: _ConversationDrawer(
+        onOpenDestination: _showDrawerDestination,
+        onOpenSettings: () => _showDrawerDestination('設定'),
+        onNewConversation: _startNewConversation,
+        currentSessionId: _session?.id,
+        projectExpanded: _projectExpanded,
+        historyExpanded: _historyExpanded,
+        projectLoading: _projectLoading,
+        historyLoading: _historyLoading,
+        projectOverview: _projectOverview,
+        sessionHistory: _sessionHistory,
+        projectError: _projectError,
+        historyError: _historyError,
+        onToggleProject: _toggleProject,
+        onToggleHistory: _toggleHistory,
+        onRetryProject: _loadProject,
+        onRetryHistory: _loadHistory,
+        onSelectSession: _openHistorySession,
+      ),
+      drawerEnableOpenDragGesture: true,
+      drawerEdgeDragWidth: 32,
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -575,7 +718,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
                   padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
                   child: Column(
                     children: [
-                      _PresenceBar(connection: _serverConnection),
+                      _PresenceBar(
+                        connection: _serverConnection,
+                        onOpenDrawer:
+                            () => _scaffoldKey.currentState?.openDrawer(),
+                      ),
                       Divider(height: 1, color: palette.outline),
                       Expanded(child: _buildConversation(palette)),
                       if (_connectionError != null)
@@ -676,9 +823,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
 }
 
 class _PresenceBar extends StatelessWidget {
-  const _PresenceBar({required this.connection});
+  const _PresenceBar({required this.connection, required this.onOpenDrawer});
 
   final _ServerConnectionState connection;
+  final VoidCallback onOpenDrawer;
 
   @override
   Widget build(BuildContext context) {
@@ -697,6 +845,13 @@ class _PresenceBar extends StatelessWidget {
         height: 68,
         child: Row(
           children: [
+            IconButton(
+              key: const Key('open-left-drawer'),
+              tooltip: '開啟對話選單',
+              onPressed: onOpenDrawer,
+              icon: const Icon(Icons.menu_rounded),
+            ),
+            const SizedBox(width: 4),
             _PresenceMark(
               active: connection == _ServerConnectionState.connected,
             ),
@@ -726,6 +881,465 @@ class _PresenceBar extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ConversationDrawer extends StatelessWidget {
+  const _ConversationDrawer({
+    required this.onOpenDestination,
+    required this.onOpenSettings,
+    required this.onNewConversation,
+    required this.currentSessionId,
+    required this.projectExpanded,
+    required this.historyExpanded,
+    required this.projectLoading,
+    required this.historyLoading,
+    required this.projectOverview,
+    required this.sessionHistory,
+    required this.projectError,
+    required this.historyError,
+    required this.onToggleProject,
+    required this.onToggleHistory,
+    required this.onRetryProject,
+    required this.onRetryHistory,
+    required this.onSelectSession,
+  });
+
+  final ValueChanged<String> onOpenDestination;
+  final VoidCallback onOpenSettings;
+  final VoidCallback onNewConversation;
+  final String? currentSessionId;
+  final bool projectExpanded;
+  final bool historyExpanded;
+  final bool projectLoading;
+  final bool historyLoading;
+  final ProjectOverview? projectOverview;
+  final List<SessionSummary>? sessionHistory;
+  final String? projectError;
+  final String? historyError;
+  final VoidCallback onToggleProject;
+  final VoidCallback onToggleHistory;
+  final VoidCallback onRetryProject;
+  final VoidCallback onRetryHistory;
+  final ValueChanged<String> onSelectSession;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+
+    return Drawer(
+      key: const Key('left-conversation-drawer'),
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Miku',
+                      key: const Key('left-drawer-title'),
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    key: const Key('close-left-drawer'),
+                    tooltip: '關閉對話選單',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            Divider(height: 1, color: palette.outline),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(8, 14, 8, 12),
+                children: [
+                  _DrawerDestination(
+                    key: const Key('drawer-drive'),
+                    icon: Icons.folder_open_rounded,
+                    label: 'Drive',
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      onOpenDestination('Drive');
+                    },
+                  ),
+                  _ExpandableDrawerDestination(
+                    key: const Key('drawer-project'),
+                    icon: Icons.workspaces_outline,
+                    label: 'Project',
+                    expanded: projectExpanded,
+                    onTap: onToggleProject,
+                    child: _ProjectDrawerContent(
+                      loading: projectLoading,
+                      overview: projectOverview,
+                      error: projectError,
+                      hasSession: currentSessionId != null,
+                      onRetry: onRetryProject,
+                    ),
+                  ),
+                  _ExpandableDrawerDestination(
+                    key: const Key('drawer-history'),
+                    icon: Icons.history_rounded,
+                    label: 'History',
+                    expanded: historyExpanded,
+                    onTap: onToggleHistory,
+                    child: _HistoryDrawerContent(
+                      loading: historyLoading,
+                      sessions: sessionHistory,
+                      error: historyError,
+                      currentSessionId: currentSessionId,
+                      onRetry: onRetryHistory,
+                      onSelect: (sessionId) {
+                        Navigator.of(context).pop();
+                        onSelectSession(sessionId);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const Key('drawer-settings'),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        onOpenSettings();
+                      },
+                      icon: const Icon(Icons.settings_outlined, size: 19),
+                      label: const Text('設定'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.icon(
+                      key: const Key('drawer-new-conversation'),
+                      onPressed: () {
+                        onNewConversation();
+                        Navigator.of(context).pop();
+                      },
+                      icon: const Icon(Icons.add_comment_outlined, size: 19),
+                      label: const Text('新對話'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpandableDrawerDestination extends StatelessWidget {
+  const _ExpandableDrawerDestination({
+    required super.key,
+    required this.icon,
+    required this.label,
+    required this.expanded,
+    required this.onTap,
+    required this.child,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool expanded;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          button: true,
+          label: '$label，${expanded ? '已展開' : '已收合'}',
+          child: ListTile(
+            minTileHeight: 52,
+            leading: Icon(icon),
+            title: Text(label),
+            trailing: Icon(
+              expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+              size: 22,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            onTap: onTap,
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          child:
+              expanded
+                  ? Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 8, 10),
+                    child: child,
+                  )
+                  : const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+}
+
+class _ProjectDrawerContent extends StatelessWidget {
+  const _ProjectDrawerContent({
+    required this.loading,
+    required this.overview,
+    required this.error,
+    required this.hasSession,
+    required this.onRetry,
+  });
+
+  final bool loading;
+  final ProjectOverview? overview;
+  final String? error;
+  final bool hasSession;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasSession) {
+      return const _DrawerEmptyState(text: '還沒有可讀取的對話。');
+    }
+    if (loading && overview == null) {
+      return const _DrawerLoadingState(label: '載入 Project…');
+    }
+    if (error != null && overview == null) {
+      return _DrawerErrorState(error: error!, onRetry: onRetry);
+    }
+    final value = overview;
+    if (value == null) return const SizedBox.shrink();
+    final palette = _Palette.of(context);
+    return Container(
+      key: const Key('drawer-project-content'),
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+      decoration: BoxDecoration(
+        color: palette.userBubble,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: palette.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(value.status, style: Theme.of(context).textTheme.bodyMedium),
+          if (value.nextActions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              '下一步',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: palette.muted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final action in value.nextActions)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('•', style: TextStyle(color: palette.muted)),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        action,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryDrawerContent extends StatelessWidget {
+  const _HistoryDrawerContent({
+    required this.loading,
+    required this.sessions,
+    required this.error,
+    required this.currentSessionId,
+    required this.onRetry,
+    required this.onSelect,
+  });
+
+  final bool loading;
+  final List<SessionSummary>? sessions;
+  final String? error;
+  final String? currentSessionId;
+  final VoidCallback onRetry;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading && sessions == null) {
+      return const _DrawerLoadingState(label: '載入 History…');
+    }
+    if (error != null && sessions == null) {
+      return _DrawerErrorState(error: error!, onRetry: onRetry);
+    }
+    final values = sessions;
+    if (values == null) return const SizedBox.shrink();
+    if (values.isEmpty) {
+      return const _DrawerEmptyState(text: '還沒有對話紀錄。');
+    }
+    final palette = _Palette.of(context);
+    return Column(
+      key: const Key('drawer-history-content'),
+      children: [
+        for (final session in values)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: ListTile(
+              key: Key('history-session-${session.id}'),
+              minTileHeight: 52,
+              dense: true,
+              selected: session.id == currentSessionId,
+              selectedTileColor: palette.miku.withValues(alpha: 0.10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              title: Text(
+                session.title.trim().isEmpty ? '新對話' : session.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                session.preview.trim().isEmpty
+                    ? session.label
+                    : session.preview,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing:
+                  session.id == currentSessionId
+                      ? Icon(Icons.check_rounded, size: 18, color: palette.miku)
+                      : null,
+              onTap: () => onSelect(session.id),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DrawerLoadingState extends StatelessWidget {
+  const _DrawerLoadingState({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: [
+          const SizedBox.square(
+            dimension: 15,
+            child: CircularProgressIndicator(strokeWidth: 1.8),
+          ),
+          const SizedBox(width: 10),
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _DrawerErrorState extends StatelessWidget {
+  const _DrawerErrorState({required this.error, required this.onRetry});
+
+  final String error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.error;
+    return Semantics(
+      liveRegion: true,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              error,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: color),
+            ),
+          ),
+          IconButton(
+            tooltip: '重試',
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded, size: 19),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DrawerEmptyState extends StatelessWidget {
+  const _DrawerEmptyState({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 7, 12, 11),
+      child: Text(
+        text,
+        style: Theme.of(
+          context,
+        ).textTheme.bodySmall?.copyWith(color: _Palette.of(context).muted),
+      ),
+    );
+  }
+}
+
+class _DrawerDestination extends StatelessWidget {
+  const _DrawerDestination({
+    required super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      minTileHeight: 52,
+      leading: Icon(icon),
+      title: Text(label),
+      trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onTap: onTap,
     );
   }
 }
@@ -1270,6 +1884,11 @@ String _friendlyError(Object error) {
   final message = error.toString().replaceFirst(RegExp(r'^\w+Exception: '), '');
   if (message.trim().isEmpty) return '現在連不上 Miku，請稍後再試。';
   return '現在連不上 Miku。$message';
+}
+
+bool _isMissingProject(Object error) {
+  final message = error.toString().toLowerCase();
+  return message.contains('404') && message.contains('active project');
 }
 
 String _fallbackOptionName(String kind) {

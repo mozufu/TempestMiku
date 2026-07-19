@@ -21,6 +21,7 @@ tm-memory = { path = "crates/tm-memory" }
 tm-drive = { path = "crates/tm-drive" }
 tm-lang = { path = "crates/tm-lang" }
 tm-egress = { path = "crates/tm-egress" }
+tm-mcp = { path = "crates/tm-mcp" }
 
 # async + runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time", "process", "signal"] }

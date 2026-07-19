@@ -279,6 +279,14 @@ impl HostRegistry {
         self.functions.insert(function.name().to_string(), function);
     }
 
+    /// Returns whether a concrete handler is already installed for `name`.
+    ///
+    /// Sandbox adapters use this to keep deterministic development fixtures from replacing a
+    /// production host boundary supplied by the application.
+    pub fn contains(&self, name: &str) -> bool {
+        self.functions.contains_key(name)
+    }
+
     pub fn search(
         &self,
         query: &str,

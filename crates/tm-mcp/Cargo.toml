@@ -1,0 +1,27 @@
+[package]
+name = "tm-mcp"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded MCP 2025-11-25 catalog import and TempestMiku host bindings."
+
+[dependencies]
+async-trait.workspace = true
+hex.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tm-artifacts.workspace = true
+tm-egress.workspace = true
+tm-host.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+serial_test = "3"
+tm-egress = { workspace = true, features = ["test-http"] }
+tokio.workspace = true

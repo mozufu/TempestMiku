@@ -94,9 +94,14 @@ void main() {
 
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('project-tempestmiku')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('drawer-project-content')), findsOneWidget);
     expect(find.text('Scripted project status'), findsOneWidget);
-    expect(find.text('Continue from latest session result'), findsOneWidget);
+    expect(
+      find.textContaining('Continue from latest session result'),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const Key('drawer-history')));
     await tester.pumpAndSettle();
@@ -120,6 +125,153 @@ void main() {
     expect(scaffold.isDrawerOpen, isFalse);
     expect(find.text('第一段對話'), findsOneWidget);
     expect((await client.createOrReuseSession()).id, first.id);
+  });
+
+  testWidgets('opens a flat project root and previews bounded file content', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('project-tempestmiku')));
+    await tester.pumpAndSettle();
+
+    const linkedRoot = 'project://tempestmiku/linked-folders/tempestmiku/';
+    const docs = 'project://tempestmiku/linked-folders/tempestmiku/docs/';
+    const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
+    const symlink = 'project://tempestmiku/linked-folders/tempestmiku/latest';
+    expect(
+      find.byKey(const Key('project-resource-$linkedRoot')),
+      findsNothing,
+      reason: 'The linked-folder collection is not a visible project level.',
+    );
+    expect(find.byKey(const Key('project-resource-$docs')), findsOneWidget);
+    expect(find.byKey(const Key('project-resource-$readme')), findsOneWidget);
+    final unsupported = tester.widget<ListTile>(
+      find.byKey(const Key('project-resource-$symlink')),
+    );
+    expect(unsupported.enabled, isFalse);
+
+    await tester.tap(find.byKey(const Key('project-resource-$docs')));
+    await tester.pumpAndSettle();
+    expect(find.text('guide.md'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('project-browser-up')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('project-resource-$readme')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('project-resource-$readme')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('project-file-title')), findsOneWidget);
+    expect(find.byKey(const Key('project-file-content')), findsOneWidget);
+    expect(find.byKey(const Key('project-file-truncated')), findsOneWidget);
+    expect(find.textContaining('Scripted linked resource'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shows project catalog empty and retryable error states', (
+    tester,
+  ) async {
+    final emptyClient = ScriptedMikuClient(projectCatalogEmpty: true);
+    await loadApp(tester, emptyClient);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    expect(find.text('尚未連結任何 Project。'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    final failingClient = ScriptedMikuClient(failProjectCatalog: true);
+    await loadApp(tester, failingClient);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+
+    failingClient.failProjectCatalog = false;
+    await tester.tap(find.byTooltip('重試'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('project-tempestmiku')), findsOneWidget);
+  });
+
+  testWidgets('does not change active project when scope switch fails', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient(failProjectScope: true);
+    await loadApp(tester, client);
+    final session = await client.createOrReuseSession();
+    expect(session.defaultScope, 'global');
+
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('project-tempestmiku')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect((await client.createOrReuseSession()).defaultScope, 'global');
+  });
+
+  testWidgets(
+    'ended session keeps its project browsable but blocks switching',
+    (tester) async {
+      final client = ScriptedMikuClient(includeArchiveProject: true);
+      final session = await client.createSession();
+      await client.setSessionScope(session.id, 'project:tempestmiku');
+      client.endSessionForTesting(session.id);
+      await loadApp(tester, client);
+      await tester.tap(find.byKey(const Key('open-left-drawer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('drawer-project')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('project-browser-up')));
+      await tester.pumpAndSettle();
+
+      final active = tester.widget<ListTile>(
+        find.byKey(const Key('project-tempestmiku')),
+      );
+      final archive = tester.widget<ListTile>(
+        find.byKey(const Key('project-archive')),
+      );
+      expect(active.enabled, isTrue);
+      expect(archive.enabled, isFalse);
+      expect(find.text('請先開新對話'), findsOneWidget);
+    },
+  );
+
+  testWidgets('retries folder listing and reports file resolve errors', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient(failProjectResources: true);
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('project-tempestmiku')));
+    await tester.pumpAndSettle();
+    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+
+    client.failProjectResources = false;
+    await tester.tap(find.byTooltip('重試'));
+    await tester.pumpAndSettle();
+
+    client.failProjectResolve = true;
+    const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
+    await tester.tap(find.byKey(const Key('project-resource-$readme')));
+    await tester.pumpAndSettle();
+    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect(find.byKey(const Key('project-file-content')), findsNothing);
   });
 
   testWidgets('keeps the enabled send arrow high contrast in dark mode', (

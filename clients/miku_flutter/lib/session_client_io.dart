@@ -122,6 +122,13 @@ class NativeMikuSessionClient
       _listSessionsImpl(limit: limit);
 
   @override
+  Future<List<ProjectCatalogEntry>> listProjects() => _listProjectsImpl();
+
+  @override
+  Future<String> setSessionScope(String sessionId, String scope) =>
+      _setSessionScopeImpl(sessionId, scope);
+
+  @override
   Future<LoadedSession> loadSession(String sessionId) =>
       _loadSessionImpl(sessionId);
 
@@ -178,6 +185,10 @@ class NativeMikuSessionClient
   @override
   Future<ResourcePreview> resolveResource(String sessionId, String uri) =>
       _resolveResourceImpl(sessionId, uri);
+
+  @override
+  Future<List<MikuResourceEntry>> listResources(String sessionId, String uri) =>
+      _listResourcesImpl(sessionId, uri);
 
   @override
   Future<ProjectPromotion> promoteSession(

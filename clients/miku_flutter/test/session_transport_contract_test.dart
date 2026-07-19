@@ -15,6 +15,35 @@ void main() {
     expect(second, isNot(first));
   });
 
+  test(
+    'project catalog and resource listing models parse camelCase wire data',
+    () {
+      final project = ProjectCatalogEntry.fromJson({
+        'id': 'tempestmiku',
+        'memoryScope': 'project:tempestmiku',
+        'projectUri': 'project://tempestmiku',
+        'linkedFoldersUri': 'project://tempestmiku/linked-folders',
+      });
+      expect(project.id, 'tempestmiku');
+      expect(project.memoryScope, 'project:tempestmiku');
+      expect(
+        project.rootUri,
+        'project://tempestmiku/linked-folders/tempestmiku/',
+      );
+
+      final directory = MikuResourceEntry.fromJson({
+        'uri': 'project://tempestmiku/linked-folders/tempestmiku/docs/',
+        'name': 'docs',
+        'kind': 'dir',
+        'sizeBytes': 128,
+        'modifiedAt': '2026-07-20T00:00:00Z',
+      });
+      expect(directory.isDirectory, isTrue);
+      expect(directory.isFile, isFalse);
+      expect(directory.sizeBytes, 128);
+    },
+  );
+
   test('ambiguous message retry keeps one id and is bounded', () async {
     const clientMessageId = 'm_0123456789abcdef0123456789abcdef';
     final attemptedIds = <String>[];

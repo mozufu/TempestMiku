@@ -153,6 +153,8 @@ extension _NativeSessionsClient on NativeMikuSessionClient {
       voiceCap:
           (json['voice_cap'] as String?) ?? (json['voiceCap'] as String?) ?? '',
       defaultScope:
+          (json['memory_scope'] as String?) ??
+          (json['memoryScope'] as String?) ??
           (json['default_scope'] as String?) ??
           (json['defaultScope'] as String?) ??
           'global',

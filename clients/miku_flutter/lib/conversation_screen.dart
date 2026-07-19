@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'rich_message.dart';
 import 'session_models.dart';
 
+part 'conversation_project_browser.dart';
+
 const _showRichResponseShowcase = bool.fromEnvironment(
   'TM_RICH_RESPONSE_SHOWCASE',
 );
@@ -87,9 +89,16 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _projectExpanded = false;
   bool _historyExpanded = false;
   bool _projectLoading = false;
+  bool _projectBrowserLoading = false;
   bool _historyLoading = false;
   ProjectOverview? _projectOverview;
+  List<ProjectCatalogEntry>? _projectCatalog;
+  List<MikuResourceEntry>? _projectEntries;
+  final List<_ProjectBrowserLocation> _projectPath = [];
   List<SessionSummary>? _sessionHistory;
+  String? _activeProjectId;
+  String? _switchingProjectId;
+  String? _previewingResourceUri;
   String? _projectError;
   String? _historyError;
   int _connectionGeneration = 0;
@@ -176,8 +185,15 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 : _PresenceState.here;
         _serverConnection = _ServerConnectionState.connected;
         _projectOverview = null;
+        _projectCatalog = null;
+        _projectEntries = null;
+        _projectPath.clear();
+        _activeProjectId = _projectIdFromScope(loaded.session.defaultScope);
+        _switchingProjectId = null;
+        _previewingResourceUri = null;
         _projectError = null;
         _projectLoading = false;
+        _projectBrowserLoading = false;
       });
       for (final event in loaded.pendingEvents) {
         _handleEvent(event, remember: false);
@@ -219,7 +235,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   void _toggleProject() {
     setState(() => _projectExpanded = !_projectExpanded);
-    if (_projectExpanded && _projectOverview == null) {
+    if (_projectExpanded && _projectCatalog == null) {
       unawaited(_loadProject());
     }
   }
@@ -239,24 +255,202 @@ class _ConversationScreenState extends State<ConversationScreen> {
       _projectError = null;
     });
     try {
-      final overview = await widget.client.projectOverview(session.id);
+      final catalog = await widget.client.listProjects();
       if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectOverview = overview);
+      final activeId = _projectIdFromScope(session.defaultScope);
+      setState(() {
+        _projectCatalog = catalog;
+        _activeProjectId = activeId;
+      });
+      final active = catalog.where((item) => item.id == activeId).firstOrNull;
+      if (active != null) await _loadProjectRoot(active);
     } catch (error) {
       if (!mounted || _session?.id != session.id) return;
-      setState(() {
-        if (_isMissingProject(error)) {
-          _projectOverview = const ProjectOverview(
-            status: '這段對話還沒有 Project。',
-            nextActions: [],
-          );
-        } else {
-          _projectError = 'Project 暫時讀不到，請再試一次。';
-        }
-      });
+      setState(() => _projectError = _friendlyProjectError(error));
     } finally {
       if (mounted && _session?.id == session.id) {
         setState(() => _projectLoading = false);
+      }
+    }
+  }
+
+  Future<void> _selectProject(ProjectCatalogEntry project) async {
+    final session = _session;
+    if (session == null || _switchingProjectId != null) return;
+    if (_presence == _PresenceState.ended && project.id != _activeProjectId) {
+      return;
+    }
+    if (project.id == _activeProjectId) {
+      await _loadProjectRoot(project);
+      return;
+    }
+    setState(() {
+      _switchingProjectId = project.id;
+      _projectError = null;
+    });
+    try {
+      final scope = await widget.client.setSessionScope(
+        session.id,
+        project.memoryScope,
+      );
+      if (!mounted || _session?.id != session.id) return;
+      if (scope != project.memoryScope) {
+        throw StateError('server selected unexpected project scope $scope');
+      }
+      setState(() {
+        _session = _sessionWithScope(session, scope);
+        _activeProjectId = project.id;
+        _projectOverview = null;
+        _projectEntries = null;
+        _projectPath.clear();
+      });
+      await _loadProjectRoot(project);
+    } catch (error) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _projectError = _friendlyProjectError(error));
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _switchingProjectId = null);
+      }
+    }
+  }
+
+  Future<void> _loadProjectRoot(ProjectCatalogEntry project) async {
+    final session = _session;
+    if (session == null || _projectBrowserLoading) return;
+    setState(() {
+      _projectBrowserLoading = true;
+      _projectError = null;
+    });
+    try {
+      final overview = await widget.client.projectOverview(session.id);
+      final entries = await widget.client.listResources(
+        session.id,
+        project.rootUri,
+      );
+      if (!mounted ||
+          _session?.id != session.id ||
+          _activeProjectId != project.id) {
+        return;
+      }
+      setState(() {
+        _projectOverview = overview;
+        _projectEntries = entries;
+        _projectPath
+          ..clear()
+          ..add(
+            _ProjectBrowserLocation(uri: project.rootUri, label: project.id),
+          );
+      });
+    } catch (error) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _projectError = _friendlyProjectError(error));
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _projectBrowserLoading = false);
+      }
+    }
+  }
+
+  Future<void> _openProjectDirectory(MikuResourceEntry entry) async {
+    if (!entry.isDirectory) return;
+    await _loadProjectLocation(
+      _ProjectBrowserLocation(uri: entry.uri, label: entry.name),
+      push: true,
+    );
+  }
+
+  Future<void> _loadProjectLocation(
+    _ProjectBrowserLocation location, {
+    required bool push,
+  }) async {
+    final session = _session;
+    if (session == null || _projectBrowserLoading) return;
+    setState(() {
+      _projectBrowserLoading = true;
+      _projectError = null;
+    });
+    try {
+      final entries = await widget.client.listResources(
+        session.id,
+        location.uri,
+      );
+      if (!mounted || _session?.id != session.id) return;
+      setState(() {
+        _projectEntries = entries;
+        if (push) _projectPath.add(location);
+      });
+    } catch (error) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _projectError = _friendlyProjectError(error));
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _projectBrowserLoading = false);
+      }
+    }
+  }
+
+  Future<void> _goUpProjectDirectory() async {
+    if (_projectPath.length <= 1) {
+      setState(() {
+        _projectOverview = null;
+        _projectEntries = null;
+        _projectPath.clear();
+        _projectError = null;
+      });
+      return;
+    }
+    final parent = _projectPath[_projectPath.length - 2];
+    setState(() => _projectPath.removeLast());
+    await _loadProjectLocation(parent, push: false);
+  }
+
+  Future<void> _retryProjectBrowser() async {
+    if (_projectCatalog == null) {
+      await _loadProject();
+      return;
+    }
+    if (_projectPath.isNotEmpty) {
+      await _loadProjectLocation(_projectPath.last, push: false);
+      return;
+    }
+    final project =
+        _projectCatalog!
+            .where((item) => item.id == _activeProjectId)
+            .firstOrNull;
+    if (project != null) await _loadProjectRoot(project);
+  }
+
+  Future<void> _openProjectFile(MikuResourceEntry entry) async {
+    final session = _session;
+    if (session == null || !entry.isFile || _previewingResourceUri != null) {
+      return;
+    }
+    setState(() {
+      _previewingResourceUri = entry.uri;
+      _projectError = null;
+    });
+    try {
+      final resource = await widget.client.resolveResource(
+        session.id,
+        entry.uri,
+      );
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _previewingResourceUri = null);
+      await showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder:
+            (context) => _ProjectFileSheet(entry: entry, resource: resource),
+      );
+    } catch (error) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _projectError = _friendlyProjectError(error));
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _previewingResourceUri = null);
       }
     }
   }
@@ -691,17 +885,37 @@ class _ConversationScreenState extends State<ConversationScreen> {
         onOpenSettings: () => _showDrawerDestination('設定'),
         onNewConversation: _startNewConversation,
         currentSessionId: _session?.id,
+        currentSessionEnded: _presence == _PresenceState.ended,
         projectExpanded: _projectExpanded,
         historyExpanded: _historyExpanded,
-        projectLoading: _projectLoading,
         historyLoading: _historyLoading,
         projectOverview: _projectOverview,
+        projectBrowser: _ProjectBrowserModel(
+          projects: _projectCatalog,
+          activeProjectId: _activeProjectId,
+          switchingProjectId: _switchingProjectId,
+          previewingResourceUri: _previewingResourceUri,
+          path: List.unmodifiable(_projectPath),
+          entries: _projectEntries,
+          catalogLoading: _projectLoading,
+          browserLoading: _projectBrowserLoading,
+          error: _projectError,
+        ),
         sessionHistory: _sessionHistory,
-        projectError: _projectError,
         historyError: _historyError,
         onToggleProject: _toggleProject,
         onToggleHistory: _toggleHistory,
         onRetryProject: _loadProject,
+        onRetryProjectBrowser: _retryProjectBrowser,
+        onSelectProject: _selectProject,
+        onOpenProjectEntry: (entry) {
+          if (entry.isDirectory) {
+            unawaited(_openProjectDirectory(entry));
+          } else if (entry.isFile) {
+            unawaited(_openProjectFile(entry));
+          }
+        },
+        onProjectUp: _goUpProjectDirectory,
         onRetryHistory: _loadHistory,
         onSelectSession: _openHistorySession,
       ),
@@ -891,17 +1105,21 @@ class _ConversationDrawer extends StatelessWidget {
     required this.onOpenSettings,
     required this.onNewConversation,
     required this.currentSessionId,
+    required this.currentSessionEnded,
     required this.projectExpanded,
     required this.historyExpanded,
-    required this.projectLoading,
     required this.historyLoading,
     required this.projectOverview,
+    required this.projectBrowser,
     required this.sessionHistory,
-    required this.projectError,
     required this.historyError,
     required this.onToggleProject,
     required this.onToggleHistory,
     required this.onRetryProject,
+    required this.onRetryProjectBrowser,
+    required this.onSelectProject,
+    required this.onOpenProjectEntry,
+    required this.onProjectUp,
     required this.onRetryHistory,
     required this.onSelectSession,
   });
@@ -910,17 +1128,21 @@ class _ConversationDrawer extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final VoidCallback onNewConversation;
   final String? currentSessionId;
+  final bool currentSessionEnded;
   final bool projectExpanded;
   final bool historyExpanded;
-  final bool projectLoading;
   final bool historyLoading;
   final ProjectOverview? projectOverview;
+  final _ProjectBrowserModel projectBrowser;
   final List<SessionSummary>? sessionHistory;
-  final String? projectError;
   final String? historyError;
   final VoidCallback onToggleProject;
   final VoidCallback onToggleHistory;
   final VoidCallback onRetryProject;
+  final VoidCallback onRetryProjectBrowser;
+  final ValueChanged<ProjectCatalogEntry> onSelectProject;
+  final ValueChanged<MikuResourceEntry> onOpenProjectEntry;
+  final VoidCallback onProjectUp;
   final VoidCallback onRetryHistory;
   final ValueChanged<String> onSelectSession;
 
@@ -978,11 +1200,15 @@ class _ConversationDrawer extends StatelessWidget {
                     expanded: projectExpanded,
                     onTap: onToggleProject,
                     child: _ProjectDrawerContent(
-                      loading: projectLoading,
                       overview: projectOverview,
-                      error: projectError,
+                      browser: projectBrowser,
                       hasSession: currentSessionId != null,
-                      onRetry: onRetryProject,
+                      sessionEnded: currentSessionEnded,
+                      onRetryCatalog: onRetryProject,
+                      onRetryBrowser: onRetryProjectBrowser,
+                      onSelectProject: onSelectProject,
+                      onOpenEntry: onOpenProjectEntry,
+                      onUp: onProjectUp,
                     ),
                   ),
                   _ExpandableDrawerDestination(
@@ -1006,7 +1232,6 @@ class _ConversationDrawer extends StatelessWidget {
                 ],
               ),
             ),
-            const Spacer(),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 18),
               child: Row(
@@ -1083,7 +1308,10 @@ class _ExpandableDrawerDestination extends StatelessWidget {
           ),
         ),
         AnimatedSize(
-          duration: const Duration(milliseconds: 180),
+          duration:
+              MediaQuery.maybeOf(context)?.disableAnimations ?? false
+                  ? Duration.zero
+                  : const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
           child:
               expanded
@@ -1100,75 +1328,41 @@ class _ExpandableDrawerDestination extends StatelessWidget {
 
 class _ProjectDrawerContent extends StatelessWidget {
   const _ProjectDrawerContent({
-    required this.loading,
     required this.overview,
-    required this.error,
+    required this.browser,
     required this.hasSession,
-    required this.onRetry,
+    required this.sessionEnded,
+    required this.onRetryCatalog,
+    required this.onRetryBrowser,
+    required this.onSelectProject,
+    required this.onOpenEntry,
+    required this.onUp,
   });
 
-  final bool loading;
   final ProjectOverview? overview;
-  final String? error;
+  final _ProjectBrowserModel browser;
   final bool hasSession;
-  final VoidCallback onRetry;
+  final bool sessionEnded;
+  final VoidCallback onRetryCatalog;
+  final VoidCallback onRetryBrowser;
+  final ValueChanged<ProjectCatalogEntry> onSelectProject;
+  final ValueChanged<MikuResourceEntry> onOpenEntry;
+  final VoidCallback onUp;
 
   @override
   Widget build(BuildContext context) {
     if (!hasSession) {
       return const _DrawerEmptyState(text: '還沒有可讀取的對話。');
     }
-    if (loading && overview == null) {
-      return const _DrawerLoadingState(label: '載入 Project…');
-    }
-    if (error != null && overview == null) {
-      return _DrawerErrorState(error: error!, onRetry: onRetry);
-    }
-    final value = overview;
-    if (value == null) return const SizedBox.shrink();
-    final palette = _Palette.of(context);
-    return Container(
-      key: const Key('drawer-project-content'),
-      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
-      decoration: BoxDecoration(
-        color: palette.userBubble,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: palette.outline),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(value.status, style: Theme.of(context).textTheme.bodyMedium),
-          if (value.nextActions.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Text(
-              '下一步',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: palette.muted,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 4),
-            for (final action in value.nextActions)
-              Padding(
-                padding: const EdgeInsets.only(top: 3),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('•', style: TextStyle(color: palette.muted)),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        action,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ],
-      ),
+    return _ProjectBrowserView(
+      model: browser,
+      overview: overview,
+      sessionEnded: sessionEnded,
+      onRetryCatalog: onRetryCatalog,
+      onRetryBrowser: onRetryBrowser,
+      onSelectProject: onSelectProject,
+      onOpenEntry: onOpenEntry,
+      onUp: onUp,
     );
   }
 }
@@ -1884,11 +2078,6 @@ String _friendlyError(Object error) {
   final message = error.toString().replaceFirst(RegExp(r'^\w+Exception: '), '');
   if (message.trim().isEmpty) return '現在連不上 Miku，請稍後再試。';
   return '現在連不上 Miku。$message';
-}
-
-bool _isMissingProject(Object error) {
-  final message = error.toString().toLowerCase();
-  return message.contains('404') && message.contains('active project');
 }
 
 String _fallbackOptionName(String kind) {

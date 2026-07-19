@@ -101,6 +101,7 @@ use projects::{build_project_overview, project_id_from_scope, record_project_obs
 use resources::validate_relative_path;
 
 pub use modes::{ModeRequest, ModeResponse};
+pub use projects::{ProjectCatalogEntry, ProjectCatalogResponse};
 pub use sessions::{
     CreateSessionRequest, CreateSessionResponse, EndSessionRequest, EndSessionResponse,
     EvolutionReviewProposalResponse, ListSessionsResponse, MemoryWriteProposalResponse,
@@ -588,6 +589,7 @@ where
             delete(auth_devices::revoke_device::<S, M, C>),
         )
         .route("/modes", get(modes::list_modes::<S, M, C>))
+        .route("/projects", get(projects::list_projects::<S, M, C>))
         .route(
             "/voice/asr/engines",
             get(crate::voice_asr::engines::<S, M, C>),

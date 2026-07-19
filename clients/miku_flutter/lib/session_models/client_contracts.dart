@@ -50,6 +50,10 @@ abstract class MikuSessionClient {
 
   Future<List<SessionSummary>> listSessions({int limit = 30});
 
+  Future<List<ProjectCatalogEntry>> listProjects();
+
+  Future<String> setSessionScope(String sessionId, String scope);
+
   Future<LoadedSession> loadSession(String sessionId);
 
   Stream<MikuEvent> events(String sessionId, {String? lastEventId});
@@ -90,6 +94,8 @@ abstract class MikuSessionClient {
   Future<ResourcePreview> previewResource(String sessionId, String uri);
 
   Future<ResourcePreview> resolveResource(String sessionId, String uri);
+
+  Future<List<MikuResourceEntry>> listResources(String sessionId, String uri);
 
   Future<ProjectPromotion> promoteSession(
     String sessionId, {

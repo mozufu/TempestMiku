@@ -122,6 +122,29 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   @override
+  Future<List<ProjectCatalogEntry>> listProjects() async {
+    final json = await _request('GET', '/projects');
+    return ((json['projects'] as List?) ?? const [])
+        .whereType<Map>()
+        .map(
+          (item) => ProjectCatalogEntry.fromJson(item.cast<String, Object?>()),
+        )
+        .toList();
+  }
+
+  @override
+  Future<String> setSessionScope(String sessionId, String scope) async {
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/scope',
+      body: {'scope': scope},
+    );
+    return (json['memoryScope'] as String?) ??
+        (json['memory_scope'] as String?) ??
+        scope;
+  }
+
+  @override
   Future<LoadedSession> loadSession(String sessionId) async {
     final json = await _request('GET', '/sessions/$sessionId/messages');
     final lastEventId = _nullableString(
@@ -422,6 +445,22 @@ class WebMikuSessionClient implements MikuSessionClient {
     return _resourcePreviewFromJson(json, uri);
   }
 
+  @override
+  Future<List<MikuResourceEntry>> listResources(
+    String sessionId,
+    String uri,
+  ) async {
+    final query = Uri(queryParameters: {'uri': uri}).query;
+    final json = await _requestList(
+      'GET',
+      '/sessions/$sessionId/resources/list?$query',
+    );
+    return json
+        .whereType<Map>()
+        .map((item) => MikuResourceEntry.fromJson(item.cast<String, Object?>()))
+        .toList();
+  }
+
   ResourcePreview _resourcePreviewFromJson(
     Map<String, Object?> json,
     String uri,
@@ -468,6 +507,26 @@ class WebMikuSessionClient implements MikuSessionClient {
     String path, {
     Map<String, Object?>? body,
   }) async {
+    final decoded = await _requestJson(method, path, body: body);
+    if (decoded is! Map) {
+      throw const FormatException('server returned a non-object JSON response');
+    }
+    return decoded.cast<String, Object?>();
+  }
+
+  Future<List<Object?>> _requestList(String method, String path) async {
+    final decoded = await _requestJson(method, path);
+    if (decoded is! List) {
+      throw const FormatException('server returned a non-list JSON response');
+    }
+    return decoded.cast<Object?>();
+  }
+
+  Future<Object?> _requestJson(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+  }) async {
     late final web.Response response;
     try {
       response = await _fetch(
@@ -488,7 +547,7 @@ class WebMikuSessionClient implements MikuSessionClient {
     }
     final text = await _responseText(response);
     if (text.isEmpty) return <String, Object?>{};
-    return (jsonDecode(text) as Map).cast<String, Object?>();
+    return jsonDecode(text);
   }
 
   MikuSession _sessionFromJson(
@@ -507,6 +566,8 @@ class WebMikuSessionClient implements MikuSessionClient {
       voiceCap:
           (json['voice_cap'] as String?) ?? (json['voiceCap'] as String?) ?? '',
       defaultScope:
+          (json['memory_scope'] as String?) ??
+          (json['memoryScope'] as String?) ??
           (json['default_scope'] as String?) ??
           (json['defaultScope'] as String?) ??
           'global',

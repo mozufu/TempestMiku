@@ -383,7 +383,7 @@ a dedicated cheap dialectic model until that resolver is wired.
   `GET|POST /sessions/:id/approvals/:approval_id`, `POST /sessions/:id/memory/proposals`,
   `POST /sessions/:id/evolution/review-proposals`,
   `POST /sessions/:id/evolution/skills/:name/rollback`,
-  `POST /sessions/:id/promote`, `GET /modes`, mode lock / override endpoints, session-scoped
+  `POST /sessions/:id/promote`, `GET /modes`, authenticated `GET /projects`, mode lock / override endpoints, session-scoped
   resource endpoints (§09), protected `GET /ready`/`GET /metrics`, and minimal public `GET /health`.
   Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
@@ -411,6 +411,14 @@ resources (§23), P4 `cron://` job/run views, P5 `drive://` documents/virtual di
 store is configured, and P7.1 `skill://` managed catalog/version views. `GET
 /sessions/:id/resources/preview` returns a bounded metadata envelope with empty `content`; clients
 resolve full content only on demand.
+
+`GET /projects` is the client-facing picker catalog for active local and remote linked aliases. It
+returns stable project/scope/linked-folder URIs without host or connector details. The equivalent
+`project://` resource-list root keeps generic resource browsers navigable. Flutter uses the catalog
+to switch the current active session through `POST /sessions/:id/scope`, then opens the same-alias
+linked root directly as the flat project contents. The internal `linked-folders` collection is not a
+visible navigation level. Nested directories and explicitly selected files continue through the
+existing resource gateway; the browser remains read-only and bounded by the linked resource handler.
 
 P5 also exposes a compact read-only drive browser feed at `GET /sessions/:id/drive/feed`: recent
 drive docs, virtual directory roots, pending organizer proposals, and a pending-approvals slot for

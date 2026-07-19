@@ -6,6 +6,26 @@ extension _NativeTransport on NativeMikuSessionClient {
     String path, {
     Map<String, Object?>? body,
   }) async {
+    final decoded = await _requestJson(method, path, body: body);
+    if (decoded is! Map) {
+      throw const FormatException('server returned a non-object JSON response');
+    }
+    return decoded.cast<String, Object?>();
+  }
+
+  Future<List<Object?>> _requestList(String method, String path) async {
+    final decoded = await _requestJson(method, path);
+    if (decoded is! List) {
+      throw const FormatException('server returned a non-list JSON response');
+    }
+    return decoded.cast<Object?>();
+  }
+
+  Future<Object?> _requestJson(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+  }) async {
     final baseUrl = await serverBaseUrl();
     final request = await _http.openUrl(method, _resolveAgainst(baseUrl, path));
     request.headers.set(HttpHeaders.acceptHeader, 'application/json');
@@ -23,7 +43,7 @@ extension _NativeTransport on NativeMikuSessionClient {
       throw StateError('request failed: ${response.statusCode} $text');
     }
     if (text.isEmpty) return <String, Object?>{};
-    return (jsonDecode(text) as Map).cast<String, Object?>();
+    return jsonDecode(text);
   }
 
   Future<Map<String, Object?>> _binaryRequest(

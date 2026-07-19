@@ -192,6 +192,12 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
+    if uri == "project://" {
+        state.store.get_session(session_id).await?;
+        return Ok(crate::api::projects::project_resource_entries(
+            &state.linked_folders,
+        ));
+    }
     let (project_id, view) = parse_project_uri(uri)?;
     let session = state.store.get_session(session_id).await?;
     validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;

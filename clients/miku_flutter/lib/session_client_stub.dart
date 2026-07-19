@@ -10,9 +10,23 @@ part 'session_client_stub/mode_catalog.dart';
 MikuSessionClient createClient() => ScriptedMikuClient();
 
 class ScriptedMikuClient implements MikuSessionClient {
-  ScriptedMikuClient({this.pauseBeforeFinal = false});
+  ScriptedMikuClient({
+    this.pauseBeforeFinal = false,
+    this.projectCatalogEmpty = false,
+    this.includeArchiveProject = false,
+    this.failProjectCatalog = false,
+    this.failProjectScope = false,
+    this.failProjectResources = false,
+    this.failProjectResolve = false,
+  });
 
   final bool pauseBeforeFinal;
+  bool projectCatalogEmpty;
+  bool includeArchiveProject;
+  bool failProjectCatalog;
+  bool failProjectScope;
+  bool failProjectResources;
+  bool failProjectResolve;
   final Map<String, StreamController<MikuEvent>> _controllers = {};
   final Map<String, MikuSession> _sessions = {};
   final Map<String, DateTime> _updatedAt = {};
@@ -144,6 +158,22 @@ class ScriptedMikuClient implements MikuSessionClient {
     _controllers[sessionId]?.add(event);
   }
 
+  void endSessionForTesting(String sessionId) {
+    final session = _sessions[sessionId];
+    if (session == null) throw StateError('unknown session $sessionId');
+    _sessions[sessionId] = MikuSession(
+      id: session.id,
+      status: 'ended',
+      mode: session.mode,
+      label: session.label,
+      voiceCap: session.voiceCap,
+      defaultScope: session.defaultScope,
+      activeSkills: session.activeSkills,
+      lastEventId: session.lastEventId,
+      locked: session.locked,
+    );
+  }
+
   @override
   Future<List<SessionSummary>> listSessions({int limit = 30}) async {
     final ids =
@@ -179,6 +209,49 @@ class ScriptedMikuClient implements MikuSessionClient {
         lastEventId: session.lastEventId,
       );
     }).toList();
+  }
+
+  @override
+  Future<List<ProjectCatalogEntry>> listProjects() async {
+    if (failProjectCatalog) throw StateError('project catalog unavailable');
+    if (projectCatalogEmpty) return const [];
+    return [
+      const ProjectCatalogEntry(
+        id: 'tempestmiku',
+        memoryScope: 'project:tempestmiku',
+        projectUri: 'project://tempestmiku',
+        linkedFoldersUri: 'project://tempestmiku/linked-folders',
+      ),
+      if (includeArchiveProject)
+        const ProjectCatalogEntry(
+          id: 'archive',
+          memoryScope: 'project:archive',
+          projectUri: 'project://archive',
+          linkedFoldersUri: 'project://archive/linked-folders',
+        ),
+    ];
+  }
+
+  @override
+  Future<String> setSessionScope(String sessionId, String scope) async {
+    if (failProjectScope) throw StateError('project scope unavailable');
+    final session = _sessions[sessionId];
+    if (session == null) throw StateError('unknown session $sessionId');
+    if (session.status == 'ended') {
+      throw StateError('session $sessionId has ended');
+    }
+    _sessions[sessionId] = MikuSession(
+      id: session.id,
+      status: session.status,
+      mode: session.mode,
+      label: session.label,
+      voiceCap: session.voiceCap,
+      defaultScope: scope,
+      activeSkills: session.activeSkills,
+      lastEventId: session.lastEventId,
+      locked: session.locked,
+    );
+    return scope;
   }
 
   @override
@@ -377,6 +450,19 @@ class ScriptedMikuClient implements MikuSessionClient {
 
   @override
   Future<ResourcePreview> resolveResource(String sessionId, String uri) async {
+    if (failProjectResolve) throw StateError('project resource unavailable');
+    if (uri.startsWith('project://tempestmiku/linked-folders/')) {
+      return ResourcePreview(
+        uri: uri,
+        kind: 'text',
+        mime: 'text/plain',
+        title: uri.split('/').last,
+        sizeBytes: 96,
+        preview: 'Scripted linked resource for $uri',
+        content: 'Scripted linked resource for $uri',
+        hasMore: uri.endsWith('README.md'),
+      );
+    }
     if (uri.startsWith('drive://')) {
       return ResourcePreview(
         uri: uri,
@@ -390,6 +476,55 @@ class ScriptedMikuClient implements MikuSessionClient {
       );
     }
     return previewResource(sessionId, uri);
+  }
+
+  @override
+  Future<List<MikuResourceEntry>> listResources(
+    String sessionId,
+    String uri,
+  ) async {
+    if (failProjectResources) throw StateError('project listing unavailable');
+    final scope = _sessions[sessionId]?.defaultScope;
+    if (scope != 'project:tempestmiku') {
+      throw StateError('404 active project scope');
+    }
+    return switch (uri) {
+      'project://tempestmiku/linked-folders' => const [
+        MikuResourceEntry(
+          uri: 'project://tempestmiku/linked-folders/tempestmiku/',
+          name: 'tempestmiku',
+          kind: 'linked_folder',
+          title: 'linked://tempestmiku/',
+        ),
+      ],
+      'project://tempestmiku/linked-folders/tempestmiku/' => const [
+        MikuResourceEntry(
+          uri: 'project://tempestmiku/linked-folders/tempestmiku/docs/',
+          name: 'docs',
+          kind: 'dir',
+        ),
+        MikuResourceEntry(
+          uri: 'project://tempestmiku/linked-folders/tempestmiku/README.md',
+          name: 'README.md',
+          kind: 'file',
+          sizeBytes: 96,
+        ),
+        MikuResourceEntry(
+          uri: 'project://tempestmiku/linked-folders/tempestmiku/latest',
+          name: 'latest',
+          kind: 'symlink',
+        ),
+      ],
+      'project://tempestmiku/linked-folders/tempestmiku/docs/' => const [
+        MikuResourceEntry(
+          uri: 'project://tempestmiku/linked-folders/tempestmiku/docs/guide.md',
+          name: 'guide.md',
+          kind: 'file',
+          sizeBytes: 64,
+        ),
+      ],
+      _ => const [],
+    };
   }
 
   @override

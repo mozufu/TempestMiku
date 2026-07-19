@@ -151,6 +151,19 @@ paging and fail-closed `FsPolicy` checks while presenting the entry inside the p
 `project://<id>/memory` exposes the explicit `memory://scopes/project:<id>/chunks` pointer for
 project-scoped recall while `memory://root` remains the active session-scope view.
 
+The authenticated `GET /projects` catalog and the session resource listing root `project://` expose
+only currently active linked aliases. Each catalog entry supplies the stable project URI, matching
+`project:<id>` memory scope, and `project://<id>/linked-folders` collection URI. The catalog is a
+live view of local policies plus remote virtual aliases: it never serializes canonical host paths,
+worker endpoints, command allowlists, or other connector details, and unlink removes an entry
+immediately. Entering a project or reading a linked-folder child still requires the session's exact
+server-owned project scope.
+
+The Flutter project picker presents each catalog alias as one flat project root. Selecting
+`<id>` lists `project://<id>/linked-folders/<id>/` directly, so the internal `linked-folders`
+collection and same-name alias do not appear as redundant navigation levels. Generic resource
+browsers may still enumerate the collection URI explicitly.
+
 ### Project promotion
 
 Promotion copies selected session-scoped state into a durable project while preserving provenance. It is

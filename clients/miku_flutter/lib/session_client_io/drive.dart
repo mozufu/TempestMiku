@@ -1,6 +1,27 @@
 part of '../session_client_io.dart';
 
 extension _NativeDriveClient on NativeMikuSessionClient {
+  Future<List<ProjectCatalogEntry>> _listProjectsImpl() async {
+    final json = await _request('GET', '/projects');
+    return ((json['projects'] as List?) ?? const [])
+        .whereType<Map>()
+        .map(
+          (item) => ProjectCatalogEntry.fromJson(item.cast<String, Object?>()),
+        )
+        .toList();
+  }
+
+  Future<String> _setSessionScopeImpl(String sessionId, String scope) async {
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/scope',
+      body: {'scope': scope},
+    );
+    return (json['memoryScope'] as String?) ??
+        (json['memory_scope'] as String?) ??
+        scope;
+  }
+
   Future<ProjectOverview> _projectOverviewImpl(String sessionId) async {
     final json = await _request('GET', '/sessions/$sessionId/project');
     return ProjectOverview(
@@ -57,6 +78,21 @@ extension _NativeDriveClient on NativeMikuSessionClient {
       '/sessions/$sessionId/resources/resolve?$query',
     );
     return _resourcePreviewFromJson(json, uri);
+  }
+
+  Future<List<MikuResourceEntry>> _listResourcesImpl(
+    String sessionId,
+    String uri,
+  ) async {
+    final query = Uri(queryParameters: {'uri': uri}).query;
+    final json = await _requestList(
+      'GET',
+      '/sessions/$sessionId/resources/list?$query',
+    );
+    return json
+        .whereType<Map>()
+        .map((item) => MikuResourceEntry.fromJson(item.cast<String, Object?>()))
+        .toList();
   }
 
   Future<ProjectPromotion> _promoteSessionImpl(

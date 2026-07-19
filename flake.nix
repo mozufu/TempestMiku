@@ -2,8 +2,8 @@
   description = "TempestMiku — code-execution agent runtime and Flutter client contracts";
 
   inputs = {
-    # Flutter on 25.05 carries Dart 3.7+, required by the retained client contracts.
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    # Flutter on 26.05 carries Dart 3.9+, required by the maintained Markdown renderer.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -111,13 +111,8 @@
             pkgs.noto-fonts-cjk-sans
             pkgs.watch
           ]
-          # reqwest uses rustls (no OpenSSL); darwin still wants libiconv and these
-          # frameworks for linking network-touching crates.
-          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-            pkgs.libiconv
-            pkgs.darwin.apple_sdk.frameworks.Security
-            pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-          ];
+          # reqwest uses rustls (no OpenSSL); Darwin still needs libiconv.
+          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
           JAVA_HOME = "${pkgs.jdk17.home}";

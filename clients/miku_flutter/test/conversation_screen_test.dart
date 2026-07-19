@@ -1,0 +1,243 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:miku_flutter/conversation_app.dart';
+import 'package:miku_flutter/session_client_stub.dart';
+import 'package:miku_flutter/session_models.dart';
+
+void main() {
+  Widget appFor(ScriptedMikuClient client) => TempestMikuApp(
+    client: client,
+    themeMode: ThemeMode.light,
+    now: () => DateTime(2026, 7, 19, 20),
+  );
+
+  Future<void> loadApp(WidgetTester tester, ScriptedMikuClient client) async {
+    await tester.pumpWidget(appFor(client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+
+  testWidgets('starts as a quiet, present conversation canvas', (tester) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+
+    expect(find.text('Miku'), findsOneWidget);
+    expect(find.text('伺服器已連線'), findsOneWidget);
+    expect(find.text('晚上好。我在這裡。'), findsOneWidget);
+    expect(find.byKey(const Key('conversation-composer')), findsOneWidget);
+    expect(find.byTooltip('送出'), findsOneWidget);
+    expect(find.byIcon(Icons.attach_file), findsNothing);
+  });
+
+  testWidgets('keeps the enabled send arrow high contrast in dark mode', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(
+      TempestMikuApp(
+        client: client,
+        themeMode: ThemeMode.dark,
+        now: () => DateTime(2026, 7, 19, 20),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.enterText(
+      find.byKey(const Key('conversation-composer')),
+      '有足夠對比的送出按鈕',
+    );
+    await tester.pump();
+
+    final sendButton = tester.widget<IconButton>(
+      find.byKey(const Key('send-message')),
+    );
+    final colors =
+        Theme.of(
+          tester.element(find.byKey(const Key('send-message'))),
+        ).colorScheme;
+    final background =
+        sendButton.style!.backgroundColor!.resolve(const <WidgetState>{})!;
+    final foreground =
+        sendButton.style!.foregroundColor!.resolve(const <WidgetState>{})!;
+
+    expect(background, colors.primary);
+    expect(foreground, colors.onPrimary);
+    expect(_contrastRatio(background, foreground), greaterThanOrEqualTo(4.5));
+  });
+
+  testWidgets('sends a message and renders Miku directly on the canvas', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+
+    await tester.enterText(
+      find.byKey(const Key('conversation-composer')),
+      '今天陪我整理一下',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send-message')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.text('今天陪我整理一下'), findsOneWidget);
+    expect(find.text('Miku heard: 今天陪我整理一下'), findsOneWidget);
+    expect(client.sentClientMessageIds, hasLength(1));
+
+    final assistantText = tester.widget<SelectableText>(
+      find.widgetWithText(SelectableText, 'Miku heard: 今天陪我整理一下'),
+    );
+    final ancestor = find.ancestor(
+      of: find.byWidget(assistantText),
+      matching: find.byType(DecoratedBox),
+    );
+    expect(ancestor, findsNothing);
+  });
+
+  testWidgets('keeps a streamed response visibly active until final', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient(pauseBeforeFinal: true);
+    await loadApp(tester, client);
+
+    await tester.enterText(
+      find.byKey(const Key('conversation-composer')),
+      '慢慢回答',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send-message')));
+    await tester.pump();
+
+    expect(find.text('Miku heard: 慢慢回答'), findsOneWidget);
+    expect(find.text('伺服器已連線'), findsOneWidget);
+
+    client.completePausedTurn();
+    await tester.pump();
+
+    expect(find.text('伺服器已連線'), findsOneWidget);
+    expect(find.text('Miku heard: 慢慢回答'), findsOneWidget);
+  });
+
+  testWidgets('shows approval in the conversation and resolves it inline', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+
+    await tester.enterText(
+      find.byKey(const Key('conversation-composer')),
+      '請 actor 幫忙',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('send-message')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.text('需要你的確認'), findsOneWidget);
+    expect(find.text('proc.run cargo clean'), findsOneWidget);
+    expect(find.byKey(const Key('approval-option-allow')), findsOneWidget);
+
+    await tester.ensureVisible(find.byKey(const Key('approval-option-allow')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('approval-option-allow')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(client.resolvedApprovals, hasLength(1));
+    expect(client.resolvedApprovals.single, contains(':approve'));
+    expect(find.text('已允許'), findsOneWidget);
+  });
+
+  testWidgets('fits a compact phone viewport without overflow', (tester) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('empty-presence-copy')), findsOneWidget);
+    expect(find.byKey(const Key('conversation-composer')), findsOneWidget);
+  });
+
+  testWidgets('makes a terminal conversation clearly read-only', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    final session = await client.createOrReuseSession();
+
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'session_end', id: 'event-terminal', data: {}),
+    );
+    await tester.pump();
+
+    expect(find.text('這段對話已結束'), findsWidgets);
+    final composer = tester.widget<TextField>(
+      find.byKey(const Key('conversation-composer')),
+    );
+    expect(composer.enabled, isFalse);
+  });
+
+  testWidgets('keeps reconnecting visible and restores the composer', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    final session = await client.createOrReuseSession();
+
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'connection', data: {'status': 'reconnecting'}),
+    );
+    await tester.pump();
+
+    expect(find.text('正在重新連線'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('conversation-composer')))
+          .enabled,
+      isFalse,
+    );
+
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'connection', data: {'status': 'connected'}),
+    );
+    await tester.pump();
+
+    expect(find.text('伺服器已連線'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('conversation-composer')))
+          .enabled,
+      isTrue,
+    );
+
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'connection', data: {'status': 'offline'}),
+    );
+    await tester.pump();
+
+    expect(find.text('伺服器未連線'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('conversation-composer')))
+          .enabled,
+      isFalse,
+    );
+  });
+}
+
+double _contrastRatio(Color first, Color second) {
+  final lighter =
+      first.computeLuminance() > second.computeLuminance() ? first : second;
+  final darker = lighter == first ? second : first;
+  return (lighter.computeLuminance() + 0.05) /
+      (darker.computeLuminance() + 0.05);
+}

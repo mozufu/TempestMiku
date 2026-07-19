@@ -1,10 +1,9 @@
-// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
-
-import 'dart:html';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
 import 'dart:typed_data';
+
+import 'package:web/web.dart' as web;
 
 import 'session_models.dart';
 import 'session_sse.dart';
@@ -38,12 +37,12 @@ class WebMikuSessionClient implements MikuSessionClient {
       sampleRate: sampleRate,
       pcm16: pcm16,
     );
-    late final HttpRequest response;
+    late final web.Response response;
     try {
-      response = await HttpRequest.request(
+      response = await _fetch(
+        'POST',
         '/voice/asr/transcriptions',
-        method: 'POST',
-        requestHeaders: {
+        headers: {
           'content-type': 'application/octet-stream',
           'accept': 'application/json',
           'x-tm-asr-engine-id': engineId,
@@ -51,18 +50,20 @@ class WebMikuSessionClient implements MikuSessionClient {
           'x-tm-sample-rate': '$sampleRate',
           'x-tm-channels': '$voiceAsrChannels',
         },
-        sendData: pcm16,
+        body: pcm16.toJS,
       );
     } catch (_) {
       throw const _AmbiguousWebTransportFailure();
     }
-    final status = response.status ?? 0;
+    final status = response.status;
     if (status == 0) throw const _AmbiguousWebTransportFailure();
     if (status < 200 || status >= 300) {
-      throw StateError('request failed: $status ${response.responseText}');
+      throw StateError(
+        'request failed: $status ${await _responseText(response)}',
+      );
     }
-    final text = response.responseText;
-    if (text == null || text.isEmpty) {
+    final text = await _responseText(response);
+    if (text.isEmpty) {
       throw const FormatException('voice ASR returned an empty response');
     }
     return VoiceAsrTranscript.fromJson(
@@ -84,19 +85,19 @@ class WebMikuSessionClient implements MikuSessionClient {
 
   @override
   Future<MikuSession> createOrReuseSession() async {
-    final storedId = window.localStorage[_sessionIdKey];
+    final storedId = web.window.localStorage.getItem(_sessionIdKey);
     if (storedId != null && storedId.isNotEmpty) {
       try {
         final json = await _request('GET', '/sessions/$storedId');
         final session = _sessionFromJson(
           json,
-          lastEventId: window.localStorage[_lastEventIdKey],
+          lastEventId: web.window.localStorage.getItem(_lastEventIdKey),
         );
         _rememberSession(session);
         return session;
       } catch (_) {
-        window.localStorage.remove(_sessionIdKey);
-        window.localStorage.remove(_lastEventIdKey);
+        web.window.localStorage.removeItem(_sessionIdKey);
+        web.window.localStorage.removeItem(_lastEventIdKey);
       }
     }
     return createSession();
@@ -151,13 +152,11 @@ class WebMikuSessionClient implements MikuSessionClient {
   Stream<MikuEvent> events(String sessionId, {String? lastEventId}) {
     final controller = StreamController<MikuEvent>();
     var closed = false;
-    Object? activeAbortController;
+    web.AbortController? activeAbortController;
     controller.onCancel = () {
       closed = true;
       final abortController = activeAbortController;
-      if (abortController != null) {
-        js_util.callMethod<void>(abortController, 'abort', const []);
-      }
+      abortController?.abort();
     };
     unawaited(
       _pumpEvents(
@@ -174,17 +173,18 @@ class WebMikuSessionClient implements MikuSessionClient {
   Future<void> _pumpEvents(
     StreamController<MikuEvent> controller,
     bool Function() isClosed,
-    void Function(Object? controller) setAbortController,
+    void Function(web.AbortController? controller) setAbortController,
     String sessionId,
     String? initialLastEventId,
   ) async {
-    var resumeId = initialLastEventId ?? window.localStorage[_lastEventIdKey];
+    var resumeId =
+        initialLastEventId ?? web.window.localStorage.getItem(_lastEventIdKey);
     if (numericEventId(resumeId) == null) resumeId = null;
     final lifecycle = SessionEventLifecycle(resumeId);
 
     while (!isClosed() && lifecycle.shouldReconnect) {
       try {
-        final abortController = _newAbortController();
+        final abortController = web.AbortController();
         setAbortController(abortController);
         final decoder = SessionEventSseDecoder();
         eventStream:
@@ -247,73 +247,62 @@ class WebMikuSessionClient implements MikuSessionClient {
     }
   }
 
-  Object _newAbortController() {
-    final constructor = js_util.getProperty<Object>(window, 'AbortController');
-    return js_util.callConstructor<Object>(constructor, const []);
-  }
-
   Stream<String> _fetchEventChunks(
     String sessionId,
     String? lastEventId,
-    Object abortController,
+    web.AbortController abortController,
     void Function() onOpen,
   ) async* {
     final suffix =
         lastEventId == null
             ? ''
             : '?lastEventId=${Uri.encodeQueryComponent(lastEventId)}';
-    final signal = js_util.getProperty<Object>(abortController, 'signal');
-    final init = js_util.jsify({
-      'method': 'GET',
-      'credentials': 'same-origin',
-      'cache': 'no-store',
-      'headers': {
-        'accept': 'text/event-stream',
-        'cache-control': 'no-cache',
-        if (lastEventId != null) 'Last-Event-ID': lastEventId,
-      },
-      'signal': signal,
-    });
-    final promise = js_util.callMethod<Object>(window, 'fetch', [
-      '/sessions/$sessionId/events$suffix',
-      init,
-    ]);
-    final response = await js_util.promiseToFuture<Object>(promise);
-    final status = js_util.getProperty<num>(response, 'status').toInt();
+    final headers =
+        web.Headers()
+          ..set('accept', 'text/event-stream')
+          ..set('cache-control', 'no-cache');
+    if (lastEventId != null) headers.set('Last-Event-ID', lastEventId);
+    final response =
+        await web.window
+            .fetch(
+              '/sessions/$sessionId/events$suffix'.toJS,
+              web.RequestInit(
+                method: 'GET',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: headers,
+                signal: abortController.signal,
+              ),
+            )
+            .toDart;
+    final status = response.status;
     if (status < 200 || status >= 300) {
       throw StateError('event stream failed: $status');
     }
-    final body = js_util.getProperty<Object?>(response, 'body');
+    final body = response.body;
     if (body == null) throw StateError('streaming fetch body is unavailable');
     onOpen();
-    final reader = js_util.callMethod<Object>(body, 'getReader', const []);
-    final textDecoderConstructor = js_util.getProperty<Object>(
-      window,
-      'TextDecoder',
-    );
-    final textDecoder = js_util.callConstructor<Object>(
-      textDecoderConstructor,
-      ['utf-8'],
-    );
+    final reader = body.getReader() as web.ReadableStreamDefaultReader;
+    final textDecoder = web.TextDecoder('utf-8');
     while (true) {
-      final readPromise = js_util.callMethod<Object>(reader, 'read', const []);
-      final result = await js_util.promiseToFuture<Object>(readPromise);
-      if (js_util.getProperty<bool>(result, 'done')) break;
-      final value = js_util.getProperty<Object>(result, 'value');
-      final chunk = js_util.callMethod<String>(textDecoder, 'decode', [
-        value,
-        js_util.jsify({'stream': true}),
-      ]);
+      final result = await reader.read().toDart;
+      if (result.done) break;
+      final value = result.value;
+      if (value == null) continue;
+      final chunk = textDecoder.decode(
+        value as JSObject,
+        web.TextDecodeOptions(stream: true),
+      );
       if (chunk.isNotEmpty) yield chunk;
     }
-    final tail = js_util.callMethod<String>(textDecoder, 'decode', const []);
+    final tail = textDecoder.decode();
     if (tail.isNotEmpty) yield tail;
   }
 
   @override
   void rememberLastEventId(String sessionId, String lastEventId) {
-    if (window.localStorage[_sessionIdKey] == sessionId) {
-      window.localStorage[_lastEventIdKey] = lastEventId;
+    if (web.window.localStorage.getItem(_sessionIdKey) == sessionId) {
+      web.window.localStorage.setItem(_lastEventIdKey, lastEventId);
     }
   }
 
@@ -479,24 +468,26 @@ class WebMikuSessionClient implements MikuSessionClient {
     String path, {
     Map<String, Object?>? body,
   }) async {
-    late final HttpRequest response;
+    late final web.Response response;
     try {
-      response = await HttpRequest.request(
+      response = await _fetch(
+        method,
         path,
-        method: method,
-        requestHeaders: {if (body != null) 'content-type': 'application/json'},
-        sendData: body == null ? null : jsonEncode(body),
+        headers: {if (body != null) 'content-type': 'application/json'},
+        body: body == null ? null : jsonEncode(body).toJS,
       );
     } catch (_) {
       throw const _AmbiguousWebTransportFailure();
     }
-    final status = response.status ?? 0;
+    final status = response.status;
     if (status == 0) throw const _AmbiguousWebTransportFailure();
     if (status < 200 || status >= 300) {
-      throw StateError('request failed: $status ${response.responseText}');
+      throw StateError(
+        'request failed: $status ${await _responseText(response)}',
+      );
     }
-    final text = response.responseText;
-    if (text == null || text.isEmpty) return <String, Object?>{};
+    final text = await _responseText(response);
+    if (text.isEmpty) return <String, Object?>{};
     return (jsonDecode(text) as Map).cast<String, Object?>();
   }
 
@@ -582,11 +573,37 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   void _rememberSession(MikuSession session) {
-    window.localStorage[_sessionIdKey] = session.id;
+    web.window.localStorage.setItem(_sessionIdKey, session.id);
     if (session.lastEventId != null && session.lastEventId!.isNotEmpty) {
-      window.localStorage[_lastEventIdKey] = session.lastEventId!;
+      web.window.localStorage.setItem(_lastEventIdKey, session.lastEventId!);
     } else {
-      window.localStorage.remove(_lastEventIdKey);
+      web.window.localStorage.removeItem(_lastEventIdKey);
     }
   }
+
+  Future<web.Response> _fetch(
+    String method,
+    String path, {
+    Map<String, String> headers = const {},
+    web.BodyInit? body,
+  }) {
+    final requestHeaders = web.Headers();
+    for (final MapEntry(:key, :value) in headers.entries) {
+      requestHeaders.set(key, value);
+    }
+    return web.window
+        .fetch(
+          path.toJS,
+          web.RequestInit(
+            method: method,
+            credentials: 'same-origin',
+            headers: requestHeaders,
+            body: body,
+          ),
+        )
+        .toDart;
+  }
+
+  Future<String> _responseText(web.Response response) async =>
+      (await response.text().toDart).toDart;
 }

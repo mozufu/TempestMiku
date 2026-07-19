@@ -2,6 +2,43 @@ use super::support::*;
 use super::*;
 
 #[tokio::test]
+async fn required_proc_isolation_never_falls_back_to_host_execution() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_dir = tempfile::tempdir().unwrap();
+    let capture = Arc::new(CaptureThenApprove::default());
+    let invocation =
+        InvocationCtx::with_approvals(ctx().grants, capture.clone(), Duration::from_secs(1));
+    let proc_run = ProcRunFn::with_timeout_and_isolation(
+        temp_linked_with_commands(
+            root.path(),
+            FsMode::Rw,
+            vec!["echo".to_string()],
+            Vec::new(),
+        ),
+        ArtifactStore::open(artifact_dir.path(), "proc-required-isolation").unwrap(),
+        180_000,
+        ProcIsolationConfig::LinuxBubblewrap {
+            launcher: PathBuf::from("/definitely-missing/tempestmiku-bwrap"),
+            runtime_roots: vec![PathBuf::from("/usr")],
+            limits: ProcIsolationLimits::default(),
+        },
+    );
+
+    let error = proc_run
+        .call(
+            json!({"cmd":"echo","args":["must-not-run"],"cwd":"tempestmiku:"}),
+            &invocation,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        HostError::InvalidArgs(_) | HostError::CapabilityDenied(_)
+    ));
+    assert!(capture.actions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn proc_run_requires_approval_even_for_configured_safe_args_and_spills() {
     let root = tempfile::tempdir().unwrap();
     fs::write(
@@ -165,6 +202,8 @@ async fn proc_run_approval_binds_raw_stdin_digest_and_bounded_redacted_preview()
     assert!(preview.contains("[REDACTED_TOKEN]"));
     assert!(preview.contains("...[truncated:"));
     assert!(!preview.contains(secret));
+    assert_eq!(details["isolation"]["provider"], json!("disabled"));
+    assert_eq!(details["isolation"]["networkIsolated"], json!(false));
 }
 
 #[tokio::test]

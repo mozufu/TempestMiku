@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -308,6 +309,47 @@ impl ResourceHandler for SecretResource {
 pub(super) struct Patch {
     calls: Arc<AtomicUsize>,
     docs: ToolDocs,
+}
+
+pub(super) struct ProductionHttpGet {
+    docs: ToolDocs,
+}
+
+impl ProductionHttpGet {
+    pub(super) fn new() -> Self {
+        Self {
+            docs: ToolDocs {
+                name: "http.get".into(),
+                namespace: "http".into(),
+                summary: "Production-bound HTTP test handler".into(),
+                description: None,
+                signature: "http.get(args)".into(),
+                args_schema: json!({"type":"object"}),
+                result_schema: Some(json!({"type":"object"})),
+                examples: vec![],
+                errors: vec![],
+                grants: vec![GrantDoc {
+                    kind: "capability".into(),
+                    description: "http.get".into(),
+                }],
+                sensitive: true,
+                approval: "none".into(),
+                since: "test".into(),
+                stability: "stable".into(),
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl HostFn for ProductionHttpGet {
+    fn docs(&self) -> &ToolDocs {
+        &self.docs
+    }
+
+    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> tm_host::Result<Value> {
+        Ok(json!({"source": "production", "args": args}))
+    }
 }
 
 impl Patch {

@@ -329,6 +329,7 @@ fn validate_mime(mime: &str) -> tm_host::Result<()> {
 pub(super) enum CatalogOperation {
     Search,
     Docs,
+    Call,
 }
 
 pub(super) struct CatalogFn {
@@ -350,6 +351,11 @@ impl CatalogFn {
                 "Read one tm effect declaration and its host policy metadata",
                 "tools.docs(name)",
             ),
+            CatalogOperation::Call => (
+                "tools.call",
+                "Invoke one granted tm effect by its catalog name",
+                "tools.call({name, args})",
+            ),
         };
         Self {
             operation,
@@ -368,7 +374,11 @@ impl CatalogFn {
                     kind: "catalog".into(),
                     description: "Catalog inspection does not grant target authority".into(),
                 }],
-                sensitive: false,
+                // A late-bound target may carry private arguments or results even though catalog
+                // search/docs do not. Redact the generic call envelope at the runtime-event
+                // boundary; the target HostFn still performs its own exact grant and approval
+                // checks through HostRegistry::invoke.
+                sensitive: matches!(operation, CatalogOperation::Call),
                 approval: "none".into(),
                 since: "0.1".into(),
                 stability: "stable".into(),
@@ -440,6 +450,29 @@ impl HostFn for CatalogFn {
                     self.registry.docs(name, ctx)?
                 };
                 Self::docs_value(docs)
+            }
+            CatalogOperation::Call => {
+                let fields = args.as_object().ok_or_else(|| {
+                    HostError::InvalidArgs("tools.call requires {name: String, args: Json}".into())
+                })?;
+                if fields
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "name" | "args"))
+                {
+                    return Err(HostError::InvalidArgs(
+                        "tools.call accepts only name and args".into(),
+                    ));
+                }
+                let name = fields.get("name").and_then(Value::as_str).ok_or_else(|| {
+                    HostError::InvalidArgs("tools.call requires a string name".into())
+                })?;
+                if name == "tools.call" {
+                    return Err(HostError::InvalidArgs(
+                        "tools.call cannot recursively invoke itself".into(),
+                    ));
+                }
+                let target_args = fields.get("args").cloned().unwrap_or(Value::Null);
+                self.registry.invoke(name, target_args, ctx).await
             }
         }
     }

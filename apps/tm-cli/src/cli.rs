@@ -85,6 +85,7 @@ pub(super) fn load_host_config(path: Option<&PathBuf>) -> Result<P0HostConfig> {
             approvals: Default::default(),
             artifact_root: None,
             proc_run_timeout_ms: tm_host::default_proc_run_timeout_ms(),
+            proc_isolation: Default::default(),
             self_evolution: Default::default(),
             egress: Default::default(),
         }),

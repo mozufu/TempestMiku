@@ -6,8 +6,8 @@ use tm_core::{CancellationToken, Result, Sandbox, Session, SessionConfig};
 use tm_drive::SharedDriveStore;
 use tm_host::{
     ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy,
-    HostEventSink, HostRegistry, InvocationCtx, LinkedFolders, NoopHostEventSink, ResourceRegistry,
-    register_p0_linked_folder_functions,
+    HostEventSink, HostRegistry, InvocationCtx, LinkedFolders, NoopHostEventSink,
+    ProcIsolationConfig, ResourceRegistry, register_p0_linked_folder_functions_with_isolation,
 };
 
 use crate::{Interpreter, RuntimeLimits, catalog_from_registry};
@@ -27,6 +27,7 @@ pub struct TmSandboxOptions {
     pub approval_policy: Arc<dyn ApprovalPolicy>,
     pub approval_timeout: Duration,
     pub proc_run_timeout: Duration,
+    pub proc_isolation: ProcIsolationConfig,
     pub host_event_sink: Arc<dyn HostEventSink>,
     pub limits: RuntimeLimits,
     pub cancellation: Option<Arc<dyn CancellationToken>>,
@@ -50,6 +51,7 @@ impl Default for TmSandboxOptions {
             approval_policy: Arc::new(DefaultDenyApprovalPolicy),
             approval_timeout: Duration::from_secs(60),
             proc_run_timeout: Duration::from_millis(180_000),
+            proc_isolation: ProcIsolationConfig::default(),
             host_event_sink: Arc::new(NoopHostEventSink),
             limits: RuntimeLimits::default(),
             cancellation: None,
@@ -79,9 +81,14 @@ impl Sandbox for TmSandbox {
         .map_err(|error| tm_core::Error::Sandbox(format!("artifact open task failed: {error}")))?
         .map_err(|error| tm_core::Error::Sandbox(error.to_string()))?;
         let mut registry = self.options.host_registry.clone();
-        registry.register(Arc::new(HttpGetFn::new(
-            self.options.http_allowlist.clone(),
-        )));
+        // The in-memory URL map is a deterministic M1/test fixture. An application-provided
+        // production `http.get` handler owns the name and must never be replaced while opening a
+        // persistent tm session.
+        if !registry.contains("http.get") {
+            registry.register(Arc::new(HttpGetFn::new(
+                self.options.http_allowlist.clone(),
+            )));
+        }
         let mut resources = self.options.resource_registry.clone();
         resources.register(Arc::new(ArtifactResourceHandler::new(artifacts.clone())));
         let linked_folders = self.options.linked_folders.clone().or_else(|| {
@@ -91,12 +98,13 @@ impl Sandbox for TmSandbox {
                 .map(|_| LinkedFolders::default())
         });
         if let Some(linked_folders) = linked_folders.clone() {
-            register_p0_linked_folder_functions(
+            register_p0_linked_folder_functions_with_isolation(
                 &mut registry,
                 &mut resources,
                 linked_folders,
                 artifacts.clone(),
                 self.options.proc_run_timeout,
+                self.options.proc_isolation.clone(),
             );
         }
         if let Some(drive_store) = self.options.drive_store.clone() {
@@ -163,11 +171,12 @@ impl Sandbox for TmSandbox {
         }
         // Session-local output spilling and granted-catalog inspection are intrinsic tm runtime
         // operations. They do not add host, resource-read, network, or child authority.
-        invocation.grants =
-            invocation
-                .grants
-                .clone()
-                .allow_many(["artifacts.put", "tools.search", "tools.docs"]);
+        invocation.grants = invocation.grants.clone().allow_many([
+            "artifacts.put",
+            "tools.search",
+            "tools.docs",
+            "tools.call",
+        ]);
         if invocation.grants.permits("resources.read:artifact") {
             invocation.grants = invocation.grants.clone().allow_many([
                 "artifacts.get",
@@ -179,7 +188,11 @@ impl Sandbox for TmSandbox {
             }
         }
         let catalog_registry = Arc::new(registry.clone());
-        for operation in [CatalogOperation::Search, CatalogOperation::Docs] {
+        for operation in [
+            CatalogOperation::Search,
+            CatalogOperation::Docs,
+            CatalogOperation::Call,
+        ] {
             registry.register(Arc::new(CatalogFn::new(
                 operation,
                 Arc::clone(&catalog_registry),

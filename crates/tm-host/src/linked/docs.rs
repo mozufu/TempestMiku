@@ -317,7 +317,7 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
             }],
             errors: vec![
                 tool_error("CapabilityDeniedError", "proc.run is not granted or the command is not allowlisted for the linked cwd.", false),
-                tool_error("ApprovalDeniedError", "The user denies process execution. All commands require approval until OS isolation is available.", false),
+                tool_error("ApprovalDeniedError", "The user denies process execution. Every command requires approval; optional Linux isolation is defense in depth.", false),
                 tool_error("ApprovalTimeoutError", "The approval request times out and defaults to deny.", true),
                 tool_error("InvalidArgsError", "cmd is not a bare executable, stdin is not a string or exceeds 1 MiB, or env/shell-style args are requested.", false),
                 tool_error("InvalidPathError", "cwd is outside the linked root or missing.", false),

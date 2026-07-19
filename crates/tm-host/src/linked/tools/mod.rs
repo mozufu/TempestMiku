@@ -17,6 +17,7 @@ use crate::{
     ResourceRegistry, Result, ToolDocs,
 };
 
+use super::isolation::ProcIsolationConfig;
 use super::secure_fs::{
     SecureKind, WalkControl, WalkOptions, atomic_replace, create_file, open_entry_file,
     open_existing, open_parent, read_bounded, read_entry_bounded, remove_entry, rename_entry,
@@ -53,6 +54,24 @@ pub fn register_p0_linked_folder_functions(
     artifact_store: ArtifactStore,
     proc_run_timeout: Duration,
 ) {
+    register_p0_linked_folder_functions_with_isolation(
+        host_registry,
+        resource_registry,
+        linked_folders,
+        artifact_store,
+        proc_run_timeout,
+        ProcIsolationConfig::default(),
+    );
+}
+
+pub fn register_p0_linked_folder_functions_with_isolation(
+    host_registry: &mut HostRegistry,
+    resource_registry: &mut ResourceRegistry,
+    linked_folders: LinkedFolders,
+    artifact_store: ArtifactStore,
+    proc_run_timeout: Duration,
+    proc_isolation: ProcIsolationConfig,
+) {
     host_registry.register(Arc::new(FsReadFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsWriteFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsPatchFn::new(
@@ -64,10 +83,11 @@ pub fn register_p0_linked_folder_functions(
     host_registry.register(Arc::new(FsLsFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsFindFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(CodeSearchFn::new(linked_folders.clone())));
-    host_registry.register(Arc::new(ProcRunFn::with_timeout_ms(
+    host_registry.register(Arc::new(ProcRunFn::with_timeout_and_isolation(
         linked_folders.clone(),
         artifact_store,
         u64::try_from(proc_run_timeout.as_millis()).unwrap_or(u64::MAX),
+        proc_isolation,
     )));
     resource_registry.register(Arc::new(LinkedResourceHandler::new(linked_folders)));
 }

@@ -137,6 +137,7 @@ fn serious_engineer_config_sets_voice_cap_and_budget() {
         approvals: Default::default(),
         artifact_root: None,
         proc_run_timeout_ms: tm_host::default_proc_run_timeout_ms(),
+        proc_isolation: Default::default(),
         self_evolution: Default::default(),
         egress: Default::default(),
     };
@@ -228,6 +229,7 @@ async fn multi_folder_default_session_id_stays_fail_closed() {
         approvals: Default::default(),
         artifact_root: Some(artifacts.path().to_path_buf()),
         proc_run_timeout_ms: tm_host::default_proc_run_timeout_ms(),
+        proc_isolation: Default::default(),
         self_evolution: Default::default(),
         egress: Default::default(),
     };

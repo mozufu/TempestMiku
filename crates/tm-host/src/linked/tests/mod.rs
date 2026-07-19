@@ -32,6 +32,7 @@ use super::{
 
 mod foundation;
 mod fs_policy;
+mod linux_isolation;
 mod mutations;
 mod proc_approval;
 mod proc_runtime;

@@ -77,6 +77,7 @@ pub(super) fn load_host_config() -> Result<P0HostConfig, BoxError> {
             approvals: Default::default(),
             artifact_root: None,
             proc_run_timeout_ms: tm_host::default_proc_run_timeout_ms(),
+            proc_isolation: Default::default(),
             self_evolution: Default::default(),
             egress: Default::default(),
         }),

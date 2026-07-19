@@ -1,11 +1,17 @@
 use super::*;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::AtomicUsize;
+use std::{path::Path, sync::atomic::AtomicUsize};
+
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd};
 
 mod bounded_io;
 mod environment;
 mod process_group;
 
+use super::super::isolation::{PreparedProcIsolation, ProcIsolationCommand, ProcIsolationConfig};
 use bounded_io::{
     MAX_RETAINED_PROCESS_OUTPUT_BYTES, bounded_inline_output, bounded_process_artifact,
     parse_stdin, read_bounded_output, stdin_approval_preview, write_stdin,
@@ -23,14 +29,30 @@ pub(in crate::linked) struct ProcRunFn {
     linked: LinkedFolders,
     artifact_store: ArtifactStore,
     timeout_ms: u64,
+    isolation: ProcIsolationConfig,
     docs: ToolDocs,
 }
 
 impl ProcRunFn {
+    #[cfg(test)]
     pub(in crate::linked) fn with_timeout_ms(
         linked: LinkedFolders,
         artifact_store: ArtifactStore,
         timeout_ms: u64,
+    ) -> Self {
+        Self::with_timeout_and_isolation(
+            linked,
+            artifact_store,
+            timeout_ms,
+            ProcIsolationConfig::default(),
+        )
+    }
+
+    pub(in crate::linked) fn with_timeout_and_isolation(
+        linked: LinkedFolders,
+        artifact_store: ArtifactStore,
+        timeout_ms: u64,
+        isolation: ProcIsolationConfig,
     ) -> Self {
         let timeout_ms = timeout_ms.clamp(1, 900_000);
         let mut docs = docs(
@@ -45,6 +67,7 @@ impl ProcRunFn {
             linked,
             artifact_store,
             timeout_ms,
+            isolation,
             docs,
         }
     }
@@ -117,6 +140,11 @@ impl HostFn for ProcRunFn {
             })?;
         let (resolved_executable, executable_target, executable_identity) =
             resolve_executable(&args.cmd, &sanitized_path)?;
+        #[cfg(unix)]
+        let pinned_executable = pin_executable(&executable_target, executable_identity)?;
+        // An enabled profile is a hard requirement, not a preference. Resolve and pin it before
+        // approval so an unavailable launcher or mount profile never falls back to host execution.
+        let prepared_isolation = self.isolation.prepare()?;
         let revision = self.linked.revision();
         let requested_cwd = self.linked.resolve_spec(args.cwd.as_deref())?;
         ctx.require_linked_alias(&requested_cwd.alias)?;
@@ -138,9 +166,9 @@ impl HostFn for ProcRunFn {
                 }
                 Ok((cwd, initial_cwd))
             })?;
-        // Host process execution is not OS-isolated yet. Even an exact `cargo test` argv can run
-        // repository-controlled build scripts or tests with the server's filesystem and network
-        // authority, so configured safe args cannot bypass approval until that isolation exists.
+        // Approval remains mandatory in both profiles: repository-controlled build scripts can
+        // still mutate the granted linked folder even when Linux namespaces remove ambient host
+        // filesystem/network authority. The disabled profile additionally exposes host authority.
         let mut exact_argv = vec![args.cmd.clone()];
         exact_argv.extend(args.args.clone());
         let argv_bytes =
@@ -173,6 +201,7 @@ impl HostFn for ProcRunFn {
                 "stdinSha256": stdin_sha256,
                 "stdinPreview": stdin_preview,
                 "stdinPreviewTruncated": stdin_preview_truncated,
+                "isolation": prepared_isolation.approval_details(),
             }),
         );
         let approval_json: Value = serde_json::from_str(&approval)
@@ -196,120 +225,211 @@ impl HostFn for ProcRunFn {
         }
         let start = Instant::now();
         let initial_cwd_identity = initial_cwd.identity;
-        let (mut child, executed_cwd) =
-            self.linked
-                .with_stable_policy_snapshot(revision, |linked| {
-                    let fresh_cwd = linked.resolve_spec(Some(&stable_cwd_path))?;
-                    if !fresh_cwd.policy.commands.contains(&args.cmd) {
-                        return Err(HostError::CapabilityDenied(args.cmd.clone()));
-                    }
-                    let (fresh_executable, fresh_executable_target, fresh_executable_identity) =
-                        resolve_executable(&args.cmd, &sanitized_path)?;
-                    if fresh_executable != resolved_executable
-                        || fresh_executable_target != executable_target
-                        || fresh_executable_identity != executable_identity
-                    {
+        let (mut child, executed_cwd, mut isolation_run) = self
+            .linked
+            .with_stable_policy_snapshot(revision, |linked| {
+                let fresh_cwd = linked.resolve_spec(Some(&stable_cwd_path))?;
+                if !fresh_cwd.policy.commands.contains(&args.cmd) {
+                    return Err(HostError::CapabilityDenied(args.cmd.clone()));
+                }
+                let (fresh_executable, fresh_executable_target, fresh_executable_identity) =
+                    resolve_executable(&args.cmd, &sanitized_path)?;
+                if fresh_executable != resolved_executable
+                    || fresh_executable_target != executable_target
+                    || fresh_executable_identity != executable_identity
+                {
+                    return Err(HostError::InvalidArgs(
+                        "proc.run executable changed while approval was pending; retry".to_string(),
+                    ));
+                }
+                #[cfg(unix)]
+                {
+                    // Open the current path again while the policy snapshot is held. Comparing
+                    // the descriptor identity closes the validation-side path race; execution
+                    // still uses the descriptor pinned before approval, so a later rename can
+                    // never substitute a different executable.
+                    let fresh_pin =
+                        pin_executable(&fresh_executable_target, fresh_executable_identity)?;
+                    if fresh_pin.identity != pinned_executable.identity {
                         return Err(HostError::InvalidArgs(
                             "proc.run executable changed while approval was pending; retry"
                                 .to_string(),
                         ));
                     }
-                    let cwd_handle = open_existing(
+                }
+                let fresh_isolation = self.isolation.prepare()?;
+                if fresh_isolation != prepared_isolation {
+                    return Err(HostError::CapabilityDenied(
+                        "proc isolation profile changed while approval was pending; retry"
+                            .to_string(),
+                    ));
+                }
+                let cwd_handle = open_existing(
+                    &fresh_cwd.policy,
+                    fresh_cwd.root_identity,
+                    &fresh_cwd.relative,
+                    &fresh_cwd.display,
+                )?;
+                if cwd_handle.kind != SecureKind::Directory
+                    || cwd_handle.identity != initial_cwd_identity
+                {
+                    return Err(HostError::InvalidArgs(format!(
+                        "proc.run cwd {} changed while approval was pending; retry",
+                        fresh_cwd.display
+                    )));
+                }
+                let executed_cwd_path = fresh_cwd.policy.root.join(&fresh_cwd.relative);
+                // Allocate and fully configure the unpredictable cgroup leaf only after
+                // approval, but before spawn. The profile itself was already probed before
+                // approval, and `fresh_isolation` was compared with that exact approved
+                // profile above.
+                let isolation_run = fresh_isolation.start_run()?;
+                #[cfg(target_os = "linux")]
+                let cgroup_procs_file = isolation_run.cgroup_procs_file();
+                let direct_execution = matches!(fresh_isolation, PreparedProcIsolation::Disabled);
+                #[cfg(unix)]
+                let linked_root_handle = if direct_execution {
+                    None
+                } else {
+                    Some(open_existing(
                         &fresh_cwd.policy,
                         fresh_cwd.root_identity,
-                        &fresh_cwd.relative,
-                        &fresh_cwd.display,
-                    )?;
-                    if cwd_handle.kind != SecureKind::Directory
-                        || cwd_handle.identity != initial_cwd_identity
-                    {
-                        return Err(HostError::InvalidArgs(format!(
-                            "proc.run cwd {} changed while approval was pending; retry",
-                            fresh_cwd.display
-                        )));
-                    }
-                    #[cfg(unix)]
-                    let mut command = {
-                        let mut command = tokio::process::Command::new(&fresh_executable_target);
-                        // Preserve multicall/proxy dispatch (for example rustup's `cargo` symlink)
-                        // while executing the already-resolved canonical target rather than
-                        // reopening the PATH symlink after approval.
-                        command.arg0(&args.cmd);
-                        command
-                    };
-                    #[cfg(not(unix))]
-                    let mut command = tokio::process::Command::new(&fresh_executable);
+                        Path::new(""),
+                        &fresh_cwd.alias,
+                    )?)
+                };
+                #[cfg(unix)]
+                let mut command = if direct_execution {
+                    #[cfg(target_os = "linux")]
+                    let mut command = tokio::process::Command::new(pinned_fd_path(
+                        pinned_executable.file.as_raw_fd(),
+                    ));
+                    #[cfg(not(target_os = "linux"))]
+                    let mut command = tokio::process::Command::new(&fresh_executable_target);
+                    // Preserve multicall/proxy dispatch (for example rustup's `cargo` symlink)
+                    // while Linux executes the descriptor pinned before approval. Other Unix
+                    // hosts retain the final child-side identity check below because their
+                    // `/dev/fd` implementation is not executable.
+                    command.arg0(&args.cmd);
                     command
-                        .args(&args.args)
-                        .stdin(if stdin.is_some() {
-                            Stdio::piped()
-                        } else {
-                            Stdio::null()
-                        })
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::piped())
-                        .kill_on_drop(true)
-                        .env_clear();
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::ffi::OsStrExt;
+                } else {
+                    use std::os::fd::AsRawFd;
 
-                        command.process_group(0);
-                        let cwd_file = cwd_handle.file;
-                        // Allocate and validate everything needed by the child-side identity check
-                        // before fork. `pre_exec` is the last available hook before the path-based
-                        // exec performed by `Command`.
-                        let executable_path =
-                            std::ffi::CString::new(fresh_executable_target.as_os_str().as_bytes())
-                                .map_err(|_| {
-                                    HostError::HostCall(
-                                        "proc.run executable path contains a NUL byte".to_string(),
-                                    )
-                                })?;
-                        // `libc::dev_t` is `u64` on Linux but narrower on some Unix targets, so
-                        // keep the checked cross-target conversion even when it is a no-op here.
-                        #[allow(clippy::useless_conversion)]
-                        let expected_device: libc::dev_t =
-                            fresh_executable_identity.0.try_into().map_err(|_| {
+                    let linked_root_fd = linked_root_handle
+                        .as_ref()
+                        .map(|handle| handle.file.as_raw_fd())
+                        .ok_or_else(|| {
+                            HostError::HostCall(
+                                "proc isolation linked-root descriptor is missing".to_string(),
+                            )
+                        })?;
+                    fresh_isolation.command(ProcIsolationCommand {
+                        resolved_executable: &fresh_executable,
+                        executable_target: &fresh_executable_target,
+                        command_name: &args.cmd,
+                        args: &args.args,
+                        linked_root: &fresh_cwd.policy.root,
+                        linked_root_fd,
+                        linked_mode: fresh_cwd.policy.mode,
+                        cwd: &executed_cwd_path,
+                        cwd_fd: cwd_handle.file.as_raw_fd(),
+                        executable_fd: pinned_executable.file.as_raw_fd(),
+                        environment: &inherited_environment,
+                    })?
+                };
+                #[cfg(not(unix))]
+                let mut command = tokio::process::Command::new(&fresh_executable);
+                if direct_execution {
+                    command.args(&args.args);
+                }
+                command
+                    .stdin(if stdin.is_some() {
+                        Stdio::piped()
+                    } else {
+                        Stdio::null()
+                    })
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true)
+                    .env_clear();
+                #[cfg(unix)]
+                {
+                    use std::os::fd::AsRawFd;
+                    #[cfg(not(target_os = "linux"))]
+                    use std::os::unix::ffi::OsStrExt;
+
+                    command.process_group(0);
+                    let cwd_file = cwd_handle.file;
+                    let linked_root_file = linked_root_handle.map(|handle| handle.file);
+                    #[cfg(target_os = "linux")]
+                    let executable_file = pinned_executable.file;
+                    let child_isolation = fresh_isolation.clone();
+                    #[cfg(not(target_os = "linux"))]
+                    let executable_path =
+                        std::ffi::CString::new(fresh_executable_target.as_os_str().as_bytes())
+                            .map_err(|_| {
                                 HostError::HostCall(
-                                    "proc.run executable device identity is not representable"
-                                        .to_string(),
+                                    "proc.run executable path contains a NUL byte".to_string(),
                                 )
                             })?;
-                        let expected_inode = fresh_executable_identity.1;
-                        // SAFETY: the closure calls only descriptor/path syscalls with storage and
-                        // a NUL-terminated path prepared before fork. It performs no heap allocation
-                        // or locking. A mismatch returns ESTALE and prevents exec.
-                        unsafe {
-                            command.pre_exec(move || {
+                    #[cfg(not(target_os = "linux"))]
+                    let expected_identity = fresh_executable_identity;
+                    // The descriptor is kept alive by this closure and made inheritable only in
+                    // the forked child. Direct execution opens `/proc/self/fd/N` (or `/dev/fd/N`
+                    // on other Unix systems); bubblewrap consumes the same descriptor with
+                    // `--ro-bind-fd`. Both routes therefore execute the approved inode.
+                    unsafe {
+                        command.pre_exec(move || {
+                            let pinned_mount_fds = linked_root_file
+                                .as_ref()
+                                .map(|root| (root.as_raw_fd(), cwd_file.as_raw_fd()));
+                            if direct_execution {
                                 rustix::process::fchdir(&cwd_file).map_err(|error| {
                                     std::io::Error::from_raw_os_error(error.raw_os_error())
                                 })?;
+                            }
+                            #[cfg(target_os = "linux")]
+                            child_isolation.prepare_child(
+                                Some(executable_file.as_raw_fd()),
+                                pinned_mount_fds,
+                                cgroup_procs_file.as_ref().map(|file| file.as_raw_fd()),
+                            )?;
+                            #[cfg(not(target_os = "linux"))]
+                            {
                                 let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-                                // SAFETY: `executable_path` is a live CString and `stat` points to
-                                // writable storage for one `libc::stat` result.
                                 if libc::stat(executable_path.as_ptr(), stat.as_mut_ptr()) != 0 {
                                     return Err(std::io::Error::last_os_error());
                                 }
-                                // SAFETY: `libc::stat` returned success and initialized the value.
                                 let stat = stat.assume_init();
-                                if stat.st_dev != expected_device || stat.st_ino != expected_inode {
+                                // libc identity widths vary across Unix targets; on some
+                                // hosts one or both casts are intentionally a no-op.
+                                #[allow(clippy::unnecessary_cast)]
+                                let actual_identity = (stat.st_dev as u64, stat.st_ino as u64);
+                                if actual_identity != expected_identity {
                                     return Err(std::io::Error::from_raw_os_error(libc::ESTALE));
                                 }
-                                Ok(())
-                            });
-                        }
+                                child_isolation.prepare_child(None, pinned_mount_fds, None)?;
+                            }
+                            Ok(())
+                        });
                     }
-                    #[cfg(not(unix))]
-                    command.current_dir(fresh_cwd.policy.root.join(&fresh_cwd.relative));
+                }
+                #[cfg(not(unix))]
+                command.current_dir(&executed_cwd_path);
+                if direct_execution {
                     for (key, value) in &inherited_environment {
                         command.env(key, value);
                     }
-                    let child = command
-                        .spawn()
-                        .map_err(|err| HostError::HostCall(err.to_string()))?;
-                    Ok((child, display_path(&fresh_cwd.alias, &fresh_cwd.relative)))
-                })?;
+                }
+                let child = command
+                    .spawn()
+                    .map_err(|err| HostError::HostCall(err.to_string()))?;
+                Ok((
+                    child,
+                    display_path(&fresh_cwd.alias, &fresh_cwd.relative),
+                    isolation_run,
+                ))
+            })?;
         let mut process_group = ProcessGroupGuard::new(child.id());
         let stdout = child
             .stdout
@@ -341,6 +461,7 @@ impl HostFn for ProcRunFn {
         let duration_ms = start.elapsed().as_millis();
         let (exit_code, timed_out, stdout, stderr, output_limit_reached) = match output {
             Ok((Ok(()), Ok(status), Ok(stdout), Ok(stderr))) => {
+                isolation_run.terminate_and_cleanup()?;
                 process_group.disarm();
                 (
                     status.code().unwrap_or(-1),
@@ -355,6 +476,7 @@ impl HostFn for ProcRunFn {
             | Ok((_, _, Err(err), _))
             | Ok((_, _, _, Err(err))) => return Err(HostError::HostCall(err.to_string())),
             Err(_) => {
+                isolation_run.terminate_and_cleanup()?;
                 stop_process_tree(&mut child, &mut process_group)
                     .await
                     .map_err(|err| HostError::HostCall(err.to_string()))?;
@@ -406,4 +528,63 @@ impl HostFn for ProcRunFn {
         };
         serde_json::to_value(result).map_err(|err| HostError::HostCall(err.to_string()))
     }
+}
+
+#[cfg(unix)]
+struct PinnedExecutable {
+    file: File,
+    identity: (u64, u64),
+}
+
+#[cfg(unix)]
+fn pin_executable(path: &Path, expected_identity: (u64, u64)) -> Result<PinnedExecutable> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    #[cfg(target_os = "linux")]
+    let file = {
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+            HostError::HostCall("proc.run executable path contains a NUL byte".to_string())
+        })?;
+        // O_PATH pins the executable without requiring read permission. The child later executes
+        // the descriptor through procfs (direct) or binds it into the bubblewrap namespace.
+        // SAFETY: `path` is a live NUL-terminated string and flags require no mode argument.
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(HostError::CapabilityDenied(format!(
+                "proc.run executable cannot be pinned: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        // SAFETY: `open` returned a new owned descriptor.
+        unsafe { File::from_raw_fd(fd) }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let file = File::open(path).map_err(|error| {
+        HostError::CapabilityDenied(format!(
+            "proc.run executable cannot be pinned on this Unix host: {error}"
+        ))
+    })?;
+
+    let metadata = file.metadata().map_err(|error| {
+        HostError::CapabilityDenied(format!(
+            "proc.run pinned executable cannot be inspected: {error}"
+        ))
+    })?;
+    let identity = (metadata.dev(), metadata.ino());
+    if !metadata.is_file()
+        || metadata.permissions().mode() & 0o111 == 0
+        || identity != expected_identity
+    {
+        return Err(HostError::InvalidArgs(
+            "proc.run executable changed while it was being pinned; retry".to_string(),
+        ));
+    }
+    Ok(PinnedExecutable { file, identity })
+}
+
+#[cfg(target_os = "linux")]
+fn pinned_fd_path(fd: libc::c_int) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/proc/self/fd/{fd}"))
 }

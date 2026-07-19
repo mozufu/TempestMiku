@@ -30,11 +30,41 @@ fn host_config_defaults_and_bounds_proc_run_timeout() {
     fs::write(&default_path, "{}").unwrap();
     let default = P0HostConfig::from_json_file(default_path).unwrap();
     assert_eq!(default.proc_run_timeout_ms, 180_000);
+    assert_eq!(default.proc_isolation, ProcIsolationConfig::Disabled {});
 
     let invalid_path = root.path().join("invalid.json");
     fs::write(&invalid_path, r#"{"proc_run_timeout_ms":900001}"#).unwrap();
     let err = P0HostConfig::from_json_file(invalid_path).unwrap_err();
     assert!(matches!(err, HostError::InvalidArgs(_)));
+}
+
+#[test]
+fn host_config_rejects_unknown_authority_fields_instead_of_defaulting() {
+    let root = tempfile::tempdir().unwrap();
+    for (name, config) in [
+        ("top-level", r#"{"proc_isolaton":{"provider":"disabled"}}"#),
+        (
+            "linked-folder",
+            r#"{"linked_folders":[{"name":"repo","path":".","mode":"ro","commands":[],"commandz":[]}]}"#,
+        ),
+        ("approval", r#"{"approvals":{"mod":"manual"}}"#),
+        (
+            "self-evolution",
+            r#"{"self_evolution":{"teir":"conservative"}}"#,
+        ),
+    ] {
+        let path = root.path().join(format!("{name}.json"));
+        fs::write(&path, config).unwrap();
+        let error = P0HostConfig::from_json_file(path).unwrap_err();
+        assert!(
+            matches!(error, HostError::InvalidArgs(_)),
+            "{name} unknown field did not fail closed: {error}"
+        );
+        assert!(
+            error.to_string().contains("unknown field"),
+            "{name} error was not explicit: {error}"
+        );
+    }
 }
 
 #[tokio::test]

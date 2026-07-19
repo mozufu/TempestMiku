@@ -14,13 +14,16 @@ use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{EgressConfig, HostError, Result, SelfEvolutionConfig};
 
-use super::secure_fs::{FileIdentity, SecureKind, open_existing, pin_root_identity};
 use super::util::{
     linked_uri, parse_linked_path, read_text_page_from_file, validate_alias, validate_command_name,
 };
+use super::{
+    isolation::ProcIsolationConfig,
+    secure_fs::{FileIdentity, SecureKind, open_existing, pin_root_identity},
+};
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct P0HostConfig {
     #[serde(default)]
     pub linked_folders: Vec<LinkedFolderConfig>,
@@ -30,6 +33,8 @@ pub struct P0HostConfig {
     pub artifact_root: Option<PathBuf>,
     #[serde(default = "default_proc_run_timeout_ms")]
     pub proc_run_timeout_ms: u64,
+    #[serde(default)]
+    pub proc_isolation: ProcIsolationConfig,
     #[serde(default)]
     pub self_evolution: SelfEvolutionConfig,
     #[serde(default)]
@@ -53,6 +58,7 @@ impl P0HostConfig {
                 "proc_run_timeout_ms must be between 1 and 900000".to_string(),
             ));
         }
+        self.proc_isolation.validate_runtime()?;
         self.egress.validate()?;
         LinkedFolders::from_configs(self.linked_folders.clone()).map(|_| ())
     }
@@ -63,7 +69,7 @@ impl P0HostConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct LinkedFolderConfig {
     pub name: String,
     pub path: PathBuf,
@@ -82,7 +88,7 @@ pub enum FsMode {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct ApprovalConfig {
     #[serde(default = "default_approval_mode")]
     pub mode: String,

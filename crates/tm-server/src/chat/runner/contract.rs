@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tm_core::{EventSink, Message};
 use tm_host::HostFn;
+use tm_memory::{DialecticRequest, DialecticTrace};
 use tm_modes::ModeId;
 use uuid::Uuid;
 
@@ -20,6 +21,9 @@ pub struct ChatTurn {
     pub system_prompt: String,
     pub capabilities: Vec<String>,
     pub prior_messages: Vec<Message>,
+    /// Optional bounded user-model synthesis. Fresh requests are executed by the production
+    /// chat runner before the main turn; persisted traces are reused on durable retries.
+    pub dialectic: Option<DialecticTurn>,
     pub limits: ChatRunLimits,
     pub deny_approvals: bool,
     /// Server-owned SDK handlers installed for this turn. Registration does not grant
@@ -38,6 +42,7 @@ impl std::fmt::Debug for ChatTurn {
             .field("system_prompt", &self.system_prompt)
             .field("capabilities", &self.capabilities)
             .field("prior_messages", &self.prior_messages)
+            .field("dialectic", &self.dialectic)
             .field("limits", &self.limits)
             .field("deny_approvals", &self.deny_approvals)
             .field(
@@ -50,6 +55,12 @@ impl std::fmt::Debug for ChatTurn {
             )
             .finish()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DialecticTurn {
+    Generate(DialecticRequest),
+    Reuse(DialecticTrace),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

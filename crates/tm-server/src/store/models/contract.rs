@@ -182,6 +182,73 @@ pub trait Store: Send + Sync + 'static {
         error: &str,
         failed_at: DateTime<Utc>,
     ) -> Result<SessionTurnRecord>;
+    async fn begin_mcp_mutation_effect(
+        &self,
+        _intent: tm_mcp::McpMutationIntent,
+    ) -> Result<tm_mcp::McpMutationEffectClaim> {
+        Err(ServerError::Store(
+            "store does not support durable MCP mutation effects".to_string(),
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_mcp_mutation_effect(
+        &self,
+        _effect_id: &str,
+        _status: tm_mcp::McpMutationEffectStatus,
+        _result_digest: Option<&str>,
+        _result_bytes: Option<usize>,
+        _error_code: Option<&str>,
+        _error_digest: Option<&str>,
+    ) -> Result<tm_mcp::McpMutationEffectRecord> {
+        Err(ServerError::Store(
+            "store does not support durable MCP mutation effects".to_string(),
+        ))
+    }
+    async fn begin_egress_mutation_effect(
+        &self,
+        _intent: tm_egress::EgressMutationIntent,
+    ) -> Result<tm_egress::EgressMutationClaim> {
+        Err(ServerError::Store(
+            "store does not support durable egress mutation effects".to_string(),
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_egress_mutation_effect(
+        &self,
+        _effect_id: &str,
+        _status: tm_egress::EgressMutationStatus,
+        _result_digest: Option<&str>,
+        _result_bytes: Option<usize>,
+        _error_code: Option<&str>,
+        _error_digest: Option<&str>,
+    ) -> Result<tm_egress::EgressMutationRecord> {
+        Err(ServerError::Store(
+            "store does not support durable egress mutation effects".to_string(),
+        ))
+    }
+    async fn reserve_egress_budget(
+        &self,
+        _request: tm_egress::EgressBudgetRequest,
+    ) -> Result<tm_egress::EgressBudgetReservation> {
+        Err(ServerError::Store(
+            "store does not support durable egress budgets".to_string(),
+        ))
+    }
+    async fn settle_egress_budget(
+        &self,
+        _reservation: tm_egress::EgressBudgetReservation,
+        _response_bytes: u64,
+        _elapsed_ms: u64,
+    ) -> Result<()> {
+        Err(ServerError::Store(
+            "store does not support durable egress budgets".to_string(),
+        ))
+    }
+    async fn clear_egress_session(&self, _session_id: &str) -> Result<()> {
+        Err(ServerError::Store(
+            "store does not support durable egress session cleanup".to_string(),
+        ))
+    }
     async fn create_approval_request(
         &self,
         request: NewApprovalRequest,
@@ -290,6 +357,24 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<EvolutionReviewProposalRecord> {
         Err(ServerError::Store(
             "evolution review proposal persistence is not implemented".to_string(),
+        ))
+    }
+    async fn create_auto_evolution_review_proposal(
+        &self,
+        _proposal: NewEvolutionReviewProposal,
+        _cooldown_since: DateTime<Utc>,
+    ) -> Result<AutoEvolutionReviewProposalResult> {
+        Err(ServerError::Store(
+            "atomic auto evolution review proposal persistence is not implemented".to_string(),
+        ))
+    }
+    async fn create_auto_evolution_review_bundle(
+        &self,
+        _bundle: NewAutoEvolutionReviewBundle,
+    ) -> Result<AutoEvolutionReviewBundleResult> {
+        Err(ServerError::Store(
+            "atomic auto evolution review approval bundle persistence is not implemented"
+                .to_string(),
         ))
     }
     async fn evolution_review_proposal(&self, _id: Uuid) -> Result<EvolutionReviewProposalRecord> {

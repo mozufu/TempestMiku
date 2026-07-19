@@ -275,6 +275,14 @@ where
     for event in result.events {
         let _ = state.sender(session_id).send(event);
     }
+    if let Some(admin) = &state.egress_admin {
+        admin
+            .clear_session(&session_id.to_string())
+            .await
+            .map_err(|_| {
+                ServerError::Store("egress session cleanup failed (durability_failed)".into())
+            })?;
+    }
     Ok(Json(EndSessionResponse {
         id: result.session.id,
         status: result.session.status,

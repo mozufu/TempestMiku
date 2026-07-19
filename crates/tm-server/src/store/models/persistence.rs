@@ -12,6 +12,38 @@ pub(crate) fn redact_persisted_json(mut payload: Value) -> Value {
     payload
 }
 
+pub(crate) fn sanitize_approval_request_persistence(
+    mut request: NewApprovalRequest,
+) -> Result<NewApprovalRequest> {
+    validate_persistence_identifier("approval origin", &request.origin)?;
+    validate_persistence_identifier("approval effect type", &request.effect_type)?;
+    request.action = redact_persisted_text(&request.action);
+    tm_memory::redact_json_value(&mut request.scope_json);
+    tm_memory::redact_json_value(&mut request.options_json);
+    tm_memory::redact_json_value(&mut request.effect_payload_json);
+    if request.origin.trim().is_empty() || request.action.trim().is_empty() {
+        return Err(ServerError::InvalidRequest(
+            "approval origin and action must not be empty".to_string(),
+        ));
+    }
+    if !request.options_json.is_array() {
+        return Err(ServerError::InvalidRequest(
+            "approval options must be an array".to_string(),
+        ));
+    }
+    if request.effect_type.trim().is_empty() {
+        return Err(ServerError::InvalidRequest(
+            "approval effect type must not be empty".to_string(),
+        ));
+    }
+    if request.expires_at <= request.created_at {
+        return Err(ServerError::InvalidRequest(
+            "approval expiry must be after creation".to_string(),
+        ));
+    }
+    Ok(request)
+}
+
 pub(crate) fn validate_profile_fact_persistence(fact: &ProfileFactRecord) -> Result<()> {
     reject_sensitive_persistence_fields([
         ("profile fact subject", fact.subject.as_str()),
@@ -180,7 +212,101 @@ pub(crate) fn sanitize_evolution_review_proposal_persistence(
             before.summary = redact_persisted_text(&before.summary);
         }
     }
+    if let Some(candidate) = &mut proposal.auto_candidate {
+        sanitize_persona_auto_candidate(
+            candidate,
+            &proposal.target,
+            proposal.apply_contract,
+            proposal.changes.len(),
+        )?;
+    }
     Ok(proposal)
+}
+
+fn sanitize_persona_auto_candidate(
+    candidate: &mut PersonaAutoCandidate,
+    target: &tm_modes::ReviewProposalTarget,
+    apply_contract: tm_modes::ReviewApplyContract,
+    change_count: usize,
+) -> Result<()> {
+    if candidate.schema_version != PERSONA_AUTO_CANDIDATE_SCHEMA_VERSION {
+        return Err(ServerError::InvalidRequest(format!(
+            "unsupported persona auto-candidate schema version {}",
+            candidate.schema_version
+        )));
+    }
+    if !matches!(
+        target,
+        tm_modes::ReviewProposalTarget::Persona { persona_id } if persona_id == "miku"
+    ) || apply_contract != tm_modes::ReviewApplyContract::VersionedPersonaAddendum
+        || change_count != 1
+    {
+        return Err(ServerError::InvalidRequest(
+            "persona auto-candidates require one activatable miku persona change".to_string(),
+        ));
+    }
+    validate_persistence_identifier("persona auto-candidate dedupe key", &candidate.dedupe_key)?;
+    let digest = candidate.dedupe_key.strip_prefix("persona-auto:v1:sha256:");
+    if digest.is_none_or(|digest| {
+        digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    }) {
+        return Err(ServerError::InvalidRequest(
+            "persona auto-candidate dedupe key is invalid".to_string(),
+        ));
+    }
+    let minimum_evidence = match candidate.trigger {
+        PersonaAutoCandidateTrigger::RepeatedPreference => 2,
+        PersonaAutoCandidateTrigger::PersonaMismatch => 1,
+    };
+    if candidate.evidence.len() < minimum_evidence
+        || candidate.evidence.len() > MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE
+    {
+        return Err(ServerError::InvalidRequest(format!(
+            "persona auto-candidate evidence must contain {minimum_evidence}..={} records",
+            MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE
+        )));
+    }
+    let mut record_ids = std::collections::BTreeSet::new();
+    for evidence in &mut candidate.evidence {
+        if !record_ids.insert(evidence.record_id) {
+            return Err(ServerError::InvalidRequest(
+                "persona auto-candidate evidence records must be distinct".to_string(),
+            ));
+        }
+        let expected_uri = format!(
+            "memory://records/{}/{}",
+            evidence.kind.as_str(),
+            evidence.record_id
+        );
+        if evidence.source_uri != expected_uri {
+            return Err(ServerError::InvalidRequest(
+                "persona auto-candidate evidence URI does not match its typed record".to_string(),
+            ));
+        }
+        if evidence.evidence.is_empty()
+            || evidence.evidence.len() > MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE_REFS
+        {
+            return Err(ServerError::InvalidRequest(format!(
+                "persona auto-candidate record evidence must contain 1..={} references",
+                MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE_REFS
+            )));
+        }
+        for reference in &mut evidence.evidence {
+            *reference = redact_persisted_text(reference);
+            if reference.trim().is_empty()
+                || reference.len() > MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE_REF_BYTES
+            {
+                return Err(ServerError::InvalidRequest(format!(
+                    "persona auto-candidate evidence reference exceeds {} bytes",
+                    MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE_REF_BYTES
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn review_section_allowed(target_kind: &str, section: tm_modes::ReviewAddendumSection) -> bool {

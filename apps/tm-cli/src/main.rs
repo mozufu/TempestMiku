@@ -16,7 +16,7 @@ mod cli;
 mod runtime;
 mod sink;
 
-use cli::{Args, env_is_fenced, load_host_config, print_usage, read_stdin};
+use cli::{Args, env_is_fenced, load_host_config, load_mcp_config, print_usage, read_stdin};
 use runtime::{build_agent_config, build_sandbox};
 use sink::StdoutSink;
 
@@ -50,9 +50,10 @@ async fn main() -> Result<()> {
         Protocol::NativeTool
     };
     let host_config = load_host_config(args.config.as_ref())?;
+    let mcp_config = load_mcp_config(args.mcp_config.as_ref(), &host_config)?;
     let linked_folders = host_config.linked_folders()?;
     let cfg = build_agent_config(&args, protocol, &host_config, &linked_folders);
-    let sandbox = build_sandbox(&args, &host_config, linked_folders)?;
+    let sandbox = build_sandbox(&args, &host_config, &mcp_config, linked_folders).await?;
 
     let agent = Agent::new(Arc::new(llm), sandbox, cfg);
     let sink = StdoutSink::stdio(args.event_log.as_ref())?;
@@ -73,3 +74,5 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_egress;

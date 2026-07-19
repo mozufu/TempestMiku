@@ -69,6 +69,8 @@ pub struct EvolutionReviewProposalRecord {
     pub content_digest: String,
     pub status: ReviewProposalStatus,
     pub apply_contract: ReviewApplyContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_candidate: Option<PersonaAutoCandidate>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -85,6 +87,69 @@ pub struct NewEvolutionReviewProposal {
     pub changes: Vec<ReviewAddendumChange>,
     pub content_digest: String,
     pub apply_contract: ReviewApplyContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_candidate: Option<PersonaAutoCandidate>,
+}
+
+pub const PERSONA_AUTO_CANDIDATE_SCHEMA_VERSION: u16 = 1;
+pub const MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE: usize = 3;
+pub const MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE_REFS: usize = 4;
+pub const MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE_REF_BYTES: usize = 256;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonaAutoCandidateTrigger {
+    RepeatedPreference,
+    PersonaMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonaAutoCandidateEvidence {
+    pub record_id: Uuid,
+    pub kind: tm_memory::MemoryRecordKind,
+    pub source_uri: String,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonaAutoCandidate {
+    pub schema_version: u16,
+    pub trigger: PersonaAutoCandidateTrigger,
+    pub dedupe_key: String,
+    pub source_turn_id: Uuid,
+    pub evidence: Vec<PersonaAutoCandidateEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoEvolutionReviewDisposition {
+    Created,
+    Duplicate,
+    Cooldown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoEvolutionReviewProposalResult {
+    pub disposition: AutoEvolutionReviewDisposition,
+    pub proposal: EvolutionReviewProposalRecord,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewAutoEvolutionReviewBundle {
+    pub proposal: NewEvolutionReviewProposal,
+    pub approval: NewApprovalRequest,
+    pub proposal_payload_json: Value,
+    pub approval_payload_json: Value,
+    pub cooldown_since: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoEvolutionReviewBundleResult {
+    pub disposition: AutoEvolutionReviewDisposition,
+    pub proposal: EvolutionReviewProposalRecord,
+    pub approval: Option<ApprovalRequestRecord>,
+    pub events: Vec<SessionEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

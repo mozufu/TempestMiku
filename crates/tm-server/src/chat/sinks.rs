@@ -21,6 +21,7 @@ pub struct PersistingEventSink<S> {
     writer: Mutex<Option<JoinHandle<Result<()>>>>,
     failure: Arc<Mutex<Option<String>>>,
     store_type: PhantomData<fn() -> S>,
+    effect_scope_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -72,6 +73,7 @@ where
             writer: Mutex::new(Some(writer)),
             failure,
             store_type: PhantomData,
+            effect_scope_id: turn_id.map(|turn_id| turn_id.to_string()),
         }
     }
 
@@ -142,6 +144,10 @@ impl<S> EventSink for PersistingEventSink<S>
 where
     S: Store,
 {
+    fn effect_scope_id(&self) -> Option<String> {
+        self.effect_scope_id.clone()
+    }
+
     fn on_text(&self, delta: &str) {
         self.preserve_legacy_result(self.try_on_text(delta));
     }

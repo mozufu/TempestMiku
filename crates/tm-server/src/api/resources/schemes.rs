@@ -382,6 +382,141 @@ where
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 
+struct McpApiEventSink<S> {
+    session_id: Uuid,
+    store: Arc<S>,
+    sender: broadcast::Sender<SessionEvent>,
+}
+
+#[async_trait::async_trait]
+impl<S> HostEventSink for McpApiEventSink<S>
+where
+    S: Store,
+{
+    async fn emit(&self, event_type: &str, payload_json: Value) -> tm_host::Result<()> {
+        let event = self
+            .store
+            .append_event(self.session_id, event_type, payload_json)
+            .await
+            .map_err(|error| HostError::HostCall(error.to_string()))?;
+        let _ = self.sender.send(event);
+        Ok(())
+    }
+}
+
+async fn mcp_api_context<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    resource_uri: Option<&str>,
+    needs_network: bool,
+) -> Result<InvocationCtx>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let session = state.store.get_session(session_id).await?;
+    let profile = super::super::modes::mode_profile(&state.persona, &session.mode_state.mode);
+    let base = CapabilityGrants::default().allow_many(profile.capabilities);
+    if !base.permits("http.get") {
+        return Err(ServerError::Policy(format!(
+            "mode {} does not permit network-backed MCP resources",
+            session.mode_state.mode
+        )));
+    }
+
+    let mut capabilities = match resource_uri {
+        Some(uri) => state
+            .mcp_resource_capabilities
+            .get(uri)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("MCP resource {uri}")))?,
+        None => state
+            .mcp_resource_capabilities
+            .values()
+            .flat_map(|capabilities| capabilities.iter().cloned())
+            .collect(),
+    };
+    if !needs_network {
+        capabilities.retain(|capability| capability.starts_with("resources.read:"));
+    }
+    let events: Arc<dyn HostEventSink> = Arc::new(McpApiEventSink {
+        session_id,
+        store: Arc::clone(&state.store),
+        sender: state.sender(session_id),
+    });
+    Ok(
+        InvocationCtx::new(CapabilityGrants::default().allow_many(capabilities))
+            .with_session_id(session_id.to_string())
+            .with_session_scope(session.memory_scope)
+            .with_event_sink(events),
+    )
+}
+
+pub(super) async fn read_mcp_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+    selector: Option<&str>,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let handler = state
+        .mcp_resource_handler
+        .clone()
+        .ok_or_else(|| ServerError::Policy("MCP resource catalog is not configured".to_string()))?;
+    let ctx = mcp_api_context(state, session_id, Some(uri), true).await?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(handler);
+    registry
+        .read(uri, selector, &ctx)
+        .await
+        .map_err(map_host_error)
+}
+
+pub(super) async fn preview_mcp_resource<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<ResourceContent>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let handler = state
+        .mcp_resource_handler
+        .clone()
+        .ok_or_else(|| ServerError::Policy("MCP resource catalog is not configured".to_string()))?;
+    let ctx = mcp_api_context(state, session_id, Some(uri), false).await?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(handler);
+    registry.preview(uri, &ctx).await.map_err(map_host_error)
+}
+
+pub(super) async fn list_mcp_resources<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    uri: &str,
+) -> Result<Vec<ResourceEntry>>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    let handler = state
+        .mcp_resource_handler
+        .clone()
+        .ok_or_else(|| ServerError::Policy("MCP resource catalog is not configured".to_string()))?;
+    let ctx = mcp_api_context(state, session_id, None, false).await?;
+    let mut registry = ResourceRegistry::new();
+    registry.register(handler);
+    registry.list(Some(uri), &ctx).await.map_err(map_host_error)
+}
+
 pub(super) async fn read_memory_resource<S, M, C>(
     state: &AppState<S, M, C>,
     session_id: Uuid,

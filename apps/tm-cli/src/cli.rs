@@ -2,6 +2,7 @@ use std::{io::Read, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use tm_host::P0HostConfig;
+use tm_mcp::{McpBounds, McpRuntimeConfig};
 
 #[derive(Debug, Default)]
 pub(super) struct Args {
@@ -9,6 +10,7 @@ pub(super) struct Args {
     pub(super) model: Option<String>,
     pub(super) max_turns: Option<usize>,
     pub(super) config: Option<PathBuf>,
+    pub(super) mcp_config: Option<PathBuf>,
     pub(super) session_id: Option<String>,
     pub(super) event_log: Option<PathBuf>,
     pub(super) turn_budget_ok: bool,
@@ -36,6 +38,11 @@ impl Args {
                 "--config" => {
                     out.config = Some(PathBuf::from(it.next().context("--config needs a value")?));
                 }
+                "--mcp-config" => {
+                    out.mcp_config = Some(PathBuf::from(
+                        it.next().context("--mcp-config needs a value")?,
+                    ));
+                }
                 "--session-id" => {
                     out.session_id = Some(it.next().context("--session-id needs a value")?);
                 }
@@ -55,6 +62,31 @@ impl Args {
         }
         Ok(out)
     }
+}
+
+pub(super) fn load_mcp_config(
+    path: Option<&PathBuf>,
+    host_config: &P0HostConfig,
+) -> Result<McpRuntimeConfig> {
+    let path = path
+        .cloned()
+        .or_else(|| std::env::var_os("TM_MCP_CONFIG").map(PathBuf::from))
+        .or_else(|| {
+            let default = PathBuf::from(".tempestmiku/mcp.json");
+            default.exists().then_some(default)
+        });
+    let config = match path {
+        Some(path) => {
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading MCP config from {}", path.display()))?;
+            serde_json::from_str::<McpRuntimeConfig>(&content)
+                .with_context(|| format!("parsing MCP config from {}", path.display()))?
+        }
+        None => McpRuntimeConfig::default(),
+    };
+    config.validate(&McpBounds::default())?;
+    config.validate_egress(&host_config.egress)?;
+    Ok(config)
 }
 
 pub(super) fn env_is_fenced() -> bool {
@@ -102,6 +134,7 @@ pub(super) fn print_usage() {
          --model <name>     model id (or env OPENAI_MODEL)\n  \
          --max-turns <n>    max agent turns (default 8)\n  \
          --config <path>    JSON config path (or env TM_CONFIG, else .tempestmiku/config.json)\n  \
+         --mcp-config <path> trusted MCP config (or env TM_MCP_CONFIG, else .tempestmiku/mcp.json)\n  \
          --session-id <id>  artifact session id (default cli)\n  \
          --event-log <path> write structured JSONL runtime events\n  \
          --turn-budget-ok   exit 0 after recording max-turn exhaustion\n  \

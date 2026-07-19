@@ -2,11 +2,17 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tm_agents::MailboxRegistry;
 use tm_core::{AgentConfig, CellBudget, DEFAULT_SYSTEM_PROMPT, LlmClient, Sandbox};
+use tm_egress::{EgressAdmin, EgressRuntime, register_egress_functions};
 use tm_host::{
-    ApprovalPolicy, CapabilityGrants, DefaultDenyApprovalPolicy, LinkedFolders, P0HostConfig,
+    ApprovalPolicy, CapabilityGrants, DefaultDenyApprovalPolicy, HostEventSink, InvocationCtx,
+    LinkedFolders, P0HostConfig,
 };
 use tm_lang::{TmSandbox, TmSandboxOptions};
 use tm_llm::OpenAiClient;
+use tm_mcp::{
+    EgressMcpTransport, McpBindings, McpBounds, McpCatalogContext, McpCatalogManager,
+    McpCatalogView, McpHttpServerConfig, McpHttpTransportBounds, McpRuntimeConfig,
+};
 use tm_modes::ModesConfig;
 use tm_server::{
     AgentChatRunner, AppState, ApprovalBroker, ChatActorExecutor, CodingBackend, CodingEventSink,
@@ -14,11 +20,19 @@ use tm_server::{
     OmpAcpConfig, RosterCodingEventSink, ServerChatRunner,
 };
 
-use super::BoxError;
+use super::{BoxError, config::load_host_config};
 
 pub(super) struct BuiltRuntime {
     pub(super) chat: Arc<ServerChatRunner>,
     pub(super) native_tm: Option<NativeTmBackendConfig>,
+    pub(super) mcp: Option<BuiltMcpRuntime>,
+    pub(super) egress_admin: EgressAdmin,
+}
+
+pub(super) struct BuiltMcpRuntime {
+    pub(super) catalog: McpCatalogView,
+    pub(super) bindings: McpBindings,
+    pub(super) http_servers: Vec<McpHttpServerConfig>,
 }
 
 pub(super) struct NativeTmBackendConfig {
@@ -28,8 +42,13 @@ pub(super) struct NativeTmBackendConfig {
     approval_mode: NativeApprovalMode,
 }
 
-pub(super) fn build_runtime(
-    host_config: &P0HostConfig,
+pub(super) struct RuntimePolicies<'a> {
+    pub(super) host: &'a P0HostConfig,
+    pub(super) mcp: &'a McpRuntimeConfig,
+}
+
+pub(super) async fn build_runtime(
+    policies: RuntimePolicies<'_>,
     linked_folders: &LinkedFolders,
     persona: &ModesConfig,
     artifact_root: PathBuf,
@@ -37,6 +56,12 @@ pub(super) fn build_runtime(
     roster: Arc<MailboxRegistry>,
     approval_broker: Arc<ApprovalBroker>,
 ) -> Result<BuiltRuntime, BoxError> {
+    let host_config = policies.host;
+    // Build one shared policy/budget/secret-handle boundary for root chat, native coding, and
+    // explicitly delegated child actor sandboxes. Cloning the runtime retains the same state.
+    let egress_runtime = EgressRuntime::new(host_config.egress.clone())?;
+    let egress_admin = egress_runtime.admin_handle();
+    let mcp = build_mcp_runtime(policies.mcp, egress_runtime.clone()).await?;
     let api_key_set = std::env::var("OPENAI_API_KEY")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
@@ -49,6 +74,8 @@ pub(super) fn build_runtime(
         return Ok(BuiltRuntime {
             chat: Arc::new(ServerChatRunner::Echo(EchoChatRunner)),
             native_tm: None,
+            mcp,
+            egress_admin,
         });
     }
 
@@ -73,6 +100,7 @@ pub(super) fn build_runtime(
         approval_policy: chat_approval_policy(host_config)?,
         approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
         proc_run_timeout: Duration::from_millis(host_config.proc_run_timeout_ms),
+        proc_isolation: host_config.proc_isolation.clone(),
         ..TmSandboxOptions::default()
     };
     tm_agents::register(
@@ -80,11 +108,18 @@ pub(super) fn build_runtime(
         &mut sandbox_options.resource_registry,
         Arc::clone(&roster),
     );
+    register_egress_functions(&mut sandbox_options.host_registry, egress_runtime);
     sandbox_options
         .resource_registry
         .register(Arc::new(tm_modes::SkillResourceHandler::new(
             persona.clone(),
         )));
+    if let Some(mcp) = &mcp {
+        mcp.bindings.register_into(
+            &mut sandbox_options.host_registry,
+            &mut sandbox_options.resource_registry,
+        )?;
+    }
 
     // Inject executor AFTER sandbox_options has agents.* registered so child actor
     // sandboxes inherit the same host registry (including agents.* for recursive actors).
@@ -144,7 +179,104 @@ pub(super) fn build_runtime(
             sandbox_options,
             approval_mode,
         }),
+        mcp,
+        egress_admin,
     })
+}
+
+/// Install a trusted local policy-reload seam. SIGHUP never exposes a network admin endpoint:
+/// it rereads the operator-owned host config, validates the complete replacement, and swaps it
+/// atomically. A failed load leaves the previous generation active.
+#[cfg(unix)]
+pub(super) fn start_egress_policy_reload(admin: EgressAdmin) -> Result<(), BoxError> {
+    let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+    tokio::spawn(async move {
+        while signal.recv().await.is_some() {
+            let config = match load_host_config() {
+                Ok(config) => config.egress,
+                Err(error) => {
+                    tracing::error!(error = %error, "rejected SIGHUP egress policy reload");
+                    continue;
+                }
+            };
+            match admin.replace(config).await {
+                Ok(()) => {
+                    let generation = admin.policy_generation().await;
+                    tracing::info!(generation, "reloaded egress policy after SIGHUP");
+                }
+                Err(error) => {
+                    tracing::error!(error = %error, "rejected SIGHUP egress policy replacement");
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(super) fn start_egress_policy_reload(_admin: EgressAdmin) -> Result<(), BoxError> {
+    tracing::warn!("live egress policy reload is unavailable on this platform");
+    Ok(())
+}
+
+#[derive(Debug)]
+struct CatalogAuditSink;
+
+#[async_trait::async_trait]
+impl HostEventSink for CatalogAuditSink {
+    async fn emit(&self, event_type: &str, payload_json: serde_json::Value) -> tm_host::Result<()> {
+        // Discovery runs before an application store exists. Keep its host-owned audit bounded
+        // and explicit; all user-session MCP/P9 events use the durable per-turn sink.
+        tracing::info!(event_type, payload = %payload_json, "MCP catalog host audit");
+        Ok(())
+    }
+}
+
+async fn build_mcp_runtime(
+    config: &McpRuntimeConfig,
+    egress: EgressRuntime,
+) -> Result<Option<BuiltMcpRuntime>, BoxError> {
+    if !config.enabled {
+        return Ok(None);
+    }
+    let bounds = McpBounds::default();
+    config.validate(&bounds)?;
+    let http_servers = config.http_servers();
+    let transport = Arc::new(EgressMcpTransport::new(
+        egress,
+        http_servers.clone(),
+        McpHttpTransportBounds::default(),
+    )?);
+    let mut grants = CapabilityGrants::default();
+    for server in &http_servers {
+        grants = grants.allow(format!("egress.destination:{}", server.destination_id));
+        if let Some(secret_id) = &server.secret_id {
+            grants = grants.allow(format!("secrets.use:{secret_id}"));
+        }
+    }
+    let catalog_context = McpCatalogContext::new(
+        InvocationCtx::new(grants)
+            .with_session_id("mcp-catalog-host")
+            .with_event_sink(Arc::new(CatalogAuditSink)),
+    )?;
+    let manager = McpCatalogManager::new(transport, bounds, catalog_context)?;
+    let report = manager.reload(&config.specs()).await?;
+    let catalog = manager.catalog();
+    let bindings = manager.bindings()?;
+    tracing::info!(
+        generation = report.generation,
+        digest = %report.digest,
+        servers = report.servers,
+        tools = report.tools,
+        resources = report.resources,
+        prompts = report.prompts,
+        "activated immutable MCP startup catalog"
+    );
+    Ok(Some(BuiltMcpRuntime {
+        catalog,
+        bindings,
+        http_servers,
+    }))
 }
 
 pub(super) fn configure_coding_backend<S, M, C>(

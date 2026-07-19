@@ -1,4 +1,5 @@
 mod auth_devices;
+mod egress_state;
 mod memory_readiness;
 mod memory_retrieval;
 mod memory_write;
@@ -30,8 +31,8 @@ use crate::{Result, ServerError};
 use memory_write::upsert_typed_memory_record;
 
 use super::models::{
-    redact_persisted_json, redact_persisted_text, sanitize_cron_job_persistence,
-    sanitize_cron_run_persistence, sanitize_durable_memory_record,
+    redact_persisted_json, redact_persisted_text, sanitize_approval_request_persistence,
+    sanitize_cron_job_persistence, sanitize_cron_run_persistence, sanitize_durable_memory_record,
     sanitize_evolution_review_proposal_persistence, sanitize_memory_summary_persistence,
     sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
     sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
@@ -39,12 +40,14 @@ use super::models::{
 };
 
 use super::{
-    ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronLease,
-    CronRunRecord, EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord,
-    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution, NewCronJobRecord,
-    NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession, ProfileFactRecord,
-    ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord,
-    SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
+    ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord,
+    AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
+    AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
+    EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MessageRecord,
+    ModeState, NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle,
+    NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
+    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent,
+    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
 };
 
 fn evolution_audit_entry(
@@ -85,6 +88,7 @@ fn evolution_audit_params(
 pub struct PostgresStore {
     client: tokio_postgres::Client,
     memory_mutation_client: tokio::sync::Mutex<tokio_postgres::Client>,
+    egress_state_client: tokio::sync::Mutex<tokio_postgres::Client>,
 }
 
 pub(super) const DURABLE_MEMORY_RECORD_COLUMNS: &str = "record_kind, id, schema_version, owner_subject, memory_scope, text, semantic_subject, predicate, object, evidence_json, confidence, importance, observed_at, effective_from, effective_to, status, corrects_record_id, corrected_by_record_id, supersedes_record_id, superseded_by_record_id, content_key, version_key, created_at";
@@ -117,6 +121,65 @@ select 1 from memory_records successor
  join successors on successors.id = successor.id
  where successor.status = 'active' and successor.effective_to is null
 ";
+
+const MCP_MUTATION_EFFECT_COLUMNS: &str = "effect_id, session_id, effect_scope_id, actor_id, catalog_generation, catalog_digest, server_alias, tool_name, target_digest, request_digest, request_bytes, status, result_digest, result_bytes, error_code, error_digest";
+
+fn mcp_mutation_status_name(status: tm_mcp::McpMutationEffectStatus) -> &'static str {
+    match status {
+        tm_mcp::McpMutationEffectStatus::Started => "started",
+        tm_mcp::McpMutationEffectStatus::Succeeded => "succeeded",
+        tm_mcp::McpMutationEffectStatus::Failed => "failed",
+        tm_mcp::McpMutationEffectStatus::Uncertain => "uncertain",
+    }
+}
+
+fn row_to_mcp_mutation_effect(row: tokio_postgres::Row) -> Result<tm_mcp::McpMutationEffectRecord> {
+    let status: String = row.get("status");
+    let status = match status.as_str() {
+        "started" => tm_mcp::McpMutationEffectStatus::Started,
+        "succeeded" => tm_mcp::McpMutationEffectStatus::Succeeded,
+        "failed" => tm_mcp::McpMutationEffectStatus::Failed,
+        "uncertain" => tm_mcp::McpMutationEffectStatus::Uncertain,
+        other => {
+            return Err(ServerError::Store(format!(
+                "invalid persisted MCP mutation status {other}"
+            )));
+        }
+    };
+    let catalog_generation: i64 = row.get("catalog_generation");
+    let request_bytes: i64 = row.get("request_bytes");
+    let result_bytes: Option<i64> = row.get("result_bytes");
+    Ok(tm_mcp::McpMutationEffectRecord {
+        intent: tm_mcp::McpMutationIntent {
+            effect_id: row.get("effect_id"),
+            session_id: row.get::<_, Uuid>("session_id").to_string(),
+            effect_scope_id: row.get::<_, Uuid>("effect_scope_id").to_string(),
+            actor_id: row.get("actor_id"),
+            catalog_generation: u64::try_from(catalog_generation).map_err(|_| {
+                ServerError::Store("negative persisted MCP catalog generation".to_string())
+            })?,
+            catalog_digest: row.get("catalog_digest"),
+            server: row.get("server_alias"),
+            tool: row.get("tool_name"),
+            target_digest: row.get("target_digest"),
+            request_digest: row.get("request_digest"),
+            request_bytes: usize::try_from(request_bytes).map_err(|_| {
+                ServerError::Store("invalid persisted MCP request byte count".to_string())
+            })?,
+        },
+        status,
+        result_digest: row.get("result_digest"),
+        result_bytes: result_bytes
+            .map(|bytes| {
+                usize::try_from(bytes).map_err(|_| {
+                    ServerError::Store("invalid persisted MCP result byte count".to_string())
+                })
+            })
+            .transpose()?,
+        error_code: row.get("error_code"),
+        error_digest: row.get("error_digest"),
+    })
+}
 
 pub(super) fn postgres_memory_error(error: tokio_postgres::Error) -> ServerError {
     if error.code().is_some_and(|code| code.code() == "TM001") {
@@ -180,9 +243,20 @@ impl PostgresStore {
                 tracing::error!(%err, "postgres memory mutation connection failed");
             }
         });
+        let (egress_state_client, egress_state_connection) = config
+            .connect(NoTls)
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        tokio::spawn(async move {
+            if let Err(err) = egress_state_connection.await {
+                let err = tm_memory::redact_dream_text(&err.to_string()).text;
+                tracing::error!(%err, "postgres egress state connection failed");
+            }
+        });
         let mut store = Self {
             client,
             memory_mutation_client: tokio::sync::Mutex::new(memory_mutation_client),
+            egress_state_client: tokio::sync::Mutex::new(egress_state_client),
         };
         store.ensure_schema().await?;
         Ok(store)
@@ -1383,29 +1457,219 @@ impl Store for PostgresStore {
         )))
     }
 
+    async fn begin_mcp_mutation_effect(
+        &self,
+        intent: tm_mcp::McpMutationIntent,
+    ) -> Result<tm_mcp::McpMutationEffectClaim> {
+        let session_id = Uuid::parse_str(&intent.session_id).map_err(|_| {
+            ServerError::InvalidRequest("MCP mutation session id is not a UUID".to_string())
+        })?;
+        let effect_scope_id = Uuid::parse_str(&intent.effect_scope_id).map_err(|_| {
+            ServerError::InvalidRequest("MCP mutation effect scope is not a turn UUID".to_string())
+        })?;
+        let catalog_generation = i64::try_from(intent.catalog_generation).map_err(|_| {
+            ServerError::InvalidRequest("MCP catalog generation exceeds persistence bounds".into())
+        })?;
+        let request_bytes = i64::try_from(intent.request_bytes).map_err(|_| {
+            ServerError::InvalidRequest("MCP request byte count exceeds persistence bounds".into())
+        })?;
+        let now = Utc::now();
+        let row = self
+            .client
+            .query_opt(
+                &format!(
+                    "insert into mcp_mutation_effects
+                        (effect_id, session_id, effect_scope_id, actor_id, catalog_generation,
+                         catalog_digest, server_alias, tool_name, target_digest, request_digest,
+                         request_bytes, status, created_at, updated_at)
+                     select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'started', $12, $12
+                      where exists (
+                            select 1 from session_turns
+                             where id = $3 and session_id = $2
+                      )
+                     on conflict (effect_id) do nothing
+                     returning {MCP_MUTATION_EFFECT_COLUMNS}"
+                ),
+                &[
+                    &intent.effect_id,
+                    &session_id,
+                    &effect_scope_id,
+                    &intent.actor_id,
+                    &catalog_generation,
+                    &intent.catalog_digest,
+                    &intent.server,
+                    &intent.tool,
+                    &intent.target_digest,
+                    &intent.request_digest,
+                    &request_bytes,
+                    &now,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let Some(row) = row {
+            return Ok(tm_mcp::McpMutationEffectClaim {
+                record: row_to_mcp_mutation_effect(row)?,
+                created: true,
+            });
+        }
+        let existing = self
+            .client
+            .query_opt(
+                &format!(
+                    "select {MCP_MUTATION_EFFECT_COLUMNS}
+                       from mcp_mutation_effects where effect_id = $1"
+                ),
+                &[&intent.effect_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| {
+                ServerError::NotFound(format!(
+                    "durable MCP mutation turn {effect_scope_id} for session {session_id}"
+                ))
+            })?;
+        let existing = row_to_mcp_mutation_effect(existing)?;
+        if !existing.intent.same_effect_identity(&intent) {
+            return Err(ServerError::Conflict(
+                "MCP mutation effect id collides with different intent".to_string(),
+            ));
+        }
+        Ok(tm_mcp::McpMutationEffectClaim {
+            record: existing,
+            created: false,
+        })
+    }
+
+    async fn finish_mcp_mutation_effect(
+        &self,
+        effect_id: &str,
+        status: tm_mcp::McpMutationEffectStatus,
+        result_digest: Option<&str>,
+        result_bytes: Option<usize>,
+        error_code: Option<&str>,
+        error_digest: Option<&str>,
+    ) -> Result<tm_mcp::McpMutationEffectRecord> {
+        if !status.is_terminal() {
+            return Err(ServerError::InvalidRequest(
+                "MCP mutation finish requires terminal status".to_string(),
+            ));
+        }
+        let result_bytes = result_bytes.map(i64::try_from).transpose().map_err(|_| {
+            ServerError::InvalidRequest(
+                "MCP result byte count exceeds persistence bounds".to_string(),
+            )
+        })?;
+        let status_name = mcp_mutation_status_name(status);
+        let now = Utc::now();
+        let row = self
+            .client
+            .query_opt(
+                &format!(
+                    "update mcp_mutation_effects
+                        set status = $2, result_digest = $3, result_bytes = $4,
+                            error_code = $5, error_digest = $6, updated_at = $7
+                      where effect_id = $1 and status = 'started'
+                     returning {MCP_MUTATION_EFFECT_COLUMNS}"
+                ),
+                &[
+                    &effect_id,
+                    &status_name,
+                    &result_digest,
+                    &result_bytes,
+                    &error_code,
+                    &error_digest,
+                    &now,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let Some(row) = row {
+            return row_to_mcp_mutation_effect(row);
+        }
+        let existing = self
+            .client
+            .query_opt(
+                &format!(
+                    "select {MCP_MUTATION_EFFECT_COLUMNS}
+                       from mcp_mutation_effects where effect_id = $1"
+                ),
+                &[&effect_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("MCP mutation effect {effect_id}")))?;
+        let existing = row_to_mcp_mutation_effect(existing)?;
+        let requested = tm_mcp::McpMutationEffectRecord {
+            intent: existing.intent.clone(),
+            status,
+            result_digest: result_digest.map(str::to_string),
+            result_bytes: result_bytes
+                .map(|bytes| usize::try_from(bytes).expect("converted from usize")),
+            error_code: error_code.map(str::to_string),
+            error_digest: error_digest.map(str::to_string),
+        };
+        if existing == requested {
+            return Ok(existing);
+        }
+        Err(ServerError::Conflict(
+            "MCP mutation effect already has a different terminal state".to_string(),
+        ))
+    }
+
+    async fn begin_egress_mutation_effect(
+        &self,
+        intent: tm_egress::EgressMutationIntent,
+    ) -> Result<tm_egress::EgressMutationClaim> {
+        self.begin_egress_effect(intent).await
+    }
+
+    async fn finish_egress_mutation_effect(
+        &self,
+        effect_id: &str,
+        status: tm_egress::EgressMutationStatus,
+        result_digest: Option<&str>,
+        result_bytes: Option<usize>,
+        error_code: Option<&str>,
+        error_digest: Option<&str>,
+    ) -> Result<tm_egress::EgressMutationRecord> {
+        self.finish_egress_effect(
+            effect_id,
+            status,
+            result_digest,
+            result_bytes,
+            error_code,
+            error_digest,
+        )
+        .await
+    }
+
+    async fn reserve_egress_budget(
+        &self,
+        request: tm_egress::EgressBudgetRequest,
+    ) -> Result<tm_egress::EgressBudgetReservation> {
+        self.reserve_egress_usage(request).await
+    }
+
+    async fn settle_egress_budget(
+        &self,
+        reservation: tm_egress::EgressBudgetReservation,
+        response_bytes: u64,
+        elapsed_ms: u64,
+    ) -> Result<()> {
+        self.settle_egress_usage(reservation, response_bytes, elapsed_ms)
+            .await
+    }
+
+    async fn clear_egress_session(&self, session_id: &str) -> Result<()> {
+        self.clear_egress_usage(session_id).await
+    }
+
     async fn create_approval_request(
         &self,
-        mut request: NewApprovalRequest,
+        request: NewApprovalRequest,
     ) -> Result<ApprovalRequestRecord> {
-        validate_persistence_identifier("approval origin", &request.origin)?;
-        validate_persistence_identifier("approval effect type", &request.effect_type)?;
-        request.action = redact_persisted_text(&request.action);
-        tm_memory::redact_json_value(&mut request.scope_json);
-        tm_memory::redact_json_value(&mut request.options_json);
-        tm_memory::redact_json_value(&mut request.effect_payload_json);
-        if request.origin.trim().is_empty() || request.action.trim().is_empty() {
-            return Err(ServerError::InvalidRequest(
-                "approval origin and action must not be empty".to_string(),
-            ));
-        }
-        if !request.options_json.is_array()
-            || request.expires_at <= request.created_at
-            || request.effect_type.trim().is_empty()
-        {
-            return Err(ServerError::InvalidRequest(
-                "approval options or expiry are invalid".to_string(),
-            ));
-        }
+        let request = sanitize_approval_request_persistence(request)?;
         self.get_session(request.session_id).await?;
         if let Some(turn_id) = request.turn_id {
             let turn = self.turn(turn_id).await?;
@@ -2442,6 +2706,7 @@ impl Store for PostgresStore {
             content_digest: proposal.content_digest,
             status: ReviewProposalStatus::Pending,
             apply_contract: proposal.apply_contract,
+            auto_candidate: proposal.auto_candidate,
             created_at: now,
             updated_at: now,
         };
@@ -2486,6 +2751,474 @@ impl Store for PostgresStore {
             )));
         }
         Ok(stored)
+    }
+
+    async fn create_auto_evolution_review_proposal(
+        &self,
+        proposal: NewEvolutionReviewProposal,
+        cooldown_since: DateTime<Utc>,
+    ) -> Result<AutoEvolutionReviewProposalResult> {
+        let proposal = sanitize_evolution_review_proposal_persistence(proposal)?;
+        let candidate = proposal.auto_candidate.as_ref().ok_or_else(|| {
+            ServerError::InvalidRequest(
+                "auto evolution review proposal is missing candidate metadata".to_string(),
+            )
+        })?;
+        self.get_session(proposal.session_id).await?;
+        let source_turn = self.turn(candidate.source_turn_id).await?;
+        if source_turn.session_id != proposal.session_id || source_turn.status != "completed" {
+            return Err(ServerError::Conflict(
+                "persona auto-candidate source turn is not durably completed".to_string(),
+            ));
+        }
+
+        let now = Utc::now();
+        let record = EvolutionReviewProposalRecord {
+            id: proposal.id,
+            session_id: proposal.session_id,
+            target: proposal.target,
+            base_version: proposal.base_version,
+            base_digest: proposal.base_digest,
+            base_active_digest: proposal.base_active_digest,
+            changes: proposal.changes,
+            content_digest: proposal.content_digest,
+            status: ReviewProposalStatus::Pending,
+            apply_contract: proposal.apply_contract,
+            auto_candidate: proposal.auto_candidate,
+            created_at: now,
+            updated_at: now,
+        };
+        let candidate = record
+            .auto_candidate
+            .as_ref()
+            .expect("validated auto proposal has candidate metadata");
+        let target_class = match &record.target {
+            ReviewProposalTarget::Persona { .. } => "persona_proposal",
+            ReviewProposalTarget::Mode { .. } => "mode_proposal",
+        };
+        let target_id = record.target.id();
+        let base_version = i64::try_from(record.base_version).map_err(|_| {
+            ServerError::InvalidRequest("review proposal base version is too large".to_string())
+        })?;
+        let record_json = serde_json::to_value(&record)?;
+        let changes_json = serde_json::to_value(&record.changes)?;
+        // The advisory lock must be acquired in a statement *before* the duplicate read. Under
+        // READ COMMITTED, a lock taken inside the same CTE statement would still use the snapshot
+        // established before a concurrent inserter commits, allowing both instances to insert.
+        let mut client = self.memory_mutation_client.lock().await;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .query_one(
+                "select pg_advisory_xact_lock(hashtextextended($1, 7282))",
+                &[&candidate.dedupe_key],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let blocked = transaction
+            .query_opt(
+                "select proposal.record_json, proposal.status
+                   from evolution_review_proposals proposal
+                  where (
+                         proposal.record_json #>> '{autoCandidate,dedupeKey}' = $1
+                         or (
+                             proposal.target_class = $2
+                             and proposal.target_id = $3
+                             and proposal.record_json -> 'changes' = $4
+                         )
+                  )
+                    and (
+                         proposal.status in ('pending', 'approved')
+                         or proposal.updated_at >= $5
+                    )
+                  order by (proposal.status in ('pending', 'approved')) desc,
+                           proposal.updated_at desc, proposal.id desc
+                  limit 1",
+                &[
+                    &candidate.dedupe_key,
+                    &target_class,
+                    &target_id,
+                    &changes_json,
+                    &cooldown_since,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let Some(row) = blocked {
+            let status = row.get::<_, String>("status");
+            let disposition = if matches!(status.as_str(), "pending" | "approved") {
+                AutoEvolutionReviewDisposition::Duplicate
+            } else {
+                AutoEvolutionReviewDisposition::Cooldown
+            };
+            let stored = row_to_evolution_review_proposal(row)?;
+            transaction
+                .commit()
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            return Ok(AutoEvolutionReviewProposalResult {
+                disposition,
+                proposal: stored,
+            });
+        }
+        let row = transaction
+            .query_one(
+                "insert into evolution_review_proposals(
+                    id, session_id, target_class, target_id, status, base_version, base_digest,
+                    content_digest, record_json, created_at, updated_at
+                 ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+                 returning record_json",
+                &[
+                    &record.id,
+                    &record.session_id,
+                    &target_class,
+                    &target_id,
+                    &record.status.as_str(),
+                    &base_version,
+                    &record.base_digest,
+                    &record.content_digest,
+                    &record_json,
+                    &now,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let stored = row_to_evolution_review_proposal(row)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        Ok(AutoEvolutionReviewProposalResult {
+            disposition: AutoEvolutionReviewDisposition::Created,
+            proposal: stored,
+        })
+    }
+
+    async fn create_auto_evolution_review_bundle(
+        &self,
+        bundle: NewAutoEvolutionReviewBundle,
+    ) -> Result<AutoEvolutionReviewBundleResult> {
+        let proposal = sanitize_evolution_review_proposal_persistence(bundle.proposal)?;
+        let approval = sanitize_approval_request_persistence(bundle.approval)?;
+        let proposal_payload_json = redact_persisted_json(bundle.proposal_payload_json);
+        let approval_payload_json = redact_persisted_json(bundle.approval_payload_json);
+        let candidate = proposal.auto_candidate.as_ref().ok_or_else(|| {
+            ServerError::InvalidRequest(
+                "auto evolution review proposal is missing candidate metadata".to_string(),
+            )
+        })?;
+        let dedupe_key = candidate.dedupe_key.clone();
+        let source_turn_id = candidate.source_turn_id;
+        let proposal_id = proposal.id.to_string();
+        let approval_id = approval.id.to_string();
+        if approval.session_id != proposal.session_id
+            || approval.turn_id != Some(source_turn_id)
+            || approval.effect_type != "evolution_review"
+            || approval
+                .effect_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || proposal_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || approval_payload_json
+                .get("approvalId")
+                .and_then(Value::as_str)
+                != Some(approval_id.as_str())
+        {
+            return Err(ServerError::InvalidRequest(
+                "auto evolution review bundle has inconsistent proposal, approval, or event references"
+                    .to_string(),
+            ));
+        }
+        self.get_session(proposal.session_id).await?;
+        let source_turn = self.turn(source_turn_id).await?;
+        if source_turn.session_id != proposal.session_id || source_turn.status != "completed" {
+            return Err(ServerError::Conflict(
+                "persona auto-candidate source turn is not durably completed".to_string(),
+            ));
+        }
+
+        let record = EvolutionReviewProposalRecord {
+            id: proposal.id,
+            session_id: proposal.session_id,
+            target: proposal.target,
+            base_version: proposal.base_version,
+            base_digest: proposal.base_digest,
+            base_active_digest: proposal.base_active_digest,
+            changes: proposal.changes,
+            content_digest: proposal.content_digest,
+            status: ReviewProposalStatus::Pending,
+            apply_contract: proposal.apply_contract,
+            auto_candidate: proposal.auto_candidate,
+            created_at: approval.created_at,
+            updated_at: approval.created_at,
+        };
+        let target_class = match &record.target {
+            ReviewProposalTarget::Persona { .. } => "persona_proposal",
+            ReviewProposalTarget::Mode { .. } => "mode_proposal",
+        };
+        let target_id = record.target.id();
+        let base_version = i64::try_from(record.base_version).map_err(|_| {
+            ServerError::InvalidRequest("review proposal base version is too large".to_string())
+        })?;
+        let record_json = serde_json::to_value(&record)?;
+        let changes_json = serde_json::to_value(&record.changes)?;
+        let (audit_json, audit_key) = evolution_audit_params(evolution_audit_entry(
+            &approval.effect_payload_json,
+            approval.id,
+            approval.id,
+            EvolutionAuditStatus::AwaitingApproval,
+            approval.created_at,
+            None,
+            format!("approval:{}:attempt", approval.id),
+        )?)?;
+
+        let mut client = self.memory_mutation_client.lock().await;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .query_one(
+                "select pg_advisory_xact_lock(hashtextextended($1, 7282))",
+                &[&dedupe_key],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let blocked = transaction
+            .query_opt(
+                "select proposal.record_json, proposal.status
+                   from evolution_review_proposals proposal
+                  where (
+                         proposal.record_json #>> '{autoCandidate,dedupeKey}' = $1
+                         or (
+                             proposal.target_class = $2
+                             and proposal.target_id = $3
+                             and proposal.record_json -> 'changes' = $4
+                         )
+                  )
+                    and (
+                         proposal.status in ('pending', 'approved')
+                         or proposal.updated_at >= $5
+                    )
+                  order by (proposal.status in ('pending', 'approved')) desc,
+                           proposal.updated_at desc, proposal.id desc
+                  limit 1",
+                &[
+                    &dedupe_key,
+                    &target_class,
+                    &target_id,
+                    &changes_json,
+                    &bundle.cooldown_since,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let Some(row) = blocked {
+            let status = row.get::<_, String>("status");
+            let disposition = if matches!(status.as_str(), "pending" | "approved") {
+                AutoEvolutionReviewDisposition::Duplicate
+            } else {
+                AutoEvolutionReviewDisposition::Cooldown
+            };
+            let stored = row_to_evolution_review_proposal(row)?;
+            transaction
+                .commit()
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            return Ok(AutoEvolutionReviewBundleResult {
+                disposition,
+                proposal: stored,
+                approval: None,
+                events: Vec::new(),
+            });
+        }
+
+        let proposal_row = transaction
+            .query_one(
+                "insert into evolution_review_proposals(
+                    id, session_id, target_class, target_id, status, base_version, base_digest,
+                    content_digest, record_json, created_at, updated_at
+                 ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+                 returning record_json",
+                &[
+                    &record.id,
+                    &record.session_id,
+                    &target_class,
+                    &target_id,
+                    &record.status.as_str(),
+                    &base_version,
+                    &record.base_digest,
+                    &record.content_digest,
+                    &record_json,
+                    &record.created_at,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let stored = row_to_evolution_review_proposal(proposal_row)?;
+        let _approval_row = transaction
+            .query_one(
+                "insert into approval_requests
+                    (id, session_id, turn_id, requester_id, origin, action, scope_json,
+                     options_json, status, resumable, created_at, expires_at, heartbeat_at,
+                     resolved_at, selected_option_id, resolution_json, request_event_seq,
+                     resolution_event_seq, resolution_version)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11, $10,
+                         null, null, null, null, null, 0)
+                 returning id, session_id, turn_id, requester_id, origin, action, scope_json,
+                           options_json, status, resumable, created_at, expires_at, heartbeat_at,
+                           resolved_at, selected_option_id, resolution_json, request_event_seq,
+                           resolution_event_seq, resolution_version",
+                &[
+                    &approval.id,
+                    &approval.session_id,
+                    &approval.turn_id,
+                    &approval.requester_id,
+                    &approval.origin,
+                    &approval.action,
+                    &approval.scope_json,
+                    &approval.options_json,
+                    &approval.resumable,
+                    &approval.created_at,
+                    &approval.expires_at,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .execute(
+                "insert into approval_effects
+                    (id, approval_id, session_id, effect_type, payload_json, status, attempts,
+                     available_at, locked_at, lease_owner, lease_epoch, applied_at, error_at,
+                     last_error, created_at, updated_at)
+                 values ($1, $1, $2, $3, $4, 'blocked', 0, $5, null, null, 0, null, null, null,
+                         $6, $6)",
+                &[
+                    &approval.id,
+                    &approval.session_id,
+                    &approval.effect_type,
+                    &approval.effect_payload_json,
+                    &approval.expires_at,
+                    &approval.created_at,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let (Some(audit_json), Some(audit_key)) = (&audit_json, &audit_key) {
+            transaction
+                .execute(
+                    "insert into evolution_audits(
+                        id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                        target_class, target_id, content_digest, configured_tier, decision_json,
+                        approval_id, effect_id, status, error_code, record_json, created_at
+                     ) values (
+                        ($1::jsonb ->> 'id')::uuid, $2,
+                        ($1::jsonb #>> '{origin,sessionId}')::uuid,
+                        nullif($1::jsonb #>> '{origin,dreamId}', '')::uuid,
+                        $1::jsonb #>> '{origin,actorId}',
+                        ($1::jsonb ->> 'proposalId')::uuid,
+                        $1::jsonb #>> '{target,class}', $1::jsonb #>> '{target,id}',
+                        $1::jsonb ->> 'contentDigest', $1::jsonb ->> 'configuredTier',
+                        $1::jsonb -> 'decision',
+                        nullif($1::jsonb ->> 'approvalId', '')::uuid,
+                        nullif($1::jsonb ->> 'effectId', '')::uuid,
+                        $1::jsonb ->> 'status', $1::jsonb ->> 'errorCode', $1,
+                        ($1::jsonb ->> 'createdAt')::timestamptz)
+                     on conflict (idempotency_key) do nothing",
+                    &[audit_json, audit_key],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+        }
+        let session_key = record.session_id.to_string();
+        transaction
+            .query_one(
+                "select pg_advisory_xact_lock(hashtext($1))",
+                &[&session_key],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let first_seq: i64 = transaction
+            .query_one(
+                "select coalesce(max(seq) + 1, 1)::bigint as seq
+                   from session_events where session_id = $1",
+                &[&record.session_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .get("seq");
+        transaction
+            .execute(
+                "insert into session_events(
+                    session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                    history_uri, turn_id, created_at)
+                 values ($1, $2, 'write_proposal', $3, null, null, null, $4, $5),
+                        ($1, $6, 'approval', $7, null, null, null, $4, $5)",
+                &[
+                    &record.session_id,
+                    &first_seq,
+                    &proposal_payload_json,
+                    &approval.turn_id,
+                    &approval.created_at,
+                    &(first_seq + 1),
+                    &approval_payload_json,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let approval_row = transaction
+            .query_one(
+                "update approval_requests set request_event_seq = $2
+                   where id = $1
+                   returning id, session_id, turn_id, requester_id, origin, action, scope_json,
+                             options_json, status, resumable, created_at, expires_at, heartbeat_at,
+                             resolved_at, selected_option_id, resolution_json, request_event_seq,
+                             resolution_event_seq, resolution_version",
+                &[&approval.id, &(first_seq + 1)],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let approval_record = row_to_approval_request(approval_row);
+        transaction
+            .execute(
+                "update sessions set updated_at = $2 where id = $1",
+                &[&record.session_id, &approval.created_at],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+
+        let mut proposal_event = SessionEvent::new(
+            record.session_id,
+            first_seq,
+            "write_proposal",
+            proposal_payload_json,
+            approval.created_at,
+        );
+        proposal_event.turn_id = approval.turn_id;
+        let mut approval_event = SessionEvent::new(
+            record.session_id,
+            first_seq + 1,
+            "approval",
+            approval_payload_json,
+            approval.created_at,
+        );
+        approval_event.turn_id = approval.turn_id;
+        Ok(AutoEvolutionReviewBundleResult {
+            disposition: AutoEvolutionReviewDisposition::Created,
+            proposal: stored,
+            approval: Some(approval_record),
+            events: vec![proposal_event, approval_event],
+        })
     }
 
     async fn evolution_review_proposal(&self, id: Uuid) -> Result<EvolutionReviewProposalRecord> {

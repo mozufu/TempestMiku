@@ -11,7 +11,8 @@ use std::{
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
 use tm_core::{
-    CellBudget, ChatRequest, Error, EvalOutput, Message, NullSink, Role, SessionConfig, StreamEvent,
+    CellBudget, ChatRequest, Error, EvalOutput, Message, NullSink, Role, SessionConfig,
+    StreamEvent, ToolChoice,
 };
 use tm_host::{
     ApprovalDecision, ApprovalPolicy, FsMode, GrantDoc, HostFn, InvocationCtx, LinkedFolderConfig,
@@ -86,6 +87,7 @@ impl HostFn for ApprovedPatch {
 struct ReactiveLlm {
     requests: Mutex<Vec<Vec<Message>>>,
     code: String,
+    dialectic_text: Mutex<String>,
 }
 
 impl Default for ReactiveLlm {
@@ -93,6 +95,10 @@ impl Default for ReactiveLlm {
         Self {
             requests: Mutex::new(Vec::new()),
             code: "increment".to_string(),
+            dialectic_text: Mutex::new(
+                "Brian's approved profile preference is relevant as a tentative constraint."
+                    .to_string(),
+            ),
         }
     }
 }
@@ -102,6 +108,10 @@ impl ReactiveLlm {
         Self {
             requests: Mutex::new(Vec::new()),
             code: code.into(),
+            dialectic_text: Mutex::new(
+                "Brian's approved profile preference is relevant as a tentative constraint."
+                    .to_string(),
+            ),
         }
     }
 }
@@ -113,7 +123,20 @@ impl LlmClient for ReactiveLlm {
         request: &ChatRequest,
     ) -> tm_core::Result<BoxStream<'static, tm_core::Result<StreamEvent>>> {
         self.requests.lock().unwrap().push(request.messages.clone());
-        let events = if request
+        let events = if request.tools.is_empty()
+            && request.tool_choice == ToolChoice::None
+            && request
+                .messages
+                .first()
+                .is_some_and(|message| message.content.contains("bounded user-model synthesizer"))
+        {
+            vec![
+                StreamEvent::Text(self.dialectic_text.lock().unwrap().clone()),
+                StreamEvent::Finish {
+                    reason: Some("stop".to_string()),
+                },
+            ]
+        } else if request
             .messages
             .last()
             .is_some_and(|message| message.role == Role::Tool)
@@ -363,6 +386,7 @@ fn chat_turn(session_id: Uuid) -> ChatTurn {
         system_prompt: "test system".to_string(),
         capabilities: Vec::new(),
         prior_messages: Vec::new(),
+        dialectic: None,
         limits: ChatRunLimits::default(),
         deny_approvals: false,
         host_functions: Vec::new(),

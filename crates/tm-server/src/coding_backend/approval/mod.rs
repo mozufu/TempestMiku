@@ -36,3 +36,9 @@ impl Default for ApprovalBroker {
         }
     }
 }
+
+impl ApprovalBroker {
+    pub(crate) fn requester_id(&self) -> Uuid {
+        self.instance_id
+    }
+}

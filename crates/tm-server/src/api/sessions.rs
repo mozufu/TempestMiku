@@ -3,6 +3,7 @@ use super::*;
 mod crud;
 pub(crate) mod evolution_review;
 mod memory_write;
+mod persona_candidate;
 pub(crate) mod skill_lifecycle;
 mod turn;
 

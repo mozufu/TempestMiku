@@ -1,6 +1,78 @@
 use super::*;
 
 #[tokio::test]
+async fn user_model_dialectic_is_third_turn_only_and_disabled_for_serious_mode() {
+    let store = Arc::new(InMemoryStore::default());
+    store
+        .add_profile_fact(ProfileFactRecord {
+            id: Uuid::new_v4(),
+            subject: "brian".to_string(),
+            predicate: "prefers".to_string(),
+            object: "boring Rust implementations".to_string(),
+            confidence: 0.94,
+            importance: 0.8,
+            provenance: "approved-test-fixture".to_string(),
+            valid_from: Utc::now(),
+            valid_to: None,
+        })
+        .await
+        .unwrap();
+    let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+    let chat = Arc::new(RecordingChatRunner::default());
+    let turns = Arc::clone(&chat.turns);
+    let state = AppState::new(
+        Arc::clone(&store),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let app = app(state);
+
+    let general = create(&app).await;
+    for content in [
+        "first question",
+        "second question",
+        "choose an implementation",
+    ] {
+        post_user_message(&app, general.id, content).await;
+    }
+    let serious = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    for content in ["first check", "second check", "third engineering check"] {
+        post_user_message(&app, serious.id, content).await;
+    }
+
+    let turns = turns.lock();
+    assert_eq!(turns.len(), 6);
+    assert!(turns[0].dialectic.is_none());
+    assert!(turns[1].dialectic.is_none());
+    let crate::DialecticTurn::Generate(request) = turns[2]
+        .dialectic
+        .as_ref()
+        .expect("third general turn plans dialectic")
+    else {
+        panic!("fresh third turn must generate, not reuse, a dialectic");
+    };
+    assert_eq!(request.turn_number, 3);
+    assert_eq!(request.max_chars, tm_memory::DEFAULT_DIALECTIC_MAX_CHARS);
+    assert_eq!(request.facts.len(), 1);
+    assert!(
+        request.facts[0]
+            .text
+            .contains("boring Rust implementations")
+    );
+    assert!(
+        request.facts[0]
+            .source_uri
+            .starts_with("memory://profile/brian/facts/")
+    );
+    assert!(
+        turns[3..].iter().all(|turn| turn.dialectic.is_none()),
+        "serious/engineering turns never receive the user-model dialectic"
+    );
+}
+
+#[tokio::test]
 async fn modes_catalog_is_loaded_from_runtime_mode_assets() {
     let temp = tempfile::tempdir().unwrap();
     write_mode_assets_fixture(temp.path());

@@ -14,7 +14,7 @@ use chrono::Utc;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::HeaderMap,
     middleware,
     response::{IntoResponse, Sse, sse::Event},
@@ -31,10 +31,12 @@ use tm_agents::{
 use tm_artifacts::{ResourceContent, preview};
 use tm_core::DEFAULT_SYSTEM_PROMPT;
 use tm_drive::{IntoSharedDriveStore, SharedDriveStore};
+use tm_egress::EgressAdmin;
 use tm_host::{
-    CapabilityGrants, InvocationCtx, LinkedFolders, LinkedResourceHandler, ResourceEntry,
-    ResourceRegistry, SelfEvolutionTier,
+    CapabilityGrants, EgressConfig, HostError, HostEventSink, InvocationCtx, LinkedFolders,
+    LinkedResourceHandler, ResourceEntry, ResourceRegistry, SelfEvolutionTier,
 };
+use tm_mcp::{McpBindings, McpCatalogView, McpHttpServerConfig, McpResourceHandler};
 use tm_memory::DreamQueueRecord;
 
 use crate::{
@@ -123,7 +125,14 @@ pub struct AppState<S, M, C> {
     pub actor_roster: Arc<MailboxRegistry>,
     pub push: Option<Arc<crate::PushService>>,
     pub memory_embedding_worker: Option<Arc<dyn crate::MemoryEmbeddingWorker>>,
+    pub(crate) self_hosted_asr: Option<Arc<crate::SelfHostedAsr>>,
     pub self_evolution_tier: SelfEvolutionTier,
+    egress_turn_capabilities: Arc<Vec<String>>,
+    egress_admin: Option<EgressAdmin>,
+    mcp_catalog: Option<Arc<McpCatalogView>>,
+    mcp_resource_handler: Option<Arc<McpResourceHandler>>,
+    mcp_turn_capabilities: Arc<Vec<String>>,
+    mcp_resource_capabilities: Arc<BTreeMap<String, Vec<String>>>,
     runtime_status: Arc<crate::RuntimeStatus>,
     auto_start_turn_dispatcher: bool,
     turn_notify: Arc<tokio::sync::Notify>,
@@ -148,7 +157,14 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             actor_roster: Arc::clone(&self.actor_roster),
             push: self.push.clone(),
             memory_embedding_worker: self.memory_embedding_worker.clone(),
+            self_hosted_asr: self.self_hosted_asr.clone(),
             self_evolution_tier: self.self_evolution_tier,
+            egress_turn_capabilities: Arc::clone(&self.egress_turn_capabilities),
+            egress_admin: self.egress_admin.clone(),
+            mcp_catalog: self.mcp_catalog.clone(),
+            mcp_resource_handler: self.mcp_resource_handler.clone(),
+            mcp_turn_capabilities: Arc::clone(&self.mcp_turn_capabilities),
+            mcp_resource_capabilities: Arc::clone(&self.mcp_resource_capabilities),
             runtime_status: Arc::clone(&self.runtime_status),
             auto_start_turn_dispatcher: self.auto_start_turn_dispatcher,
             turn_notify: Arc::clone(&self.turn_notify),
@@ -185,7 +201,14 @@ impl<S, M, C> AppState<S, M, C> {
             actor_roster: Arc::new(MailboxRegistry::new()),
             push: None,
             memory_embedding_worker: None,
+            self_hosted_asr: None,
             self_evolution_tier: SelfEvolutionTier::default(),
+            egress_turn_capabilities: Arc::new(Vec::new()),
+            egress_admin: None,
+            mcp_catalog: None,
+            mcp_resource_handler: None,
+            mcp_turn_capabilities: Arc::new(Vec::new()),
+            mcp_resource_capabilities: Arc::new(BTreeMap::new()),
             runtime_status: Arc::new(crate::RuntimeStatus::local_test()),
             // Production startup is role-supervised. Unit tests retain the small embedded
             // dispatcher so router tests can exercise the durable API without a daemon.
@@ -246,6 +269,136 @@ impl<S, M, C> AppState<S, M, C> {
     ) -> Self {
         self.memory_embedding_worker = Some(worker);
         self
+    }
+
+    pub fn with_self_hosted_asr(mut self, service: Arc<crate::SelfHostedAsr>) -> Self {
+        self.self_hosted_asr = Some(service);
+        self
+    }
+
+    /// Installs only the exact destination and secret references configured for production
+    /// egress. The turn builder applies them only to an existing mode envelope that already owns
+    /// the read-only `http.get` capability; registration alone never grants authority.
+    pub fn with_egress_config(mut self, config: &EgressConfig) -> Self {
+        self.egress_turn_capabilities = Arc::new(config.turn_capabilities());
+        self
+    }
+
+    /// Retains only the transport-free local administration handle. It is intentionally not
+    /// routed through axum; production supervision and session teardown are its trusted callers.
+    pub fn with_egress_admin(mut self, admin: EgressAdmin) -> Self
+    where
+        S: Store,
+    {
+        admin.install_state_store(Arc::new(crate::StoreEgressStateStore::new(Arc::clone(
+            &self.store,
+        ))));
+        self.egress_admin = Some(admin);
+        self
+    }
+
+    fn extend_egress_turn_capabilities(&self, capabilities: &mut Vec<String>) {
+        let base = CapabilityGrants::default().allow_many(capabilities.iter().cloned());
+        if !base.permits("http.get") {
+            return;
+        }
+        capabilities.extend(self.egress_turn_capabilities.iter().cloned());
+        capabilities.sort();
+        capabilities.dedup();
+    }
+
+    /// Installs one immutable startup MCP catalog. The process never mutates this catalog in
+    /// place: a configuration reload rebuilds the runtime, which also guarantees that cached
+    /// interpreter sessions cannot retain bindings from an older generation or digest.
+    ///
+    /// Registration remains separate from authority. Only modes whose existing envelope permits
+    /// `http.get` receive the exact imported object and underlying P9 destination/secret grants.
+    pub fn with_mcp_runtime(
+        mut self,
+        catalog: McpCatalogView,
+        bindings: &McpBindings,
+        servers: &[McpHttpServerConfig],
+    ) -> Result<Self>
+    where
+        S: Store,
+    {
+        if bindings.generation() != catalog.generation || bindings.digest() != catalog.digest {
+            return Err(ServerError::Policy(
+                "MCP bindings do not match the supplied catalog generation and digest".to_string(),
+            ));
+        }
+        bindings.install_mutation_effect_store(Arc::new(crate::StoreMcpMutationEffectStore::new(
+            Arc::clone(&self.store),
+        )));
+        let transports = servers
+            .iter()
+            .map(|server| (server.alias.as_str(), server))
+            .collect::<BTreeMap<_, _>>();
+        if transports.len() != servers.len() {
+            return Err(ServerError::Policy(
+                "MCP transport aliases must be unique".to_string(),
+            ));
+        }
+        let mut turn_capabilities = Vec::new();
+        let mut resource_capabilities = BTreeMap::new();
+
+        for server in &catalog.servers {
+            let transport = transports.get(server.alias.as_str()).ok_or_else(|| {
+                ServerError::Policy(format!(
+                    "MCP catalog server {} has no trusted transport mapping",
+                    server.alias
+                ))
+            })?;
+            let mut transport_capabilities =
+                vec![format!("egress.destination:{}", transport.destination_id)];
+            if let Some(secret_id) = &transport.secret_id {
+                transport_capabilities.push(format!("secrets.use:{secret_id}"));
+            }
+            turn_capabilities.extend(transport_capabilities.iter().cloned());
+            turn_capabilities.extend(server.tools.iter().map(|tool| tool.capability.clone()));
+            turn_capabilities.extend(
+                server
+                    .prompts
+                    .iter()
+                    .map(|prompt| prompt.capability.clone()),
+            );
+            if !server.resources.is_empty() {
+                turn_capabilities.push("resources.read:mcp".to_string());
+            }
+            for resource in &server.resources {
+                let mut capabilities = vec![
+                    "resources.read:mcp".to_string(),
+                    resource.capability.clone(),
+                ];
+                capabilities.extend(transport_capabilities.iter().cloned());
+                capabilities.sort();
+                capabilities.dedup();
+                resource_capabilities.insert(resource.local_uri.clone(), capabilities);
+                turn_capabilities.push(resource.capability.clone());
+            }
+        }
+        turn_capabilities.sort();
+        turn_capabilities.dedup();
+
+        self.mcp_catalog = Some(Arc::new(catalog));
+        self.mcp_resource_handler = Some(bindings.resource_handler());
+        self.mcp_turn_capabilities = Arc::new(turn_capabilities);
+        self.mcp_resource_capabilities = Arc::new(resource_capabilities);
+        Ok(self)
+    }
+
+    fn extend_mcp_turn_capabilities(&self, capabilities: &mut Vec<String>) {
+        let base = CapabilityGrants::default().allow_many(capabilities.iter().cloned());
+        if !base.permits("http.get") {
+            return;
+        }
+        capabilities.extend(self.mcp_turn_capabilities.iter().cloned());
+        capabilities.sort();
+        capabilities.dedup();
+    }
+
+    pub fn mcp_catalog(&self) -> Option<&McpCatalogView> {
+        self.mcp_catalog.as_deref()
     }
 
     pub fn with_self_evolution_tier(mut self, tier: SelfEvolutionTier) -> Self {
@@ -427,6 +580,15 @@ where
             delete(auth_devices::revoke_device::<S, M, C>),
         )
         .route("/modes", get(modes::list_modes::<S, M, C>))
+        .route(
+            "/voice/asr/engines",
+            get(crate::voice_asr::engines::<S, M, C>),
+        )
+        .route(
+            "/voice/asr/transcriptions",
+            post(crate::voice_asr::transcriptions::<S, M, C>)
+                .layer(DefaultBodyLimit::max(crate::voice_asr::MAX_ASR_PCM_BYTES)),
+        )
         .route(
             "/sessions",
             get(sessions::list_sessions::<S, M, C>).post(sessions::create_session::<S, M, C>),

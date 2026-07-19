@@ -26,7 +26,7 @@ where
         &state.linked_folders,
         &session.memory_scope,
     )?;
-    let prior_messages =
+    let (prior_messages, turn_number) =
         bounded_prior_messages(state.store.as_ref(), session_id, durable_turn.id).await?;
     // Mode changes are never inferred from keywords. An unlocked normal chat turn receives the
     // exact modes.suggest grant and may call it through execute; coding, actor, scheduler, and
@@ -72,6 +72,16 @@ where
             memory
         }
     };
+    let dialectic = dialectic_for_turn(
+        state.store.as_ref(),
+        session_id,
+        durable_turn.id,
+        turn_number,
+        &turn_profile,
+        &durable_turn.content,
+        &memory,
+    )
+    .await?;
     let mut recall_blocks = Vec::new();
     if !memory.is_empty() {
         recall_blocks.push(memory.render_prompt_block());
@@ -91,6 +101,8 @@ where
     let mode_suggest_host: Arc<dyn HostFn> =
         Arc::new(ModeSuggestHostFn::new(state, MODE_SUGGEST_APPROVAL_TIMEOUT));
     let mut chat_capabilities = turn_profile.capabilities.clone();
+    state.extend_egress_turn_capabilities(&mut chat_capabilities);
+    state.extend_mcp_turn_capabilities(&mut chat_capabilities);
     if session.mode_state.lock_source.is_none() && !turn_profile.has_capability("backend.coding") {
         chat_capabilities.push(MODE_SUGGEST_CAPABILITY.to_string());
     }
@@ -116,7 +128,7 @@ where
                         system_prompt: persona_prompt.system_prompt.clone(),
                         mode: session.mode_state.mode.clone(),
                         scope: scope.clone(),
-                        capabilities: turn_profile.capabilities.clone(),
+                        capabilities: chat_capabilities.clone(),
                         prior_messages: prior_messages.clone(),
                     },
                     sink,
@@ -143,6 +155,7 @@ where
                         scope: scope.clone(),
                         capabilities: chat_capabilities.clone(),
                         prior_messages: prior_messages.clone(),
+                        dialectic: dialectic.clone(),
                         limits: crate::ChatRunLimits::default(),
                         deny_approvals: false,
                         host_functions: chat_host_functions.clone(),
@@ -177,6 +190,7 @@ where
                     scope: scope.clone(),
                     capabilities: chat_capabilities,
                     prior_messages,
+                    dialectic,
                     limits: crate::ChatRunLimits::default(),
                     deny_approvals: false,
                     host_functions: chat_host_functions,
@@ -218,6 +232,15 @@ where
         )
         .await?;
     }
+    let auto_persona_candidate = if session.mode_state.lock_source.is_none()
+        && !turn_profile.has_capability("backend.coding")
+        && state.self_evolution_tier == tm_host::SelfEvolutionTier::Moderate
+        && state.persona.managed_persona_addenda_path().is_some()
+    {
+        super::super::persona_candidate::detect(durable_turn.id, &durable_turn.content, &memory)
+    } else {
+        None
+    };
     super::super::memory_write::spawn_personal_assistant_state_capture(
         state.clone(),
         session_id,
@@ -227,7 +250,11 @@ where
         durable_turn.content.clone(),
     )
     .await?;
-    Ok(ExecutedTurn { response, runtime })
+    Ok(ExecutedTurn {
+        response,
+        runtime,
+        auto_persona_candidate,
+    })
 }
 
 fn persisted_memory_context(
@@ -254,7 +281,7 @@ async fn bounded_prior_messages<S: Store>(
     store: &S,
     session_id: Uuid,
     current_turn_id: Uuid,
-) -> Result<Vec<Message>> {
+) -> Result<(Vec<Message>, u64)> {
     const MAX_MESSAGES: usize = 40;
     const MAX_BYTES: usize = 128 * 1024;
 
@@ -268,6 +295,12 @@ async fn bounded_prior_messages<S: Store>(
                 "turn {current_turn_id} is missing its persisted user message"
             ))
         })?;
+    let turn_number = stored
+        .iter()
+        .filter(|message| message.seq <= current_seq && message.role == "user")
+        .count()
+        .try_into()
+        .map_err(|_| ServerError::Store("session turn count exceeds u64".to_string()))?;
     let mut linked_roles = std::collections::BTreeMap::<Uuid, (bool, bool)>::new();
     for message in stored.iter().filter(|message| message.seq < current_seq) {
         let Some(turn_id) = message.turn_id else {
@@ -315,5 +348,53 @@ async fn bounded_prior_messages<S: Store>(
         newest.push(message);
     }
     newest.reverse();
-    Ok(newest)
+    Ok((newest, turn_number))
+}
+
+async fn dialectic_for_turn<S: Store>(
+    store: &S,
+    session_id: Uuid,
+    turn_id: Uuid,
+    turn_number: u64,
+    profile: &ModeProfile,
+    query: &str,
+    memory: &crate::MemoryContext,
+) -> Result<Option<crate::DialecticTurn>> {
+    let serious_or_engineering = profile.voice_cap == "off"
+        || profile.capability_class == "engineering"
+        || profile.has_capability("backend.coding");
+    let facts = memory
+        .profile_facts
+        .iter()
+        .map(|fact| tm_memory::DialecticFact::new(fact.text.clone(), fact.source_uri.clone()));
+    let Some(request) = tm_memory::DialecticRequest::plan(
+        turn_number,
+        serious_or_engineering,
+        &memory.subject,
+        query,
+        facts,
+    ) else {
+        return Ok(None);
+    };
+
+    let Some(event) = store
+        .event_for_turn(session_id, turn_id, tm_memory::DIALECTIC_EVENT_TYPE)
+        .await?
+    else {
+        return Ok(Some(crate::DialecticTurn::Generate(request)));
+    };
+    let trace: tm_memory::DialecticTrace =
+        serde_json::from_value(event.payload_json).map_err(|error| {
+            ServerError::Store(format!("persisted dialectic trace is invalid: {error}"))
+        })?;
+    trace
+        .validate_for(&request)
+        .map_err(|error| ServerError::Store(error.to_string()))?;
+    if trace.status == tm_memory::DialecticStatus::Applied {
+        Ok(Some(crate::DialecticTurn::Reuse(trace)))
+    } else {
+        // An unavailable or empty auxiliary pass is durable for this turn. Do not keep retrying
+        // an optional model role while the main response can still proceed without it.
+        Ok(None)
+    }
 }

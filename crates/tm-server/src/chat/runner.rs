@@ -20,7 +20,7 @@ mod contract;
 mod dispatch;
 mod shard;
 
-pub use contract::{ChatRunLimits, ChatRunner, ChatTurn};
+pub use contract::{ChatRunLimits, ChatRunner, ChatTurn, DialecticTurn};
 pub use dispatch::{EchoChatRunner, ServerChatRunner};
 
 use shard::run_agent_shard;
@@ -142,6 +142,14 @@ impl HostEventSink for SwappableHostEventSink {
             .await
             .map_err(|error| tm_host::HostError::HostCall(error.to_string()))?;
         Ok(())
+    }
+
+    fn effect_scope_id(&self) -> Option<String> {
+        self.sink
+            .lock()
+            .expect("host event proxy lock poisoned")
+            .as_ref()
+            .and_then(|sink| sink.effect_scope_id())
     }
 }
 

@@ -169,15 +169,18 @@ fn dense_query(
     }
 }
 
+mod egress_state;
 mod in_memory_approvals;
 mod in_memory_memory;
 mod in_memory_scheduling;
 mod in_memory_sessions;
+mod mcp_mutation_effects;
 mod postgres_approvals;
 mod postgres_drive;
 mod postgres_durable_memory;
 mod postgres_end_to_end;
 mod postgres_memory_embeddings;
+mod postgres_persona_candidate;
 mod postgres_platform;
 mod postgres_scheduling;
 mod postgres_sessions;

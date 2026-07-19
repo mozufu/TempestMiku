@@ -333,7 +333,7 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
         )
         .await
         .unwrap();
-    assert_eq!(migrations.len(), 18);
+    assert_eq!(migrations.len(), 20);
     assert!(migrations.iter().enumerate().all(|(index, row)| {
         row.get::<_, i64>("version") == index as i64 + 1
             && row.get::<_, String>("checksum").len() == 64

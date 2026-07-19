@@ -142,11 +142,17 @@ async fn moderate_review_approval_updates_only_durable_proposal_and_replays() {
     assert_eq!(pending_event["kind"], json!("evolution_review"));
     assert_eq!(pending_event["applyEnabled"], json!(false));
     assert!(pending_event.get("changes").is_none());
+    assert!(pending_event.get("source").is_none());
+    assert!(pending_event.get("candidateTrigger").is_none());
+    assert!(pending_event.get("evidenceCount").is_none());
     assert!(pending_event["preview"].as_str().unwrap().len() <= 512);
     let approval = wait_for_event_payload(&store, session.id, "approval").await;
     assert_eq!(approval["backend"], json!("evolution-review"));
     assert_eq!(approval["scope"]["applyEnabled"], json!(false));
     assert_eq!(approval["scope"]["uri"], response["resourceUri"]);
+    assert!(approval["scope"].get("source").is_none());
+    assert!(approval["scope"].get("candidateTrigger").is_none());
+    assert!(approval["scope"].get("evidenceCount").is_none());
 
     let resource = get_session_resource_json(
         &app,
@@ -368,6 +374,202 @@ async fn approved_persona_addendum_composes_across_modes_and_rolls_back_to_base(
             && event.payload_json["kind"] == json!("persona_addendum_rollback")
             && event.payload_json["status"] == json!("approved")
     }));
+}
+
+#[tokio::test]
+async fn persona_activation_and_rollback_retry_after_filesystem_commit_emit_once() {
+    let root = tempfile::tempdir().unwrap();
+    let state = moderate_state_with_persona_addenda(root.path());
+    let store = Arc::clone(&state.store);
+    let persona = state.persona.clone();
+    let (app, _) = test_app_with_state(state);
+    let session = create(&app).await;
+
+    let response = post_review_proposal(&app, session.id, persona_review_request(5_000)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    let proposal_id = response["proposalId"].as_str().unwrap().parse().unwrap();
+    let approval_id = response["approvalId"].as_str().unwrap().parse().unwrap();
+    let pending = store.evolution_review_proposal(proposal_id).await.unwrap();
+
+    store.fail_next_complete_approval_effect_with_event();
+    let failed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/approvals/{approval_id}", session.id))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "decision": "approve" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        persona
+            .active_managed_persona_addendum("miku")
+            .unwrap()
+            .unwrap()
+            .content_digest,
+        pending.content_digest
+    );
+
+    let retry_at = Utc::now() + chrono::Duration::seconds(10);
+    let lease = store
+        .claim_approval_effect(
+            approval_id,
+            Uuid::new_v4(),
+            retry_at,
+            chrono::Duration::seconds(30),
+        )
+        .await
+        .unwrap()
+        .expect("failed activation is retryable");
+    let approval = store
+        .approval_request(session.id, approval_id)
+        .await
+        .unwrap();
+    crate::api::approvals::apply_approval_effect_lease(
+        store.as_ref(),
+        &approval,
+        &lease,
+        tm_host::SelfEvolutionTier::Moderate,
+        &persona,
+        Arc::new(crate::StoreCodingEventSink::new(
+            session.id,
+            Arc::clone(&store),
+            tokio::sync::broadcast::channel(8).0,
+        )),
+    )
+    .await
+    .unwrap();
+
+    let rollback = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/sessions/{}/evolution/personas/miku/rollback",
+                    session.id
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "expectedActiveDigest": pending.content_digest,
+                        "targetDigest": null,
+                        "timeoutMs": 5_000
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rollback.status(), StatusCode::OK);
+    let rollback = response_json(rollback).await;
+    let rollback_approval_id = rollback["approvalId"].as_str().unwrap().parse().unwrap();
+
+    store.fail_next_complete_approval_effect_with_event();
+    let failed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!(
+                    "/sessions/{}/approvals/{rollback_approval_id}",
+                    session.id
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "decision": "approve" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        persona
+            .active_managed_persona_addendum("miku")
+            .unwrap()
+            .is_none()
+    );
+
+    let lease = store
+        .claim_approval_effect(
+            rollback_approval_id,
+            Uuid::new_v4(),
+            Utc::now() + chrono::Duration::seconds(10),
+            chrono::Duration::seconds(30),
+        )
+        .await
+        .unwrap()
+        .expect("failed rollback is retryable");
+    let approval = store
+        .approval_request(session.id, rollback_approval_id)
+        .await
+        .unwrap();
+    crate::api::approvals::apply_approval_effect_lease(
+        store.as_ref(),
+        &approval,
+        &lease,
+        tm_host::SelfEvolutionTier::Moderate,
+        &persona,
+        Arc::new(crate::StoreCodingEventSink::new(
+            session.id,
+            Arc::clone(&store),
+            tokio::sync::broadcast::channel(8).0,
+        )),
+    )
+    .await
+    .unwrap();
+
+    let managed = persona.managed_persona_addendum("miku").unwrap();
+    assert!(managed.active.is_none());
+    assert_eq!(managed.versions.len(), 1);
+    assert_eq!(
+        store
+            .evolution_review_proposal(proposal_id)
+            .await
+            .unwrap()
+            .status,
+        tm_modes::ReviewProposalStatus::Approved
+    );
+    assert!(
+        store
+            .claim_approval_effect(
+                rollback_approval_id,
+                Uuid::new_v4(),
+                Utc::now() + chrono::Duration::seconds(60),
+                chrono::Duration::seconds(30),
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["proposalId"] == json!(proposal_id)
+                    && event.payload_json["status"] == json!("approved")
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                event.event_type == "write_proposal"
+                    && event.payload_json["kind"] == json!("persona_addendum_rollback")
+                    && event.payload_json["status"] == json!("approved")
+            })
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

@@ -2,8 +2,8 @@ use super::schemes::{
     compact_resource_preview, list_agent_resources, list_cron_resources, list_drive_resources,
     list_linked_resources, list_memory_resources, list_skill_resources, list_workspace_resources,
     preview_memory_resource, read_agent_resource, read_cron_resource, read_drive_resource,
-    read_history_resource, read_linked_resource, read_memory_resource, read_skill_resource,
-    read_workspace_resource, resource_scheme,
+    read_history_resource, read_linked_resource, read_mcp_resource, read_memory_resource,
+    read_skill_resource, read_workspace_resource, resource_scheme,
 };
 use super::util::map_artifact_error;
 use super::*;
@@ -45,6 +45,9 @@ where
         Some("history") => read_history_resource(state, session_id, uri, selector).await,
         Some("cron") => read_cron_resource(state, uri).await,
         Some("drive") => read_drive_resource(state, session_id, uri, selector).await,
+        Some("mcp") if state.mcp_resource_handler.is_some() => {
+            read_mcp_resource(state, session_id, uri, selector).await
+        }
         Some(scheme) => Err(ServerError::Policy(format!(
             "unknown resource scheme {scheme}; registered: {}",
             registered_resource_schemes(state).join(", ")
@@ -67,6 +70,9 @@ where
 {
     let content = match resource_scheme(uri).as_deref() {
         Some("memory") => preview_memory_resource(state, session_id, uri).await?,
+        Some("mcp") if state.mcp_resource_handler.is_some() => {
+            super::schemes::preview_mcp_resource(state, session_id, uri).await?
+        }
         _ => read_resource_content(state, session_id, uri, None).await?,
     };
     Ok(compact_resource_preview(content))
@@ -130,6 +136,9 @@ where
         )),
         Some("cron") => list_cron_resources(state, uri).await,
         Some("drive") => list_drive_resources(state, session_id, uri).await,
+        Some("mcp") if state.mcp_resource_handler.is_some() => {
+            super::schemes::list_mcp_resources(state, session_id, uri).await
+        }
         Some(scheme) => Err(ServerError::Policy(format!(
             "unknown resource scheme {scheme}; registered: {}",
             registered_resource_schemes(state).join(", ")
@@ -156,6 +165,9 @@ pub(super) fn registered_resource_schemes<S, M, C>(state: &AppState<S, M, C>) ->
     }
     if state.persona.managed_skills_path().is_some() {
         schemes.push("skill");
+    }
+    if state.mcp_resource_handler.is_some() {
+        schemes.push("mcp");
     }
     schemes
 }

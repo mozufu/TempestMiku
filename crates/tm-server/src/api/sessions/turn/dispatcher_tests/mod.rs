@@ -181,3 +181,4 @@ impl ChatRunner for LinearizedRunner {
 mod maintenance;
 mod memory_replay;
 mod ownership;
+mod persona_candidate;

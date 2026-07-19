@@ -20,6 +20,7 @@ pub mod scheduler;
 mod session_shards;
 pub mod store;
 mod turn_control;
+pub mod voice_asr;
 pub mod webui;
 
 pub use api::{AppState, app};
@@ -30,7 +31,8 @@ pub use auth::{
 };
 pub use chat::{
     AgentChatRunner, AgentChatRunnerOptions, ChatActorExecutor, ChatRunLimits, ChatRunner,
-    ChatTurn, EchoChatRunner, PersistingEventSink, RosterCodingEventSink, ServerChatRunner,
+    ChatTurn, DialecticTurn, EchoChatRunner, PersistingEventSink, RosterCodingEventSink,
+    ServerChatRunner,
 };
 pub use coding_backend::{
     ApprovalBroker, ApprovalOption, ApprovalOutcome, ApprovalPrompt, ApprovalResolveDecision,
@@ -65,12 +67,16 @@ pub use scheduler::{
     ensure_weekly_ship_ledger_job, trigger_weekly_ship_ledger, weekly_ship_ledger_job,
 };
 pub use store::{
-    ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronLease,
-    CronRunRecord, EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord,
-    InMemoryStore, MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
-    NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
-    PostgresDriveMetadataStore, PostgresStore, ProjectItemKind, ProjectItemRecord, SessionEvent,
-    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreEvent, StoreRuntimeMetrics,
+    ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord,
+    AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
+    AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
+    EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, InMemoryStore,
+    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
+    NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
+    NewProjectItem, NewSession, PersonaAutoCandidate, PersonaAutoCandidateEvidence,
+    PersonaAutoCandidateTrigger, PostgresDriveMetadataStore, PostgresStore, ProjectItemKind,
+    ProjectItemRecord, SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store,
+    StoreEgressStateStore, StoreEvent, StoreMcpMutationEffectStore, StoreRuntimeMetrics,
 };
 pub use tm_agents::MailboxRegistry;
 pub use tm_memory::{
@@ -91,3 +97,4 @@ pub use tm_modes::{
     ReviewAddendumChange, ReviewAddendumSection, ReviewApplyContract, ReviewMetadata,
     ReviewProposalStatus, ReviewProposalTarget,
 };
+pub use voice_asr::{SelfHostedAsr, SelfHostedAsrConfig};

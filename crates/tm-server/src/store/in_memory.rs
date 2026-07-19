@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::{Result, ServerError};
 
 use super::models::{
-    redact_persisted_json, redact_persisted_text, sanitize_cron_job_persistence,
-    sanitize_cron_run_persistence, sanitize_durable_memory_record,
+    redact_persisted_json, redact_persisted_text, sanitize_approval_request_persistence,
+    sanitize_cron_job_persistence, sanitize_cron_run_persistence, sanitize_durable_memory_record,
     sanitize_evolution_review_proposal_persistence, sanitize_memory_summary_persistence,
     sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
     sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
@@ -26,12 +26,14 @@ use super::models::{
 };
 
 use super::{
-    ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronLease,
-    CronRunRecord, EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord,
-    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution, NewCronJobRecord,
-    NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession, ProfileFactRecord,
-    ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent, SessionRecord,
-    SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
+    ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord,
+    AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
+    AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
+    EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MessageRecord,
+    ModeState, NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle,
+    NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
+    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent,
+    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
 };
 
 mod approval_helpers;
@@ -49,6 +51,7 @@ use memory_helpers::{
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryStore {
     inner: Arc<Mutex<Inner>>,
+    egress_state: Arc<tm_egress::VolatileEgressStateStore>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -73,6 +76,26 @@ struct Inner {
     skill_proposals: Vec<SkillProposalRecord>,
     cron_jobs: Vec<CronJobRecord>,
     cron_runs: Vec<CronRunRecord>,
+    mcp_mutation_effects: BTreeMap<String, tm_mcp::McpMutationEffectRecord>,
+    #[cfg(test)]
+    fail_auto_evolution_bundle_before_commit_once: bool,
+    #[cfg(test)]
+    fail_complete_approval_effect_with_event_once: bool,
+}
+
+#[cfg(test)]
+impl InMemoryStore {
+    pub(crate) fn fail_next_auto_evolution_bundle_before_commit(&self) {
+        self.inner
+            .lock()
+            .fail_auto_evolution_bundle_before_commit_once = true;
+    }
+
+    pub(crate) fn fail_next_complete_approval_effect_with_event(&self) {
+        self.inner
+            .lock()
+            .fail_complete_approval_effect_with_event_once = true;
+    }
 }
 
 fn stale_dream_lease(lease: &DreamLease) -> ServerError {
@@ -87,6 +110,18 @@ fn stale_cron_lease(lease: &CronLease) -> ServerError {
         "active cron lease {} owner {} epoch {}",
         lease.run.id, lease.owner_id, lease.epoch
     ))
+}
+
+fn egress_store_error(error: tm_egress::EgressError) -> ServerError {
+    match error {
+        tm_egress::EgressError::Budget(_) => {
+            ServerError::Policy("egress budget exceeded".to_string())
+        }
+        tm_egress::EgressError::Durability(_) => {
+            ServerError::Conflict("egress durable state collision".to_string())
+        }
+        other => ServerError::Store(format!("egress durable state failed ({})", other.code())),
+    }
 }
 
 #[async_trait]
@@ -832,36 +867,210 @@ impl Store for InMemoryStore {
         Ok(turn.clone())
     }
 
+    async fn begin_mcp_mutation_effect(
+        &self,
+        intent: tm_mcp::McpMutationIntent,
+    ) -> Result<tm_mcp::McpMutationEffectClaim> {
+        let session_id = Uuid::parse_str(&intent.session_id).map_err(|_| {
+            ServerError::InvalidRequest("MCP mutation session id is not a UUID".to_string())
+        })?;
+        let turn_id = Uuid::parse_str(&intent.effect_scope_id).map_err(|_| {
+            ServerError::InvalidRequest("MCP mutation effect scope is not a turn UUID".to_string())
+        })?;
+        let mut inner = self.inner.lock();
+        if !inner
+            .turns
+            .iter()
+            .any(|turn| turn.id == turn_id && turn.session_id == session_id)
+        {
+            return Err(ServerError::NotFound(format!(
+                "durable MCP mutation turn {turn_id}"
+            )));
+        }
+        if let Some(existing) = inner.mcp_mutation_effects.get(&intent.effect_id) {
+            if !existing.intent.same_effect_identity(&intent) {
+                return Err(ServerError::Conflict(
+                    "MCP mutation effect id collides with different intent".to_string(),
+                ));
+            }
+            return Ok(tm_mcp::McpMutationEffectClaim {
+                record: existing.clone(),
+                created: false,
+            });
+        }
+        let record = tm_mcp::McpMutationEffectRecord {
+            intent,
+            status: tm_mcp::McpMutationEffectStatus::Started,
+            result_digest: None,
+            result_bytes: None,
+            error_code: None,
+            error_digest: None,
+        };
+        inner
+            .mcp_mutation_effects
+            .insert(record.intent.effect_id.clone(), record.clone());
+        Ok(tm_mcp::McpMutationEffectClaim {
+            record,
+            created: true,
+        })
+    }
+
+    async fn finish_mcp_mutation_effect(
+        &self,
+        effect_id: &str,
+        status: tm_mcp::McpMutationEffectStatus,
+        result_digest: Option<&str>,
+        result_bytes: Option<usize>,
+        error_code: Option<&str>,
+        error_digest: Option<&str>,
+    ) -> Result<tm_mcp::McpMutationEffectRecord> {
+        if !status.is_terminal() {
+            return Err(ServerError::InvalidRequest(
+                "MCP mutation finish requires terminal status".to_string(),
+            ));
+        }
+        let mut inner = self.inner.lock();
+        let record = inner
+            .mcp_mutation_effects
+            .get_mut(effect_id)
+            .ok_or_else(|| ServerError::NotFound(format!("MCP mutation effect {effect_id}")))?;
+        let requested = tm_mcp::McpMutationEffectRecord {
+            intent: record.intent.clone(),
+            status,
+            result_digest: result_digest.map(str::to_string),
+            result_bytes,
+            error_code: error_code.map(str::to_string),
+            error_digest: error_digest.map(str::to_string),
+        };
+        if record.status.is_terminal() {
+            if *record == requested {
+                return Ok(record.clone());
+            }
+            return Err(ServerError::Conflict(
+                "MCP mutation effect already has a different terminal state".to_string(),
+            ));
+        }
+        *record = requested;
+        Ok(record.clone())
+    }
+
+    async fn begin_egress_mutation_effect(
+        &self,
+        intent: tm_egress::EgressMutationIntent,
+    ) -> Result<tm_egress::EgressMutationClaim> {
+        let session_id = Uuid::parse_str(&intent.session_id).map_err(|_| {
+            ServerError::InvalidRequest("egress mutation session id is not a UUID".to_string())
+        })?;
+        let turn_id = Uuid::parse_str(&intent.effect_scope_id).map_err(|_| {
+            ServerError::InvalidRequest(
+                "egress mutation effect scope is not a turn UUID".to_string(),
+            )
+        })?;
+        {
+            let inner = self.inner.lock();
+            if !inner
+                .turns
+                .iter()
+                .any(|turn| turn.id == turn_id && turn.session_id == session_id)
+            {
+                return Err(ServerError::NotFound(format!(
+                    "durable egress mutation turn {turn_id}"
+                )));
+            }
+        }
+        tm_egress::EgressStateStore::begin_mutation(self.egress_state.as_ref(), intent)
+            .await
+            .map_err(egress_store_error)
+    }
+
+    async fn finish_egress_mutation_effect(
+        &self,
+        effect_id: &str,
+        status: tm_egress::EgressMutationStatus,
+        result_digest: Option<&str>,
+        result_bytes: Option<usize>,
+        error_code: Option<&str>,
+        error_digest: Option<&str>,
+    ) -> Result<tm_egress::EgressMutationRecord> {
+        tm_egress::EgressStateStore::finish_mutation(
+            self.egress_state.as_ref(),
+            effect_id,
+            status,
+            result_digest,
+            result_bytes,
+            error_code,
+            error_digest,
+        )
+        .await
+        .map_err(egress_store_error)
+    }
+
+    async fn reserve_egress_budget(
+        &self,
+        request: tm_egress::EgressBudgetRequest,
+    ) -> Result<tm_egress::EgressBudgetReservation> {
+        let session_id = Uuid::parse_str(&request.session_id).map_err(|_| {
+            ServerError::InvalidRequest("egress budget session id is not a UUID".to_string())
+        })?;
+        {
+            let inner = self.inner.lock();
+            let session = inner
+                .sessions
+                .get(&session_id)
+                .ok_or_else(|| ServerError::NotFound(format!("session {session_id}")))?;
+            if session.status != "open" {
+                return Err(ServerError::Conflict(format!(
+                    "session {session_id} is not open"
+                )));
+            }
+        }
+        tm_egress::EgressStateStore::reserve_budget(self.egress_state.as_ref(), request)
+            .await
+            .map_err(egress_store_error)
+    }
+
+    async fn settle_egress_budget(
+        &self,
+        reservation: tm_egress::EgressBudgetReservation,
+        response_bytes: u64,
+        elapsed_ms: u64,
+    ) -> Result<()> {
+        tm_egress::EgressStateStore::settle_budget(
+            self.egress_state.as_ref(),
+            reservation,
+            response_bytes,
+            elapsed_ms,
+        )
+        .await
+        .map_err(egress_store_error)
+    }
+
+    async fn clear_egress_session(&self, session_id: &str) -> Result<()> {
+        let parsed = Uuid::parse_str(session_id).map_err(|_| {
+            ServerError::InvalidRequest("egress session id is not a UUID".to_string())
+        })?;
+        {
+            let inner = self.inner.lock();
+            let session = inner
+                .sessions
+                .get(&parsed)
+                .ok_or_else(|| ServerError::NotFound(format!("session {parsed}")))?;
+            if session.status != "ended" {
+                return Err(ServerError::Conflict(format!(
+                    "active session {parsed} egress state cannot be cleared"
+                )));
+            }
+        }
+        tm_egress::EgressStateStore::clear_session(self.egress_state.as_ref(), session_id)
+            .await
+            .map_err(egress_store_error)
+    }
+
     async fn create_approval_request(
         &self,
-        mut request: NewApprovalRequest,
+        request: NewApprovalRequest,
     ) -> Result<ApprovalRequestRecord> {
-        validate_persistence_identifier("approval origin", &request.origin)?;
-        validate_persistence_identifier("approval effect type", &request.effect_type)?;
-        request.action = redact_persisted_text(&request.action);
-        tm_memory::redact_json_value(&mut request.scope_json);
-        tm_memory::redact_json_value(&mut request.options_json);
-        tm_memory::redact_json_value(&mut request.effect_payload_json);
-        if request.origin.trim().is_empty() || request.action.trim().is_empty() {
-            return Err(ServerError::InvalidRequest(
-                "approval origin and action must not be empty".to_string(),
-            ));
-        }
-        if !request.options_json.is_array() {
-            return Err(ServerError::InvalidRequest(
-                "approval options must be an array".to_string(),
-            ));
-        }
-        if request.effect_type.trim().is_empty() {
-            return Err(ServerError::InvalidRequest(
-                "approval effect type must not be empty".to_string(),
-            ));
-        }
-        if request.expires_at <= request.created_at {
-            return Err(ServerError::InvalidRequest(
-                "approval expiry must be after creation".to_string(),
-            ));
-        }
+        let request = sanitize_approval_request_persistence(request)?;
         let audit = crate::evolution::evolution_audit_record(
             &request.effect_payload_json,
             request.id,
@@ -1298,6 +1507,14 @@ impl Store for InMemoryStore {
             record,
         });
 
+        #[cfg(test)]
+        if inner.fail_complete_approval_effect_with_event_once {
+            inner.fail_complete_approval_effect_with_event_once = false;
+            return Err(ServerError::Store(
+                "injected approval effect finalization crash".to_string(),
+            ));
+        }
+
         let event = {
             let events = inner.events.entry(session_id).or_default();
             let mut event = SessionEvent::new(
@@ -1448,6 +1665,7 @@ impl Store for InMemoryStore {
                 && existing.changes == proposal.changes
                 && existing.content_digest == proposal.content_digest
                 && existing.apply_contract == proposal.apply_contract
+                && existing.auto_candidate == proposal.auto_candidate
             {
                 return Ok(existing.clone());
             }
@@ -1468,11 +1686,325 @@ impl Store for InMemoryStore {
             content_digest: proposal.content_digest,
             status: ReviewProposalStatus::Pending,
             apply_contract: proposal.apply_contract,
+            auto_candidate: proposal.auto_candidate,
             created_at: now,
             updated_at: now,
         };
         inner.evolution_review_proposals.push(record.clone());
         Ok(record)
+    }
+
+    async fn create_auto_evolution_review_proposal(
+        &self,
+        proposal: NewEvolutionReviewProposal,
+        cooldown_since: DateTime<Utc>,
+    ) -> Result<AutoEvolutionReviewProposalResult> {
+        let proposal = sanitize_evolution_review_proposal_persistence(proposal)?;
+        let candidate = proposal.auto_candidate.as_ref().ok_or_else(|| {
+            ServerError::InvalidRequest(
+                "auto evolution review proposal is missing candidate metadata".to_string(),
+            )
+        })?;
+        self.get_session(proposal.session_id).await?;
+        let source_turn = self.turn(candidate.source_turn_id).await?;
+        if source_turn.session_id != proposal.session_id || source_turn.status != "completed" {
+            return Err(ServerError::Conflict(
+                "persona auto-candidate source turn is not durably completed".to_string(),
+            ));
+        }
+
+        let mut inner = self.inner.lock();
+        let blocked = inner
+            .evolution_review_proposals
+            .iter()
+            .filter(|existing| {
+                existing
+                    .auto_candidate
+                    .as_ref()
+                    .is_some_and(|existing| existing.dedupe_key == candidate.dedupe_key)
+                    || (existing.target == proposal.target && existing.changes == proposal.changes)
+            })
+            .filter(|existing| {
+                matches!(
+                    existing.status,
+                    ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+                ) || existing.updated_at >= cooldown_since
+            })
+            .max_by(|left, right| {
+                let left_open = matches!(
+                    left.status,
+                    ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+                );
+                let right_open = matches!(
+                    right.status,
+                    ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+                );
+                left_open
+                    .cmp(&right_open)
+                    .then_with(|| left.updated_at.cmp(&right.updated_at))
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .cloned();
+        if let Some(existing) = blocked {
+            let disposition = if matches!(
+                existing.status,
+                ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+            ) {
+                AutoEvolutionReviewDisposition::Duplicate
+            } else {
+                AutoEvolutionReviewDisposition::Cooldown
+            };
+            return Ok(AutoEvolutionReviewProposalResult {
+                disposition,
+                proposal: existing,
+            });
+        }
+
+        let now = Utc::now();
+        let record = EvolutionReviewProposalRecord {
+            id: proposal.id,
+            session_id: proposal.session_id,
+            target: proposal.target,
+            base_version: proposal.base_version,
+            base_digest: proposal.base_digest,
+            base_active_digest: proposal.base_active_digest,
+            changes: proposal.changes,
+            content_digest: proposal.content_digest,
+            status: ReviewProposalStatus::Pending,
+            apply_contract: proposal.apply_contract,
+            auto_candidate: proposal.auto_candidate,
+            created_at: now,
+            updated_at: now,
+        };
+        inner.evolution_review_proposals.push(record.clone());
+        Ok(AutoEvolutionReviewProposalResult {
+            disposition: AutoEvolutionReviewDisposition::Created,
+            proposal: record,
+        })
+    }
+
+    async fn create_auto_evolution_review_bundle(
+        &self,
+        bundle: NewAutoEvolutionReviewBundle,
+    ) -> Result<AutoEvolutionReviewBundleResult> {
+        let proposal = sanitize_evolution_review_proposal_persistence(bundle.proposal)?;
+        let approval = sanitize_approval_request_persistence(bundle.approval)?;
+        let proposal_payload_json = redact_persisted_json(bundle.proposal_payload_json);
+        let approval_payload_json = redact_persisted_json(bundle.approval_payload_json);
+        let candidate = proposal.auto_candidate.as_ref().ok_or_else(|| {
+            ServerError::InvalidRequest(
+                "auto evolution review proposal is missing candidate metadata".to_string(),
+            )
+        })?;
+        let proposal_id = proposal.id.to_string();
+        let approval_id = approval.id.to_string();
+        if approval.session_id != proposal.session_id
+            || approval.turn_id != Some(candidate.source_turn_id)
+            || approval.effect_type != "evolution_review"
+            || approval
+                .effect_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || proposal_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || approval_payload_json
+                .get("approvalId")
+                .and_then(Value::as_str)
+                != Some(approval_id.as_str())
+        {
+            return Err(ServerError::InvalidRequest(
+                "auto evolution review bundle has inconsistent proposal, approval, or event references"
+                    .to_string(),
+            ));
+        }
+        self.get_session(proposal.session_id).await?;
+        let source_turn = self.turn(candidate.source_turn_id).await?;
+        if source_turn.session_id != proposal.session_id || source_turn.status != "completed" {
+            return Err(ServerError::Conflict(
+                "persona auto-candidate source turn is not durably completed".to_string(),
+            ));
+        }
+        let audit = crate::evolution::evolution_audit_record(
+            &approval.effect_payload_json,
+            approval.id,
+            approval.id,
+            EvolutionAuditStatus::AwaitingApproval,
+            approval.created_at,
+            None,
+        )?
+        .map(|record| EvolutionAuditEntry {
+            idempotency_key: format!("approval:{}:attempt", approval.id),
+            record,
+        });
+
+        let mut inner = self.inner.lock();
+        let blocked = inner
+            .evolution_review_proposals
+            .iter()
+            .filter(|existing| {
+                existing
+                    .auto_candidate
+                    .as_ref()
+                    .is_some_and(|existing| existing.dedupe_key == candidate.dedupe_key)
+                    || (existing.target == proposal.target && existing.changes == proposal.changes)
+            })
+            .filter(|existing| {
+                matches!(
+                    existing.status,
+                    ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+                ) || existing.updated_at >= bundle.cooldown_since
+            })
+            .max_by(|left, right| {
+                let left_open = matches!(
+                    left.status,
+                    ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+                );
+                let right_open = matches!(
+                    right.status,
+                    ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+                );
+                left_open
+                    .cmp(&right_open)
+                    .then_with(|| left.updated_at.cmp(&right.updated_at))
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .cloned();
+        if let Some(existing) = blocked {
+            let disposition = if matches!(
+                existing.status,
+                ReviewProposalStatus::Pending | ReviewProposalStatus::Approved
+            ) {
+                AutoEvolutionReviewDisposition::Duplicate
+            } else {
+                AutoEvolutionReviewDisposition::Cooldown
+            };
+            return Ok(AutoEvolutionReviewBundleResult {
+                disposition,
+                proposal: existing,
+                approval: None,
+                events: Vec::new(),
+            });
+        }
+        if inner
+            .evolution_review_proposals
+            .iter()
+            .any(|existing| existing.id == proposal.id)
+            || inner
+                .approval_requests
+                .iter()
+                .any(|existing| existing.id == approval.id)
+        {
+            return Err(ServerError::Conflict(
+                "auto evolution review bundle identifiers already exist".to_string(),
+            ));
+        }
+
+        let record = EvolutionReviewProposalRecord {
+            id: proposal.id,
+            session_id: proposal.session_id,
+            target: proposal.target,
+            base_version: proposal.base_version,
+            base_digest: proposal.base_digest,
+            base_active_digest: proposal.base_active_digest,
+            changes: proposal.changes,
+            content_digest: proposal.content_digest,
+            status: ReviewProposalStatus::Pending,
+            apply_contract: proposal.apply_contract,
+            auto_candidate: proposal.auto_candidate,
+            created_at: approval.created_at,
+            updated_at: approval.created_at,
+        };
+        let first_seq = inner
+            .events
+            .get(&record.session_id)
+            .map_or(1, |events| events.len() as i64 + 1);
+        let mut proposal_event = SessionEvent::new(
+            record.session_id,
+            first_seq,
+            "write_proposal",
+            proposal_payload_json,
+            approval.created_at,
+        );
+        proposal_event.turn_id = approval.turn_id;
+        let mut approval_event = SessionEvent::new(
+            record.session_id,
+            first_seq + 1,
+            "approval",
+            approval_payload_json,
+            approval.created_at,
+        );
+        approval_event.turn_id = approval.turn_id;
+        let approval_record = ApprovalRequestRecord {
+            id: approval.id,
+            session_id: approval.session_id,
+            turn_id: approval.turn_id,
+            requester_id: approval.requester_id,
+            origin: approval.origin,
+            action: approval.action,
+            scope_json: approval.scope_json,
+            options_json: approval.options_json,
+            status: "pending".to_string(),
+            resumable: approval.resumable,
+            created_at: approval.created_at,
+            expires_at: approval.expires_at,
+            heartbeat_at: approval.created_at,
+            resolved_at: None,
+            selected_option_id: None,
+            resolution_json: None,
+            request_event_seq: Some(approval_event.seq),
+            resolution_event_seq: None,
+            resolution_version: 0,
+        };
+        let effect = ApprovalEffectRecord {
+            id: approval.id,
+            approval_id: approval.id,
+            session_id: approval.session_id,
+            effect_type: approval.effect_type,
+            payload_json: approval.effect_payload_json,
+            status: "blocked".to_string(),
+            attempts: 0,
+            available_at: approval.expires_at,
+            locked_at: None,
+            lease_owner: None,
+            lease_epoch: 0,
+            applied_at: None,
+            error_at: None,
+            last_error: None,
+            created_at: approval.created_at,
+            updated_at: approval.created_at,
+        };
+
+        #[cfg(test)]
+        if inner.fail_auto_evolution_bundle_before_commit_once {
+            inner.fail_auto_evolution_bundle_before_commit_once = false;
+            return Err(ServerError::Store(
+                "injected auto evolution bundle crash".to_string(),
+            ));
+        }
+
+        inner.evolution_review_proposals.push(record.clone());
+        inner.approval_requests.push(approval_record.clone());
+        inner.approval_effects.push(effect);
+        if let Some(audit) = audit {
+            append_evolution_audit_in_memory(&mut inner, audit)?;
+        }
+        inner
+            .events
+            .entry(record.session_id)
+            .or_default()
+            .extend([proposal_event.clone(), approval_event.clone()]);
+        if let Some(session) = inner.sessions.get_mut(&record.session_id) {
+            session.updated_at = approval.created_at;
+        }
+        Ok(AutoEvolutionReviewBundleResult {
+            disposition: AutoEvolutionReviewDisposition::Created,
+            proposal: record,
+            approval: Some(approval_record),
+            events: vec![proposal_event, approval_event],
+        })
     }
 
     async fn evolution_review_proposal(&self, id: Uuid) -> Result<EvolutionReviewProposalRecord> {

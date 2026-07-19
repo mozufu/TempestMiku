@@ -3,8 +3,13 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use tm_artifacts::default_root;
 use tm_core::{AgentConfig, CellBudget, Protocol, Sandbox};
-use tm_host::{CapabilityGrants, LinkedFolders, P0HostConfig};
+use tm_egress::{EgressRuntime, register_egress_functions};
+use tm_host::{CapabilityGrants, HostEventSink, InvocationCtx, LinkedFolders, P0HostConfig};
 use tm_lang::{TmSandbox, TmSandboxOptions};
+use tm_mcp::{
+    EgressMcpTransport, McpBounds, McpCatalogContext, McpCatalogManager, McpHttpTransportBounds,
+    McpRuntimeConfig,
+};
 use tm_modes::{ModeId, ModesConfig};
 
 use super::{approval::approval_policy, cli::Args};
@@ -94,9 +99,10 @@ and git status.\n"
         .system_prompt
 }
 
-pub(super) fn build_sandbox(
+pub(super) async fn build_sandbox(
     args: &Args,
     host_config: &P0HostConfig,
+    mcp_config: &McpRuntimeConfig,
     linked_folders: LinkedFolders,
 ) -> Result<Arc<dyn Sandbox>> {
     // The standalone CLI is its own local authority boundary. A single configured
@@ -109,7 +115,8 @@ pub(super) fn build_sandbox(
         [] => None,
     };
     let linked_folders = (!linked_folders.is_empty()).then_some(linked_folders);
-    let options = TmSandboxOptions {
+    let egress_runtime = EgressRuntime::new(host_config.egress.clone())?;
+    let mut options = TmSandboxOptions {
         artifact_root: host_config
             .artifact_root
             .clone()
@@ -117,13 +124,100 @@ pub(super) fn build_sandbox(
         session_id: args.session_id.clone().unwrap_or_else(|| "cli".to_string()),
         session_scope,
         linked_folders,
-        grants: serious_engineer_grants(),
+        grants: serious_engineer_grants().allow_many(host_config.egress.turn_capabilities()),
         approval_policy: approval_policy(host_config)?,
         approval_timeout: Duration::from_millis(host_config.approvals.timeout_ms),
         proc_run_timeout: Duration::from_millis(host_config.proc_run_timeout_ms),
+        proc_isolation: host_config.proc_isolation.clone(),
         ..TmSandboxOptions::default()
     };
+    register_egress_functions(&mut options.host_registry, egress_runtime.clone());
+    if mcp_config.enabled {
+        let bounds = McpBounds::default();
+        let http_servers = mcp_config.http_servers();
+        let transport = Arc::new(EgressMcpTransport::new(
+            egress_runtime,
+            http_servers.clone(),
+            McpHttpTransportBounds::default(),
+        )?);
+        let mut catalog_grants = CapabilityGrants::default();
+        for server in &http_servers {
+            catalog_grants =
+                catalog_grants.allow(format!("egress.destination:{}", server.destination_id));
+            if let Some(secret_id) = &server.secret_id {
+                catalog_grants = catalog_grants.allow(format!("secrets.use:{secret_id}"));
+            }
+        }
+        let catalog_context = McpCatalogContext::new(
+            InvocationCtx::new(catalog_grants)
+                .with_session_id("mcp-catalog-host")
+                .with_event_sink(Arc::new(CliCatalogAuditSink)),
+        )?;
+        let manager = McpCatalogManager::new(transport, bounds, catalog_context)?;
+        let report = manager.reload(&mcp_config.specs()).await?;
+        let catalog = manager.catalog();
+        for server in &catalog.servers {
+            let transport = http_servers
+                .iter()
+                .find(|transport| transport.alias == server.alias)
+                .expect("validated MCP config has transport for every catalog server");
+            options.grants = options
+                .grants
+                .clone()
+                .allow(format!("egress.destination:{}", transport.destination_id));
+            if let Some(secret_id) = &transport.secret_id {
+                options.grants = options
+                    .grants
+                    .clone()
+                    .allow(format!("secrets.use:{secret_id}"));
+            }
+            options.grants = options.grants.clone().allow_many(
+                server
+                    .tools
+                    .iter()
+                    .map(|tool| tool.capability.clone())
+                    .chain(
+                        server
+                            .prompts
+                            .iter()
+                            .map(|prompt| prompt.capability.clone()),
+                    )
+                    .chain(
+                        server
+                            .resources
+                            .iter()
+                            .map(|resource| resource.capability.clone()),
+                    ),
+            );
+            if !server.resources.is_empty() {
+                options.grants = options.grants.clone().allow("resources.read:mcp");
+            }
+        }
+        manager
+            .bindings()?
+            .register_into(&mut options.host_registry, &mut options.resource_registry)?;
+        tracing::info!(
+            generation = report.generation,
+            digest = %report.digest,
+            servers = report.servers,
+            tools = report.tools,
+            resources = report.resources,
+            prompts = report.prompts,
+            "activated immutable CLI MCP startup catalog"
+        );
+    }
     Ok(Arc::new(TmSandbox::new(options)))
+}
+
+#[derive(Debug)]
+struct CliCatalogAuditSink;
+
+#[async_trait::async_trait]
+impl HostEventSink for CliCatalogAuditSink {
+    async fn emit(&self, event_type: &str, payload_json: serde_json::Value) -> tm_host::Result<()> {
+        tracing::info!(event_type, payload = %payload_json, "MCP catalog host audit");
+        Ok(())
+    }
 }
 
 pub(super) fn serious_engineer_grants() -> CapabilityGrants {

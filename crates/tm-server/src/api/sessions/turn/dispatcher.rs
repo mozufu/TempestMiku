@@ -167,6 +167,21 @@ where
                 abort_turn_runtime(state, turn.session_id, turn.id, Some(executed.runtime)).await?;
                 return Err(error);
             }
+            if let Some(candidate) = executed.auto_persona_candidate
+                && let Err(error) = super::super::evolution_review::enqueue_auto_persona_candidate(
+                    state,
+                    turn.session_id,
+                    candidate,
+                )
+                .await
+            {
+                let safe_error = tm_memory::redact_dream_text(&error.to_string()).text;
+                tracing::warn!(
+                    error = %safe_error,
+                    turn_id = %turn.id,
+                    "could not enqueue auto-mode persona candidate"
+                );
+            }
             Ok(())
         }
         Err(error) => {
@@ -245,6 +260,8 @@ pub(super) enum TurnRuntime {
 pub(super) struct ExecutedTurn {
     pub(super) response: String,
     pub(super) runtime: TurnRuntime,
+    pub(super) auto_persona_candidate:
+        Option<super::super::persona_candidate::DetectedPersonaCandidate>,
 }
 
 fn cancel_turn_runtime<S, M, C>(state: &AppState<S, M, C>, session_id: Uuid, turn_id: Uuid)

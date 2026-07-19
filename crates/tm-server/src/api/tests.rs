@@ -578,7 +578,9 @@ where
 mod auth;
 mod coding_native;
 mod core_flow;
+mod egress;
 mod evolution_review;
+mod mcp;
 mod memory;
 mod pairing;
 mod project_resources;

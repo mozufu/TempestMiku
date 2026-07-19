@@ -56,6 +56,8 @@ fn args_parse_p0_config_and_session_flags() {
         [
             "--config",
             ".tempestmiku/config.json",
+            "--mcp-config",
+            ".tempestmiku/mcp.json",
             "--session-id",
             "smoke",
             "--event-log",
@@ -70,6 +72,10 @@ fn args_parse_p0_config_and_session_flags() {
     )
     .unwrap();
     assert_eq!(args.config, Some(PathBuf::from(".tempestmiku/config.json")));
+    assert_eq!(
+        args.mcp_config,
+        Some(PathBuf::from(".tempestmiku/mcp.json"))
+    );
     assert_eq!(args.session_id, Some("smoke".to_string()));
     assert_eq!(args.event_log, Some(PathBuf::from("/tmp/tm-events.jsonl")));
     assert!(args.turn_budget_ok);
@@ -240,8 +246,10 @@ async fn multi_folder_default_session_id_stays_fail_closed() {
             ..Args::default()
         },
         &host_config,
+        &tm_mcp::McpRuntimeConfig::default(),
         linked,
     )
+    .await
     .unwrap();
     let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
 

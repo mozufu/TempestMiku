@@ -300,6 +300,8 @@ where
             // expand a background run's grants.
             capabilities: Vec::new(),
             prior_messages: Vec::new(),
+            // Background scheduler runs never receive user-model dialectic synthesis.
+            dialectic: None,
             limits: ChatRunLimits {
                 max_turns: Some(job.max_turns.min(8) as usize),
                 cell_wall_ms: Some(job.script_timeout_seconds.min(120) as u64 * 1_000),

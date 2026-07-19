@@ -1,9 +1,10 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{fs, net::SocketAddr, path::PathBuf};
 
 use tm_artifacts::default_root;
 use tm_host::P0HostConfig;
+use tm_mcp::{McpBounds, McpRuntimeConfig};
 use tm_modes::ModesConfig;
-use tm_server::ServerRole;
+use tm_server::{SelfHostedAsrConfig, ServerRole};
 
 use super::BoxError;
 
@@ -17,6 +18,46 @@ pub(super) fn database_dsn_from_env() -> Option<String> {
     std::env::var("TM_DATABASE_URL")
         .ok()
         .filter(|dsn| !dsn.trim().is_empty())
+}
+
+pub(super) fn self_hosted_asr_config_from_env() -> Result<Option<SelfHostedAsrConfig>, BoxError> {
+    self_hosted_asr_config_from_values(
+        optional_utf8_env("TM_SELF_HOSTED_ASR_ENDPOINT")?,
+        optional_utf8_env("TM_SELF_HOSTED_ASR_LABEL")?,
+        optional_utf8_env("TM_SELF_HOSTED_ASR_MODEL_ID")?,
+    )
+}
+
+fn optional_utf8_env(name: &str) -> Result<Option<String>, BoxError> {
+    std::env::var_os(name)
+        .map(|value| {
+            value
+                .into_string()
+                .map_err(|_| format!("{name} must be valid UTF-8").into())
+        })
+        .transpose()
+}
+
+fn self_hosted_asr_config_from_values(
+    endpoint: Option<String>,
+    label: Option<String>,
+    model_id: Option<String>,
+) -> Result<Option<SelfHostedAsrConfig>, BoxError> {
+    let values = [endpoint, label, model_id].map(|value| {
+        value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    });
+    match values {
+        [None, None, None] => Ok(None),
+        [Some(endpoint), Some(label), Some(model_id)] => Ok(Some(SelfHostedAsrConfig::new(
+            &endpoint, &label, &model_id,
+        )?)),
+        _ => Err(
+            "TM_SELF_HOSTED_ASR_ENDPOINT, TM_SELF_HOSTED_ASR_LABEL, and TM_SELF_HOSTED_ASR_MODEL_ID must be set together"
+                .into(),
+        ),
+    }
 }
 
 pub(super) fn server_role_from_env() -> Result<ServerRole, BoxError> {
@@ -84,6 +125,26 @@ pub(super) fn load_host_config() -> Result<P0HostConfig, BoxError> {
     }
 }
 
+pub(super) fn load_mcp_config(host_config: &P0HostConfig) -> Result<McpRuntimeConfig, BoxError> {
+    let path = std::env::var_os("TM_MCP_CONFIG")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let default = PathBuf::from(".tempestmiku/mcp.json");
+            default.exists().then_some(default)
+        });
+    let config = match path {
+        Some(path) => {
+            let content = fs::read_to_string(&path)?;
+            serde_json::from_str::<McpRuntimeConfig>(&content)
+                .map_err(|error| format!("loading MCP config from {}: {error}", path.display()))?
+        }
+        None => McpRuntimeConfig::default(),
+    };
+    config.validate(&McpBounds::default())?;
+    config.validate_egress(&host_config.egress)?;
+    Ok(config)
+}
+
 pub(super) fn server_artifact_root(host_config: &P0HostConfig) -> PathBuf {
     std::env::var_os("TM_OMP_ACP_ARTIFACT_ROOT")
         .map(PathBuf::from)
@@ -116,4 +177,35 @@ pub(super) fn env_flag(name: &str) -> bool {
     std::env::var(name)
         .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_hosted_asr_is_disabled_by_default_and_rejects_partial_config() {
+        assert!(
+            self_hosted_asr_config_from_values(None, None, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            self_hosted_asr_config_from_values(
+                Some("https://asr.example.test/transcribe".to_string()),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            self_hosted_asr_config_from_values(
+                Some("https://asr.example.test/transcribe".to_string()),
+                Some("家用 ASR".to_string()),
+                Some("tea-asr-1.1-mini".to_string()),
+            )
+            .unwrap()
+            .is_some()
+        );
+    }
 }

@@ -101,6 +101,16 @@ const MIGRATIONS: &[Migration] = &[
         name: "p8_embedding_lifecycle_hardening",
         sql: include_str!("../../../migrations/0018_p8_embedding_lifecycle_hardening.sql"),
     },
+    Migration {
+        version: 19,
+        name: "mcp_mutation_effects",
+        sql: include_str!("../../../migrations/0019_mcp_mutation_effects.sql"),
+    },
+    Migration {
+        version: 20,
+        name: "egress_effects_budgets",
+        sql: include_str!("../../../migrations/0020_egress_effects_budgets.sql"),
+    },
 ];
 
 impl PostgresStore {

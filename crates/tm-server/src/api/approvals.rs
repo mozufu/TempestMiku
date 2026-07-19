@@ -231,21 +231,6 @@ async fn apply_mode_addendum_rollback_effect(
         let managed = persona
             .managed_mode_addendum(&mode_id)
             .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
-        let active = managed.active.ok_or_else(|| {
-            crate::evolution::policy_error(
-                tm_host::EvolutionPolicyReason::StaleApproval,
-                format!("managed mode addendum {mode_id} is no longer active"),
-            )
-        })?;
-        if active.content_digest != expected_active_digest {
-            return Err(crate::evolution::policy_error(
-                tm_host::EvolutionPolicyReason::StaleApproval,
-                format!(
-                    "managed mode addendum {mode_id} active version changed from {expected_active_digest} to {}",
-                    active.content_digest
-                ),
-            ));
-        }
         if let Some(target_digest) = target_digest
             && !managed
                 .versions
@@ -327,21 +312,6 @@ async fn apply_persona_addendum_rollback_effect(
         let managed = persona
             .managed_persona_addendum(persona_id)
             .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
-        let active = managed.active.ok_or_else(|| {
-            crate::evolution::policy_error(
-                tm_host::EvolutionPolicyReason::StaleApproval,
-                format!("managed persona addendum {persona_id} is no longer active"),
-            )
-        })?;
-        if active.content_digest != expected_active_digest {
-            return Err(crate::evolution::policy_error(
-                tm_host::EvolutionPolicyReason::StaleApproval,
-                format!(
-                    "managed persona addendum {persona_id} active version changed from {expected_active_digest} to {}",
-                    active.content_digest
-                ),
-            ));
-        }
         if let Some(target_digest) = target_digest
             && !managed
                 .versions
@@ -612,18 +582,12 @@ where
             persona,
             &proposal.target,
         )?;
-        if current
-            != (
+        let base_matches = current
+            == (
                 proposal.base_version,
                 proposal.base_digest.clone(),
                 proposal.base_active_digest.clone(),
-            )
-        {
-            return Err(crate::evolution::policy_error(
-                tm_host::EvolutionPolicyReason::StaleApproval,
-                format!("review proposal {proposal_id} base changed after approval"),
-            ));
-        }
+            );
         let current_digest = crate::api::sessions::evolution_review::review_content_digest(
             &proposal.target,
             proposal.base_version,
@@ -641,6 +605,14 @@ where
                 tm_modes::ReviewApplyContract::VersionedPersonaAddendum,
                 tm_modes::ReviewProposalTarget::Persona { persona_id },
             ) => {
+                let already_active_target =
+                    current.2.as_deref() == Some(proposal.content_digest.as_str());
+                if !base_matches && !already_active_target {
+                    return Err(crate::evolution::policy_error(
+                        tm_host::EvolutionPolicyReason::StaleApproval,
+                        format!("review proposal {proposal_id} base changed after approval"),
+                    ));
+                }
                 activation = Some(serde_json::to_value(
                     persona
                         .install_managed_persona_addendum(tm_modes::ManagedPersonaAddendumInstall {
@@ -664,6 +636,14 @@ where
                 tm_modes::ReviewApplyContract::VersionedModeAddendum,
                 tm_modes::ReviewProposalTarget::Mode { mode_id },
             ) => {
+                let already_active_target =
+                    current.2.as_deref() == Some(proposal.content_digest.as_str());
+                if !base_matches && !already_active_target {
+                    return Err(crate::evolution::policy_error(
+                        tm_host::EvolutionPolicyReason::StaleApproval,
+                        format!("review proposal {proposal_id} base changed after approval"),
+                    ));
+                }
                 activation = Some(serde_json::to_value(
                     persona
                         .install_managed_mode_addendum(tm_modes::ManagedModeAddendumInstall {
@@ -683,7 +663,14 @@ where
                         })?,
                 )?);
             }
-            (tm_modes::ReviewApplyContract::Disabled, _) => {}
+            (tm_modes::ReviewApplyContract::Disabled, _) => {
+                if !base_matches {
+                    return Err(crate::evolution::policy_error(
+                        tm_host::EvolutionPolicyReason::StaleApproval,
+                        format!("review proposal {proposal_id} base changed after approval"),
+                    ));
+                }
+            }
             _ => {
                 return Err(crate::evolution::policy_error(
                     tm_host::EvolutionPolicyReason::InvalidPayload,

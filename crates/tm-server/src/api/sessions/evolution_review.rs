@@ -62,6 +62,9 @@ pub struct PersonaAddendumRollbackResponse {
     pub status: String,
 }
 
+const PERSONA_AUTO_PROPOSAL_COOLDOWN_DAYS: i64 = 7;
+const PERSONA_AUTO_PROPOSAL_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub(crate) async fn propose_evolution_review<S, M, C>(
     State(state): State<AppState<S, M, C>>,
     Path(session_id): Path<Uuid>,
@@ -107,6 +110,7 @@ where
         changes: payload.changes,
         content_digest,
         apply_contract,
+        auto_candidate: None,
     };
     let evolution = crate::evolution::evolution_effect_metadata(
         state.self_evolution_tier,
@@ -177,6 +181,172 @@ where
         resource_uri: evolution_review_proposal_uri(proposal_id),
         apply_enabled: proposal.apply_contract != ReviewApplyContract::Disabled,
     }))
+}
+
+pub(super) async fn enqueue_auto_persona_candidate<S, M, C>(
+    state: &AppState<S, M, C>,
+    session_id: Uuid,
+    mut candidate: super::persona_candidate::DetectedPersonaCandidate,
+) -> Result<bool>
+where
+    S: Store,
+    M: MemoryProvider,
+    C: ChatRunner,
+{
+    if state.self_evolution_tier != tm_host::SelfEvolutionTier::Moderate
+        || state.persona.managed_persona_addenda_path().is_none()
+    {
+        return Ok(false);
+    }
+    let target = ReviewProposalTarget::Persona {
+        persona_id: "miku".to_string(),
+    };
+    let (base_version, base_digest, base_active_digest) =
+        review_base_snapshot(&state.persona, &target)?;
+    let active = state
+        .persona
+        .active_managed_persona_addendum("miku")
+        .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+    if active.as_ref().map(|active| active.content_digest.clone()) != base_active_digest {
+        return Err(crate::evolution::policy_error(
+            tm_host::EvolutionPolicyReason::StaleApproval,
+            "managed persona addendum changed during auto-candidate snapshot",
+        ));
+    }
+    if let Some(active) = &active {
+        if active.changes.iter().any(|change| {
+            change.section == candidate.change.section
+                && change.after.summary == candidate.change.after.summary
+        }) {
+            return Ok(false);
+        }
+        candidate.change.before = active
+            .changes
+            .iter()
+            .rev()
+            .find(|change| change.section == candidate.change.section)
+            .map(|change| change.after.clone());
+    }
+
+    let proposal_id = Uuid::new_v4();
+    let changes = vec![candidate.change];
+    let content_digest = review_content_digest(&target, base_version, &base_digest, &changes)?;
+    let new = crate::NewEvolutionReviewProposal {
+        id: proposal_id,
+        session_id,
+        target,
+        base_version,
+        base_digest,
+        base_active_digest,
+        changes,
+        content_digest,
+        apply_contract: ReviewApplyContract::VersionedPersonaAddendum,
+        auto_candidate: Some(candidate.metadata),
+    };
+    let evolution = crate::evolution::evolution_effect_metadata(
+        state.self_evolution_tier,
+        EvolutionTargetClass::PersonaProposal,
+        proposal_id.to_string(),
+        "auto-mode",
+        session_id,
+        None,
+        &review_content_value(&new),
+    )?;
+    let created_at = Utc::now();
+    let approval_id = Uuid::new_v4();
+    let expires_at = created_at
+        + chrono::Duration::from_std(PERSONA_AUTO_PROPOSAL_TIMEOUT)
+            .map_err(|error| ServerError::InvalidRequest(error.to_string()))?;
+    let proposal_preview = crate::EvolutionReviewProposalRecord {
+        id: new.id,
+        session_id: new.session_id,
+        target: new.target.clone(),
+        base_version: new.base_version,
+        base_digest: new.base_digest.clone(),
+        base_active_digest: new.base_active_digest.clone(),
+        changes: new.changes.clone(),
+        content_digest: new.content_digest.clone(),
+        status: ReviewProposalStatus::Pending,
+        apply_contract: new.apply_contract,
+        auto_candidate: new.auto_candidate.clone(),
+        created_at,
+        updated_at: created_at,
+    };
+    let prompt = evolution_review_approval_prompt(&proposal_preview, PERSONA_AUTO_PROPOSAL_TIMEOUT);
+    let proposal_payload_json = evolution_review_proposal_payload(&proposal_preview);
+    let approval_payload_json = json!({
+        "approvalId": approval_id,
+        "backend": "evolution-review",
+        "action": prompt.action.clone(),
+        "scope": prompt.scope.clone(),
+        "options": prompt.options.clone(),
+        "timeoutMs": PERSONA_AUTO_PROPOSAL_TIMEOUT.as_millis(),
+        "expiresAt": expires_at,
+        "resumable": true,
+    });
+    let created = state
+        .store
+        .create_auto_evolution_review_bundle(crate::NewAutoEvolutionReviewBundle {
+            proposal: new,
+            approval: crate::NewApprovalRequest {
+                id: approval_id,
+                session_id,
+                turn_id: Some(candidate_source_turn_id(&proposal_preview)?),
+                requester_id: state.approval_broker.requester_id(),
+                origin: "evolution-review".to_string(),
+                action: prompt.action,
+                scope_json: prompt.scope,
+                options_json: serde_json::to_value(prompt.options)?,
+                effect_type: "evolution_review".to_string(),
+                effect_payload_json: json!({
+                    "evolution": evolution,
+                    "proposalId": proposal_id,
+                }),
+                resumable: true,
+                created_at,
+                expires_at,
+            },
+            proposal_payload_json,
+            approval_payload_json,
+            cooldown_since: created_at
+                - chrono::Duration::days(PERSONA_AUTO_PROPOSAL_COOLDOWN_DAYS),
+        })
+        .await?;
+    if created.disposition != crate::AutoEvolutionReviewDisposition::Created {
+        return Ok(false);
+    }
+    let proposal = created.proposal;
+    let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::for_turn(
+        session_id,
+        proposal
+            .auto_candidate
+            .as_ref()
+            .expect("created auto proposal has candidate metadata")
+            .source_turn_id,
+        Arc::clone(&state.store),
+        state.sender(session_id),
+    ));
+    if created.approval.is_none() || created.events.len() != 2 {
+        return Err(ServerError::Store(
+            "created auto evolution review bundle is incomplete".to_string(),
+        ));
+    }
+    for event in created.events {
+        sink.publish_persisted(event).await?;
+    }
+    Ok(true)
+}
+
+fn candidate_source_turn_id(proposal: &crate::EvolutionReviewProposalRecord) -> Result<Uuid> {
+    proposal
+        .auto_candidate
+        .as_ref()
+        .map(|candidate| candidate.source_turn_id)
+        .ok_or_else(|| {
+            ServerError::InvalidRequest(
+                "auto evolution review proposal is missing candidate metadata".to_string(),
+            )
+        })
 }
 
 fn persona_changes_are_activatable(changes: &[ReviewAddendumChange]) -> bool {
@@ -306,7 +476,7 @@ pub(crate) fn evolution_review_proposal_payload(
         .map(|change| format!("{}: {}", change.after.label, change.after.summary))
         .collect::<Vec<_>>()
         .join("\n");
-    json!({
+    let mut payload = json!({
         "kind": "evolution_review",
         "proposalId": proposal.id,
         "target": proposal.target,
@@ -319,7 +489,13 @@ pub(crate) fn evolution_review_proposal_payload(
         "applyEnabled": proposal.apply_contract != ReviewApplyContract::Disabled,
         "createdAt": proposal.created_at,
         "updatedAt": proposal.updated_at,
-    })
+    });
+    if let Some(candidate) = &proposal.auto_candidate {
+        payload["source"] = json!("auto_mode");
+        payload["candidateTrigger"] = json!(candidate.trigger);
+        payload["evidenceCount"] = json!(candidate.evidence.len());
+    }
+    payload
 }
 
 fn evolution_review_approval_prompt(
@@ -327,24 +503,30 @@ fn evolution_review_approval_prompt(
     timeout: Duration,
 ) -> ApprovalPrompt {
     let event = evolution_review_proposal_payload(proposal);
+    let mut scope = json!({
+        "kind": "evolution_review",
+        "proposalId": proposal.id,
+        "target": proposal.target,
+        "baseVersion": proposal.base_version,
+        "baseDigest": proposal.base_digest,
+        "preview": event["preview"],
+        "contentDigest": proposal.content_digest,
+        "uri": evolution_review_proposal_uri(proposal.id),
+        "applyEnabled": proposal.apply_contract != ReviewApplyContract::Disabled,
+        "timeoutMs": timeout.as_millis(),
+    });
+    if let Some(candidate) = &proposal.auto_candidate {
+        scope["source"] = json!("auto_mode");
+        scope["candidateTrigger"] = json!(candidate.trigger);
+        scope["evidenceCount"] = json!(candidate.evidence.len());
+    }
     ApprovalPrompt {
         action: format!(
             "review {} addendum {}",
             proposal.target.kind(),
             proposal.target.id()
         ),
-        scope: json!({
-            "kind": "evolution_review",
-            "proposalId": proposal.id,
-            "target": proposal.target,
-            "baseVersion": proposal.base_version,
-            "baseDigest": proposal.base_digest,
-            "preview": event["preview"],
-            "contentDigest": proposal.content_digest,
-            "uri": evolution_review_proposal_uri(proposal.id),
-            "applyEnabled": proposal.apply_contract != ReviewApplyContract::Disabled,
-            "timeoutMs": timeout.as_millis(),
-        }),
+        scope,
         options: vec![
             ApprovalOption {
                 option_id: "allow".to_string(),

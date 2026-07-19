@@ -228,6 +228,7 @@ in
       ];
       wants = [ "tailscaled.service" ];
       environment = {
+        PATH = "${cfg.isolationRuntime}/bin";
         TM_WORKER_CONFIG = workerConfig;
       };
       serviceConfig = {

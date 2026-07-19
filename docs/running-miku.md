@@ -826,6 +826,31 @@ linked hosts in protocol v1. Health is intentionally separate from execution:
 and artifact request is signed. Keep port 18787 reachable only on the Tailnet. If homolab sleeps,
 remote host calls fail instead of falling back to lumo.
 
+For the checked-in `~/deployment-config` deployment, roll out in this order:
+
+1. Push the reviewed TempestMiku revision. Update the TempestMiku flake input used by homolab and,
+   when Rust coordinator code changed, lumo's independent `sourceRev` plus both hashes of the raw
+   GitHub source archive. An unpacked NAR hash is not a valid `pkgs.fetchurl` or Docker archive hash.
+2. From m3air, run the deployment-config flake check plus explicit homolab NixOS and lumo Home Manager
+   evaluations, then commit and push the scoped deployment-config change.
+3. On homolab, fast-forward `~/deployment-config`, run `just homolab-switch`, and provision
+   `/var/lib/tempestmiku-worker/linked/tempestmiku` as a clean operator-owned checkout at the exact
+   reviewed revision. The module creates the directory but never clones or updates it.
+4. Verify `tempestmiku-m4-worker` is enabled/active, `GET /v1/health` returns
+   `workerId=homolab-m4`, the delegated cgroup root has zero resident processes, and its
+   `service` subgroup owns the long-lived worker.
+5. From m3air, run `just lumo-build`, `just lumo-switch`, and `just lumo-smoke`. The coordinator
+   container must contain `TM_REMOTE_WORKER_CONFIG` and no `TM_HOST_CONFIG`.
+6. Run a signed real-checkout read, same-job-id idempotency replay, and approval-gated isolated
+   `proc.run`. Update m3air last with `just build` and `just switch`.
+
+The exact commands, SOPS validation, first-checkout procedure, attended no-fallback canary,
+hardening compatibility notes, and rollback order live in
+`~/deployment-config/hosts/lumo/home/services/tempestmiku/DEPLOYMENT.md`. Retain release results using the
+claim boundary in
+[`2026-07-19-m4-coordinator-worker.md`](evidence/2026-07-19-m4-coordinator-worker.md); an unsigned
+health response alone is not deployment acceptance.
+
 ## Selected MCP and live research
 
 MCP is disabled unless a trusted MCP config explicitly selects both the transport and individual

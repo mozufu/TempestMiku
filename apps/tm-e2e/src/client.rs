@@ -205,22 +205,14 @@ impl MikuClient {
         .await
     }
 
-    pub async fn promote_session(
+    pub async fn assign_session_to_project(
         &self,
+        project_id: &str,
         session_id: &str,
-        summary: &str,
-        open_loops: &[String],
-        decisions: &[String],
-        resources: &[String],
     ) -> Result<Value> {
         self.post_json(
-            &format!("/sessions/{session_id}/promote"),
-            json!({
-                "summary": summary,
-                "openLoops": open_loops,
-                "decisions": decisions,
-                "resources": resources,
-            }),
+            &format!("/projects/{project_id}/sessions/{session_id}"),
+            json!({}),
         )
         .await
     }

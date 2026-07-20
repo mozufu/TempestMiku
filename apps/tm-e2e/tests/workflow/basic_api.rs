@@ -28,7 +28,7 @@ async fn scripted_workflow_drives_miku_public_api() {
     assert_eq!(report.artifact_uri.as_deref(), Some("artifact://0"));
     assert_ne!(report.continuity_session_id, report.session_id);
     assert_eq!(report.continuity_project_uri, "project://tempestmiku");
-    assert!(report.promoted_count >= 4);
+    assert!(report.promoted_count >= 3);
     assert_eq!(report.rounds.len(), 2);
     assert_eq!(report.rounds[0].index, 1);
     assert_eq!(report.rounds[0].mode, "general");

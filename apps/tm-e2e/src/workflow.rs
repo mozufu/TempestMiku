@@ -289,39 +289,9 @@ pub async fn run_workflow(
         );
     }
 
-    let mut resources = Vec::new();
-    if let Some(uri) = &artifact_uri {
-        resources.push(uri.clone());
-    }
-    let open_loops = vec!["keep the LLM-to-Miku E2E hatch covered".to_string()];
-    let decisions = vec!["keep the hatch HTTP-only and approval-bound".to_string()];
-    let first_promotion = client
-        .promote_session(
-            &session.id,
-            "LLM-to-Miku E2E hatch is wired through public session APIs.",
-            &open_loops,
-            &decisions,
-            &resources,
-        )
-        .await?;
-    ensure!(first_promotion["projectUri"] == json!("project://tempestmiku"));
-    let promoted = first_promotion["promoted"]
-        .as_array()
-        .context("promotion response did not include promoted items")?;
-    ensure!(!promoted.is_empty());
-    let second_promotion = client
-        .promote_session(
-            &session.id,
-            "LLM-to-Miku E2E hatch is wired through public session APIs.",
-            &open_loops,
-            &decisions,
-            &resources,
-        )
-        .await?;
-    ensure!(
-        first_promotion["promoted"][0]["id"] == second_promotion["promoted"][0]["id"],
-        "promotion should be idempotent"
-    );
+    // §30: the project-scoped coding turn already grew project items through the per-turn
+    // observation pipeline; there is no promote step. Continuity is proven from those durable items.
+    let _ = &artifact_uri;
 
     let project = client.project_overview(&session.id).await?;
     ensure!(project["projectUri"] == json!("project://tempestmiku"));
@@ -369,12 +339,14 @@ pub async fn run_workflow(
         "fresh project session should preserve the Serious Engineer capability and voice envelope"
     );
     let continuity_project = client.project_overview(&continuity_session.id).await?;
+    // §30: the summary/status is grown from the project-scoped coding turn, whose echoed final
+    // repeats the coding prompt ("...open loop...decision").
     ensure!(
         continuity_project["projectUri"] == json!("project://tempestmiku")
             && continuity_project["status"]
                 .as_str()
-                .is_some_and(|status| status.contains("LLM-to-Miku E2E hatch")),
-        "fresh project session did not recover the promoted summary: {continuity_project}"
+                .is_some_and(|status| status.contains("Open loop") && status.contains("Decision")),
+        "fresh project session did not recover the auto-observed summary: {continuity_project}"
     );
     ensure!(
         continuity_project["openLoops"]
@@ -401,15 +373,24 @@ pub async fn run_workflow(
         .await?;
     let continuity_content = continuity_resource["content"].as_str().unwrap_or_default();
     ensure!(
-        continuity_content.contains("keep the LLM-to-Miku E2E hatch covered")
-            && continuity_content.contains("keep the hatch HTTP-only and approval-bound"),
-        "fresh project session could not open promoted project provenance"
+        continuity_content.contains("Open loop") && continuity_content.contains("Decision"),
+        "fresh project session could not open durable project provenance"
     );
 
     // Keep the variable live so future workflow edits do not accidentally stop proving replay
     // after the memory path.
     let _ = last_event_id;
 
+    // Count the durable project items the observation pipeline grew for this project.
+    let observed_count = ["openLoops", "decisions", "nextActions"]
+        .iter()
+        .map(|key| {
+            continuity_project[*key]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0)
+        })
+        .sum::<usize>();
     Ok(WorkflowReport {
         session_id: session.id,
         continuity_session_id: continuity_session.id,
@@ -418,7 +399,7 @@ pub async fn run_workflow(
         coding_final,
         memory_record_uri,
         artifact_uri,
-        promoted_count: promoted.len(),
+        promoted_count: observed_count,
         rounds,
     })
 }

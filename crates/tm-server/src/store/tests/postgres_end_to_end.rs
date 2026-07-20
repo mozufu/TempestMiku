@@ -409,3 +409,122 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
         1
     );
 }
+
+#[tokio::test]
+async fn gated_postgres_project_entity_lifecycle_archives_and_fails_closed() {
+    let Some(dsn) = postgres_test_dsn() else {
+        return;
+    };
+    let admin = PostgresStore::connect(&dsn).await.unwrap();
+    let schema = format!("tm_p11_project_{}", Uuid::new_v4().simple());
+    admin
+        .client()
+        .batch_execute(&format!("create schema {schema}"))
+        .await
+        .unwrap();
+    let store = PostgresStore::connect_in_schema(&dsn, &schema)
+        .await
+        .unwrap();
+
+    // §30: a project is a server-owned durable entity. ensure_project is idempotent on id.
+    let created = store.ensure_project("atlas", "Atlas").await.unwrap();
+    assert_eq!(created.id, "atlas");
+    assert_eq!(created.title, "Atlas");
+    assert_eq!(created.status, ProjectStatus::Active);
+    assert!(created.archived_at.is_none());
+    let again = store
+        .ensure_project("atlas", "Atlas Renamed")
+        .await
+        .unwrap();
+    assert_eq!(again.id, created.id);
+    assert_eq!(again.status, ProjectStatus::Active);
+    assert_eq!(store.project("atlas").await.unwrap().unwrap().id, "atlas");
+    assert_eq!(
+        store
+            .projects(false)
+            .await
+            .unwrap()
+            .iter()
+            .map(|project| project.id.clone())
+            .collect::<Vec<_>>(),
+        vec!["atlas".to_string()]
+    );
+
+    // Project-scoped memory persists while the entity is active.
+    let scope = "project:atlas";
+    let record = durable_episodic_record(
+        Uuid::new_v4(),
+        "brian",
+        scope,
+        "Atlas retains this until archive.",
+        MemoryRecordStatus::Active,
+        MemoryRecordLinks::default(),
+    );
+    let record = store.upsert_memory_record(record).await.unwrap();
+    store
+        .enqueue_memory_embedding_job(pending_embedding_job(&record))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .active_memory_records("brian", scope, 5)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .memory_scope_tombstone("brian", scope)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // §30.4: archive flips status and commits the memory-scope tombstone in one transaction so
+    // exact recall/replay fails closed immediately after archive.
+    let archived = store
+        .archive_project("brian", "atlas", "wrapped up")
+        .await
+        .unwrap();
+    assert_eq!(archived.status, ProjectStatus::Archived);
+    assert!(archived.archived_at.is_some());
+    assert!(
+        store
+            .memory_scope_tombstone("brian", scope)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        store.active_memory_records("brian", scope, 5).await,
+        Err(ServerError::NotFound(_))
+    ));
+    assert!(matches!(
+        store.memory_embedding_jobs("brian", scope).await,
+        Err(ServerError::NotFound(_))
+    ));
+
+    // Archived entities drop out of the default listing but remain visible with include_archived.
+    assert!(store.projects(false).await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .projects(true)
+            .await
+            .unwrap()
+            .iter()
+            .map(|project| (project.id.clone(), project.status))
+            .collect::<Vec<_>>(),
+        vec![("atlas".to_string(), ProjectStatus::Archived)]
+    );
+    // ensure_project never resurrects an archived entity (§30 lifecycle).
+    let after = store.ensure_project("atlas", "Atlas").await.unwrap();
+    assert_eq!(after.status, ProjectStatus::Archived);
+
+    drop(store);
+    admin
+        .client()
+        .batch_execute(&format!("drop schema {schema} cascade"))
+        .await
+        .unwrap();
+}

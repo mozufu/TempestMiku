@@ -65,7 +65,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let project = super::util::authorized_project_id(&session, query.project.as_deref())?;
     let store = state
         .drive_store

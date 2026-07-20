@@ -11,8 +11,9 @@ use chrono::{DateTime, Duration, Utc};
 use rows::{
     row_to_approval_effect, row_to_approval_request, row_to_cron_job, row_to_cron_run,
     row_to_dream_record, row_to_evolution_audit, row_to_evolution_review_proposal,
-    row_to_memory_embedding_job, row_to_memory_summary, row_to_message_record, row_to_project_item,
-    row_to_session_record, row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
+    row_to_memory_embedding_job, row_to_memory_summary, row_to_message_record, row_to_project,
+    row_to_project_item, row_to_session_record, row_to_session_turn, row_to_skill_proposal,
+    row_to_stored_memory_record,
 };
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus, EvolutionPolicyReason};
@@ -46,8 +47,9 @@ use super::{
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MessageRecord,
     ModeState, NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle,
     NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
-    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent,
-    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
+    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, ProjectRecord, RecallChunkRecord,
+    SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store,
+    StoreRuntimeMetrics,
 };
 
 fn evolution_audit_entry(
@@ -193,6 +195,10 @@ pub(super) fn postgres_memory_error(error: tokio_postgres::Error) -> ServerError
     }
 }
 
+fn store_error(error: tokio_postgres::Error) -> ServerError {
+    ServerError::Store(error.to_string())
+}
+
 impl PostgresStore {
     const SCHEMA_LOCK_ID: i64 = 0x544d_5343_4845_4d41;
 
@@ -305,6 +311,19 @@ impl Store for PostgresStore {
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
         Ok(session)
+    }
+
+    async fn owner_subject(&self) -> Result<String> {
+        Ok(self
+            .client
+            .query_opt(
+                "select owner_subject from server_authority where singleton = true",
+                &[],
+            )
+            .await
+            .map_err(store_error)?
+            .map(|row| row.get("owner_subject"))
+            .unwrap_or_else(|| "owner".to_string()))
     }
 
     async fn configure_owner_subject(&self, owner_subject: &str) -> Result<usize> {
@@ -4136,6 +4155,107 @@ impl Store for PostgresStore {
         }
         .map_err(|err| ServerError::Store(err.to_string()))?;
         rows.into_iter().map(row_to_project_item).collect()
+    }
+
+    async fn ensure_project(&self, id: &str, title: &str) -> Result<ProjectRecord> {
+        validate_persistence_identifier("project id", id)?;
+        let title = title.trim();
+        let title = if title.is_empty() { id } else { title };
+        let row = self
+            .client
+            .query_one(
+                "insert into projects(id, title, status, created_at, updated_at)
+                 values ($1, $2, 'active', now(), now())
+                 on conflict (id) do update set updated_at = projects.updated_at
+                 returning id, title, status, created_at, updated_at, archived_at",
+                &[&id, &title],
+            )
+            .await
+            .map_err(store_error)?;
+        row_to_project(row)
+    }
+
+    async fn project(&self, id: &str) -> Result<Option<ProjectRecord>> {
+        let row = self
+            .client
+            .query_opt(
+                "select id, title, status, created_at, updated_at, archived_at
+                   from projects where id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(store_error)?;
+        row.map(row_to_project).transpose()
+    }
+
+    async fn projects(&self, include_archived: bool) -> Result<Vec<ProjectRecord>> {
+        let rows = if include_archived {
+            self.client
+                .query(
+                    "select id, title, status, created_at, updated_at, archived_at
+                       from projects order by id asc",
+                    &[],
+                )
+                .await
+        } else {
+            self.client
+                .query(
+                    "select id, title, status, created_at, updated_at, archived_at
+                       from projects where status = 'active' order by id asc",
+                    &[],
+                )
+                .await
+        }
+        .map_err(store_error)?;
+        rows.into_iter().map(row_to_project).collect()
+    }
+
+    async fn archive_project(
+        &self,
+        owner_subject: &str,
+        id: &str,
+        reason: &str,
+    ) -> Result<ProjectRecord> {
+        validate_persistence_identifier("project id", id)?;
+        validate_persistence_identifier("memory tombstone owner subject", owner_subject)?;
+        let reason = redact_persisted_text(reason);
+        if reason.trim().is_empty() {
+            return Err(ServerError::InvalidRequest(
+                "project archive reason must not be empty".to_string(),
+            ));
+        }
+        let scope = format!("project:{id}");
+        let now = Utc::now();
+        // Serialize the memory-scope tombstone with the status flip in one transaction (§30.4), so
+        // recall/replay fails closed exactly when the project is archived.
+        let mut client = self.memory_mutation_client.lock().await;
+        let transaction = client.transaction().await.map_err(postgres_memory_error)?;
+        transaction
+            .execute(
+                "insert into memory_scope_tombstones(
+                    owner_subject, memory_scope, link_alias, reason, revoked_at
+                 ) values ($1, $2, null, $3, $4)
+                 on conflict (owner_subject, memory_scope) do update set
+                    reason = excluded.reason,
+                    revoked_at = least(memory_scope_tombstones.revoked_at, excluded.revoked_at)",
+                &[&owner_subject, &scope, &reason, &now],
+            )
+            .await
+            .map_err(postgres_memory_error)?;
+        let row = transaction
+            .query_opt(
+                "update projects
+                    set status = 'archived', archived_at = coalesce(archived_at, $2), updated_at = $2
+                  where id = $1
+                  returning id, title, status, created_at, updated_at, archived_at",
+                &[&id, &now],
+            )
+            .await
+            .map_err(postgres_memory_error)?;
+        let row = row.ok_or_else(|| ServerError::NotFound(format!("project {id}")))?;
+        let record = row_to_project(row)?;
+        transaction.commit().await.map_err(postgres_memory_error)?;
+        Ok(record)
     }
 
     async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord> {

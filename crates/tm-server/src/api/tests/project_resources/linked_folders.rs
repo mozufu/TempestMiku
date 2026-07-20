@@ -343,20 +343,21 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
     assert_eq!(resolved["selector"], json!("2-2"));
     assert_eq!(resolved["content"], json!("two"));
 
-    let scoped_recall = "revoked linked memory should not leak this recall";
+    // §30: detaching the folder revokes only the filesystem grant; project memory persists.
+    let scoped_recall = "linked memory survives folder detach under project entity";
     store
         .add_recall_chunk(RecallChunkRecord {
             id: Uuid::new_v4(),
             scope: "project:tempestmiku".to_string(),
             text: scoped_recall.to_string(),
-            source: "linked-revocation-test".to_string(),
+            source: "linked-detach-test".to_string(),
             importance: 0.8,
             created_at: Utc::now(),
         })
         .await
         .unwrap();
     linked.remove_policy("tempestmiku").unwrap();
-    let revoked_memory = app
+    let memory = app
         .clone()
         .oneshot(
             Request::builder()
@@ -370,15 +371,16 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
         )
         .await
         .unwrap();
-    assert_eq!(revoked_memory.status(), StatusCode::NOT_FOUND);
-    let revoked_body = response_json(revoked_memory).await;
-    assert!(!revoked_body.to_string().contains(scoped_recall));
-    assert!(
-        revoked_body
-            .to_string()
-            .contains("active linked project scope project:tempestmiku")
-    );
+    // Project memory still resolves after the folder is detached; only the fs grant is gone.
+    assert_eq!(memory.status(), StatusCode::OK);
+    let memory_body = response_json(memory).await;
+    let memory_view: Value =
+        serde_json::from_str(memory_body["content"].as_str().unwrap()).unwrap();
+    assert_eq!(memory_view["scope"], json!("project:tempestmiku"));
+    assert_eq!(memory_view["mode"], json!(null));
+    assert_eq!(memory_view["linkedUri"], json!(null));
 
+    // The linked file read now fails closed because the fs grant was revoked.
     let revoked_file = app
         .oneshot(
             Request::builder()
@@ -392,5 +394,6 @@ async fn project_linked_folder_view_lists_and_reads_shared_links() {
         )
         .await
         .unwrap();
-    assert_eq!(revoked_file.status(), StatusCode::NOT_FOUND);
+    // The grant is revoked, so the linked file read fails closed with a policy error.
+    assert_eq!(revoked_file.status(), StatusCode::FORBIDDEN);
 }

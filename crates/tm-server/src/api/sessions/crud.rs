@@ -161,7 +161,7 @@ where
         None => assets.modes.default_mode(),
     };
     let scope = payload.scope.unwrap_or_else(|| "global".to_string());
-    validate_memory_scope(&state.linked_folders, &scope)?;
+    resources::util::ensure_active_project_scope(state.store.as_ref(), &scope).await?;
     let persona_status = assets.status.clone();
     let mut session = state
         .store
@@ -300,7 +300,7 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    validate_memory_scope(&state.linked_folders, &payload.scope)?;
+    resources::util::ensure_active_project_scope(state.store.as_ref(), &payload.scope).await?;
     let existing = state.store.get_session(session_id).await?;
     if existing.status == "ended" {
         return Err(ServerError::Conflict(format!(
@@ -337,10 +337,6 @@ fn session_response(
         memory_scope: session.memory_scope,
         active_skills: profile.active_skills,
     }
-}
-
-fn validate_memory_scope(linked_folders: &tm_host::LinkedFolders, scope: &str) -> Result<()> {
-    resources::util::validate_authorized_memory_scope(linked_folders, scope)
 }
 
 fn session_summary_response(

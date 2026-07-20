@@ -22,10 +22,8 @@ where
             "session {session_id} has ended"
         )));
     }
-    resources::util::validate_authorized_memory_scope(
-        &state.linked_folders,
-        &session.memory_scope,
-    )?;
+    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let (prior_messages, turn_number) =
         bounded_prior_messages(state.store.as_ref(), session_id, durable_turn.id).await?;
     // Mode changes are never inferred from keywords. An unlocked normal chat turn receives the

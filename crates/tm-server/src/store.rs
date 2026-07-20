@@ -22,8 +22,9 @@ pub use models::{
     NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle, NewCronJobRecord,
     NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
     PERSONA_AUTO_CANDIDATE_SCHEMA_VERSION, PersonaAutoCandidate, PersonaAutoCandidateEvidence,
-    PersonaAutoCandidateTrigger, ProjectItemKind, ProjectItemRecord, SessionEvent, SessionRecord,
-    SessionSummaryRecord, SessionTurnRecord, Store, StoreEvent, StoreRuntimeMetrics,
+    PersonaAutoCandidateTrigger, ProjectItemKind, ProjectItemRecord, ProjectRecord, ProjectStatus,
+    SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreEvent,
+    StoreRuntimeMetrics,
 };
 pub use postgres::PostgresStore;
 pub use tm_memory::{ProfileFactRecord, RecallChunkRecord};

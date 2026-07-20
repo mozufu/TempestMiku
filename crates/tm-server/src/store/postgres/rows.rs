@@ -12,8 +12,8 @@ use crate::{Result, ServerError};
 
 use super::{
     ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronRunRecord,
-    EvolutionReviewProposalRecord, MessageRecord, ModeState, ProjectItemRecord, SessionRecord,
-    SessionTurnRecord,
+    EvolutionReviewProposalRecord, MessageRecord, ModeState, ProjectItemRecord, ProjectRecord,
+    SessionRecord, SessionTurnRecord,
 };
 
 pub(super) fn row_to_approval_request(row: tokio_postgres::Row) -> ApprovalRequestRecord {
@@ -343,6 +343,18 @@ pub(super) fn row_to_project_item(row: tokio_postgres::Row) -> Result<ProjectIte
         dedupe_key: row.get("dedupe_key"),
         provenance_json: row.get("provenance_json"),
         created_at: row.get("created_at"),
+    })
+}
+
+pub(super) fn row_to_project(row: tokio_postgres::Row) -> Result<ProjectRecord> {
+    let status: String = row.get("status");
+    Ok(ProjectRecord {
+        id: row.get("id"),
+        title: row.get("title"),
+        status: status.parse()?,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        archived_at: row.get("archived_at"),
     })
 }
 

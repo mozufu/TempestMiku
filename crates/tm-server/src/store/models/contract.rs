@@ -3,6 +3,11 @@ use super::*;
 pub trait Store: Send + Sync + 'static {
     async fn create_session(&self, new: NewSession) -> Result<SessionRecord>;
     async fn configure_owner_subject(&self, owner_subject: &str) -> Result<usize>;
+    /// The server-owned authority subject. Used by non-session-scoped owner actions such as project
+    /// archive (§30.4). Defaults to `owner` for stores without a durable authority row.
+    async fn owner_subject(&self) -> Result<String> {
+        Ok("owner".to_string())
+    }
     async fn set_session_memory_scope(
         &self,
         session_id: Uuid,
@@ -527,6 +532,41 @@ pub trait Store: Send + Sync + 'static {
         project_id: &str,
         kind: Option<ProjectItemKind>,
     ) -> Result<Vec<ProjectItemRecord>>;
+    /// Create or return the project entity for `id` (§30). `id` is the canonical `project:<id>`
+    /// slug; `title` is the display name. Idempotent on `id`.
+    async fn ensure_project(&self, id: &str, title: &str) -> Result<ProjectRecord> {
+        let _ = (id, title);
+        Err(ServerError::Store(
+            "project entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// Look up a single project entity by id.
+    async fn project(&self, id: &str) -> Result<Option<ProjectRecord>> {
+        let _ = id;
+        Err(ServerError::Store(
+            "project entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// List project entities. When `include_archived` is false, only `active` projects are returned.
+    async fn projects(&self, include_archived: bool) -> Result<Vec<ProjectRecord>> {
+        let _ = include_archived;
+        Err(ServerError::Store(
+            "project entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// Archive a project entity and tombstone its memory scope (§30.4). The archive and the durable
+    /// scope revocation commit together so exact recall/replay fails closed after archive.
+    async fn archive_project(
+        &self,
+        owner_subject: &str,
+        id: &str,
+        reason: &str,
+    ) -> Result<ProjectRecord> {
+        let _ = (owner_subject, id, reason);
+        Err(ServerError::Store(
+            "project entities are not implemented by this store".to_string(),
+        ))
+    }
     async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord>;
     async fn dream_queue_for_session(&self, session_id: Uuid) -> Result<Vec<DreamQueueRecord>>;
     async fn dream_queue(&self, scope: &str, limit: usize) -> Result<Vec<DreamQueueRecord>>;

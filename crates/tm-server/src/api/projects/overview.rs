@@ -31,10 +31,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    resources::util::validate_authorized_memory_scope(
-        &state.linked_folders,
-        &session.memory_scope,
-    )?;
+    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         build_project_overview(&state, session_id, project_id).await?,
@@ -52,10 +50,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    resources::util::validate_authorized_memory_scope(
-        &state.linked_folders,
-        &session.memory_scope,
-    )?;
+    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         state
@@ -76,10 +72,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    resources::util::validate_authorized_memory_scope(
-        &state.linked_folders,
-        &session.memory_scope,
-    )?;
+    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         state
@@ -100,10 +94,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    resources::util::validate_authorized_memory_scope(
-        &state.linked_folders,
-        &session.memory_scope,
-    )?;
+    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let project_id = resources::util::authorized_project_id(&session, query.project_id.as_deref())?;
     Ok(Json(
         state

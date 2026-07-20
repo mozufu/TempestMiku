@@ -5,10 +5,10 @@ use std::{
     io::{BufRead, BufReader},
 };
 
-pub(crate) fn validate_authorized_memory_scope(
-    linked_folders: &tm_host::LinkedFolders,
-    scope: &str,
-) -> Result<()> {
+pub(crate) async fn validate_authorized_memory_scope<S>(store: &S, scope: &str) -> Result<()>
+where
+    S: Store,
+{
     if scope == "global" {
         return Ok(());
     }
@@ -16,13 +16,38 @@ pub(crate) fn validate_authorized_memory_scope(
         .strip_prefix("project:")
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            ServerError::InvalidRequest(
-                "scope must be global or project:<active-linked-alias>".to_string(),
-            )
+            ServerError::InvalidRequest("scope must be global or project:<id>".to_string())
         })?;
-    if !linked_folders.contains_alias(project) {
+    // §30: scope authority is the server-owned project entity, not a live linked-folder alias. A
+    // folderless project is a valid scope; an archived project fails closed.
+    match store.project(project).await? {
+        Some(record) if record.status == crate::ProjectStatus::Active => Ok(()),
+        _ => Err(ServerError::NotFound(format!(
+            "active project scope {scope}"
+        ))),
+    }
+}
+
+/// Enter a memory scope as the owner (session create / scope switch). `global` is always valid.
+/// A `project:<id>` scope lazily creates the entity (owner action, §30.2) but never resurrects an
+/// archived one — re-entering an archived project fails closed.
+pub(crate) async fn ensure_active_project_scope<S>(store: &S, scope: &str) -> Result<()>
+where
+    S: Store,
+{
+    if scope == "global" {
+        return Ok(());
+    }
+    let project = scope
+        .strip_prefix("project:")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ServerError::InvalidRequest("scope must be global or project:<id>".to_string())
+        })?;
+    let record = store.ensure_project(project, project).await?;
+    if record.status != crate::ProjectStatus::Active {
         return Err(ServerError::NotFound(format!(
-            "active linked project scope {scope}"
+            "active project scope {scope}"
         )));
     }
     Ok(())
@@ -109,7 +134,7 @@ where
 {
     let (project_id, view) = parse_project_uri(uri)?;
     let session = state.store.get_session(session_id).await?;
-    validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope).await?;
     authorized_project_id(&session, Some(&project_id))?;
     if let Some(view) = view.as_deref()
         && let Some(linked_uri) = project_linked_uri(view)
@@ -154,9 +179,8 @@ where
             serde_json::to_value(overview.resources)?
         }
         Some("memory") => {
-            let policy = active_project_link_policy(&project_id, &state.linked_folders)
-                .ok_or_else(|| inactive_project_memory_scope_error(&project_id))?;
-            project_memory_view(&project_id, &policy)
+            let policy = active_project_link_policy(&project_id, &state.linked_folders);
+            project_memory_view(&project_id, policy.as_ref())
         }
         Some("linked-folders") => serde_json::to_value(project_linked_folder_entries(
             &project_id,
@@ -194,19 +218,16 @@ where
 {
     if uri == "project://" {
         state.store.get_session(session_id).await?;
-        return Ok(crate::api::projects::project_resource_entries(
-            &state.linked_folders,
-        ));
+        return crate::api::projects::project_resource_entries(state).await;
     }
     let (project_id, view) = parse_project_uri(uri)?;
     let session = state.store.get_session(session_id).await?;
-    validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope).await?;
     authorized_project_id(&session, Some(&project_id))?;
     if let Some(view) = view.as_deref() {
         if view == "memory" {
-            let policy = active_project_link_policy(&project_id, &state.linked_folders)
-                .ok_or_else(|| inactive_project_memory_scope_error(&project_id))?;
-            return Ok(project_memory_entries(&project_id, &policy));
+            let policy = active_project_link_policy(&project_id, &state.linked_folders);
+            return Ok(project_memory_entries(&project_id, policy.as_ref()));
         }
         if view == "linked-folders" {
             return Ok(project_linked_folder_entries(
@@ -255,9 +276,8 @@ where
         "resources",
         "linked-folders",
     ];
-    if active_project_link_policy(&project_id, &state.linked_folders).is_some() {
-        views.insert(4, "memory");
-    }
+    // §30: project memory exists on the entity, not the folder, so the memory view is always listed.
+    views.insert(4, "memory");
     Ok(views
         .into_iter()
         .map(|view| ResourceEntry {
@@ -290,27 +310,34 @@ fn project_linked_folder_entries(
         .collect()
 }
 
-fn project_memory_view(project_id: &str, policy: &tm_host::FsPolicy) -> Value {
+fn project_memory_view(project_id: &str, policy: Option<&tm_host::FsPolicy>) -> Value {
     let scope = project_memory_scope(project_id);
     let encoded = crate::memory::encode_memory_segment(&scope);
     json!({
         "scope": scope,
         "chunksUri": format!("memory://scopes/{encoded}/chunks"),
-        "mode": fs_mode_label(policy.mode),
-        "linkedUri": format!("linked://{}/", policy.alias),
+        "mode": policy.map(|policy| fs_mode_label(policy.mode)),
+        "linkedUri": policy.map(|policy| format!("linked://{}/", policy.alias)),
         "activeRootUri": "memory://root",
-        "note": "memory://root and memory://summaries resolve using the active session scope; chunksUri is the explicit project-scope recall surface."
+        "note": "memory://root and memory://summaries resolve using the active session scope; chunksUri is the explicit project-scope recall surface. Project memory is owned by the project entity and exists with or without a linked folder (§30)."
     })
 }
 
-fn project_memory_entries(project_id: &str, policy: &tm_host::FsPolicy) -> Vec<ResourceEntry> {
+fn project_memory_entries(
+    project_id: &str,
+    policy: Option<&tm_host::FsPolicy>,
+) -> Vec<ResourceEntry> {
     let scope = project_memory_scope(project_id);
     let encoded = crate::memory::encode_memory_segment(&scope);
+    let title = match policy {
+        Some(policy) => format!("{} ({})", scope, fs_mode_label(policy.mode)),
+        None => scope.clone(),
+    };
     vec![ResourceEntry {
         uri: format!("memory://scopes/{encoded}/chunks"),
         name: "chunks".to_string(),
         kind: "memory_scope".to_string(),
-        title: Some(format!("{} ({})", scope, fs_mode_label(policy.mode))),
+        title: Some(title),
         size_bytes: None,
         modified_at: None,
     }]
@@ -357,13 +384,6 @@ fn active_project_link_policy(
         .policies()
         .into_iter()
         .find(|policy| linked_alias_matches_project(project_id, &policy.alias))
-}
-
-fn inactive_project_memory_scope_error(project_id: &str) -> ServerError {
-    ServerError::Policy(format!(
-        "project memory scope {} is not active; link the project folder first",
-        project_memory_scope(project_id)
-    ))
 }
 
 fn project_linked_alias(view: &str) -> Option<&str> {

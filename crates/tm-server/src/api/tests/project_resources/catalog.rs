@@ -1,10 +1,12 @@
 use super::*;
 
 #[tokio::test]
-async fn project_catalog_lists_live_local_and_remote_aliases_without_host_details() {
+async fn project_catalog_lists_entities_with_attached_folders_without_host_details() {
     let temp = tempfile::tempdir().unwrap();
     let local_root = temp.path().join("local-project");
     std::fs::create_dir_all(&local_root).unwrap();
+    // A linked folder aliased `zeta` is attached to the `zeta` project entity; `alpha` is a
+    // folderless project. §30: the catalog is the entity list, and folders resolve as attachments.
     let linked = LinkedFolders::from_configs(vec![LinkedFolderConfig {
         name: "zeta".to_string(),
         path: local_root.clone(),
@@ -12,13 +14,13 @@ async fn project_catalog_lists_live_local_and_remote_aliases_without_host_detail
         commands: vec!["cargo".to_string()],
         safe_args: Vec::new(),
     }])
-    .unwrap()
-    .with_virtual_aliases(["alpha".to_string()])
     .unwrap();
     let store = Arc::new(InMemoryStore::default());
+    store.ensure_project("alpha", "Alpha").await.unwrap();
+    store.ensure_project("zeta", "Zeta").await.unwrap();
     let state = AppState::new(
         store.clone(),
-        Arc::new(StoreMemoryProvider::new(store)),
+        Arc::new(StoreMemoryProvider::new(store.clone())),
         Arc::new(EchoChatRunner),
         ModesConfig::default(),
         AuthConfig::NoAuth,
@@ -45,15 +47,21 @@ async fn project_catalog_lists_live_local_and_remote_aliases_without_host_detail
             "projects": [
                 {
                     "id": "alpha",
+                    "title": "Alpha",
+                    "status": "active",
                     "memoryScope": "project:alpha",
                     "projectUri": "project://alpha",
-                    "linkedFoldersUri": "project://alpha/linked-folders"
+                    "linkedFoldersUri": "project://alpha/linked-folders",
+                    "linkedFolderUris": []
                 },
                 {
                     "id": "zeta",
+                    "title": "Zeta",
+                    "status": "active",
                     "memoryScope": "project:zeta",
                     "projectUri": "project://zeta",
-                    "linkedFoldersUri": "project://zeta/linked-folders"
+                    "linkedFoldersUri": "project://zeta/linked-folders",
+                    "linkedFolderUris": ["project://zeta/linked-folders/zeta/"]
                 }
             ]
         })
@@ -63,6 +71,8 @@ async fn project_catalog_lists_live_local_and_remote_aliases_without_host_detail
     assert!(!encoded.contains("cargo"));
     assert!(!encoded.contains("worker"));
 
+    // §30: detaching the folder does not remove the project; it keeps its memory scope and simply
+    // shows no attached folder.
     linked.remove_policy("zeta").unwrap();
     let response = app
         .clone()
@@ -75,27 +85,24 @@ async fn project_catalog_lists_live_local_and_remote_aliases_without_host_detail
         )
         .await
         .unwrap();
-    assert_eq!(
-        response_json(response).await,
-        json!({
-            "projects": [{
-                "id": "alpha",
-                "memoryScope": "project:alpha",
-                "projectUri": "project://alpha",
-                "linkedFoldersUri": "project://alpha/linked-folders"
-            }]
-        })
-    );
+    let catalog = response_json(response).await;
+    let zeta = catalog["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == json!("zeta"))
+        .expect("zeta project survives folder detach");
+    assert_eq!(zeta["linkedFolderUris"], json!([]));
+    assert_eq!(zeta["status"], json!("active"));
 }
 
 #[tokio::test]
 async fn empty_catalog_and_project_resource_root_are_navigable() {
-    let temp = tempfile::tempdir().unwrap();
     let store = Arc::new(InMemoryStore::default());
     let linked = LinkedFolders::default();
     let state = AppState::new(
         store.clone(),
-        Arc::new(StoreMemoryProvider::new(store)),
+        Arc::new(StoreMemoryProvider::new(store.clone())),
         Arc::new(EchoChatRunner),
         ModesConfig::default(),
         AuthConfig::NoAuth,
@@ -135,15 +142,8 @@ async fn empty_catalog_and_project_resource_root_are_navigable() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response_json(response).await, json!([]));
 
-    linked
-        .insert_policy(tm_host::FsPolicy {
-            alias: "runtime".to_string(),
-            root: temp.path().canonicalize().unwrap(),
-            mode: FsMode::Ro,
-            commands: std::collections::BTreeSet::new(),
-            safe_args: Vec::new(),
-        })
-        .unwrap();
+    // §30: a folderless project entity appears in the catalog and the resource root.
+    store.ensure_project("runtime", "Runtime").await.unwrap();
     let response = app
         .clone()
         .oneshot(
@@ -160,9 +160,12 @@ async fn empty_catalog_and_project_resource_root_are_navigable() {
         json!({
             "projects": [{
                 "id": "runtime",
+                "title": "Runtime",
+                "status": "active",
                 "memoryScope": "project:runtime",
                 "projectUri": "project://runtime",
-                "linkedFoldersUri": "project://runtime/linked-folders"
+                "linkedFoldersUri": "project://runtime/linked-folders",
+                "linkedFolderUris": []
             }]
         })
     );
@@ -187,13 +190,17 @@ async fn empty_catalog_and_project_resource_root_are_navigable() {
             "uri": "project://runtime",
             "name": "runtime",
             "kind": "project",
-            "title": "runtime",
+            "title": "Runtime",
             "sizeBytes": null,
             "modifiedAt": null
         }])
     );
 
-    linked.remove_policy("runtime").unwrap();
+    // Archiving the project removes it from the active catalog (§30.4).
+    store
+        .archive_project("brian", "runtime", "done")
+        .await
+        .unwrap();
     let response = app
         .oneshot(
             Request::builder()

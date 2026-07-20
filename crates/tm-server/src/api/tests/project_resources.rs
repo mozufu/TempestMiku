@@ -8,6 +8,7 @@ use tm_memory::{
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillVerification,
 };
 
+mod assignment;
 mod catalog;
 mod cron;
 mod drive;
@@ -15,6 +16,5 @@ mod linked_folders;
 mod memory_access;
 mod memory_dreams;
 mod memory_records;
-mod promotion;
 mod resource_gateway;
 mod skill;

@@ -550,7 +550,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let subject = session.owner_subject;
     let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
@@ -579,7 +580,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let subject = session.owner_subject;
     let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
@@ -605,7 +607,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(&state.linked_folders, &session.memory_scope)?;
+    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let subject = session.owner_subject;
     let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();

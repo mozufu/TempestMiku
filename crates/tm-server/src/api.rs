@@ -45,8 +45,8 @@ use crate::{
     CodingEventSink, CodingTurn, DurableApprovalSpec, MemoryProvider, MemoryRecordRef,
     MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, ModeCatalog, ModeId, ModeProfile,
     ModesConfig, NewProjectItem, NewSession, PersistingEventSink, ProjectItemKind,
-    ProjectItemRecord, ResolveApprovalRequest, Result, ServerError, SessionEvent,
-    SkillProposalStatus, Store, StoreCodingEventSink, StoreEvent, store::ModeState,
+    ProjectItemRecord, ProjectRecord, ProjectStatus, ResolveApprovalRequest, Result, ServerError,
+    SessionEvent, SkillProposalStatus, Store, StoreCodingEventSink, StoreEvent, store::ModeState,
     store::RecallChunkRecord,
 };
 
@@ -98,7 +98,6 @@ mod tests;
 use mode_suggest::{MODE_SUGGEST_APPROVAL_TIMEOUT, MODE_SUGGEST_CAPABILITY, ModeSuggestHostFn};
 use modes::{active_skills, build_turn_prompt, mode_changed_payload, mode_profile};
 use projects::{build_project_overview, project_id_from_scope, record_project_observations};
-use resources::validate_relative_path;
 
 pub use modes::{ModeRequest, ModeResponse};
 pub use projects::{ProjectCatalogEntry, ProjectCatalogResponse};
@@ -589,7 +588,18 @@ where
             delete(auth_devices::revoke_device::<S, M, C>),
         )
         .route("/modes", get(modes::list_modes::<S, M, C>))
-        .route("/projects", get(projects::list_projects::<S, M, C>))
+        .route(
+            "/projects",
+            get(projects::list_projects::<S, M, C>).post(projects::create_project::<S, M, C>),
+        )
+        .route(
+            "/projects/:id/archive",
+            post(projects::archive_project::<S, M, C>),
+        )
+        .route(
+            "/projects/:id/sessions/:session_id",
+            post(projects::assign_session::<S, M, C>),
+        )
         .route(
             "/voice/asr/engines",
             get(crate::voice_asr::engines::<S, M, C>),
@@ -679,10 +689,6 @@ where
         .route(
             "/sessions/:id/project/next-actions",
             get(projects::project_next_actions::<S, M, C>),
-        )
-        .route(
-            "/sessions/:id/promote",
-            post(projects::promote_session::<S, M, C>),
         )
         .route(
             "/sessions/:id/resources/resolve",

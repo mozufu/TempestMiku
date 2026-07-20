@@ -356,3 +356,46 @@ pub struct EndSessionDreamResult {
     pub events: Vec<SessionEvent>,
     pub newly_ended: bool,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectStatus {
+    Active,
+    Archived,
+}
+
+impl ProjectStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+        }
+    }
+}
+
+impl std::str::FromStr for ProjectStatus {
+    type Err = ServerError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "active" => Ok(Self::Active),
+            "archived" => Ok(Self::Archived),
+            other => Err(ServerError::Store(format!(
+                "unknown project status {other}"
+            ))),
+        }
+    }
+}
+
+/// A server-owned project entity (§30). Its `id` is the canonical `project:<id>` memory-scope slug;
+/// linked folders attach to it by id but are not part of the record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRecord {
+    pub id: String,
+    pub title: String,
+    pub status: ProjectStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
+}

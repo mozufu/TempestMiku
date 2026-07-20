@@ -43,10 +43,8 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    resources::util::validate_authorized_memory_scope(
-        &state.linked_folders,
-        &session.memory_scope,
-    )?;
+    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+        .await?;
     let (proposal, timeout) = memory_write_proposal_from_request(session_id, &session, payload)?;
     Ok(Json(
         run_memory_write_proposal(&state, session_id, proposal, timeout).await?,

@@ -32,8 +32,9 @@ use super::{
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MessageRecord,
     ModeState, NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle,
     NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
-    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, RecallChunkRecord, SessionEvent,
-    SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
+    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, ProjectRecord, ProjectStatus,
+    RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store,
+    StoreRuntimeMetrics,
 };
 
 mod approval_helpers;
@@ -71,6 +72,7 @@ struct Inner {
     memory_embedding_jobs: Vec<MemoryEmbeddingJobRecord>,
     memory_scope_tombstones: Vec<MemoryScopeTombstone>,
     project_items: Vec<ProjectItemRecord>,
+    projects: BTreeMap<String, ProjectRecord>,
     dream_queue: Vec<DreamQueueRecord>,
     memory_summaries: Vec<MemorySummaryRecord>,
     skill_proposals: Vec<SkillProposalRecord>,
@@ -145,6 +147,15 @@ impl Store for InMemoryStore {
         };
         inner.sessions.insert(session.id, session.clone());
         Ok(session)
+    }
+
+    async fn owner_subject(&self) -> Result<String> {
+        Ok(self
+            .inner
+            .lock()
+            .configured_owner_subject
+            .clone()
+            .unwrap_or_else(|| "brian".to_string()))
     }
 
     async fn configure_owner_subject(&self, owner_subject: &str) -> Result<usize> {
@@ -2596,6 +2607,67 @@ impl Store for InMemoryStore {
             .collect::<Vec<_>>();
         items.sort_by_key(|item| item.created_at);
         Ok(items)
+    }
+
+    async fn ensure_project(&self, id: &str, title: &str) -> Result<ProjectRecord> {
+        validate_persistence_identifier("project id", id)?;
+        let title = title.trim();
+        let title = if title.is_empty() { id } else { title };
+        let now = Utc::now();
+        let mut inner = self.inner.lock();
+        let record = inner
+            .projects
+            .entry(id.to_string())
+            .or_insert_with(|| ProjectRecord {
+                id: id.to_string(),
+                title: title.to_string(),
+                status: ProjectStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+            });
+        Ok(record.clone())
+    }
+
+    async fn project(&self, id: &str) -> Result<Option<ProjectRecord>> {
+        Ok(self.inner.lock().projects.get(id).cloned())
+    }
+
+    async fn projects(&self, include_archived: bool) -> Result<Vec<ProjectRecord>> {
+        let mut projects = self
+            .inner
+            .lock()
+            .projects
+            .values()
+            .filter(|project| include_archived || project.status == ProjectStatus::Active)
+            .cloned()
+            .collect::<Vec<_>>();
+        projects.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(projects)
+    }
+
+    async fn archive_project(
+        &self,
+        owner_subject: &str,
+        id: &str,
+        reason: &str,
+    ) -> Result<ProjectRecord> {
+        validate_persistence_identifier("project id", id)?;
+        let scope = format!("project:{id}");
+        // Serialize the archive with the durable scope tombstone (§30.4): revoke first so a failure
+        // leaves the project active, then flip status.
+        self.revoke_memory_scope(owner_subject, &scope, reason)
+            .await?;
+        let now = Utc::now();
+        let mut inner = self.inner.lock();
+        let project = inner
+            .projects
+            .get_mut(id)
+            .ok_or_else(|| ServerError::NotFound(format!("project {id}")))?;
+        project.status = ProjectStatus::Archived;
+        project.archived_at = Some(now);
+        project.updated_at = now;
+        Ok(project.clone())
     }
 
     async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord> {

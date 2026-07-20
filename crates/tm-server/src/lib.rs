@@ -75,8 +75,9 @@ pub use store::{
     NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
     NewProjectItem, NewSession, PersonaAutoCandidate, PersonaAutoCandidateEvidence,
     PersonaAutoCandidateTrigger, PostgresDriveMetadataStore, PostgresStore, ProjectItemKind,
-    ProjectItemRecord, SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store,
-    StoreEgressStateStore, StoreEvent, StoreMcpMutationEffectStore, StoreRuntimeMetrics,
+    ProjectItemRecord, ProjectRecord, ProjectStatus, SessionEvent, SessionRecord,
+    SessionSummaryRecord, SessionTurnRecord, Store, StoreEgressStateStore, StoreEvent,
+    StoreMcpMutationEffectStore, StoreRuntimeMetrics,
 };
 pub use tm_agents::MailboxRegistry;
 pub use tm_memory::{

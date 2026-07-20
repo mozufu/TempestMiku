@@ -472,8 +472,6 @@ pub struct SessionInfo {
     pub id: String,
     pub mode: String,
     pub label: String,
-    #[serde(alias = "voice_cap")]
-    pub voice_cap: String,
     #[serde(alias = "default_scope")]
     pub default_scope: String,
     #[serde(default)]

@@ -4,7 +4,6 @@ use super::super::*;
 async fn serious_engineer_session_uses_authoritative_global_scope_and_recalls_next_session() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-    assert_eq!(session_a.voice_cap, "off");
     assert_eq!(session_a.default_scope, "global");
     assert_eq!(session_a.active_skills, vec!["serious-engineer-ops"]);
     post_user_message(&app, session_a.id, "tempestmiku code open loop").await;

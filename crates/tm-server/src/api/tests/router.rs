@@ -440,7 +440,6 @@ async fn unlock_removes_the_lock_but_never_reverts_the_mode() {
     let lock_json = response_json(lock).await;
     assert_eq!(lock_json["modeState"]["mode"], json!("serious_engineer"));
     assert_eq!(lock_json["modeState"]["lockSource"], json!("user"));
-    assert_eq!(lock_json["voiceCap"], json!("off"));
 
     post_user_message(
         &app,
@@ -545,7 +544,6 @@ async fn user_override_can_switch_to_serious_engineer_through_lock() {
     );
     assert_eq!(override_json["modeState"]["lockSource"], Value::Null);
     assert_eq!(override_json["modeState"]["overrideSource"], json!("user"));
-    assert_eq!(override_json["voiceCap"], json!("off"));
 
     let latest = store.get_session(session.id).await.unwrap();
     assert_eq!(latest.mode_state.mode, ModeId::from("serious_engineer"));
@@ -608,7 +606,6 @@ async fn mode_events_only_come_from_explicit_actions_not_from_messages() {
         mode_events[1].payload_json["mode"],
         json!("serious_engineer")
     );
-    assert_eq!(mode_events[1].payload_json["voice_cap"], json!("off"));
     assert_eq!(
         mode_events[1].payload_json["activeSkills"],
         json!(["serious-engineer-ops"])
@@ -643,7 +640,6 @@ async fn mode_events_only_come_from_explicit_actions_not_from_messages() {
     assert_eq!(lock.status(), StatusCode::OK);
     let lock_json = response_json(lock).await;
     assert_eq!(lock_json["modeState"]["lockSource"], json!("user"));
-    assert_eq!(lock_json["voiceCap"], json!("medium"));
     assert_eq!(
         lock_json["activeSkills"],
         json!(["miku-voice", "personal-assistant-state-capture"])

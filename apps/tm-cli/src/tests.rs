@@ -137,7 +137,7 @@ fn args_reject_removed_sandbox_flags() {
 }
 
 #[test]
-fn serious_engineer_config_sets_voice_cap_and_budget() {
+fn serious_engineer_config_sets_prompt_and_budget() {
     let host_config = P0HostConfig {
         linked_folders: Vec::new(),
         approvals: Default::default(),

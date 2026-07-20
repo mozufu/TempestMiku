@@ -29,13 +29,13 @@ The structure that lets serious coding coexist with a characterful companion ins
 sterile coding product:
 
 - **Identity** (SOUL.md) — *who* she is. Always present, never overridden.
-- **Voice** (miku-voice) — *how* she talks. Intensity **floats by context**:
-  `high` (light / stuck / emotional) → `medium` (planning) → `off` (serious / money /
-  legal / irreversible / external). The API uses the English values. Chinese voice labels and
-  examples belong inside the mode/voice skills, not in the client UI. Rule: **the more serious, the
-  fewer 喵.** Cuteness yields to precision, by design.
+- **Voice agreement** (`SOUL.md` + mode/voice skill text) — *how* she talks. Intensity floats by
+  context: light / stuck / emotional is more characterful; planning is moderate; serious / money /
+  legal / irreversible / external work is plain and precise. This is prompt guidance shared by the
+  identity and the active mode's skills, not a structured profile field, API value, router input, or
+  client setting. Rule: **the more serious, the fewer 喵.** Cuteness yields to precision, by design.
 - **Mode profile** (`modes.json` → `modes[]`) — *what capabilities are available now*: declared
-  runtime capabilities, the mode's own declared skills, grouping class, default scope, and voice cap.
+  runtime capabilities, the mode's own declared skills, grouping class, and default scope.
   Switchable, and **sticky**: once switched, a mode stays active until the user changes it or
   confirms an `await modes.suggest(...)` proposal — never a silent per-turn revert.
 - **Layered skills** (`modes.json` → top-level `skills[]`, bodies at `skills/*/SKILL.md`) —
@@ -49,7 +49,7 @@ system prompt = [ immutable tm runtime boot contract ]
               + [ always-on layered skill markdown ]
               + [ active mode's own declared skill markdown ]
               + [ triggered layered skill markdown, if this message matched ]
-              + [ voice overlay @ context-appropriate intensity, via miku-voice when loaded ]
+              + [ voice behavior from SOUL.md and composed mode/voice skill text ]
               + [ memory: recall context + summary (§22) ]
 ```
 
@@ -59,12 +59,10 @@ SOUL and mode-selected skills. Configured or managed assets cannot replace or di
 runtime-owned language guidance. Repo workflow details such as `fs.patch` operations remain in
 `serious-engineer-ops`, not in the language contract.
 
-All skill markdown is frontmatter-stripped before composition. Mode id, capability list, voice cap,
-and scope are dispatch data the router and host act on — they are never rendered into the prompt as
-labels. Miku doesn't read "Mode id: serious_engineer" or "Voice cap: off"; she reads SOUL.md plus
-whichever skill markdown resolved for that turn. Voice intensity likewise isn't told to her as a
-value — it's implicit in whether `miku-voice` is among the composed skills, and the skill's own
-concentration table reads intensity from context.
+Mode id, capability list, and scope are dispatch data the router and host act on; they are never
+rendered into the prompt as labels. Miku doesn't read "Mode id: serious_engineer" or a structured
+voice level. She reads SOUL.md plus whichever skill markdown resolved for that turn. Voice behavior
+is therefore changed by editing those prompt assets, not by changing API metadata.
 
 Rust vendors the default `SOUL.md`, `modes.json`, and bundled skills under
 `crates/tm-modes/assets/`. A configured mode/skill asset path may override those files except the
@@ -89,17 +87,17 @@ without changing who Miku is. Rust does not know a fixed list of modes or layere
 
 Pick the smallest sufficient mode — and expect it to stick until you leave it.
 
-| # | Bundled runtime mode | Declared capabilities | Voice | Mode-declared skills |
-|---|---|---|---|---|
-| 1 | **General** (default) | conversation + light `memory.recall` / `memory.propose` | `medium` | `miku-voice`, `personal-assistant-state-capture` |
-| 2 | **Serious Engineer** | native `fs.*` / `code.*` / `proc.*` and `resources.read:linked` (§25), with an OMP ACP bridge available as a replaceable backend | `off` | `serious-engineer-ops` |
-| 3 | **Handoff** | `agents.*` (§23) + brief generation | `off` | `oh-my-pi-handoff` |
+| # | Bundled runtime mode | Declared capabilities | Mode-declared skills |
+|---|---|---|---|
+| 1 | **General** (default) | conversation + light `memory.recall` / `memory.propose` | `miku-voice`, `personal-assistant-state-capture` |
+| 2 | **Serious Engineer** | native `fs.*` / `code.*` / `proc.*` and `resources.read:linked` (§25), with an OMP ACP bridge available as a replaceable backend | `serious-engineer-ops` |
+| 3 | **Handoff** | `agents.*` (§23) + brief generation | `oh-my-pi-handoff` |
 
 All three modes run under the **one** character. Capabilities are config, not code (§10.4): a mode =
 runtime id + profile + route triggers (routing hints; see §21.4) + declared capabilities + its own
-declared skills + default scope + voice cap. The optional `capabilityClass` is only grouping/display
-metadata; dispatch decisions use declared capabilities such as `backend.coding`, `fs.*`, `code.*`,
-`proc.*`, or `agents.*`.
+declared skills + default scope. The optional `capabilityClass` is only grouping/display metadata;
+dispatch decisions use declared capabilities such as `backend.coding`, `fs.*`, `code.*`, `proc.*`,
+or `agents.*`. Voice remains prompt-level agreement rather than mode metadata.
 
 What used to be modes 2 and 3 here (Ambiguity Grill, Negative-State Grounding) granted no
 capabilities and are now layered skills instead — see §21.3. They still shape the conversation the
@@ -182,7 +180,7 @@ sequenceDiagram
     M->>SDK: execute("await modes.suggest('serious_engineer', 'irreversible op')")
     SDK-->>C: pending confirmation (approval event)
     C-->>SDK: Brian confirms
-    SDK-->>C: ModeChanged(Serious Engineer)  %% debug/advanced only; voice cap is internal
+    SDK-->>C: ModeChanged(Serious Engineer)  %% debug/advanced capability state only
     SDK-->>M: execute result: approved; next turn gets engineering grants
     Note over M: identity unchanged; precise, asks before destructive
     Note over M,SDK: A later "clean up my inbox" does NOT revert the mode — it stays in<br/>Serious Engineer until Brian or another confirmed modes.suggest moves it.

@@ -5,7 +5,6 @@ class MikuSession {
     required this.id,
     required this.mode,
     required this.label,
-    required this.voiceCap,
     this.status = 'active',
     this.defaultScope = 'global',
     this.activeSkills = const [],
@@ -17,7 +16,6 @@ class MikuSession {
   final String status;
   final String mode;
   final String label;
-  final String voiceCap;
   final String defaultScope;
   final List<String> activeSkills;
   final String? lastEventId;

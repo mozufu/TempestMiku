@@ -296,8 +296,8 @@ targets rather than paths:
   deduplicated, cooldown-limited addenda — but it decides only **when to propose**, never when to
   approve or activate.
 - **Human review stands in for the Gödel machine's proof.** `SOUL.md`, core identity, safety rules,
-  capabilities, voice caps, mode scopes, route triggers, source code, configuration, and deployment
-  are immutable to this contract. Auto-approve, aggressive evolution, and direct persona-file writes
+  capabilities, mode scopes, route triggers, source code, configuration, and deployment are
+  immutable to this contract. Auto-approve, aggressive evolution, and direct persona-file writes
   are permanent non-goals. Every write is human-readable through `memory://` / `skill://` and fully
   auditable and replayable.
 

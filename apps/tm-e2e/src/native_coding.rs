@@ -288,7 +288,7 @@ async fn run_approved_path(
     let final_text = final_text(&replayed)?;
     ensure!(
         final_text.contains(APPROVED_FINAL) && !final_text.contains('喵'),
-        "approved final did not preserve the serious voice cap: {final_text}"
+        "approved final did not preserve the serious voice agreement: {final_text}"
     );
     let replayed_event_types = event_types(&replayed);
     ensure_native_replay(&replayed_event_types)?;
@@ -461,8 +461,8 @@ async fn start_native_session(client: &MikuClient) -> Result<(String, Option<i64
         .create_session_scoped(Some("serious_engineer"), Some("project:repo"))
         .await?;
     ensure!(
-        session.mode == "serious_engineer" && session.voice_cap == "off",
-        "native coding session should start in Serious Engineer with voice cap off"
+        session.mode == "serious_engineer",
+        "native coding session should start in Serious Engineer"
     );
     let (_, mode) = client
         .wait_for_event(&session.id, Some(0), |event| event.event_type == "mode")

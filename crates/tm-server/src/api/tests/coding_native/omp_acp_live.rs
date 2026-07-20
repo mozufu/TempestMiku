@@ -131,7 +131,6 @@ async fn gated_live_omp_acp_patches_tests_approves_and_replays() {
     state = state.with_coding_backend(Arc::new(backend));
     let (app, store) = test_app_with_state(state);
     let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-    assert_eq!(session.voice_cap, "off");
 
     let response = app
         .clone()

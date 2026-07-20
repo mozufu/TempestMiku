@@ -305,10 +305,6 @@ class _ModeDetails extends StatelessWidget {
         style: TextStyle(color: palette.muted),
       ),
       children: [
-        _DetailGroup(
-          label: '語氣上限',
-          values: [profile?.voiceCap ?? session.voiceCap],
-        ),
         _DetailGroup(label: 'Active skills', values: skills),
         _DetailGroup(label: 'Capabilities', values: capabilities),
       ],
@@ -356,7 +352,6 @@ MikuSession _sessionWithMode(
     status: session.status,
     mode: profile.id,
     label: profile.label,
-    voiceCap: profile.voiceCap,
     defaultScope: session.defaultScope,
     activeSkills: profile.activeSkills,
     lastEventId: session.lastEventId,
@@ -370,7 +365,6 @@ MikuSession _copySessionWithLock(MikuSession session, bool locked) {
     status: session.status,
     mode: session.mode,
     label: session.label,
-    voiceCap: session.voiceCap,
     defaultScope: session.defaultScope,
     activeSkills: session.activeSkills,
     lastEventId: session.lastEventId,
@@ -384,7 +378,6 @@ MikuSession _sessionFromModeEvent(
 ) {
   final mode = _string(data['mode']);
   final label = _string(data['label']);
-  final voiceCap = _string(data['voiceCap'] ?? data['voice_cap']);
   final rawSkills = data['activeSkills'] ?? data['active_skills'];
   final skills =
       rawSkills is List
@@ -397,7 +390,6 @@ MikuSession _sessionFromModeEvent(
     status: session.status,
     mode: mode.isEmpty ? session.mode : mode,
     label: label.isEmpty ? session.label : label,
-    voiceCap: voiceCap.isEmpty ? session.voiceCap : voiceCap,
     defaultScope: session.defaultScope,
     activeSkills: skills,
     lastEventId: session.lastEventId,
@@ -416,7 +408,6 @@ MikuSession _copySessionWithStatus(MikuSession session, String status) {
     status: status,
     mode: session.mode,
     label: session.label,
-    voiceCap: session.voiceCap,
     defaultScope: session.defaultScope,
     activeSkills: session.activeSkills,
     lastEventId: session.lastEventId,

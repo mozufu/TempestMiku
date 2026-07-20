@@ -165,16 +165,15 @@ Approved P7.2a mode proposals are stored as immutable typed addendum versions be
 `TM_MANAGED_MODE_ADDENDA_PATH`; when unset, the server uses
 `<artifact-root>/managed-mode-addenda`. API and worker processes must share this root. Activation and
 rollback atomically replace only the per-mode active pointer. Addenda compose description/routing
-guidance into the next prompt; they cannot alter `SOUL.md`, voice caps, capabilities, scopes, skills,
-or the hand-authored `modes.json` catalog.
+guidance into the next prompt; they cannot alter `SOUL.md`, capabilities, scopes, skills, or the
+hand-authored `modes.json` catalog.
 
 Approved P7.2b persona proposals are stored as immutable typed addendum versions beneath
 `TM_MANAGED_PERSONA_ADDENDA_PATH`; when unset, the server uses
 `<artifact-root>/managed-persona-addenda`. API and worker processes must share this root. Activation
-and rollback atomically replace only the `miku` active pointer. Addenda compose bounded tone,
-address, and interaction-preference guidance into every mode's next prompt; they cannot alter
-`SOUL.md`, identity, safety rules, voice caps, capabilities, scopes, routes, skills, or source
-configuration.
+and rollback atomically replace only the `miku` active pointer. Addenda compose bounded tone, address,
+and interaction-preference guidance into every mode's next prompt; they cannot alter `SOUL.md`,
+identity, safety rules, capabilities, scopes, routes, skills, or source configuration.
 
 `api` serves HTTP only, `worker` dispatches durable turns and runs approval effects, dreams, and cron,
 and `all` runs both in one process. `worker` and `all` require Postgres. A split deployment runs one

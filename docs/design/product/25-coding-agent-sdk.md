@@ -48,8 +48,8 @@ The bridge shape is deliberately small:
   bridge process, never an ambient default.
 - OMP outputs are mirrored into TempestMiku artifacts or wrapped as resource refs so reconnect/replay
   and project assignment (§30) keep provenance.
-- Miku owns the user-facing final answer and serious-mode voice cap; raw OMP transcript is evidence,
-  not the personality layer.
+- Miku owns the user-facing final answer and applies the serious-mode voice agreement from
+  `SOUL.md` and composed skills; raw OMP transcript is evidence, not the personality layer.
 - Transcript capture is bounded and redacted while streaming: individual JSONL artifact segments are
   at most 1 MiB, the complete capture is at most 16 MiB, and one entry is at most 128 KiB. A manifest
   records source/backend version, ACP session id, segment refs, captured/max bytes, redaction count,

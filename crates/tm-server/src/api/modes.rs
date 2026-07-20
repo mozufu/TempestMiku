@@ -15,7 +15,6 @@ pub struct ModeRequest {
 pub struct ModeResponse {
     pub mode_state: ModeState,
     pub label: String,
-    pub voice_cap: String,
     pub default_scope: String,
     pub capabilities: Vec<String>,
     pub active_skills: Vec<String>,
@@ -215,7 +214,6 @@ pub(super) fn mode_response(
     let profile = mode_profile(persona, &mode_state.mode);
     ModeResponse {
         label: profile.label.clone(),
-        voice_cap: profile.voice_cap.clone(),
         default_scope: profile.default_scope.clone(),
         capabilities: profile.capabilities.clone(),
         active_skills: profile.active_skills.clone(),
@@ -300,7 +298,6 @@ pub(crate) fn mode_changed_payload(
             from,
             mode: mode_state.mode.clone(),
             label: profile.label.clone(),
-            voice_cap: profile.voice_cap.clone(),
             capabilities: profile.capabilities.clone(),
             active_skills: profile.active_skills.clone(),
             router_reason: mode_state.router_reason.clone(),

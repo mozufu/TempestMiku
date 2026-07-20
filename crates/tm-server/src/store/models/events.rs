@@ -12,7 +12,6 @@ pub struct ModeChangedStoreEvent {
     pub from: Option<ModeId>,
     pub mode: ModeId,
     pub label: String,
-    pub voice_cap: String,
     pub capabilities: Vec<String>,
     #[serde(rename = "activeSkills")]
     pub active_skills: Vec<String>,

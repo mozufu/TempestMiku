@@ -722,7 +722,6 @@ class _ConversationScreenState extends State<ConversationScreen>
       status: session.status,
       mode: session.mode,
       label: session.label,
-      voiceCap: session.voiceCap,
       defaultScope: scope,
       activeSkills: session.activeSkills,
       lastEventId: session.lastEventId,

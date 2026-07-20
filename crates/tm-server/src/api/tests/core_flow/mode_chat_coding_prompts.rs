@@ -83,7 +83,6 @@ async fn modes_catalog_is_loaded_from_runtime_mode_assets() {
                 "mode": "custom_runtime_mode",
                 "label": "Custom Runtime Mode",
                 "description": "Runtime-only mode from the mode catalog.",
-                "voiceCap": "medium",
                 "defaultScope": "global",
                 "activeSkills": ["miku-voice"],
                 "capabilityClass": "conversation",

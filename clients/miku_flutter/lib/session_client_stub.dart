@@ -325,7 +325,6 @@ class ScriptedMikuClient
       status: 'ended',
       mode: session.mode,
       label: session.label,
-      voiceCap: session.voiceCap,
       defaultScope: session.defaultScope,
       activeSkills: session.activeSkills,
       lastEventId: session.lastEventId,
@@ -410,7 +409,6 @@ class ScriptedMikuClient
       status: session.status,
       mode: session.mode,
       label: session.label,
-      voiceCap: session.voiceCap,
       defaultScope: scope,
       activeSkills: session.activeSkills,
       lastEventId: session.lastEventId,
@@ -1020,7 +1018,6 @@ class ScriptedMikuClient
       id: id,
       mode: mode,
       label: _label(mode),
-      voiceCap: _voiceCap(mode),
       defaultScope:
           mode == 'serious_engineer' || mode == 'handoff'
               ? 'project:tempestmiku'
@@ -1037,20 +1034,11 @@ class ScriptedMikuClient
       status: session.status,
       mode: session.mode,
       label: session.label,
-      voiceCap: session.voiceCap,
       defaultScope: session.defaultScope,
       activeSkills: session.activeSkills,
       locked: session.locked,
       lastEventId: lastEventId,
     );
-  }
-
-  String _voiceCap(String mode) {
-    if (mode == 'serious_engineer' || mode == 'handoff') return 'off';
-    if (mode == 'ambiguity_grill' || mode == 'negative_state_grounding') {
-      return 'high';
-    }
-    return 'medium';
   }
 
   void _appendMessage(String sessionId, String role, String content) {
@@ -1072,7 +1060,6 @@ class ScriptedMikuClient
         status: session.status,
         mode: session.mode,
         label: session.label,
-        voiceCap: session.voiceCap,
         defaultScope: session.defaultScope,
         activeSkills: session.activeSkills,
         locked: session.locked,

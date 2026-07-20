@@ -358,9 +358,8 @@ async fn dialectic_for_turn<S: Store>(
     query: &str,
     memory: &crate::MemoryContext,
 ) -> Result<Option<crate::DialecticTurn>> {
-    let serious_or_engineering = profile.voice_cap == "off"
-        || profile.capability_class == "engineering"
-        || profile.has_capability("backend.coding");
+    let serious_or_engineering =
+        profile.capability_class == "engineering" || profile.has_capability("backend.coding");
     let facts = memory
         .profile_facts
         .iter()

@@ -270,7 +270,6 @@ async fn gated_postgres_covers_replay_memory_approvals_and_project_refs() {
                 from: Some(ModeId::from("general")),
                 mode: ModeId::from("serious_engineer"),
                 label: "Serious Engineer".to_string(),
-                voice_cap: "off".to_string(),
                 capabilities: vec![
                     "fs.*".to_string(),
                     "code.*".to_string(),

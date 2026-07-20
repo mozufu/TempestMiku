@@ -21,7 +21,6 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
           data: const {
             'mode': 'handoff',
             'label': 'Handoff',
-            'voice_cap': 'off',
             'activeSkills': ['oh-my-pi-handoff'],
           },
         ),
@@ -120,7 +119,6 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
           data: const {
             'mode': 'serious_engineer',
             'label': 'Serious Engineer',
-            'voice_cap': 'off',
             'activeSkills': [],
           },
         ),

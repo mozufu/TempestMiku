@@ -106,7 +106,6 @@ pub async fn run_workflow(
         session.mode
     );
     ensure!(session.label == "General");
-    ensure!(session.voice_cap == "medium");
     ensure!(
         session
             .active_skills
@@ -189,7 +188,6 @@ pub async fn run_workflow(
         .find(|event| event.event_type == "mode" && event.data["mode"] == json!("serious_engineer"))
         .context("coding prompt did not route to Serious Engineer")?;
     let coding_mode = mode.data["mode"].as_str().unwrap_or("serious_engineer");
-    ensure!(mode.data["voice_cap"] == json!("off"));
     ensure!(mode.data["activeSkills"] == json!(["serious-engineer-ops"]));
     let coding_final = final_text(&coding_events)?;
     ensure!(!coding_final.contains("喵"));
@@ -335,8 +333,8 @@ pub async fn run_workflow(
         "project continuity must be proven from a fresh session"
     );
     ensure!(
-        continuity_session.mode == "serious_engineer" && continuity_session.voice_cap == "off",
-        "fresh project session should preserve the Serious Engineer capability and voice envelope"
+        continuity_session.mode == "serious_engineer",
+        "fresh project session should preserve the Serious Engineer capability envelope"
     );
     let continuity_project = client.project_overview(&continuity_session.id).await?;
     // §30: the summary/status is grown from the project-scoped coding turn, whose echoed final

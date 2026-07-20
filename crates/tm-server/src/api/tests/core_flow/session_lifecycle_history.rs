@@ -33,10 +33,6 @@ async fn session_creation_message_append_event_append_and_replay_work() {
         vec!["mode", "text", "final"]
     );
     assert_eq!(
-        all[0].payload_json["voice_cap"],
-        serde_json::json!("medium")
-    );
-    assert_eq!(
         all[0].payload_json["activeSkills"],
         json!(["miku-voice", "personal-assistant-state-capture"])
     );

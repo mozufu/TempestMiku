@@ -131,6 +131,30 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('shows only capability-oriented Mode details', (tester) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+
+    await tester.tap(find.byKey(const Key('open-session-context')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('mode-details')),
+      180,
+      scrollable:
+          find
+              .descendant(
+                of: find.byKey(const Key('session-context-drawer')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+    );
+    await tester.tap(find.byKey(const Key('mode-details')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Active skills'), findsOneWidget);
+    expect(find.text('Capabilities'), findsOneWidget);
+  });
+
   testWidgets('shows typed memory and evolution review details in approvals', (
     tester,
   ) async {

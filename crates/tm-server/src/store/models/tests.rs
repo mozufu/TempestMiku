@@ -94,7 +94,6 @@ fn store_event_serializes_sse_payload_shapes() {
         from: Some(ModeId::from("general")),
         mode: ModeId::from("serious_engineer"),
         label: "Serious Engineer".to_string(),
-        voice_cap: "off".to_string(),
         capabilities: vec!["fs.read".to_string()],
         active_skills: vec!["serious-engineer-ops".to_string()],
         router_reason: Some("coding request".to_string()),
@@ -110,7 +109,6 @@ fn store_event_serializes_sse_payload_shapes() {
     assert_eq!(value["event"], json!("mode_changed"));
     assert_eq!(value["from"], json!("general"));
     assert_eq!(value["mode"], json!("serious_engineer"));
-    assert_eq!(value["voice_cap"], json!("off"));
     assert_eq!(value["router_reason"], json!("coding request"));
     assert_eq!(value["lock_source"], json!("user"));
     assert_eq!(value["override_source"], json!(null));

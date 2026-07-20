@@ -172,7 +172,7 @@ fn evaluate_serious(_text: &str, lower: &str, criteria: &mut Vec<VoiceCriterion>
         .copied()
         .collect::<Vec<_>>();
     criteria.push(criterion(
-        "voice_cap_off",
+        "serious_voice_is_plain",
         found.is_empty(),
         "serious output contains no cute honorific, cat suffix, roleplay noise, or playful wave",
     ));

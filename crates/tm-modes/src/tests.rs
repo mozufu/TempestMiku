@@ -21,7 +21,6 @@ fn bundled_mode_catalog_has_default_and_handoff_profile() {
         .profile(&ModeId::from("handoff"))
         .expect("handoff profile");
     assert_eq!(handoff.label, "Handoff");
-    assert_eq!(handoff.voice_cap, "off");
     assert_eq!(handoff.default_scope, "project:tempestmiku");
     assert_eq!(handoff.active_skills, ["oh-my-pi-handoff"]);
     assert!(handoff.has_capability("backend.coding"));
@@ -154,7 +153,6 @@ fn composed_prompt_never_leaks_skill_frontmatter_or_mode_metadata() {
             "category:",
             "skill://",
             "Mode id:",
-            "Voice cap:",
             "Capability class:",
             "Declared capabilities:",
         ];
@@ -313,7 +311,7 @@ fn configured_missing_active_skill_warns_and_uses_prompt_fallback() {
 }
 
 #[test]
-fn mode_profiles_map_expected_skills_voice_and_scope() {
+fn mode_profiles_map_expected_skills_and_scope() {
     let assets = ModesConfig::default().load_assets();
     let assistant = assets
         .modes
@@ -323,7 +321,6 @@ fn mode_profiles_map_expected_skills_voice_and_scope() {
         assistant.active_skills,
         vec!["miku-voice", "personal-assistant-state-capture"]
     );
-    assert_eq!(assistant.voice_cap, "medium");
     assert_eq!(assistant.default_scope, "global");
     assert!(assistant.captures_personal_state());
     assert!(assistant.has_capability("http.get"));
@@ -344,7 +341,6 @@ fn mode_profiles_map_expected_skills_voice_and_scope() {
     assert!(serious.has_capability("resources.read:linked"));
     assert!(serious.has_capability("backend.coding"));
     assert_eq!(serious.capability_class, "engineering");
-    assert_eq!(serious.voice_cap, "off");
     assert_eq!(serious.default_scope, "project:tempestmiku");
 
     let handoff = assets
@@ -501,7 +497,6 @@ fn custom_modes_json() -> String {
                 "mode": "custom_runtime_mode",
                 "label": "Custom Runtime Mode",
                 "description": "Loaded only from runtime mode assets.",
-                "voiceCap": "medium",
                 "defaultScope": "global",
                 "activeSkills": ["custom-skill"],
                 "capabilities": ["memory.recall"],
@@ -525,7 +520,6 @@ fn missing_skill_modes_json() -> String {
                 "mode": "custom_runtime_mode",
                 "label": "Custom Runtime Mode",
                 "description": "Loaded only from runtime mode assets.",
-                "voiceCap": "medium",
                 "defaultScope": "global",
                 "activeSkills": ["missing-skill"],
                 "capabilities": [],

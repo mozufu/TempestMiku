@@ -156,8 +156,6 @@ extension _NativeSessionsClient on NativeMikuSessionClient {
       status: json['status'] as String? ?? 'active',
       mode: (json['mode'] as String?) ?? (modeState['mode'] as String?) ?? '',
       label: json['label'] as String? ?? '',
-      voiceCap:
-          (json['voice_cap'] as String?) ?? (json['voiceCap'] as String?) ?? '',
       defaultScope:
           (json['memory_scope'] as String?) ??
           (json['memoryScope'] as String?) ??

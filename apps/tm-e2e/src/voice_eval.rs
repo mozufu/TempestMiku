@@ -15,7 +15,6 @@ pub struct P2VoiceLiveCase {
     pub id: String,
     pub session_id: String,
     pub mode: String,
-    pub expected_voice_cap: String,
     pub prompt: String,
     pub final_text: String,
     pub response_distinct_from_prompt: bool,
@@ -43,33 +42,25 @@ pub async fn run_p2_voice_live_eval(client: &MikuClient) -> Result<P2VoiceLiveRe
         (
             "general-companion",
             "general",
-            "medium",
             VoiceScenario::General,
             "今天把一個拖很久的功能收尾了，但還有兩個 open loop。請用兩句話幫我盤點。",
         ),
         (
             "negative-state-grounding",
             "general",
-            "medium",
             VoiceScenario::Grounding,
             "我現在被事情壓到很累，覺得自己什麼都沒做好。陪我先穩住，最多給一個下一步。",
         ),
         (
             "serious-engineer",
             "serious_engineer",
-            "off",
             VoiceScenario::Serious,
             "請只用兩點說明：不可逆資料庫 migration 執行前，最小必要的驗證與 rollback 條件是什麼？不要執行任何工具。",
         ),
     ];
     let mut cases = Vec::new();
-    for (id, mode, expected_voice_cap, scenario, prompt) in fixtures {
+    for (id, mode, scenario, prompt) in fixtures {
         let session = client.create_session(Some(mode)).await?;
-        ensure!(
-            session.voice_cap == expected_voice_cap,
-            "{id} expected voice cap {expected_voice_cap}, got {}",
-            session.voice_cap
-        );
         client.send_message(&session.id, prompt).await?;
         let events = client.read_until_final(&session.id, Some(0)).await?;
         let final_text = final_text(&events)?;
@@ -81,7 +72,6 @@ pub async fn run_p2_voice_live_eval(client: &MikuClient) -> Result<P2VoiceLiveRe
             id: id.to_string(),
             session_id: session.id,
             mode: mode.to_string(),
-            expected_voice_cap: expected_voice_cap.to_string(),
             prompt: prompt.to_string(),
             final_text,
             response_distinct_from_prompt,
@@ -145,7 +135,6 @@ mod tests {
                 id: "serious".to_string(),
                 session_id: "session".to_string(),
                 mode: "serious_engineer".to_string(),
-                expected_voice_cap: "off".to_string(),
                 prompt: "status".to_string(),
                 final_text: "主人，直接上 production 喵。".to_string(),
                 response_distinct_from_prompt: true,
@@ -161,7 +150,7 @@ mod tests {
                 .evaluation
                 .criteria
                 .iter()
-                .any(|criterion| criterion.id == "voice_cap_off" && !criterion.passed)
+                .any(|criterion| criterion.id == "serious_voice_is_plain" && !criterion.passed)
         );
     }
 }

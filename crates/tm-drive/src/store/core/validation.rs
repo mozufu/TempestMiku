@@ -197,7 +197,7 @@ pub(crate) fn linked_alias_from_target(target: &str) -> tm_host::Result<String> 
     let target = target.trim();
     if target.is_empty() {
         return Err(HostError::InvalidArgs(
-            "drive.unlink requires a linked folder alias".to_string(),
+            "project.unlink requires a linked folder alias".to_string(),
         ));
     }
     if let Some(rest) = target.strip_prefix("linked://") {
@@ -216,7 +216,7 @@ pub(crate) fn linked_alias_from_target(target: &str) -> tm_host::Result<String> 
     }
     if target.contains("://") || target.contains('/') || target.contains('\\') {
         return Err(HostError::InvalidPath(format!(
-            "drive.unlink expects an alias or linked:// URI, got {target}"
+            "project.unlink expects an alias or linked:// URI, got {target}"
         )));
     }
     Ok(target.to_string())

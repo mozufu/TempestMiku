@@ -15,13 +15,13 @@ async fn drive_link_registers_shared_policy_only_after_approval() {
     );
 
     let timeout_ctx = InvocationCtx::with_approvals(
-        CapabilityGrants::default().allow_many(["drive.link", "drive.unlink"]),
+        CapabilityGrants::default().allow_many(["project.link", "project.unlink"]),
         Arc::new(DefaultDenyApprovalPolicy),
         std::time::Duration::from_millis(1),
     );
     let err = host
         .invoke(
-            "drive.link",
+            "project.link",
             json!({
                 "hostPath": project.path(),
                 "mode": "ro",
@@ -35,13 +35,13 @@ async fn drive_link_registers_shared_policy_only_after_approval() {
     assert!(linked.policy("tempest-miku").is_err());
 
     let approved_ctx = InvocationCtx::with_approvals(
-        CapabilityGrants::default().allow_many(["drive.link", "drive.unlink"]),
+        CapabilityGrants::default().allow_many(["project.link", "project.unlink"]),
         Arc::new(StaticApproval(ApprovalDecision::Approved)),
         std::time::Duration::from_secs(1),
     );
     let linked_value = host
         .invoke(
-            "drive.link",
+            "project.link",
             json!({
                 "hostPath": project.path(),
                 "mode": "rw",
@@ -57,7 +57,7 @@ async fn drive_link_registers_shared_policy_only_after_approval() {
     assert_eq!(policy.mode, tm_host::FsMode::Rw);
 
     host.invoke(
-        "drive.link",
+        "project.link",
         json!({
             "hostPath": project.path(),
             "mode": "ro",
@@ -71,14 +71,14 @@ async fn drive_link_registers_shared_policy_only_after_approval() {
     assert_eq!(policy.mode, tm_host::FsMode::Ro);
 
     let denied_ctx = InvocationCtx::with_approvals(
-        CapabilityGrants::default().allow_many(["drive.link", "drive.unlink"]),
+        CapabilityGrants::default().allow_many(["project.link", "project.unlink"]),
         Arc::new(StaticApproval(ApprovalDecision::Denied)),
         std::time::Duration::from_secs(1),
     );
     let other = tempfile::tempdir().unwrap();
     let err = host
         .invoke(
-            "drive.link",
+            "project.link",
             json!({
                 "hostPath": other.path(),
                 "mode": "ro",
@@ -93,7 +93,7 @@ async fn drive_link_registers_shared_policy_only_after_approval() {
 
     let err = host
         .invoke(
-            "drive.unlink",
+            "project.unlink",
             json!({ "alias": "linked://tempest-miku/" }),
             &denied_ctx,
         )
@@ -104,7 +104,7 @@ async fn drive_link_registers_shared_policy_only_after_approval() {
 
     let revoked = host
         .invoke(
-            "drive.unlink",
+            "project.unlink",
             json!({ "alias": "linked://tempest-miku/" }),
             &approved_ctx,
         )
@@ -129,8 +129,8 @@ async fn drive_mutations_emit_mobile_friendly_replay_events() {
             "drive.put",
             "drive.move",
             "drive.tag",
-            "drive.link",
-            "drive.unlink",
+            "project.link",
+            "project.unlink",
         ]),
         Arc::new(StaticApproval(ApprovalDecision::Approved)),
         std::time::Duration::from_secs(1),
@@ -174,7 +174,7 @@ async fn drive_mutations_emit_mobile_friendly_replay_events() {
     .await
     .unwrap();
     host.invoke(
-        "drive.link",
+        "project.link",
         json!({
             "hostPath": project.path(),
             "mode": "ro",
@@ -184,7 +184,7 @@ async fn drive_mutations_emit_mobile_friendly_replay_events() {
     )
     .await
     .unwrap();
-    host.invoke("drive.unlink", json!({ "alias": "tempest-miku" }), &ctx)
+    host.invoke("project.unlink", json!({ "alias": "tempest-miku" }), &ctx)
         .await
         .unwrap();
 
@@ -199,8 +199,8 @@ async fn drive_mutations_emit_mobile_friendly_replay_events() {
             "drive_put",
             "drive_moved",
             "drive_tagged",
-            "drive_linked",
-            "drive_unlinked"
+            "project_linked",
+            "project_unlinked"
         ]
     );
     assert_eq!(events[0].1["uri"], json!("drive://inbox/raw.md"));

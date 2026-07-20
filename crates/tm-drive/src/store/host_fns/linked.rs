@@ -10,7 +10,7 @@ use crate::{
     store::{
         core::{drive_error_to_host, linked_alias_from_target},
         docs::drive_docs,
-        payloads::{drive_linked_payload, drive_unlinked_payload},
+        payloads::{project_linked_payload, project_unlinked_payload},
     },
 };
 
@@ -42,13 +42,15 @@ pub(super) struct DriveLinkFn {
 
 impl DriveLinkFn {
     pub(super) fn new(store: SharedDriveStore, linked_folders: Option<LinkedFolders>) -> Self {
+        let mut docs = drive_docs(
+            "project.link",
+            "Attach an approval-gated linked folder to a project (§30); does not create the project or mint its memory scope",
+            "always",
+            true,
+        );
+        docs.namespace = "project".to_string();
         Self {
-            docs: drive_docs(
-                "drive.link",
-                "Register an approval-gated linked folder plus project memory scope",
-                "always",
-                true,
-            ),
+            docs,
             store,
             linked_folders,
         }
@@ -72,21 +74,21 @@ impl HostFn for DriveLinkFn {
                     .as_deref()
                     .is_some_and(|requested| crate::slug(requested) != crate::slug(project))
                 {
-                    return Err(cross_project_error("drive.link", project));
+                    return Err(cross_project_error("project.link", project));
                 }
                 Some(project.as_str())
             }
             DriveAuthority::Trusted => args.project.as_deref(),
-            DriveAuthority::Global => return Err(linked_scope_error("drive.link")),
+            DriveAuthority::Global => return Err(linked_scope_error("project.link")),
         };
-        ctx.require_approval(&format!("drive.link {}", args.host_path))
+        ctx.require_approval(&format!("project.link {}", args.host_path))
             .await?;
         let mode = match args.mode.as_str() {
             "ro" => tm_host::FsMode::Ro,
             "rw" => tm_host::FsMode::Rw,
             other => {
                 return Err(HostError::InvalidArgs(format!(
-                    "drive.link mode must be ro or rw, got {other}"
+                    "project.link mode must be ro or rw, got {other}"
                 )));
             }
         };
@@ -101,7 +103,7 @@ impl HostFn for DriveLinkFn {
             let _ = linked_folders.remove_policy(&plan.alias);
             return Err(drive_error_to_host(err));
         }
-        ctx.emit_event("drive_linked", drive_linked_payload(&plan))
+        ctx.emit_event("project_linked", project_linked_payload(&plan))
             .await?;
         serde_json::to_value(plan).map_err(|err| HostError::HostCall(err.to_string()))
     }
@@ -115,13 +117,15 @@ pub(super) struct DriveUnlinkFn {
 
 impl DriveUnlinkFn {
     pub(super) fn new(store: SharedDriveStore, linked_folders: Option<LinkedFolders>) -> Self {
+        let mut docs = drive_docs(
+            "project.unlink",
+            "Detach a linked folder from a project (§30); revokes only the filesystem grant, not project memory",
+            "always",
+            true,
+        );
+        docs.namespace = "project".to_string();
         Self {
-            docs: drive_docs(
-                "drive.unlink",
-                "Revoke an approval-gated linked folder and its project memory scope",
-                "always",
-                true,
-            ),
+            docs,
             store,
             linked_folders,
         }
@@ -141,12 +145,12 @@ impl HostFn for DriveUnlinkFn {
         match drive_authority(ctx)? {
             DriveAuthority::Project(project) if crate::slug(&project) == alias => {}
             DriveAuthority::Project(project) => {
-                return Err(cross_project_error("drive.unlink", &project));
+                return Err(cross_project_error("project.unlink", &project));
             }
             DriveAuthority::Trusted => {}
-            DriveAuthority::Global => return Err(linked_scope_error("drive.unlink")),
+            DriveAuthority::Global => return Err(linked_scope_error("project.unlink")),
         }
-        ctx.require_approval(&format!("drive.unlink {alias}"))
+        ctx.require_approval(&format!("project.unlink {alias}"))
             .await?;
         self.store
             .revoke_link(&alias)
@@ -164,7 +168,7 @@ impl HostFn for DriveUnlinkFn {
             memory_scope: memory_scope_for_project(&alias),
             revoked_at: Utc::now(),
         };
-        ctx.emit_event("drive_unlinked", drive_unlinked_payload(&result))
+        ctx.emit_event("project_unlinked", project_unlinked_payload(&result))
             .await?;
         serde_json::to_value(result).map_err(|err| HostError::HostCall(err.to_string()))
     }

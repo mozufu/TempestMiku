@@ -9,7 +9,6 @@ use crate::{
     OrganizerProposal, PolicyDecision, ProposalStatus, Transduction,
 };
 
-const DEFAULT_PROJECT_CONVENTION: &str = "projects/{project}/{docKind}/{filename}";
 const DEFAULT_FINANCE_CONVENTION: &str = "finance/{year}/{docKind}/{filename}";
 const DEFAULT_INBOX_CONVENTION: &str = "inbox/{date}/{filename}";
 
@@ -40,20 +39,25 @@ pub fn propose_path(
     let title_slug = slug(title);
     let doc_kind_slug = slug(doc_kind);
 
-    if let Some(project) = transduction
+    // §30.5: project is a validated attribute, not a canonical-path token. The default no longer
+    // routes projected docs into a `projects/<project>/...` tree; the per-project view lives on the
+    // `/by-project/<project>` virtual directory. A caller may still opt into a project path template
+    // explicitly via `conventions.project`.
+    if let Some(template) = options
+        .conventions
         .project
-        .as_ref()
-        .or(options.project.as_ref())
-        .filter(|project| !project.trim().is_empty())
+        .as_deref()
+        .filter(|template| !template.trim().is_empty())
+        && let Some(project) = transduction
+            .project
+            .as_ref()
+            .or(options.project.as_ref())
+            .filter(|project| !project.trim().is_empty())
     {
-        let project_slug = slug(project);
         return render_path_template(
-            template_or_default(
-                options.conventions.project.as_deref(),
-                DEFAULT_PROJECT_CONVENTION,
-            ),
+            template,
             &[
-                ("project", project_slug),
+                ("project", slug(project)),
                 ("docKind", doc_kind_slug),
                 ("title", title_slug),
                 ("filename", filename),
@@ -255,7 +259,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_docs_land_under_project_kind_title() {
+    fn project_docs_are_not_path_routed_by_default() {
+        // §30.5: project is a validated attribute, not a path token. Without an explicit project
+        // convention a projected doc keeps `project` as an attribute and files by date/kind.
         let opts = DrivePutOptions {
             auto: true,
             project: Some("Tempest Miku".to_string()),
@@ -268,10 +274,12 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(
-            propose_path(&tx, &opts, Some("plan.md")),
-            "projects/tempest-miku/project-doc/p5-plan.md"
+        let path = propose_path(&tx, &opts, Some("plan.md"));
+        assert!(
+            !path.starts_with("projects/"),
+            "project must not become a path token by default, got {path}"
         );
+        assert_eq!(tx.project.as_deref(), Some("Tempest Miku"));
     }
 
     #[test]

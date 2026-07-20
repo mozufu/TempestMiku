@@ -134,8 +134,8 @@ fn drive_signature(name: &str) -> String {
         "drive.move" => "@drive.move {from, to, collision?, overwrite?} -> DriveEntry",
         "drive.search" => "@drive.search DriveSearchOptions -> List DriveSearchResult",
         "drive.tag" => "@drive.tag {path, tags} -> DriveEntry",
-        "drive.link" => "@drive.link {hostPath, mode?, project?} -> DriveLinkPlan",
-        "drive.unlink" => "@drive.unlink {alias} -> DriveUnlinkResult",
+        "project.link" => "@project.link {hostPath, mode?, project?} -> DriveLinkPlan",
+        "project.unlink" => "@project.unlink {alias} -> DriveUnlinkResult",
         "drive.organize" => "@drive.organize DriveOrganizeOptions -> List OrganizerProposal",
         _ => "@drive.unknown args -> value",
     }
@@ -178,7 +178,7 @@ fn drive_args_schema(name: &str) -> Value {
                 "tags": { "type": "array", "items": { "type": "string" } }
             }
         }),
-        "drive.link" => json!({
+        "project.link" => json!({
             "type": "object",
             "required": ["hostPath"],
             "properties": {
@@ -187,7 +187,7 @@ fn drive_args_schema(name: &str) -> Value {
                 "project": { "type": "string" }
             }
         }),
-        "drive.unlink" => json!({
+        "project.unlink" => json!({
             "type": "object",
             "required": ["alias"],
             "properties": {
@@ -238,10 +238,10 @@ fn drive_examples(name: &str) -> Vec<ToolExample> {
         "drive.tag" => {
             "@drive.tag {path: \"projects/tempestmiku/notes/note.md\", tags: [\"planning\"]}"
         }
-        "drive.link" => {
-            "let plan = @drive.link {hostPath: \"/path/to/project\", mode: \"ro\", project: \"TempestMiku\"}"
+        "project.link" => {
+            "let plan = @project.link {hostPath: \"/path/to/project\", mode: \"ro\", project: \"TempestMiku\"}"
         }
-        "drive.unlink" => "let revoked = @drive.unlink {alias: \"tempestmiku\"}",
+        "project.unlink" => "let revoked = @project.unlink {alias: \"tempestmiku\"}",
         "drive.organize" => "let proposals = @drive.organize {}",
         _ => "@tools.call {name: \"drive.unknown\", args: {}}",
     };

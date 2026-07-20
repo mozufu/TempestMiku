@@ -168,7 +168,7 @@ pub(crate) fn drive_entry_snippet(entry: &DriveEntry) -> Option<String> {
         .map(|snippet| compact_preview_text(snippet, 180))
 }
 
-pub(crate) fn drive_linked_payload(plan: &DriveLinkPlan) -> Value {
+pub(crate) fn project_linked_payload(plan: &DriveLinkPlan) -> Value {
     json!({
         "action": "link",
         "alias": &plan.alias,
@@ -191,7 +191,7 @@ pub(crate) fn drive_linked_payload(plan: &DriveLinkPlan) -> Value {
     })
 }
 
-pub(crate) fn drive_unlinked_payload(result: &DriveUnlinkResult) -> Value {
+pub(crate) fn project_unlinked_payload(result: &DriveUnlinkResult) -> Value {
     json!({
         "action": "unlink",
         "alias": &result.alias,

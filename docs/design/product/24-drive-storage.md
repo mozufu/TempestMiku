@@ -59,9 +59,9 @@ Capability-checked at the boundary like every host fn (§07/§08).
 | ~~`drive.unlink`~~ → `project.unlink(alias_or_uri)` (§30) | detach and revoke a linked-folder `FsPolicy` grant; project memory is unaffected |
 | `drive.organize()` | trigger the background re-filer (§24.3) |
 
-### 24.2.1 Implemented P5 v1 contract
+### 24.2.1 Drive contract
 
-The first Rust slice lives in `tm-drive` and is wired into `tm-lang` and `tm-server` through the
+The Rust implementation lives in `tm-drive` and is wired into `tm-lang` and `tm-server` through the
 `DriveOperations` boundary. tm effects expose `drive.put`, `drive.get`, `drive.ls`, `drive.move`,
 `drive.search`, `drive.tag`, and `drive.organize`; `drive.link` / `drive.unlink` move to
 `project.link` / `project.unlink` under §30, and the `drive_linked` / `drive_unlinked` event types
@@ -74,7 +74,7 @@ doc-kind, tag, recency, and FTS indexes. The no-database local-development path 
 the historical in-memory metadata exception; artifact/blob persistence alone does not make that mode
 durable. Runtime consumers depend on the trait-object boundary rather than the concrete in-memory store.
 
-Data vocabulary is frozen for this slice as:
+The data vocabulary is:
 
 - entry id, canonical path, `drive://` URI, `blob:sha256:` URI, content hash, MIME, size, title,
   doc kind, project, entities, dates, amounts, tags, embedding placeholder, source URI,
@@ -134,7 +134,7 @@ sessions persist both event families to `session_events` and emit them through t
 `event: session_event` SSE envelope; pending drive proposals remain visible through
 the existing pending-events transcript shape. Organizer apply uses the same `InvocationCtx` approval
 policy path as `fs.*`, `code.*`, `proc.*`, and other drive writes rather than a drive-only approval
-channel. Broader drag/drop browser UI remains a client slice.
+channel. Broader drag/drop browser UI remains demand-triggered.
 
 The local research workspace is the Rust host capability `@research.drive {query, ...}`. It searches
 the authorized drive scope, reads bounded `drive://` selectors, and returns deterministic local
@@ -146,9 +146,9 @@ distinguished without changing the result envelope.
 handler, and the result reports the effective budget. `workerTimeoutMs` and `totalTimeoutMs` remain
 in the result contract for bounded compatibility, but the tm-only implementation reports zero
 agent documents and an empty `workerFailures` list. Explicit actor research can still be composed
-with `agents.*` by tm code when a turn holds those grants. External/network research is now available
-only through operator-selected P10 MCP objects crossing the default-disabled P9 egress/opaque-secret
-boundary. P5 itself remains local-first and still has no ambient publish/send namespace; destructive
+with `agents.*` by tm code when a turn holds those grants. External/network research is available
+only through operator-selected MCP objects crossing the default-disabled egress/opaque-secret
+boundary. Drive remains local-first and has no ambient publish/send namespace; destructive
 local mutations retain the existing approval gates.
 
 ## 24.3 Auto-organize — transducers + virtual directories + user model
@@ -195,14 +195,14 @@ flowchart LR
 - Extracted attributes also flow into the **memory stores** (§22 semantic / lexical), so filed docs become
   **recallable**. The current server bridge persists project-scoped recall chunks with `drive://` and
   content-hash provenance after turns; move/tag changes update the same content-hash-keyed recall
-  record, while full source-event ids remain a hardening slice. `drive.search` is hybrid recall over
+  record; automatic source-event ids for those host calls remain hardening work. `drive.search` is hybrid recall over
   drive metadata.
 
 ## 24.4 Sandbox-default, linked-folder opt-in (decision C, amended by §30)
 
-> **Amended 2026-07-20 (§30), implemented as P11.** Linking moved out of `drive.*` to
-> `project.link` / `project.unlink`, no longer mints the project or its memory scope, and unlink no
-> longer tombstones project memory. The bullets below are the live contract.
+> **Current §30 contract.** Linking lives under `project.link` / `project.unlink`, no longer mints
+> the project or its memory scope, and unlink no longer tombstones project memory. The bullets below
+> are the live contract.
 
 - **Default = sandbox jail** (§07/§08): **no ambient real-FS authority**. The drive lives in the
   per-session sandbox workspace; nothing touches the real machine.
@@ -235,8 +235,9 @@ flowchart LR
 
 - **Local-first default** (Kleppmann et al.): the local copy is primary, fully functional **offline**; **no
   cloud dependency in v1** (the user owns the data).
-- **Later (open question, §28):** an optional **secondary** replica with **CRDT-based** sync for multi-device
-  (Flutter Web/PWA + Android, §27) — ownership, privacy, and offline use preserved; merges are conflict-free.
+- **Demand-triggered:** an optional **secondary** replica with **CRDT-based** sync for multi-device
+  (Flutter Web/PWA + Android, §27) may be added only with a concrete consumer; ownership, privacy,
+  and offline use must remain preserved and merges conflict-free.
 
 ## 24.6 Crate layout (`tm-drive`, §28)
 

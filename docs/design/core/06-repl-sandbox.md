@@ -3,9 +3,9 @@
 ## 6.1 Decision
 
 `tm-conformance-v2`, implemented by `crates/tm-lang`, is the sole language/runtime behind
-`execute(code)`. CLI and server do not expose a backend selector. The former Deno/V8 and shipped
-stub implementations were deleted after tm-lang passed the frozen conformance, approval, replay,
-client, and comparative-fluency gates.
+`execute(code)`. CLI and server do not expose a backend selector. The former Deno/V8 and test-stub
+implementations were deleted after tm-lang passed the frozen conformance, approval, replay, client,
+and comparative-fluency gates.
 
 The public abstraction remains `tm_core::Sandbox` / `tm_core::Session`; this keeps the agent loop
 independent from interpreter details without promising another language backend.

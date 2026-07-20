@@ -32,7 +32,7 @@ requested name must already be held by the parent and be delegable; `backend.*` 
 server control planes and cannot be delegated. The list is bounded to 32 names, 128 ASCII bytes per
 name, and 2 KiB total.
 
-## 7.3 Shipped namespaces
+## 7.3 Available namespaces
 
 - `tools.search`, `tools.docs`, `tools.call` — bounded catalog discovery/late-bound invocation.
 - `resources.read`, `resources.preview`, `resources.list` — capability-gated access to registered
@@ -40,7 +40,7 @@ name, and 2 KiB total.
 - `artifacts.put` — intrinsic content-addressed session output and spill references.
 - `artifacts.get`, `artifacts.slice`, `artifacts.list` — session artifact inspection, available only
   with the explicit `resources.read:artifact` grant.
-- `http.get`, `http.request`, `secrets.use` — P9's default-disabled, exact-destination HTTPS egress
+- `http.get`, `http.request`, `secrets.use` — the default-disabled, exact-destination HTTPS egress
   and opaque-secret boundary. Non-GET requests require approval.
 - `fs.read/write/list/find`, `code.search/edit`, `proc.run` — curated linked-repo reach.
 - `drive.put/get/ls/move/search/tag/link/unlink/organize` — local-first drive operations.
@@ -85,7 +85,7 @@ completion audit. Retrying an identical host-owned turn effect returns its recei
 resolved only while constructing an authorized host request, held in zeroizing memory, scoped to its
 configured destinations, and redacted from returned text and bounded host-only metadata. A restart
 does not restore tokens. Runtime policy uses immutable per-request snapshots, so revocation/reload
-does not wait for a slow peer and all later requests see the new generation before DNS. P9 closeout
+does not wait for a slow peer and all later requests see the new generation before DNS. Acceptance
 evidence is recorded in `docs/evidence/2026-07-18-p9-egress-secret-broker.md`.
 
 Literal occurrences of the injected value are removed from bounded response fields. This is not a
@@ -176,4 +176,4 @@ tm exposes no raw filesystem, process, network, environment, package manager, na
 dynamic evaluation, or secret-value access. Capability handlers receive JSON-shaped arguments and
 return JSON-shaped values. `ToolDocs.sensitive` marks trace/persistence privacy and does not imply
 approval; sensitive argument/result previews are redacted in runtime events. MCP imports remain
-catalog capabilities behind the same P9 egress/secret boundary and do not add chat-native tools.
+catalog capabilities behind the same egress/secret boundary and do not add chat-native tools.

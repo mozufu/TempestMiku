@@ -3,7 +3,7 @@
 > Agents are **message-passing actors**. This section takes Alan Kay's original OOP literally:
 > *"The big idea is messaging"* — design how the modules **communicate**, not their internals.
 
-Powers the **Handoff** mode (§21, mode 5) and heavier delegation inside **Serious Engineer**.
+Powers the **Handoff** mode (§21) and heavier delegation inside **Serious Engineer**.
 Design choice (B2): **orchestration is code, not a framework** — and the things the code orchestrates
 are **actors** that affect each other only by messages. The bet (§01) already has the model writing code
 in a REPL, so spawning, wiring, and messaging sub-agents is just more code against an SDK.
@@ -39,8 +39,8 @@ character + mode, budget, and capability grant. Cast as an actor:
 | **Hidden local state** | its **own context window** (§22 working memory) + a granted **memory scope** (§22 store); no shared mutable state |
 | **Behavior** | current **mode** (§21) + **role** + capability grant; resolved per message (late binding) |
 | **Designate next behavior** | mode switch / scope update between messages (persona self-edit, §21) |
-| **Create** | P3 MVP: `agents.spawn` / `agents.run` |
-| **Send** | P3 MVP: `agents.msg`; P3-plus: `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
+| **Create** | `agents.spawn` / `agents.run` |
+| **Send** | `agents.msg` plus `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
 
 Encapsulation is hard: one actor **never** reaches into another's context or transcript. `history://<id>`
 is **read-only** observation, not state access; coordination is by message, not by shared memory.
@@ -48,8 +48,8 @@ is **read-only** observation, not state access; coordination is by message, not 
 ## 23.2 Messaging substrate — the only inter-agent coupling
 
 Async message passing is the sole way actors affect one another (Hewitt; Kay). No shared state, ever. The
-reference implementation is the harness `irc` model. P3 MVP exposes the minimum handle-based
-message send through `agents.msg`; the rest of this table is the P3-plus/full mailbox surface:
+reference implementation is the harness `irc` model. `agents.msg` provides handle-based messaging;
+the table below is the complete live mailbox surface:
 
 | Primitive | Semantics |
 |---|---|
@@ -84,35 +84,34 @@ flowchart LR
 The `agents.*` calls are convenience constructors over spawn + message + await; the model writes ordinary
 control flow (`for`, fan-out, `try`/`catch`) around them.
 
-P3 ships the first concrete slice only:
+The concrete call surface:
 
-| P3 MVP call | Effect |
+| Orchestration call | Effect |
 |---|---|
 | `agents.run(role, task, opts.capabilities?)` | spawn one actor, await its result; optionally delegate a bounded capability subset |
 | `agents.spawn(role, task, opts.capabilities?) -> handle` | non-blocking; optionally delegate a bounded capability subset, then coordinate via the handle / messages |
 | `agents.parallel([{role, task, timeoutMs?, budget?}, …], opts.capabilities?)` | fan-out, bounded pool, **one wave**, ordered results with optional per-child budget and shared delegated subset |
 | `agents.msg(handle, text, opts?)` | send to a spawned actor (request / reply or fire-and-forget) |
 
-> **P3-plus closeout update.** P3 shipped `agents.msg` as a one-shot compatibility primitive.
-> P3-plus replaces message-log-only delivery with bounded per-actor inbox queues:
-> fire-and-forget now reaches a live actor inbox, `opts.await = true` waits for a live reply when
-> the target is still running, and already completed actors keep the old seeded-continuation fallback.
-> Lower-level `send`/`broadcast`/`wait`/`inbox`/`list` are live. Child approval requests now route through the
-> parent session's live `HttpApprovalPolicy` + `ApprovalBroker`, so approval-gated effects inside
-> child actors emit replayable SSE `approval` / `approval_resolved` events and resolve through the
-> same UI/API path as top-level coding turns. The cancel-token slice adds `agents.cancel` plus per-actor
-> cancellation tokens: a direct parent can trip a running child, the actor record becomes terminal,
-> and one replayable `actor_cancelled` event lands in the parent session log. Plain-prose message
-> enforcement rejects control-payload blobs at the `agents.msg` / `agents.send` / `agents.broadcast`
-> boundary. DAG enforcement rejects targeted live waits where a real actor would wait on itself or
-> its own descendant. `agents.pipeline` runs staged actor waves with a barrier between stages and
-> feeds compact digest references downstream: `agent://` / `history://` / artifact handles plus a
-> bounded summary, never an upstream transcript. `agents.parallel` accepts per-child
-> `timeoutMs` / `budget.wallMs` / `budget.maxDepth` values and threads them into actor lifecycle
-> records and wall-clock enforcement. Active restart supervision, wall-clock actor
-> timeouts, fail-fast sibling-group cancellation, status lifecycle events,
-> typed parent `SessionEvent` actor/artifact/history links, and
-> `actor_resources_linked` provenance events are live.
+> **Live mailbox and supervision.** `agents.msg` remains the handle-oriented convenience primitive,
+> while bounded per-actor inbox queues provide resident delivery: fire-and-forget reaches a live actor
+> inbox, `opts.await = true` waits for a live reply when the target is still running, and already
+> completed actors keep the seeded-continuation fallback. Lower-level
+> `send`/`broadcast`/`wait`/`inbox`/`list` are live. Child approval requests route through the parent
+> session's live `HttpApprovalPolicy` + `ApprovalBroker`, so approval-gated effects inside child actors
+> emit replayable SSE `approval` / `approval_resolved` events and resolve through the same UI/API path
+> as top-level coding turns. `agents.cancel` uses per-actor cancellation tokens: a direct parent can
+> trip a running child, the actor record becomes terminal, and one replayable `actor_cancelled` event
+> lands in the parent session log. Plain-prose message enforcement rejects control-payload blobs at
+> the `agents.msg` / `agents.send` / `agents.broadcast` boundary. DAG enforcement rejects targeted
+> live waits where a real actor would wait on itself or its own descendant. `agents.pipeline` runs
+> staged actor waves with a barrier between stages and feeds compact digest references downstream:
+> `agent://` / `history://` / artifact handles plus a bounded summary, never an upstream transcript.
+> `agents.parallel` accepts per-child `timeoutMs` / `budget.wallMs` / `budget.maxDepth` values and
+> threads them into actor lifecycle records and wall-clock enforcement. Active restart supervision,
+> wall-clock actor timeouts, fail-fast sibling-group cancellation, status lifecycle events, typed
+> parent `SessionEvent` actor/artifact/history links, and `actor_resources_linked` provenance events
+> are live.
 
 > **Runtime hardening bounds.** Actor identity is keyed by `(session_id, ActorId)` throughout the
 > roster, mailbox, cancellation, supervision, transcript, `agent://`, and `history://` paths. The
@@ -137,9 +136,9 @@ let results = @agents.parallel {
 };
 ```
 
-The §23 full surface is now split between the P3 MVP calls and the P3-plus mailbox/supervision calls:
+The lower-level mailbox/supervision calls complete the §23 surface:
 
-| P3-plus call | Effect |
+| Mailbox / pipeline call | Effect |
 |---|---|
 | `agents.send(to, text, opts?)` | lower-level send to one actor id |
 | `agents.broadcast(text)` | message direct live children |
@@ -151,7 +150,7 @@ The §23 full surface is now split between the P3 MVP calls and the P3-plus mail
 
 Handles **wire the DAG by reference** — an upstream result feeds a downstream prompt as a compact digest
 reference (`agent://`, `history://`, artifact URI, and bounded summary), so the large transcript is never
-re-inlined. P3 MVP `parallel` = one wave; P3-plus `pipeline` = waves with a barrier. The graph must be
+re-inlined. `parallel` = one wave; `pipeline` = waves with a barrier. The graph must be
 **acyclic**: a real actor never waits on itself or its own descendant. Top-level orchestration uses the
 synthetic `Root` actor and may still await root-level workers.
 
@@ -205,13 +204,12 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 
 ## 23.7 `agents.*` capability + `agent://` resources
 
-- **P3 calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
-- **P3-plus mailbox calls:** lower-level mailbox primitives `agents.send`,
-  `agents.broadcast`, `agents.wait`, `agents.inbox`, `agents.list`, `agents.cancel`, and
-  `agents.pipeline`.
-- **P3-plus closeout behavior:** active restart supervision, wall-clock budget enforcement,
-  fail-fast sibling cancellation, status lifecycle events, typed parent `SessionEvent`
-  actor/artifact/history links, and parent-event resource provenance.
+- **Orchestration calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
+- **Mailbox calls:** lower-level primitives `agents.send`, `agents.broadcast`, `agents.wait`,
+  `agents.inbox`, `agents.list`, `agents.cancel`, and `agents.pipeline`.
+- **Supervision behavior:** active restart supervision, wall-clock budget enforcement, fail-fast
+  sibling cancellation, status lifecycle events, typed parent `SessionEvent` actor/artifact/history
+  links, and parent-event resource provenance.
 - **Resources:** `agent://<id>` (actor output/record resource, backed by `tm-agents`);
   `history://<id>` (read-only transcript).
   Both resolve only inside the caller's exact session-owned roster. Roster listing is also exposed
@@ -222,12 +220,12 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 - `actor` — identity, lifecycle (spawn / run / park / terminate), behavior binding (mode + grant); each a
   recursive runtime session (§05/§06).
 - `mailbox` — async queue, addressing, delivery + receipts.
-- `orchestrate` — P3/P3-plus `agents.*` constructors (run / spawn / parallel / pipeline / msg /
-  send / wait / broadcast / inbox / list / cancel).
+- `orchestrate` — `agents.*` constructors (run / spawn / parallel / pipeline / msg / send / wait /
+  broadcast / inbox / list / cancel).
 - `supervise` — supervision tree, restart strategies, budgets, depth cap, cost rollup.
 - `resources` — registers the `agent://` + `history://` handlers into the §9.2 resolver registry;
-  P3 roster/resource discovery goes through the resource gateway; P3-plus also exposes roster
-  metadata through `agents.list()`.
+  roster/resource discovery goes through the resource gateway, and roster metadata is also exposed
+  through `agents.list()`.
 
 ## 23.9 Failure modes & degradation
 

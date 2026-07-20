@@ -51,8 +51,8 @@ auditable and replayable (principle #6).
 
 ## 26.1 What evolves
 
-- **Skills** — Voyager-style: §22 Phase-2 dreaming distills recurring workflows into `skills/`
-  playbooks (trigger-retrieved and prompt-composed from the P7.1 managed catalog; richer embedding
+- **Skills** — Voyager-style: §22 dreaming distills recurring workflows into `skills/`
+  playbooks (trigger-retrieved and prompt-composed from the managed catalog; richer embedding
   retrieval and `skills.*` remain future work, §07). A new skill is
   **self-verified** (Self-Refine critique + a dry-run / consistency check) **before** it is committed.
 - **User model** — the facts / profile store of Brian (§22) sharpens with each dream (Reflexion:
@@ -72,12 +72,12 @@ Dreaming *adds to* these substrates; it doesn't invent a new one. Skill / memory
 `write_approval: true` + `skills.write_approval: true` (§27.6 / §22.8) — even conservative writes can
 be approval-gated by config.
 
-## 26.3 Write-scope tiers (P7.0 contract) — least-authority framing
+## 26.3 Write-scope tiers — least-authority framing
 
-A config knob (`self_evolution.tier`); capabilities are config (§10.4, principle #9). P7.0 defines
-`off`, `conservative`, and `moderate`. The compatibility-preserving fail-closed default is
-`conservative`, matching the existing approval-backed P4 memory and skill-proposal behavior;
-deployments can explicitly select `off`. `aggressive` is reserved but **unsupported in P7.0** and
+A config knob (`self_evolution.tier`); capabilities are config (§10.4, principle #9). The supported
+tiers are `off`, `conservative`, and `moderate`. The compatibility-preserving fail-closed default is
+`conservative`, matching the approval-backed memory and skill-proposal behavior; deployments can
+explicitly select `off`. `aggressive` is reserved but **unsupported** and
 fails deserialization/startup rather than silently falling back. Tiers are **attenuated
 write-capabilities** (object-capability least authority, cf. §24): the shared policy lives in
 `tm-host`, so config validation and effect dispatch use the same matrix rather than prompt or client
@@ -92,10 +92,10 @@ Targets are typed classes, never paths:
 | **moderate** | reachable | reachable | reachable | approval required | approval required |
 
 "Reachable" is only the tier upper bound. The exact registered capability, per-turn grant, payload
-validation, and applicable write approval still must pass. A moderate approval changes review state
-only in P7.0; persona and mode apply remain disabled. `SOUL.md`, prompts, capability configuration,
-source code, deployment configuration, and arbitrary filesystem paths have no target class and cannot
-be dispatched through this contract.
+validation, and applicable write approval still must pass. Persona or mode activation also requires
+its separate immutable versioned apply contract; review alone grants no file-write authority.
+`SOUL.md`, prompts, capability configuration, source code, deployment configuration, and arbitrary
+filesystem paths have no target class and cannot be dispatched through this contract.
 
 Stable policy reason codes are `evolution_disabled`, `evolution_insufficient_tier`,
 `evolution_aggressive_unsupported`, `evolution_unknown_target`,
@@ -109,8 +109,8 @@ carries provenance, configured tier, decision, approval/effect identifiers, stat
 digest but no full candidate body. Unknown enum values fail closed; unknown object fields are ignored
 for compatible additive evolution of the versioned envelope.
 
-The first P7.0 enforcement slice threads the effective tier through HTTP proposal creation, personal
-state capture, dream-generated memory/skill proposals, synchronous approval resolution, and the
+Tier enforcement threads the effective tier through HTTP proposal creation, personal state capture,
+dream-generated memory/skill proposals, synchronous approval resolution, and the
 supervised approval-effect worker. Durable `memory_write` and `skill_write` effects persist typed
 evolution metadata containing their creation tier and target. Immediately before an approved
 mutation, the server derives the target again from the actual payload, requires an exact metadata
@@ -120,8 +120,8 @@ proposal state changes. Denied and timed-out approvals may still finalize their 
 never write the target. Tier checks remain orthogonal to exact capability grants and manual approval;
 they add an upper bound and grant nothing themselves.
 
-P7.0 audit history is an append-only projection of that existing approval/effect source of truth,
-not a competing state machine. Migration 11 creates bounded `evolution_audits` rows and backfills one
+Audit history is an append-only projection of the existing approval/effect source of truth, not a
+competing state machine. Migration 11 creates bounded `evolution_audits` rows and backfills one
 snapshot for pre-existing typed effects. New proposal attempts, terminal approval resolutions,
 applied effects, and failed attempts append idempotency-keyed records in the same Store transaction as
 the corresponding request/effect transition. Each row contains only typed provenance, target,
@@ -136,12 +136,12 @@ The active session's bounded typed history is queryable through the same capabil
 ## 26.4 Review surface
 
 `moderate` proposals land as **reviewable typed diffs** (clients, §27.1 / §27.4) for persona or mode
-addenda, surfaced as `write_proposal` events (§27.1). In P7.0, accept / reject updates durable review
-state but accepted proposals are not applied. A later slice must separately prove atomic versioned
-write and rollback before enabling apply. **This human-in-the-loop is what stands in for the Gödel
-machine's proof obligation** — Brian's approval, not a formal proof, certifies a proposed self-change.
+addenda, surfaced as `write_proposal` events (§27.1). Accept / reject always updates durable review
+state; activation occurs only through the separately proven immutable versioned apply contracts
+described below. **This human-in-the-loop is what stands in for the Gödel machine's proof
+obligation** — Brian's approval, not a formal proof, certifies a proposed self-change.
 
-P7.0 implements this as `POST /sessions/:id/evolution/review-proposals`. The request accepts only a
+The review endpoint is `POST /sessions/:id/evolution/review-proposals`. The request accepts only a
 tagged `persona` or `mode` target plus typed addendum sections; serde rejects path fields and raw patch
 payloads. Persona proposals may contain only behavior/voice guidance, while mode proposals may
 contain only description/routing guidance. The server snapshots a version and digest from the loaded
@@ -151,15 +151,14 @@ persona/mode assets, bounds the complete change set to 8 KiB and 16 changes, per
 `resources.read:memory`.
 
 Every Moderate proposal creates a durable manual approval; no auto-approve branch exists. Persona
-proposals keep `applyEnabled: false` and approval changes only durable review state. P7.2a mode
-proposals use `ReviewApplyContract::VersionedModeAddendum` when the managed addendum root is
-configured. Immediately before either outcome, the effect rechecks the current tier, typed target,
-proposal digest, live base profile digest, and active addendum digest. A tier downgrade, forged
-payload, changed base, or stale pointer fails closed. Flutter/Web renders the same server-owned
+and mode proposals use only their matching versioned addendum apply contract when the corresponding
+managed root is configured. Immediately before either outcome, the effect rechecks the current tier,
+typed target, proposal digest, live base profile digest, and active addendum digest. A tier downgrade,
+forged payload, changed base, or stale pointer fails closed. Flutter/Web renders the same server-owned
 approval and `write_proposal` lifecycle, opens the resource link, and lets server timeout events own
 default-deny semantics.
 
-P7.2a applies only typed `description` and `routing_guidance` changes. The approved version is written
+Mode addenda apply only typed `description` and `routing_guidance` changes. The approved version is written
 beneath the configured managed-mode-addendum root as immutable digest-addressed metadata, then a
 per-mode `active.json` pointer is atomically replaced under a cross-process lock. The next prompt
 composition reads the active version and adds an **Approved mode addendum** section. The base
@@ -169,29 +168,27 @@ mutated. Rollback is a separate durable manual approval and may activate an olde
 or restore the unmodified base catalog. Deny, timeout, stale base/pointer, malformed sections,
 symlinks, and retries cannot change the active pointer.
 
-**P4 candidate path:** post-session dreaming can distill a reusable
-workflow into a `SkillProposalRecord` with name, description, trigger/use criteria, `SKILL.md`-style
-body, evidence links, self-critique, verification checks, status, dedupe key, and source dream/session
-ids. The proposal emits `write_proposal` with `kind: "skill"` and uses the shared approval/default-deny
-path. Before P7.1 approval updated the proposal status only; rejection/timeout left it
-pending/denied/timed-out without mutating the live catalog. Low-value sessions do not
-create skill proposals, and candidates that fail self-verification emit a replayable
-`skill_proposal_rejected` dream progress event instead of failing the whole dream or surfacing an unsafe
-proposal. Completed dream re-runs reuse the existing queued dream/skill records and do not duplicate
-skill approvals. The constrained candidate resource remains `memory://skill-proposals/<id>`.
+**Skill candidate path:** post-session dreaming can distill a reusable workflow into a
+`SkillProposalRecord` with name, description, trigger/use criteria, `SKILL.md`-style body, evidence
+links, self-critique, verification checks, status, dedupe key, and source dream/session ids. The
+proposal emits `write_proposal` with `kind: "skill"` and uses the shared approval/default-deny path.
+Rejection or timeout leaves it pending/denied/timed-out without mutating the live catalog. Low-value
+sessions do not create skill proposals, and candidates that fail self-verification emit a replayable
+`skill_proposal_rejected` dream progress event instead of failing the whole dream or surfacing an
+unsafe proposal. Completed dream re-runs reuse the existing queued dream/skill records and do not
+duplicate skill approvals. The constrained candidate resource remains
+`memory://skill-proposals/<id>`.
 
-P7.0 keeps that `SkillProposalRecord` as the only candidate format. `memory://skill-proposals` lists
-session proposals, and read/preview expose the capability-gated candidate plus a deterministic
-lifecycle descriptor: normalized identity, version, redacted SHA-256 digest, dream/session
-provenance, reject-on-name-collision policy, no-live-mutation rollback contract, and disabled catalog
-reload. Validation bounds the body and references, requires the title/Trigger/Procedure/Guardrails
-shape, rejects traversal/absolute/schemed references and affirmative requests for prohibited
-authority, and still marks every P7.0 candidate `installable: false`. Approval could therefore review
-or reject the proposal and append audit history, but P7.0 had no install/import/reload dispatch and
-no path from the conservative evolution target to `fs.write`, `fs.patch`, `fs.move`, `fs.remove`,
-or a hand-authored skill.
+`SkillProposalRecord` is the only candidate format. `memory://skill-proposals` lists session
+proposals, and read/preview expose the capability-gated candidate plus a deterministic lifecycle
+descriptor: normalized identity, version, redacted SHA-256 digest, dream/session provenance,
+reject-on-name-collision policy, immutable-version rollback contract, and catalog state. Validation
+bounds the body and references, requires the title/Trigger/Procedure/Guardrails shape, rejects
+traversal/absolute/schemed references and affirmative requests for prohibited authority, and marks
+unqualified candidates `installable: false`. There is no path from the conservative evolution target
+to `fs.write`, `fs.patch`, `fs.move`, `fs.remove`, or a hand-authored skill.
 
-P7.1 enables only the proven managed-skill subset of that dormant contract. An approved `skill_write`
+The managed-skill contract enables only the proven proposal-backed subset. An approved `skill_write`
 effect revalidates the current tier, typed target, proposal provenance, candidate digest, and successful
 self-verification before installing `<root>/<name>/versions/<sha256>/SKILL.md` plus its manifest. Version
 directories are immutable, names colliding with bundled or hand-authored skills are rejected, and an
@@ -209,7 +206,7 @@ version bodies from that catalog; native reads require `resources.read:skill`. T
 namespace, MCP import/reload, arbitrary filesystem writes, persona apply, direct mode
 file/capability changes, and aggressive evolution remain disabled.
 
-**P7.2b shipped contract (closed 2026-07-18):** the durable review path has a separate immutable
+**Persona-addendum contract:** the durable review path has a separate immutable
 persona-addendum catalog. Only typed tone, address, and interaction-preference sections can receive
 the `versioned_persona_addendum` apply contract. Approval atomically activates a digest-addressed
 version, the next prompt composes it after the hand-authored `SOUL.md`, and a separate durable manual
@@ -218,7 +215,7 @@ behavior/voice review sections remain readable but cannot activate.
 
 Unlocked Auto-mode turns at the Moderate tier can detect a small typed set of repeated owner
 preferences or explicit persona mismatches after a turn completes. Repeated preferences require two
-distinct active, included P8 records with evidence; an explicit correction requires one. Detection
+distinct active, included typed memory records with evidence; an explicit correction requires one. Detection
 is bounded to five retrieval candidates and stores at most three evidence records with bounded,
 redacted references. Legacy lexical recall and records lacking current evidence cannot drive a
 candidate. A stable normalized SHA-256 key deduplicates pending/approved candidates and imposes a
@@ -231,8 +228,8 @@ stable base digest and uses the same durable manual approval/default-deny, stale
 version, next-turn composition, and separate rollback path as a manual proposal. `SOUL.md`, core
 Miku identity, safety rules, capabilities, voice caps, mode scopes, route triggers, source code,
 configuration, and deployment remain immutable. Auto approval, aggressive evolution, and direct
-persona-file writes are permanent non-goals. The exact closeout matrix is in the
-[P7.2b evidence note](../../evidence/2026-07-18-p7-2b-persona-addenda.md).
+persona-file writes are permanent non-goals. The exact acceptance matrix is in the
+[persona-addendum evidence note](../../evidence/2026-07-18-p7-2b-persona-addenda.md).
 
 ## 26.5 Crate layout
 
@@ -242,13 +239,13 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
   the Self-Refine self-critique pass; redaction before any disk write.
 - `tm-modes` managed catalog and `skill://` resource handler (§07) — immutable versions, atomic active
   pointers, trigger retrieval, and prompt composition. A future `skills.*` namespace or embedding
-  index needs a separate milestone.
+  index needs a concrete consumer and separate contract.
 - `tm-server` (§27) — **tier enforcement** at the config / registry boundary; the review surface
   (`write_proposal` events §27.1), typed review persistence, base/digest revalidation, and the audit
   trail (§12).
-- `tm-modes` — typed persona/mode addendum targets, managed-skill catalog, the P7.2a immutable
-  guidance-only mode-addendum catalog, and the P7.2b immutable persona-addendum catalog; no
-  direct persona file, capability, voice-cap, or hand-authored mode-file write authority.
+- `tm-modes` — typed persona/mode addendum targets, managed-skill catalog, the immutable
+  guidance-only mode-addendum catalog, and the immutable persona-addendum catalog; no direct persona
+  file, capability, voice-cap, or hand-authored mode-file write authority.
 - config — `self_evolution.tier` (+ the `write_approval` knobs, §26.2).
 
 ## 26.6 Failure modes & degradation
@@ -258,9 +255,8 @@ Self-evolution is **not a new crate** — it's a **policy layer** spanning exist
 - **Skill-library bloat** — embedding-indexed retrieval surfaces only relevant skills; dreaming
   dedups / consolidates them (§22.5).
 - **Profile drift / wrong fact** — bi-temporal supersede (§22, Zep lineage); Brian edits `memory://`.
-- **Tier misconfig** — default is conservative for P4 compatibility; aggressive and unknown values
-  are rejected; lower tiers
-  **fail closed** — they cannot reach higher-tier targets.
+- **Tier misconfig** — default is conservative for source-deployment compatibility; aggressive and
+  unknown values are rejected; lower tiers **fail closed** — they cannot reach higher-tier targets.
 - **Approval timeout** — the write is deferred / denied (§27.6) and the loop continues; nothing
   self-applies under conservative without the gate.
 
@@ -289,5 +285,5 @@ Machines: Fully Self-Referential Optimal Universal Self-Improvers* (**arXiv cs/0
 any own code only on a formal proof of higher utility; the unbounded self-rewrite extreme we refuse).
 Object-capability least authority for the tier boundary (§24). **Decision holds: conservative default;
 identity (`SOUL.md`) hand-owned; self-improvement is bounded skill + user-model growth, governed by
-tiers + human review, never unbounded self-rewrite. P7.0 defaults conservative and does not apply
-moderate or aggressive changes.**
+tiers + human review, never unbounded self-rewrite. The conservative default grants no moderate or
+aggressive mutation authority.**

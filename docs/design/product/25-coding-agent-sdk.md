@@ -25,13 +25,13 @@ Engaged by **Serious Engineer** and **Handoff** modes (§21). Reference: **Oh My
   our SDK namespaces (`fs.*` / `code.*` / `proc.*` / `agents.*` / selected
   `mcp.<server>.*` / `artifacts.*`) and resource routes are the *target* — same capabilities, made
   code-callable and **progressively disclosed** (`tools.search` / `docs`, §07) rather than
-  all-loaded. P10 imports only an operator allowlist through P9; it does not expose an MCP multi-tool
-  surface to the model.
+  all-loaded. MCP import brings in only an operator allowlist through the egress boundary; it does
+  not expose an MCP multi-tool surface to the model.
 - This is the core bet (§01) realized at the product layer; the engineer modes are its heaviest users.
 
-## 25.0.1 P0a transitional OMP ACP backend
+## 25.0.1 Transitional OMP ACP backend
 
-P0a adopted Oh My Pi first as an external coding backend over Agent Client Protocol (ACP). This is a
+Oh My Pi is available as an external coding backend over Agent Client Protocol (ACP). This is a
 bridge, not a replacement for the single-`execute` bet: TempestMiku still owns persona, mode routing,
 session ids, SSE replay, approvals, memory, and artifact/resource presentation; OMP owns coding-agent
 execution behind the adapter when that backend is explicitly enabled.
@@ -56,11 +56,12 @@ The bridge shape is deliberately small:
   and explicit truncation reason; the event stream exposes that provenance instead of raw unbounded
   backend output.
 
-P0a acceptance: a UI/API Serious Engineer session dispatches a real TempestMiku coding task through
-`omp acp`, applies a patch in a linked repo, runs a targeted test, streams progress through existing
-SSE, routes at least one permission path through TempestMiku approvals, and replays from
-`Last-Event-ID`. Native `fs.*` / `code.*` / `proc.*` is now the P0/P1 dogfood path; OMP remains a
-replaceable backend for parity comparison and fallback, not the final SDK surface.
+The bridge's retained end-to-end contract is a UI/API Serious Engineer session dispatching a real
+TempestMiku coding task through `omp acp`, applying a patch in a linked repo, running a targeted test,
+streaming progress through existing SSE, routing at least one permission path through TempestMiku
+approvals, and replaying from `Last-Event-ID`. Native `fs.*` / `code.*` / `proc.*` is the primary
+dogfood path; OMP remains a replaceable backend for parity comparison and fallback, not the final SDK
+surface.
 
 ## 25.1 Translation map
 
@@ -79,8 +80,8 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 | skills | `skills.*` remains reserved; approved managed versions are read-only through capability-gated `skill://...` resources | §07, §26 |
 | `artifact://` | session artifacts via `tm-artifacts` | §25.3 |
 | `agent://` / `history://` | actor resources via `tm-agents`, with large payloads stored out of context | §23 / §25.3 |
-| selected MCP tools / prompts | lazy `mcp.<server>.*` SDK functions discovered through `tools.search` / `docs` | P10 through the P9 egress boundary |
-| selected MCP resources | hashed `mcp://<server>/resources/<source-uri-digest>` routes through the shared resource registry | §09 / P10 |
+| selected MCP tools / prompts | lazy `mcp.<server>.*` SDK functions discovered through `tools.search` / `docs` | selected imports through the egress boundary |
+| selected MCP resources | hashed `mcp://<server>/resources/<source-uri-digest>` routes through the shared resource registry | §09 / selected MCP imports |
 
 ## 25.2 Engineer reach: raw terminal → curated `proc.run` (a deliberate tightening)
 
@@ -105,9 +106,9 @@ honoring principle #8 (no generic shell / escape hatch):
 - **Behavioral parity is kept** (build / test still work); the escape hatch is not. One of the
   on-purpose changes vs. the current system (§29.4).
 
-### 25.2.1 P0 first pass: host adaptor + config-declared linked repos
+### 25.2.1 Host adaptor + config-declared linked repos
 
-P0 reaches real repos through the server/host adaptor and config, not ambient filesystem access or an
+Real repos are reached through the server/host adaptor and config, not ambient filesystem access or an
 interactive folder picker. In the common local deployment the adaptor is in-process with `tm-server`;
 if the server later runs away from the development machine, the same adaptor contract can run as a
 local connector that owns the real filesystem and dials out. Either shape exposes only minted
@@ -152,33 +153,33 @@ folder keeps the same URI if it moves from an in-process adaptor to a remote con
 `expectedLines` for replace/delete ranges or `expectedLine` for relative inserts, applies one atomic
 file update, preserves a uniform file's LF or CRLF convention, returns a bounded contextual diff
 preview, and spills larger diffs to `artifact://`.
-New files use `fs.write`; moves and destructive removal use `fs.move` and `fs.remove`. LSP
-(`code.lsp`) and AST (`code.ast`) stay in the SDK map but are later milestones, not part of the
-first serious-engineer cut.
+New files use `fs.write`; moves and destructive removal use `fs.move` and `fs.remove`. `code.lsp`
+and `code.ast` remain in the translation map but are demand-triggered and absent from the current
+runtime namespace.
 
-### 25.2.2 Current JS/TS runtime contract
+### 25.2.2 Current runtime contract
 
 The current serious-engineer and handoff runtime exposes the authoritative SDK surface in §7.1.
 Product-layer scope is intentionally narrower than the full translation map:
 
 - **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `code`,
-  `proc`, and the current M1/P0 default-deny deterministic allowlisted `http.get` helper. The
-  `resources` namespace includes the P2 `memory://` gateway where the server registers the handler
-  and grants `resources.read:memory`; P3/P3-plus Handoff and orchestration sessions also expose
-  grant-gated `agents.run/spawn/parallel/msg/send/wait/inbox/list`.
-- **Configured P10 imports:** trusted operator config may add exact `mcp.<server>.*` tool/prompt
+  `proc`, and the default-deny deterministic allowlisted `http.get` helper. The `resources`
+  namespace includes the `memory://` gateway where the server registers the handler and grants
+  `resources.read:memory`; Handoff and orchestration sessions also expose grant-gated
+  `agents.run/spawn/parallel/msg/send/wait/inbox/list`.
+- **Configured MCP imports:** trusted operator config may add exact `mcp.<server>.*` tool/prompt
   functions and `mcp://` resource routes. They are registered lazily, remain behind exact imported
-  object plus P9 destination/opaque-secret grants, and are available only to a mode that already has
+  object plus destination/opaque-secret grants, and are available only to a mode that already has
   network authority. Remote descriptions and initialize instructions are untrusted data, never
   system instructions or local SDK documentation. Production server/CLI catalogs are immutable for
   the process lifetime; restart builds and atomically activates a fresh bounded catalog.
 - **Closed by default:** `secrets`, `memory`, `skills`, and `agents` are explicitly set to
   `undefined` in the base prelude so optional chaining and feature checks do not throw
-  `ReferenceError`. The `memory` global staying undefined is intentional; present P2 memory reads are
+  `ReferenceError`. The `memory` global staying undefined is intentional; present memory reads are
   resource reads, not `memory.*` calls. `agents` is replaced with `AgentsNamespace` only when the
   session holds an `agents.*` grant.
-- **Deferred:** `code.ast` and `code.lsp` remain in the translation map but are not first-pass runtime
-  namespaces. A future namespace may exist while a method is incomplete; that method throws
+- **Demand-triggered:** `code.ast` and `code.lsp` remain in the translation map but are not current
+  runtime namespaces. A future namespace may exist while a method is incomplete; that method throws
   `NotImplementedError`.
 - **Read shape:** `fs.read` and `resources.read` return the shared `ResourceContent` envelope, never a
   naked string.
@@ -269,16 +270,16 @@ model above. This section owns the **storage tiers** only; the **read / routing*
   `artifact://` handler into the §9.2 registry.
 - `tm-agents` (§23) — `agents.*` host functions plus `agent://` and `history://` handlers; large actor
   payloads may spill through `tm-artifacts`.
-- `tm-mcp` (P10) — bounded MCP discovery and catalog generations, local allowlist/annotation policy,
+- `tm-mcp` — bounded MCP discovery and catalog generations, local allowlist/annotation policy,
   lazy imported tool/prompt bindings, the `mcp://` resource handler, untrusted-result provenance,
-  and a Streamable HTTP transport that can reach peers only through P9 egress and opaque-secret
+  and a Streamable HTTP transport that can reach peers only through egress and opaque-secret
   handles. `tm-server` and `tm-cli` install one immutable generation at startup.
 - Future `memory.*` / `skills.*` live in their own crates (§22 / §07 + §26); §25
   is the **engineer-facing SDK + the artifact spine**.
 
 ## 25.5 Failure modes & degradation
 
-- **`omp acp` missing / unsupported / exits** — P0a bridge reports the backend unavailable and keeps
+- **`omp acp` missing / unsupported / exits** — the bridge reports the backend unavailable and keeps
   the TempestMiku session alive; no silent fallback to raw shell.
 - **ACP permission unsupported / rejected / timed out** — translate to denied approval and skip the
   effect; never auto-allow because a client capability is missing.
@@ -290,8 +291,8 @@ model above. This section owns the **storage tiers** only; the **read / routing*
   catalog; the previous generation remains active in the catalog core, and production restart does
   not publish partial bindings.
 - **MCP peer offline/protocol-invalid, destination revoked, or secret unavailable** — the request
-  fails closed through P9. No fallback credential, redirect authority, cached instruction, or ambient
-  network path is introduced.
+  fails closed through the egress boundary. No fallback credential, redirect authority, cached
+  instruction, or ambient network path is introduced.
 - **MCP mutation denied/timed out** — the terminal audit records denial and the peer is never called.
   Successful results remain bounded `mcp_untrusted_data` with local alias, object identity, catalog
   generation/digest, target/payload digests, and byte count.

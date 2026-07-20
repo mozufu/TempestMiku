@@ -35,9 +35,9 @@ executable comparator and runtime-specific fixture module were retired when Deno
 The immutable raw record, summary, prompt, and preserved corpus live under
 `docs/evidence/2026-07-16-tm-fluency-prompt-v2/`.
 
-## 5.3 Closed implementation contract
+## 5.3 Current implementation contract
 
-The T0-T7 slice closed:
+The runtime includes:
 
 - the frozen parser/checker conformance corpus;
 - persistent cells, atomic rollback, runtime limits, and structured presentation;
@@ -48,9 +48,9 @@ The T0-T7 slice closed:
   client proofs;
 - the historical comparative live-model gate above.
 
-The subsequent tm-only slice removed the old backend crate, Deno/V8 dependencies, backend enums and
-selectors, shipped stub, JavaScript declaration artifact, and comparator command. New native coding
-events use `native-tm`; stored historical events are replayed unchanged.
+The tm-only cut removed the old backend crate, Deno/V8 dependencies, backend enums and selectors,
+the test stub, JavaScript declaration artifact, and comparator command. New native coding events use
+`native-tm`; stored historical events are replayed unchanged.
 
 ## 5.4 The fun
 

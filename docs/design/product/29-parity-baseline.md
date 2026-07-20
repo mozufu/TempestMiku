@@ -1,7 +1,7 @@
 # 29. Parity baseline — the current deployment
 
-The Rust TempestMiku is a **rewrite of a running system**. This doc pins what exists today so the
-rewrite can reach **behavioral parity before adding anything new**.
+The Rust TempestMiku is a **rewrite of a running system**. This doc pins the source behavior that the
+current product preserves before layering its additional capabilities.
 
 ## 29.1 Where it lives
 
@@ -42,26 +42,26 @@ deployment location is intentionally omitted. Honcho host id `hermes`; Honcho wo
 - **Raw terminal → curated `proc.run`** (allowlisted, approval-gated, linked-folder) (§25.2).
 - **Adds:** persistent character chat over a streaming server + WebUI / Android (§27);
   code-as-orchestration `agents.*` (§23); drive auto-organize (§24); self-evolution tiers (§26).
-- **Bounds P7.0 self-evolution:** Conservative reaches only memory/profile and skill proposals;
+- **Bounds self-evolution:** Conservative reaches only memory/profile and skill proposals;
   Moderate adds typed persona/mode addendum review with durable approval and status-only effects.
-  Apply/reload, raw patches, aggressive authority, and `SOUL.md` mutation remain unavailable (§26).
+  Raw patches, aggressive authority, and `SOUL.md` mutation remain unavailable (§26).
 - **Replaces Honcho** (today's memory service) with a self-built `tm-memory` engine — episodic +
   vector + BM25 + facts fused by RRF + memory-stream scoring; the user model / ToM and "dreaming"
   are ours, no external memory dependency (§22).
-- **Adds the P2 memory resource gateway:** `memory://root`, `memory://user-model`, and approved
+- **Adds the memory resource gateway:** `memory://root`, `memory://user-model`, and approved
   profile fact / scoped recall record URIs resolve through the same preview/list/read path as artifacts
   and linked resources, with unknown or ungranted memory paths denied (§22.9 / §27.5).
-- **Adds P2.5 state capture:** `skills/personal-assistant-state-capture` is enforced server-side as
+- **Adds state capture:** `skills/personal-assistant-state-capture` is enforced server-side as
   approval-backed memory proposal logic for stable preferences, personal reminders, open loops,
   commitments/deadlines, decisions, shipped artifacts, and workflows; transient moods, secrets, raw
   logs, one-off complaints, large notes, and obvious sensitive PII are skipped before proposal creation
   (§22.8 / §27.6).
-- **Adds bounded P2 ToM:** approved profile facts feed a redacted, no-tool every-third-turn dialectic
+- **Adds bounded ToM:** approved profile facts feed a redacted, no-tool every-third-turn dialectic
   outside Serious/engineering modes; a confirmed trace is replayed on retry and its output remains
   untrusted user-channel context (§22.4).
-- **Adds P5 local-first drive/research as post-parity expansion:** `drive.*`, `drive://`, project
-  linked-folder/memory views, drive-derived recall chunks, and `research.drive(...)` are new Rust
-  surfaces layered on the existing approval/resource model. They must not weaken the inherited Hermes
+- **Adds local-first drive/research as a post-parity expansion:** `drive.*`, `drive://`, project
+  linked-folder/memory views, drive-derived recall chunks, and `research.drive(...)` are Rust
+  surfaces layered on the existing approval/resource model. They do not weaken the inherited Hermes
   invariants: manual approval for sensitive writes, no ambient host filesystem access, and bounded
   context/proactivity.
 - **Keeps:** SOUL identity + 5 modes (§21); the **memory behavior** — hybrid recall, user profile +
@@ -70,11 +70,11 @@ deployment location is intentionally omitted. Honcho host id `hermes`; Honcho wo
 
 ## 29.5 Parity gate
 
-P0–P4 (§28) are not "done" until they reproduce the current behavior for their slice: coding reach
-works through the single `execute` SDK (§25), project continuity survives across sessions (§22/§27),
-Miku replies in-voice (§21), the mode router fires (§21.2), memory recall + user profile work (§22),
-and approvals gate the same actions (§21.3). New capabilities layer on **after** parity, not before.
+The rewrite reproduces the source deployment's core behavior: coding reach works through the single
+`execute` SDK (§25), project continuity survives across sessions (§22/§27), Miku replies in voice
+(§21), the mode router fires (§21.2), memory recall and the user profile work (§22), and approvals
+gate the same actions (§21.3). New capabilities layer on **after** parity, not before.
 The deterministic voice fixture calibrates the rubric but does not close live parity: an actual
 non-echo General/grounding/Serious `tm-e2e voice-eval` run must pass and retain its JSON evidence.
-That gate passed on 2026-07-18 and the exact report is retained in
-[`P2 live voice evidence`](../../evidence/2026-07-18-p2-voice-live.json).
+That gate passed on 2026-07-18 and the exact report is retained as
+[`live voice evidence`](../../evidence/2026-07-18-p2-voice-live.json).

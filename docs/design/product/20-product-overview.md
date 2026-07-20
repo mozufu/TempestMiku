@@ -1,18 +1,17 @@
 # 20. Product layer — overview
 
-> Status: product design draft v0.2
 > Scope: the product **on top of** the runtime core (§01–16). The core is deliberately
 > UI/deployment/multi-tenant-agnostic; this track adds the companion, personas, memory,
 > storage, sub-agents, and clients.
-> **Canonical behavioral spec:** `SOUL.md` + the `skills/` + `honcho.json` + `config.yaml` of the
-> current deployment (`hermes-agent`, host `lumo`). See the **parity baseline** (§29).
+> **Canonical behavioral spec:** `SOUL.md` + `skills/` + `honcho.json` + `config.yaml` from the
+> source deployment (`hermes-agent`, host `lumo`). See the **parity baseline** (§29).
 
 ## What TempestMiku is
 
 A self-hosted personal AI companion: **Tempest Miku** (short **Miku**) — a 貓娘 (catgirl) assistant,
 **coding partner**, project manager, and second brain for her user (**Brian**). Proactive,
-opinionated, warm, and deliberately "a bit dangerous to Brian's excuses." The first dogfood slice is
-coding-heavy, but the product is not a sterile coding tool with a chat box.
+opinionated, warm, and deliberately "a bit dangerous to Brian's excuses." Coding is a first-class
+workflow, but the product is not a sterile coding tool with a chat box.
 
 One persistent identity with several facets (SOUL.md): **Miku** (voice / warmth / teasing
 accountability), **Chief of Staff** (open loops, deadlines, scope), **Research Analyst**,
@@ -31,33 +30,33 @@ Brian is low).
 
 ### This is a rewrite, not a greenfield
 
-There is a **running TempestMiku today**: `hermes-agent` (host `lumo`), built on an existing agent
-framework with Honcho memory, a skills hub, terminal, cron, MCP, and manual approvals. The Rust
-TempestMiku is its **next-gen runtime**. SOUL.md + the 7 skills + `honcho.json` + `config.yaml` are
-the **behavioral spec the rewrite must preserve before adding anything** (§29).
+The behavioral source is the running `hermes-agent` TempestMiku deployment on `lumo`, with Honcho
+memory, a skills hub, terminal, cron, MCP, and manual approvals. The Rust system preserves the
+behavior specified by `SOUL.md`, the seven skills, `honcho.json`, and `config.yaml`, then extends it
+behind the same identity, memory, and approval boundaries (§29).
 
 ### Hard non-goals (taste-level)
 
 - Becoming a **sterile coding agent** whose voice and memory disappear once work gets serious.
 - **Mechanical / robotic Q&A** as the default register.
 
-Enforced, not aspirational: the constant character + the voice-intensity rule + the staged product
-order (**coding agent → project manager → personal assistant**) keep engineering useful early without
-letting engineering erase the identity (§21).
+Enforced, not aspirational: constant character, context-sensitive voice intensity, and first-class
+Serious Engineer, project-manager, and General workflows keep engineering useful without letting it
+erase the identity (§21).
 
 ## How the product maps onto the core
 
 Almost everything new is **just another host capability** registered in `tm-host`
 (principle #9 — hot-addable capabilities), plus a thin persona layer, a server, thin clients, and
-future scheduler/background workers.
+background workers.
 
 ```mermaid
 flowchart TD
     AND[Android] --> SRV
     WEB[WebUI] --> SRV
-    SCHED[P4 scheduler / cron §27] -.-> SRV
+    SCHED[scheduler / cron §27] -.-> SRV
     SRV[tm-server: session API + SSE] --> RT[Persona router §21]
-    SRV -.P0a coding backend.-> OACP[OMP ACP bridge §25]
+    SRV -.coding backend.-> OACP[OMP ACP bridge §25]
     OACP --> OMP[Oh My Pi coding agent]
     RT --> LOOP[Agent loop + execute §05]
     LOOP <--> LLM[LlmClient + model roles §27]
@@ -66,17 +65,17 @@ flowchart TD
     REG --> CORE[core caps: http/fs/artifacts/secrets/skills/mcp]
     REG --> MEM[memory.* engine §22]
     REG --> AGT[agents.* §23]
-    REG -.P5.-> DRV[drive.* §24]
+    REG --> DRV[drive.* §24]
     REG --> CODE[fs.*/code.*/proc.* §25]
     LOOP -.approvals.-> APV[ApprovalPolicy §08]
-    MEM -.P4 dream.-> DREAM[bg: consolidation §22]
-    DRV -.P5 file.-> ORG[bg: auto-organizer §24]
+    MEM -.idle.-> DREAM[bg: consolidation §22]
+    DRV -.idle.-> ORG[bg: auto-organizer §24]
 ```
 
 The bet survives because the product is **capabilities + a persona layer + a server/clients +
 background workers** — not a rewrite of the loop.
 
-P0a is the narrow exception: `tm-server` may delegate Serious Engineer execution to an external
+A transitional OMP ACP bridge is the narrow exception: `tm-server` may delegate Serious Engineer execution to an external
 `omp acp` process while TempestMiku still owns persona, approvals, SSE replay, memory, and
 artifact/resource presentation. That bridge is a cutover aid, not the final capability architecture.
 
@@ -91,7 +90,7 @@ artifact/resource presentation. That bridge is a cutover aid, not the final capa
 | [§25](25-coding-agent-sdk.md) | Coding-agent SDK (OMP translation) + artifacts |
 | [§26](26-self-evolution.md) | Self-evolution |
 | [§27](27-server-and-clients.md) | Server, scheduler & clients |
-| [§28](../../../ROADMAP.md#product-roadmap-28) | Product roadmap |
+| [§28](28-product-roadmap.md) | Delivery history pointer |
 | [§29](29-parity-baseline.md) | Parity baseline — the current deployment |
 
 ## Scope

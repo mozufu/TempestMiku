@@ -15,7 +15,7 @@
   anything. Linked folders, drive configuration, or a prior mode never add authority implicitly.
   Authority-bearing host, linked-folder, approval, self-evolution, egress, and isolation config
   rejects unknown fields so misspelling a hardening key cannot silently select a weaker default.
-- **Network egress allowlist.** P9 ships default-disabled production HTTPS egress through configured
+- **Network egress allowlist.** The system ships default-disabled production HTTPS egress through configured
   destination ids. Exact scheme/host/port/path/method/header policy, validated and pinned DNS answers,
   a manually re-authorized redirect graph, request/response/count/time budgets, current exact grants,
   revocation generations, and bounded durable audits all fail closed. Active-session usage and
@@ -29,7 +29,7 @@
   disables redirects and proxy discovery, bounds the upstream response and timeout, and never falls
   back to another recognizer. Upstreams use HTTPS, except that an exact literal Tailscale CGNAT
   address may use HTTP inside the owner's encrypted tailnet; this exception is local to the voice
-  broker and does not widen P9 or sandbox authority. Re-pairing, logout, or any server-target change
+  broker and does not widen the egress or sandbox authority. Re-pairing, logout, or any server-target change
   first cancels active capture/transcription and invalidates the remote-engine consent/catalog;
   stale requests, catalogs, and confirmations are epoch-fenced from the new authority.
 - **Filesystem jail.** Linked-folder reads, walks, searches, and mutations traverse from an opened
@@ -65,7 +65,7 @@
   hostile-kernel containment or microVM isolation. Timeouts and unsupported flows deny by default.
   Postgres persists requests and an idempotent effect outbox; resolution is compare-and-swap with its
   event in the same transaction. Durable proposal effects resume exactly once, while ACP/native-runtime waits are
-  non-resumable and become cancelled after origin loss. P7.0 memory, skill, and review-only
+  non-resumable and become cancelled after origin loss. Memory, skill, and review-only
   persona/mode effects also carry a typed
   target and creation tier; the worker re-derives the target, rechecks the current tier, and renews
   its owner/epoch lease before mutation, so forged, downgraded, or stale work fails before a write.
@@ -94,7 +94,7 @@
 
 ### 8.3 Secrets by reference
 
-P9 exposes an opaque broker through tm effects, never a secret-value read:
+The system exposes an opaque broker through tm effects, never a secret-value read:
 
 ```tm
 let key = @secrets.use {name: "stripe_key"}

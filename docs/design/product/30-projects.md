@@ -1,10 +1,9 @@
 # 30. Projects — subject entities, and what drive means
 
-> Status: **implemented 2026-07-20** as ROADMAP **P11** (decided the same day in owner design
-> discussion). The target contract below is live: server-owned project entities, `project.link/unlink`
-> grant attachments, entity-rooted memory-scope authority with archive tombstones, drive as Miku's
-> playground, and session assignment replacing promotion. §22/§24/§27/§09 are updated in place to
-> match; this doc is the single home of the decision.
+> **Current contract.** Server-owned project entities, `project.link/unlink` grant attachments,
+> entity-rooted memory-scope authority with archive tombstones, drive as Miku's playground, and
+> session assignment replacing promotion are live. §22/§24/§27/§09 match; this doc is the single
+> home of the decision.
 
 ## 30.0 The decision
 
@@ -76,9 +75,9 @@ they were never the folder's contents.
 
 ## 30.4 Memory scope lifecycle (re-pointed revocation)
 
-The P8.2/8.3 post-closeout contract — durable tombstones, serialized scope revocation with every
-typed-memory / embedding-provenance / generation / pointer / job write (migrations 0017–0018), exact
-replay consulting the same durable authority — is **preserved and re-pointed**:
+The durable memory authority contract — durable tombstones, serialized scope revocation with every
+typed-memory / embedding-provenance / generation / pointer / job write (migrations 0017–0018), and
+exact replay consulting the same durable authority — is preserved and rooted in the project entity:
 
 - the revocation trigger is project **archive/delete** (entity lifecycle), not folder unlink;
 - unlink no longer tombstones, cancels embedding jobs, or denies scoped reads;
@@ -115,7 +114,7 @@ The two revocation axes are independent, and each fails closed on its own trigge
   output is ordinary approval-gated `drive.put` with `sourceUri` provenance; clients may
   batch-select, but that is a client concern, not a server concept.
 
-## 30.7 Migration shape (P11)
+## 30.7 Migration shape
 
 1. `projects` table + entity CRUD + lifecycle tombstones; backfill one entity per active link alias.
 2. `project.link` / `project.unlink` host calls; `drive.link` / `drive.unlink` removed with every
@@ -127,5 +126,5 @@ The two revocation axes are independent, and each fails closed on its own trigge
 5. Drive: validated project references, new filing conventions, unknown-project proposal flow.
 6. Flutter: the picker lists entities; the promote UI is replaced by assignment plus batch filing.
 
-Every step keeps the closed P5/P8 acceptance boundaries green or amends them explicitly in the same
-change.
+Every migration step preserves the established drive/memory acceptance boundaries or amends them
+explicitly in the same change.

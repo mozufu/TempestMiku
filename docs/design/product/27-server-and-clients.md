@@ -1,8 +1,8 @@
 # 27. Server, scheduler & clients
 
 > A headless, single-user, self-hosted daemon; one Flutter client targets Web/PWA and Android over
-> the same authenticated streaming API. Grounded in two proven primitives: **Server-Sent Events** (the
-> server pushes tokens / events down one long-lived connection) and, for P4, **cron** (the companion is
+> the same authenticated streaming API. Grounded in two proven primitives: **Server-Sent Events**
+> (the server pushes tokens / events down one long-lived connection) and **cron** (the companion is
 > proactive on a schedule).
 
 The core declared UI / deployment out of scope (design README). This is the deliberate expansion
@@ -27,7 +27,7 @@ signed physical acceptance evidence.
   mode, resolve an approval) is **discrete** and fits plain POSTs. SSE is HTTP-native, proxy- and
   HTTP/2-friendly, and **resumable** — which lines up with the core's streaming-first LlmClient (§04)
   and `EventSink` (§05 / §10).
-- **Scheduled proactivity = P4 cron** (Vixie cron, 1987; the de-facto Unix scheduler, five-field
+- **Scheduled proactivity = cron** (Vixie cron, 1987; the de-facto Unix scheduler, five-field
   crontab). `worker`/`all` roles supervise the weekly ship ledger scheduler with fenced leases,
   bounded catch-up, exact capabilities, and `cron_mode: deny`; prompt text is never the boundary.
 - **Replayable** (core principle #6): every client surface is a **view over one ordered event
@@ -45,7 +45,7 @@ flowchart TD
   FLUTTER[Flutter client<br/>Web/PWA + Android] -->|authenticated SSE| SRV[tm-server]
   FLUTTER -->|POST control| SRV
   FLUTTER -->|resource resolve/list/preview| SRV
-  SCHED[P4 scheduler cron] -.start session.-> SRV
+  SCHED[scheduler cron] -.start session.-> SRV
   SRV --> CORE[agent loop + sandbox + registry]
   CORE --> SUBS[persona / memory / agents / drive]
   CORE -->|signed bounded jobs over Tailnet| WORKER[tm-worker<br/>linked host on homolab]
@@ -137,28 +137,28 @@ TM_POSTGRES_TESTS=1 TM_TEST_DATABASE_URL=postgres://... cargo test -p tm-server
 `TM_TEST_DATABASE_URL` is preferred for tests; if it is absent, the tests fall back to
 `TM_DATABASE_URL`. Without `TM_POSTGRES_TESTS=1`, the gated Postgres tests return early and do not
 open a network or local database connection. The memory coverage exercises approve, deny,
-timeout/default-deny, durable-write idempotency, replay, and both P2 record types through the normal
-HTTP approval route.
+timeout/default-deny, durable-write idempotency, replay, and both profile-fact and scoped-recall
+record types through the normal HTTP approval route.
 
 ## 27.2 Scheduler & proactivity
 
-P2 implements bounded proactivity without a scheduler: General-mode turns can propose reminder
-and open-loop recall chunks through the existing `write_proposal` + approval path. Approved entries are
-memory records visible through `memory://`; they are not background jobs and never push on their own.
+General-mode turns can propose reminder and open-loop recall chunks through the existing
+`write_proposal` + approval path. Approved entries are memory records visible through `memory://`;
+they are not background jobs and never push on their own.
 
-In P4, a **scheduler** (cron lineage) can start sessions on a schedule. The implemented first job is
-the **weekly ship ledger** (`weekly-ship-ledger` skill, §29); deadline nudges and the drive organizer
-are not registered scheduler jobs. The drive organizer's durable manual/proposal flow lives in §24;
-automatic scheduled organizer policy remains a later explicit enablement.
+A **scheduler** (cron lineage) can start sessions on a schedule. The registered job is the
+**weekly ship ledger** (`weekly-ship-ledger` skill, §29); deadline nudges and the drive organizer are
+not registered scheduler jobs. The drive organizer's durable manual/proposal flow lives in §24;
+automatic scheduled organizer policy remains an explicit future enablement.
 
-- **P4 dream queue + worker:** `POST /sessions/:id/end` marks a session `ended`, writes an idempotent
+- **Dream queue + worker:** `POST /sessions/:id/end` marks a session `ended`, writes an idempotent
   durable `dream_queue` record, and emits `session_end` + `dream_queued` in the same transaction. The server-owned
   `ServerDreamWorker` / `DreamWorkerDaemon` leases ready dreams with exact owner/epoch fencing, loops on a
   poll interval with configured concurrency, exits on shutdown, emits replayable `dream_started` /
   `dream_progress` / `dream_completed` / `dream_failed`, writes a bounded `memory://summaries/<id>`
   session summary, and emits approval-gated memory/skill `write_proposal` events without blocking
   normal chat turns.
-- **P4 scheduler tables:** `cron_jobs` stores cron-style job definitions, bounds, `next_run_at`, and
+- **Scheduler tables:** `cron_jobs` stores cron-style job definitions, bounds, `next_run_at`, and
   enabled state; `cron_runs` stores run history, status, result JSON, linked session id, and fenced
   lease state. Materializing a due fire and advancing `next_run_at` is one cursor-CAS transaction;
   `UNIQUE(job_id, scheduled_for)` prevents duplicate fires across scheduler processes. Execution is
@@ -166,16 +166,16 @@ automatic scheduled organizer policy remains a later explicit enablement.
   terminal failure. Missed-run catch-up is bounded from the stored schedule cursor; callers choose a
   `max_catch_up` count (the weekly ship ledger uses a single-fire policy) rather than backfilling
   unbounded offline history.
-- **P4 bounds.** Scheduled runs honor `goals.max_turns` (baseline **8**), bounded missed-run catch-up
+- **Bounds.** Scheduled runs honor `goals.max_turns` (baseline **8**), bounded missed-run catch-up
   (baseline **1**), the proactivity bounds (§21.3), and an exact background grant set with no
   mode/host authority beyond fixed core reads. `cron_mode: deny` disables approval waits in code,
   not merely in the prompt;
   `script_timeout_seconds` is capped at **120** (§29).
-- **P4 visibility.** Dream and scheduled runs emit through the same `session_events` / SSE replay log,
+- **Visibility.** Dream and scheduled runs emit through the same `session_events` / SSE replay log,
   so they are streamed, audited, and replayable like interactive turns (#6). The session resource
   gateway exposes `cron://`, `cron://<job>`, `cron://<job>/runs`, and `cron://<job>/runs/<run>` for job
   definitions and run history.
-- **P4 supervision.** `worker` and `all` roles supervise the turn dispatcher, approval expiry/effects,
+- **Supervision.** `worker` and `all` roles supervise the turn dispatcher, approval expiry/effects,
   dream worker, and scheduler. They require Postgres, stop claiming on SIGINT/SIGTERM, keep
   heartbeats alive while draining, and abort remaining work after 30 seconds. `api` serves only the
   authenticated HTTP/SSE plane.
@@ -190,9 +190,9 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   `code-review` (→ a distinct `codex-auto-review` model).
 - **Auxiliary roles** (10, mostly → `cheap` / `gpt-5.4-mini` with per-role timeouts + fallback
   chains): `compression`, `web_extract`, `title_generation`, `approval`, `skills_hub`, `mcp`,
-  `triage_specifier`, `kanban_decomposer`, `profile_describer`, `curator`. P4 dream worker config
+  `triage_specifier`, `kanban_decomposer`, `profile_describer`, `curator`. Dream worker config
   exposes `extraction`, `reflection`, `summarization`, `skill_distillation`, `self_critique`,
-  `verification`, and future `embeddings` role names; defaults keep all dream aux roles on `cheap`
+  `verification`, and a reserved `embeddings` role; defaults keep dream auxiliary roles on `cheap`
   until a live-test configuration explicitly overrides them. Empty dream role names fail the dream
   visibly with `last_error` before summaries/proposals are written.
 - **Resolution per call site.** Interactive turns → `daily` / `heavy`; engineer plan / review →
@@ -202,7 +202,7 @@ the outbound call is OpenAI-compatible chat completions (§11, `api_mode: chat_c
   TempestMiku these roles resolve against the **self-built `tm-memory`** (§22) — the alias system is
   unchanged, the backend is ours.
 
-**Current implementation boundary.** Interactive calls use the configured `OPENAI_MODEL`; the P2
+**Current implementation boundary.** Interactive calls use the configured `OPENAI_MODEL`; the
 dialectic pass currently uses that same client/model with its own no-tool, low-temperature, bounded
 request. Dream role names are validated configuration, but the generic alias/fallback resolver
 described above is not yet a deployed runtime switch. Documentation and live evidence must not claim
@@ -210,9 +210,9 @@ a dedicated cheap dialectic model until that resolver is wired.
 
 ## 27.4 Clients
 
-- **Flutter client (single codebase).** P1 has shipped a **project-manager dogfooding** client on top of
-  the P0 coding loop for Web/PWA and Android: message input, streamed token rendering, final response,
-  approval prompts, artifact/resource links, and project/open-loop views. The normal product surface
+- **Flutter client (single codebase).** One **project-manager and companion** client serves Web/PWA
+  and Android: message input, streamed token rendering, final response, approval prompts,
+  artifact/resource links, and project/open-loop views. The normal product surface
   uses Material 3 with restrained color and status chrome; content, dialogs, and long scrolling
   regions stay opaque for contrast and predictable rendering. An understated Miku presence mark and
   cyan palette preserve identity without turning normal chat into debug or character-art chrome.
@@ -236,21 +236,19 @@ a dedicated cheap dialectic model until that resolver is wired.
   code exposes a reachable copy action, and only HTTP(S) links are rendered as bounded, copyable
   external references rather than gaining navigation or capability authority. New-message following
   stops when the user scrolls away and exposes an explicit jump-to-latest action.
-- **Mobile remote control (P1/P4).** Phone/browser control uses the same server API as every client: SSE
-  for tokens/events, POSTs for messages/mode locks/approval resolution, project assignment/linking (§30),
-  and the
-  session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
-  `project://`, `memory://`, `history://`, P4 `cron://`, configured P5 `drive://`, and P7.1 managed
-  `skill://` links. The phone is only a view and controller;
-  the sandbox, host adaptor, linked-folder grants, and command execution stay on the server/host machine (§25).
-  The P2/P4 memory gateway currently exposes `memory://root`, `memory://user-model`, exact approved
-  profile fact / scoped recall record URIs, dream queue/record previews, dream summaries, and skill
-  proposal previews; P8 adds bounded typed-record/recall lists plus exact
-  `memory://records/<kind>/<id>` and turn-linked `memory://recalls/<turn-id>` provenance views. P7.0
-  adds evolution audit history, typed persona/mode review-proposal resources, and
-  P7.1 active/immutable managed-skill versions and P7.2a typed mode-addendum review/apply/rollback,
-  with compact previews and fail-closed unknown paths (§22.9 / §26.4).
-- **Android target (P6 security slice).** The signed P6 acceptance client used an in-app camera
+- **Mobile remote control.** Phone/browser control uses the same server API as every client: SSE for
+  tokens/events, POSTs for messages/mode locks/approval resolution, project assignment/linking (§30),
+  and the session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`,
+  `linked://`, `project://`, `memory://`, `history://`, `cron://`, configured `drive://`, and managed
+  `skill://` links. The phone is only a view and controller; the sandbox, host adaptor,
+  linked-folder grants, and command execution stay on the server/host machine (§25). The memory
+  gateway exposes `memory://root`, `memory://user-model`, exact approved profile/scoped recall
+  records, dream queue and record previews, summaries, skill proposals, bounded typed-record/recall
+  lists, exact `memory://records/<kind>/<id>`, and turn-linked `memory://recalls/<turn-id>` provenance.
+  Evolution adds audit history and typed persona/mode review-proposal resources; managed skills and
+  mode addenda expose immutable versions plus review/apply/rollback, with compact previews and
+  fail-closed unknown paths (§22.9 / §26.4).
+- **Android target.** The signed acceptance client uses an in-app camera
   scanner (`mobile_scanner` 7.2.0, bundled ML Kit) for versioned one-time pairing QR data. The current
   replacement reconnects that camera route with strict v1 parsing, permission/error/cancel states,
   lifecycle fencing, and the same reviewed exchange; a scan alone never pairs or changes authority.
@@ -270,7 +268,7 @@ a dedicated cheap dialectic model until that resolver is wired.
   RFC 8291 `aes128gcm` routing payloads to the self-hosted ntfy distributor. The connector's native
   service renders/cancels notifications while Flutter is killed. The signed Android 15 physical
   canary proved remote request delivery and timeout-resolution cancellation through the live lumo
-  provider on 2026-07-14. P6.2 adds an exported `ACTION_SEND` target for `text/plain` only: native
+  provider on 2026-07-14. The exported `ACTION_SEND` target accepts `text/plain` only: native
   parsing removes control characters, caps body/subject sizes, and forwards at most one cold-start
   payload to Flutter. The client presents an editable review sheet with no preselected destination;
   the user must explicitly choose the current or a new session before the send action is enabled and
@@ -278,16 +276,16 @@ a dedicated cheap dialectic model until that resolver is wired.
   files, URI grants, HTML, pairing payloads, or automatic sends. The signed Android 15 physical
   canary on 2026-07-14 proved system Sharesheet discovery, URL preview/edit/cancel without sending,
   one durable import into the current session, one into a newly created session, and cold-start
-  recovery without preview replay or duplicate sends. P6.3 registers `ACTION_PROCESS_TEXT` /
-  `text/plain` on that same singleTop activity under the `Ask Miku` filter label. Native parsing reads
+  recovery without preview replay or duplicate sends. `ACTION_PROCESS_TEXT` / `text/plain` is
+  registered on that same singleTop activity under the `Ask Miku` filter label. Native parsing reads
   only `EXTRA_PROCESS_TEXT`, rejects URI-bearing or mismatched payloads, applies the same sanitization
   and bounds, and tags the event as selected text. Flutter changes only the review copy; the editor,
-  explicit current/new-session choice, and authenticated durable send path remain shared with P6.2.
+  explicit current/new-session choice, and authenticated durable send path remain shared with the share target.
   It never returns replacement text to the source app or sends on receipt. Local deterministic gates
   pass, and the signed Android 15 physical canary on 2026-07-14 proved system resolver discovery,
   cancel without sending, distinct current/new-session durable turns, warm delivery, and cold-start
-  recovery without preview replay or duplicate user messages. P6.4 now generalizes the leased
-  Postgres push outbox with a `session_ready` route materialized only from fresh final events for an
+  recovery without preview replay or duplicate user messages. The leased Postgres push outbox has a
+  `session_ready` route materialized only from fresh final events for an
   active registered device. The encrypted payload carries versioned delivery/session/event ids and
   expiry, never reply or transcript text. Taps restore exactly that session or approval. Eligible
   session notifications expose Android inline reply; pressing Send is the explicit confirmation.
@@ -308,7 +306,7 @@ a dedicated cheap dialectic model until that resolver is wired.
   replies, offline retry, and cold-start recovery create exactly one durable message and turn.
   Empty input stayed disabled and cancel sent nothing; oversized input, expired routes, revoked
   credentials, deleted sessions, and ended sessions all sent nothing and surfaced terminal
-  feedback. P6.5 adds one versioned `ACTION_QUICK_CAPTURE_V1` contract carrying a fresh UUID and
+  feedback. Quick capture uses one versioned `ACTION_QUICK_CAPTURE_V1` contract carrying a fresh UUID and
   optional sanitized text bounded to the existing 16,384-code-unit import limit. Native receipt
   rejects MIME, data URIs, `ClipData`, selectors, streams, URI grants, and unexpected extras. The
   static launcher shortcut uses a no-history trampoline to create that internal intent, while the
@@ -318,7 +316,7 @@ a dedicated cheap dialectic model until that resolver is wired.
   capture UUIDs, and still requires an explicit current/new-session choice before enabling Send. A
   second widget entry point was intentionally not added.
 
-  The P6.5 signed Android 15 canary on 2026-07-15 preserved the established signer, pairing
+  The signed Android 15 quick-capture canary on 2026-07-15 preserved the established signer, pairing
   credential, and transcript through an in-place upgrade. The registered shortcut appeared in the
   real launcher long-press menu and the tile appeared in the HyperOS control center. Both opened the
   same empty review from foreground, background, and killed-process states; empty Send stayed
@@ -329,7 +327,7 @@ a dedicated cheap dialectic model until that resolver is wired.
   without replaying that draft. There is still **no on-device sandbox**, added model authority,
   background send, or second execution path.
 
-  P6.6 resumed on 2026-07-18. It records at most 60 seconds / 1,920,000 raw bytes of PCM16-LE,
+  Voice capture records at most 60 seconds / 1,920,000 raw bytes of PCM16-LE,
   16 kHz, mono audio. **Local** remains the default engine and runs a replaceable `LocalAsrEngine`
   in a killable on-device worker; in that mode raw audio never leaves the phone. A versioned model
   is installed only after explicit owner action, verified by SHA-256,
@@ -350,25 +348,24 @@ a dedicated cheap dialectic model until that resolver is wired.
   Redirects, ambient proxies, arbitrary destinations, persistence, transcript/audio logging, and
   automatic fallback in either direction are forbidden. HTTPS is required except for an exact
   literal address inside Tailscale's `100.64.0.0/10` CGNAT range; that narrow exception relies on the
-  owner-controlled encrypted tailnet and does not extend the general P9 egress policy. If either hop
+  owner-controlled encrypted tailnet and does not extend the general egress policy (§08). If either hop
   fails, the capture produces no review or send and the selected engine does not silently change.
   Re-pairing, disconnect, and logout are authority transitions: they must retire any recording or
   in-flight transcription before changing credentials, immediately reset the engine to local, and
   reject stale catalog, confirmation, or transcript results from the previous server.
 
   Local and self-hosted transcripts enter the same editable review, which names their provenance;
-  both still require explicit current/new-session send. This must preserve device
-  auth, revocation, signed upgrades, airplane-mode operation after model installation, cold-start
-  exact-once behavior, and authority-free imported content. P6 closes only after deterministic
-  runtime tests, pinned-model RTF/RSS/thermal proof, APK inspection, and signed physical evidence
-  rather than accumulating open-ended OS integrations.
+  both still require explicit current/new-session send. This preserves device auth, revocation,
+  signed upgrades, airplane-mode operation after model installation, cold-start exact-once behavior,
+  and authority-free imported content. Deterministic runtime tests, pinned-model RTF/RSS/thermal
+  proof, APK inspection, and signed physical evidence bound the supported surface.
 
   The original SenseVoice feasibility run and its limitations remain in the historical
-  [P6.6 deferment evidence](../../evidence/2026-07-15-p6-6-on-device-asr-deferment.md). The resumed
-  production boundary, selected-model provenance, frozen synthetic/real-speaker quality contract,
-  production-exact host result, signed arm64 split, and physical closeout are centralized in
-  the [P6.6 resumption evidence](../../evidence/2026-07-18-p6-6-on-device-asr-resumption.md). The
-  software slice, exact model activation, and airplane-mode cold-start inspection pass. A consented
+  [voice deferment evidence](../../evidence/2026-07-15-p6-6-on-device-asr-deferment.md). The production
+  boundary, selected-model provenance, frozen synthetic/real-speaker quality contract,
+  production-exact host result, signed arm64 split, and physical acceptance are centralized in the
+  [voice production evidence](../../evidence/2026-07-18-p6-6-on-device-asr-resumption.md). The
+  software path, exact model activation, and airplane-mode cold-start inspection pass. A consented
   recording reached editable review without sending but failed quality. The latest `1.0.3+4`
   diagnostics/self-hosted package installed in place on 2026-07-19, matched the host APK hash byte
   for byte, retained pairing, exposed the configured production TEA-ASR label/model, and required an
@@ -379,8 +376,8 @@ a dedicated cheap dialectic model until that resolver is wired.
   self-hosted paths, and distinct exact-once current/new sends also pass. The consented 10-item
   production-local corpus passes mean CER `0.132922`, p90 `0.241379`, and code-switch mean `0.281980`
   with no empty/truncated/signal-warning item; its privacy-stripped retained report is
-  [machine-readable](../../evidence/2026-07-19-p6-6-real-speaker-eval.json). P6.6 and full P6 are
-  closed without broadening the no-fallback, editable-review, explicit-send boundary.
+  [machine-readable](../../evidence/2026-07-19-p6-6-real-speaker-eval.json). These gates pass without
+  broadening the no-fallback, editable-review, explicit-send boundary.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 
@@ -453,11 +450,11 @@ provider registrations, approval expiry, and approval resolution all close the c
 notification lifecycle. Notification approval omits `optionId`, so the existing broker selects
 `allow_once` before any wider allow option.
 
-The session resource gateway supports resolve/list/preview for the live P0-P7.1 schemes:
-`artifact://`, `workspace://session/...`, `linked://...`, `project://...`, the P2 `memory://`
-surface plus P4 summary/skill-proposal previews (§22.9), the P3 `agent://` / `history://` actor
-resources (§23), P4 `cron://` job/run views, P5 `drive://` documents/virtual dirs when a drive
-store is configured, and P7.1 `skill://` managed catalog/version views. `GET
+The session resource gateway supports resolve/list/preview for the registered schemes:
+`artifact://`, `workspace://session/...`, `linked://...`, `project://...`, the complete bounded
+`memory://` surface (§22.9), `agent://` / `history://` actor resources (§23), `cron://` job/run views,
+`drive://` documents/virtual directories when a drive store is configured, and `skill://` managed
+catalog/version views. `GET
 /sessions/:id/resources/preview` returns a bounded metadata envelope with empty `content`; clients
 resolve full content only on demand.
 
@@ -471,7 +468,7 @@ first attached linked root directly as the flat project contents when one exists
 visible navigation level. Nested directories and explicitly selected files continue through the
 existing resource gateway; the browser remains read-only and bounded by the linked resource handler.
 
-P5 also exposes a compact read-only drive browser feed at `GET /sessions/:id/drive/feed`: recent
+The server also exposes a compact read-only drive browser feed at `GET /sessions/:id/drive/feed`: recent
 drive docs, virtual directory roots, pending organizer proposals, and a pending-approvals slot for
 mobile/web views. Full document content still flows through the normal resource gateway, and drive
 writes remain approval/host-call mediated rather than client-authoritative.
@@ -481,12 +478,12 @@ Session authority is server-owned. `TM_OWNER_SUBJECT` is persisted/backfilled on
 entity (§30), and
 `POST /sessions/:id/scope` changes it explicitly while the session is active. Message/memory requests
 cannot supply arbitrary subject or scope, and mode changes never change memory authority. Exact
-memory/profile/drive reads compare the authorized subject/scope and return not-found on mismatch;
-persisted project archive/delete tombstones revoke project access immediately (§30), while folder
-unlink revokes only that filesystem grant.
+memory/profile/drive reads compare the authorized subject/scope and return not-found on mismatch.
+Project archive revokes active/new access while preserving exact history; project delete kills the
+scope (§30), while folder unlink revokes only that filesystem grant.
 
 Coding execution is a backend choice behind the same API. `TM_OMP_ACP_ENABLED=1` dispatches Serious
-Engineer / Handoff turns to the P0a OMP ACP bridge; otherwise, when a real LLM is configured,
+Engineer / Handoff turns to the optional OMP ACP bridge; otherwise, when a real LLM is configured,
 `tm-server` uses the native tm coding backend. The client API does not change: ACP and native tm
 events normalize into the same durable `session_event` envelope.
 
@@ -514,14 +511,14 @@ the terminal `write_proposal` append and effect `applied` transition commit atom
 post-commit, so a crash or local publish failure is recovered through durable event replay.
 
 - **Baseline (parity §29):** `approvals.mode: manual`, `approvals.timeout: 60`, `cron_mode: deny`,
-  `skills.write_approval: true`, `memory.write_approval: true`. P10 catalog changes are deliberately
+  `skills.write_approval: true`, `memory.write_approval: true`. MCP catalog changes are deliberately
   process-scoped: restart rebuilds the selected catalog, so `mcp_reload_confirm` is not an in-process
   mutation effect.
 - **Enforced as `ApprovalPolicy` / approval-broker prompts** (§08) for: destructive / external /
   spend actions, **model-proposed mode switches** (§21 `modes.suggest`), **memory-write** (§22
   `memory.note`), **skill-write** (§26), **project/session assignment** when Miku proposes it (§30),
   **project-link**
-  + auto-file (§24/§30), and locally annotated mutating MCP calls (P10). MCP hot reload remains out of
+  + auto-file (§24/§30), and locally annotated mutating MCP calls. MCP hot reload remains out of
   scope; operator restart is the explicit reload/stale-binding invalidation seam.
 - **Mode switches:** a chat model invokes `await modes.suggest(targetMode, reason)` through the
   one `execute` tool. The grant-controlled host capability emits an `approval` event with backend
@@ -547,7 +544,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   the catalog. Rollback is a separate durable manual approval with expected-current and target digests.
   Both remain resumable through the approval outbox, and disconnected clients recover their pending
   events through `/sessions/:id/messages` `pendingEvents` after the terminal `session_end` fence.
-- **OMP ACP bridge (P0a):** ACP `session/request_permission` and elicitation prompts are translated
+- **OMP ACP bridge:** ACP `session/request_permission` and elicitation prompts are translated
   into the same `approval` event + POST resolution path; unsupported or timed-out prompts deny by
   default. If the bridge process disappears, its outstanding non-resumable requests are cancelled;
   they are never replayed into a new backend process.
@@ -569,7 +566,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   cron, project refs, durable drive metadata/link tombstones, and replay from `Last-Event-ID`.
 - `runtime` — `api|worker|all` role validation, turn/effect/dream/scheduler supervision, protected
   readiness/metrics, SIGINT/SIGTERM drain, and 30-second abort grace.
-- `scheduler` (P4) — cron-style scheduler, job/run tables, scheduled-fire claim/reuse, bounded
+- `scheduler` — cron-style scheduler, job/run tables, scheduled-fire claim/reuse, bounded
   missed-run catch-up, bounds (`max_turns`, `cron_mode`, `script_timeout_seconds`), weekly
   ship-ledger trigger, and `cron://` handler (list jobs / a job's
   def + run history) in the session resource gateway.
@@ -577,7 +574,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 - `auth` — single-owner device records, hashed five-minute pairing codes, bearer/cookie+CSRF auth,
   local token/no-auth debug modes, and trusted-CIDR forwarded identity.
 - `coding_backend` / `native_tm` / `omp_acp` — the common backend interface, native Serious
-  Engineer tm backend, and P0a adapter that owns the `omp acp` subprocess, JSON-RPC framing, event
+  Engineer tm backend, and the optional adapter that owns the `omp acp` subprocess, JSON-RPC framing, event
   normalization, permission translation, and bridge health/version checks.
 - `tm-worker-protocol` / `apps/tm-worker` — versioned signed remote host jobs plus the minimal
   homolab HTTP executor. The coordinator registers the connector into each tm-lang sandbox through
@@ -596,7 +593,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 - **Offline / client-disconnected approvals** — unresolved `write_proposal` and `approval` events remain
   durable and are surfaced as `pendingEvents` when a client fetches the transcript or reconnects.
   Resumable proposal effects apply from the outbox exactly once; non-resumable origin-bound waits are
-  cancelled. P4 `cron_mode: deny` cannot create an interactive approval wait and never auto-acts.
+  cancelled. `cron_mode: deny` cannot create an interactive approval wait and never auto-acts.
 - **Model role unavailable** — fallback chain (`gpt-5.5` → `gpt-5.4-mini`); an aux role down degrades
   to `cheap`.
 - **Approval timeout (60s)** — denied-by-default (manual mode), logged; the loop continues without the

@@ -66,7 +66,7 @@ do **not** implement scheme-specific handlers. Flutter/Web/Android ask the serve
 preview a URI, and the server applies the same capability gates, selector paging, MIME detection, and
 failure semantics as `resources.read`.
 
-Implemented P1/P2 API shape (§27.5, §22.9):
+Implemented client resource-gateway API shape (§27.5, §22.9):
 
 | endpoint | purpose |
 |---|---|
@@ -96,11 +96,11 @@ outputs out of both the model context and the mobile client render path.
 
 ## 9.3 Resource catalog
 
-Internal and selected read-through schemes (v1). The implemented P0-P10 session gateway currently registers `artifact://`,
+Internal and selected read-through schemes (v1). The session gateway currently registers `artifact://`,
 `workspace://session`, `linked://`, `project://`, `memory://`, `agent://`, `history://`, `cron://`,
 `drive://` when the local-first drive store is configured, and `skill://` when the managed catalog is
-configured. P10 additionally registers `mcp://` only when a trusted selected-import config passes P9
-validation and startup discovery. Other catalog entries are reserved designs and must fail closed
+configured. The gateway additionally registers `mcp://` only when a trusted selected-import config passes
+egress validation and startup discovery. Other catalog entries are reserved designs and must fail closed
 until their backing subsystem registers a handler and grant.
 
 | scheme | resolves | backing subsystem | registered by |
@@ -108,16 +108,16 @@ until their backing subsystem registers a handler and grant.
 | `artifact://<id>` | session-local tool output (monotonic int) | artifact store §25 | `tm-artifacts` |
 | `agent://<id>` | sub-agent output/record resource | agents §23 / §25 | `tm-agents` |
 | `history://<id>` | read-only sub-agent transcript | agents §23 | `tm-agents` |
-| `memory://…` | P2/P4 memory gateway: `root`, `user-model`, approved profile facts, scoped recall chunks, dream queue/record previews, summaries, and skill proposal previews (§22.9). Richer `MEMORY.md`, episodic query, and project memory remain later `tm-memory` work. | memory §22 | `tm-server` memory slice now; `tm-memory` later |
-| `skill://[<name>[/versions[/<digest>]]]` | P7.1 managed-skill catalog, active body, version metadata, and immutable digest-addressed body. Bundled/hand-authored skills are prompt assets and are not exposed through this managed catalog. | skills §22 / §26 | `tm-modes` handler + `tm-server` gateway |
-| `drive://<path>` | P5 user document by canonical path, with virtual directory views such as `drive://by-project/<project>` and `drive://by-type/<kind>` §24 | drive §24 | `tm-drive` |
-| `cron://[<id>]` | P4 scheduler job table: list jobs / a job's definition + run history §27.2 | scheduler §27 | `tm-server` session resource gateway |
+| `memory://…` | bounded root/user-model views, approved profile/scoped records, dream/summaries/proposals, typed episodic/semantic records, and exact turn recall provenance (§22.9); query-shaped ambient `MEMORY.md` and episodic-query paths remain absent | memory §22 | `tm-memory` contracts + `tm-server` gateway |
+| `skill://[<name>[/versions[/<digest>]]]` | the managed-skill catalog, active body, version metadata, and immutable digest-addressed body. Bundled/hand-authored skills are prompt assets and are not exposed through this managed catalog. | skills §22 / §26 | `tm-modes` handler + `tm-server` gateway |
+| `drive://<path>` | a user document by canonical path, with virtual directory views such as `drive://by-project/<project>` and `drive://by-type/<kind>` §24 | drive §24 | `tm-drive` |
+| `cron://[<id>]` | the scheduler job table: list jobs / a job's definition + run history §27.2 | scheduler §27 | `tm-server` session resource gateway |
 | `workspace://session/<path>` | current session workspace read/list/preview | workspace §07 / §08 | `tm-server` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
 | `project://<id>/<view>` | aggregate project surface (§30 entity): status, open loops, decisions, attached linked folders, artifacts, agents | server project layer §30 / memory §22 / host §25 | `tm-server` |
-| `mcp://<server>/resources/<source-uri-digest>` | selected remote MCP resource returned as bounded untrusted data with catalog/target/payload provenance; the remote source URI is not exposed | MCP P10 / egress P9 | `tm-mcp` + `tm-server` when configured |
+| `mcp://<server>/resources/<source-uri-digest>` | selected remote MCP resource returned as bounded untrusted data with catalog/target/payload provenance; the remote source URI is not exposed | MCP / egress §07 | `tm-mcp` + `tm-server` when configured |
 
-P7.1 promotes approved managed skills to a first-class resource scheme without opening a `skills.*`
+Managed skills are promoted to a first-class resource scheme without opening a `skills.*`
 write namespace. `skill://` lists active managed entries; `skill://<name>` reads the active body;
 `skill://<name>/versions` returns version state; and
 `skill://<name>/versions/<sha256-hex>` reads an immutable version. The native tm handler requires
@@ -182,18 +182,18 @@ declaring that a session belongs to a project:
 
 ### Selected external read-through resources (§15)
 
-P10 enables operator-selected `mcp://` resources through the same handler contract. The handler is
+Operator-selected `mcp://` resources use the same handler contract. The handler is
 registered only after bounded startup discovery succeeds; reads require the exact selected resource,
-P9 destination, and optional opaque-secret grants. Remote content is wrapped as
+egress destination, and optional opaque-secret grants. Remote content is wrapped as
 `mcp_untrusted_resource` / `mcp_untrusted_data` with protocol revision, catalog generation/digest,
 local server alias, object identity, target/payload digests, and bounded byte count. The authenticated
 session gateway persists its MCP and egress audit sequence in the normal replayable event log, while
 list/preview receive no network or secret grants.
 
-The first production slice deliberately has no offline content cache: a peer outage or revocation
-fails closed. Process startup is the configuration/reload boundary, preventing cached interpreter
-sessions from retaining an older binding generation. `issue://` and `pr://` remain parked until a
-concrete consumer supplies their own selected handler and cache semantics.
+Selected MCP read-through deliberately has no offline content cache: peer outage or revocation fails
+closed. Process startup is the configuration/reload boundary, preventing cached interpreter sessions
+from retaining an older binding generation. `issue://` and `pr://` remain parked until a concrete
+consumer supplies its selected handler and cache semantics.
 
 ## 9.4 Failure modes & degradation
 

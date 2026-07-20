@@ -1,6 +1,6 @@
 # `tm` — an agent-first language for `execute(code)`
 
-> Status: **implemented and sole runtime as of 2026-07-16**. `tm` is the `Sandbox` language that turns the runtime policies
+> Status: **implemented and sole runtime**. `tm` is the `Sandbox` language that turns the runtime policies
 > TempestMiku already needs — capability gating, approval, provenance, fail-closed — into
 > language primitives, so the code the model writes *is itself* the auditable artifact.
 
@@ -12,10 +12,10 @@ a resumable runtime state, and every cell emits a structured trace, then the hos
 registry *is* the language's type system and the same execution record can drive both replay
 and UI.**
 
-T0-T7 are implemented and verified through the public HTTP/SSE, approval, runtime-loss, real
-Postgres reconnect, affected-client, and frozen 20-prompt x 50-run comparative fluency paths.
-The historical two-language system prompts were calibrated together and frozen as
-`tm-fluency-prompt-v2`; that comparator runner is now retired.
+The runtime is verified through public HTTP/SSE, approval, runtime-loss, real Postgres reconnect,
+affected-client, and frozen 20-prompt × 50-run comparative fluency paths. The historical two-language
+system prompts were calibrated together and frozen as `tm-fluency-prompt-v2`; that comparator runner
+is retired.
 
 `tm` is a **persistent effectful REPL with declarative presentation and an observable execution
 model**. It is not a generally declarative or reactive language: cells evaluate immediately,

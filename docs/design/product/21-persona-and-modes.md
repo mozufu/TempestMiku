@@ -25,8 +25,8 @@ posture and capability grants are orthogonal, and only one of them should requir
 
 ## 21.1 Three layers: identity constant, voice floats, capability modes, layered skills
 
-The structure that lets the first dogfood slice be a serious coding agent without becoming a sterile
-coding product:
+The structure that lets serious coding coexist with a characterful companion instead of becoming a
+sterile coding product:
 
 - **Identity** (SOUL.md) — *who* she is. Always present, never overridden.
 - **Voice** (miku-voice) — *how* she talks. Intensity **floats by context**:
@@ -76,14 +76,14 @@ and the top-level `skills[]` array. A missing reference degrades with a stable w
 side it came from, and composition falls back to a short, generic "default to careful,
 capability-appropriate behavior" note in place of that skill's markdown.
 
-In P2, skill loading and mode/skill ids are server-side dispatch concerns only; they are not a
+Skill loading and mode/skill ids are server-side dispatch concerns only; they are not a
 registered `resources.read/list/preview` scheme, and the `skills` global remains `undefined` until
-P4/P7 ships the skill proposal/import/reload lifecycle with explicit grants (§7.4 / §9.3).
+the explicit managed-skill resource and approval lifecycle (§7.4 / §9.3 / §26.4).
 
 A mode profile grants capabilities and selects its own skills; it **never** replaces identity. Tone
 still comes from the voice overlay, capped by seriousness, so serious work can turn cuteness down
-without changing who Miku is. V1 does **not** require Rust to know a fixed list of modes or layered
-skills: `modes.json` defines both, and adding/removing either should not require a Rust enum change.
+without changing who Miku is. Rust does not know a fixed list of modes or layered skills:
+`modes.json` defines both, and adding/removing either does not require a Rust enum change.
 
 ## 21.2 Capability modes (SOUL.md §Mode Router)
 
@@ -92,7 +92,7 @@ Pick the smallest sufficient mode — and expect it to stick until you leave it.
 | # | Bundled runtime mode | Declared capabilities | Voice | Mode-declared skills |
 |---|---|---|---|---|
 | 1 | **General** (default) | conversation + light `memory.recall` / `memory.propose` | `medium` | `miku-voice`, `personal-assistant-state-capture` |
-| 2 | **Serious Engineer** | native `fs.*` / `code.*` / `proc.*` and `resources.read:linked` (§25), with P0a OMP ACP still available as a replaceable bridge; future light `agents.*` | `off` | `serious-engineer-ops` |
+| 2 | **Serious Engineer** | native `fs.*` / `code.*` / `proc.*` and `resources.read:linked` (§25), with an OMP ACP bridge available as a replaceable backend | `off` | `serious-engineer-ops` |
 | 3 | **Handoff** | `agents.*` (§23) + brief generation | `off` | `oh-my-pi-handoff` |
 
 All three modes run under the **one** character. Capabilities are config, not code (§10.4): a mode =
@@ -161,15 +161,12 @@ Standing behavior from SOUL.md that isn't a skill file but is still cross-cuttin
   any `modes.suggest` — a locked mode suppresses proposals entirely rather than prompting for one.
   If the session is locked or moved to another mode while a suggestion is pending, the stale
   suggestion is ignored even if its approval response arrives later.
-- **v1 scoping: `modes.suggest` authority only exists on unlocked normal ChatRunner turns.** The
-  server registers the host handler independently, then adds the exact `modes.suggest` grant only to
-  unlocked normal chat turns. Native coding backends (§25), actors, scheduler runs, and locked turns
-  never receive that grant. So once a
-  turn is actually dispatched to a configured coding backend (i.e. Serious Engineer or Handoff with
-  a real backend wired in), the model has no way to propose *leaving* that mode from inside it —
-  getting back to General is picker/override-only in that state. Proposing to *enter* Serious
-  Engineer or Handoff from General works today because General always runs the ChatRunner path.
-  Extending mode-suggestion authority to the coding backend is explicitly out of the v1 contract.
+- **Scoped authority:** `modes.suggest` authority exists only on unlocked normal `ChatRunner` turns.
+  The server registers the host handler independently, then grants the exact capability only to that
+  path. Native coding backends (§25), actors, scheduler runs, and locked turns never receive it.
+  Therefore General can propose entering Serious Engineer or Handoff; after a turn is dispatched to
+  a coding backend, leaving that mode is a picker/override action. Widening that authority remains
+  demand-triggered.
 - **Observable, not primary UI.** Each switch emits `ModeChanged` (§10.2) for replay, audit, and
   optional debug/advanced controls. Clients read `GET /modes` to render runtime mode controls;
   default chat surfaces should not make Brian manage or care about the mode label. Mode is a
@@ -193,16 +190,15 @@ sequenceDiagram
 
 ## 21.5 Character: defined (was the top open question)
 
-**Resolved.** The character is **Tempest Miku** per `SOUL.md` + `miku-voice`. P0/P1 (§28) ship the
-real persona in Serious Engineer and project-manager form first; P2 broadens into the full
-General baseline without replacing the identity. Voice mechanics (喵 density, 主人 honorific,
-self-reference, catchphrases, example lines) live in `miku-voice` and load as a **voice overlay at
-context-appropriate intensity** — never baked into a mode addendum, so seriousness can dial it down.
+The character is **Tempest Miku** per `SOUL.md` + `miku-voice`. Serious Engineer,
+project-manager, and General workflows share that identity. Voice mechanics (喵 density, 主人
+honorific, self-reference, catchphrases, example lines) live in `miku-voice` and load as a **voice
+overlay at context-appropriate intensity** — never in a mode addendum, so seriousness can dial it down.
 
-P2 verifies the output boundary in two layers. `tm-modes::evaluate_voice` and the frozen
+The output boundary is verified in two layers. `tm-modes::evaluate_voice` and the frozen
 `p2_voice_rubric_v1.json` fixture deterministically calibrate positive and negative General,
 negative-state grounding, and Serious examples. Actual model parity is a separate opt-in
 `tm-e2e voice-eval` public-API run over exact final responses; passing prompt-composition tests or the
 frozen fixture alone does not prove that live model output is in voice. The retained 2026-07-18
 non-echo run passes all three scenarios; see
-[`P2 live voice evidence`](../../evidence/2026-07-18-p2-voice-live.json).
+[`live voice evidence`](../../evidence/2026-07-18-p2-voice-live.json).

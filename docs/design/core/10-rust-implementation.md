@@ -12,10 +12,10 @@ tempest-miku/
 │   ├── tm-artifacts/   # content-addressed artifact store
 │   ├── tm-modes/       # runtime mode catalog, default scopes, voice caps, mode/skill asset status
 │   ├── tm-agents/      # actor lifecycle, mailbox, agents.* host fns, agent:// + history:// resources
-│   ├── tm-memory/      # P4 recall, summaries, dream queue/worker, redaction helpers
-│   ├── tm-drive/       # P5 local-first drive metadata, transducers, vdirs, resources, host fns
-│   ├── tm-egress/      # P9 exact HTTPS policy, durable budgets/effects, opaque secret handles
-│   ├── tm-mcp/         # P10 selected catalog, schemas, Streamable HTTP, untrusted bindings
+│   ├── tm-memory/      # recall, summaries, dream queue/worker, redaction helpers
+│   ├── tm-drive/       # local-first drive metadata, transducers, vdirs, resources, host fns
+│   ├── tm-egress/      # exact HTTPS policy, durable budgets/effects, opaque secret handles
+│   ├── tm-mcp/         # selected catalog, schemas, Streamable HTTP, untrusted bindings
 │   └── tm-server/      # auth, migrations, durable turns/SSE, supervised workers, product stores/backends
 └── apps/
     ├── tm-cli/         # binary: wiring, config, REPL/chat entrypoint
@@ -23,7 +23,7 @@ tempest-miku/
 ```
 
 Clients live under `clients/` (`miku_flutter` for Web/PWA and Android, plus web smoke coverage).
-`tm-egress` and `tm-mcp` are now concrete P9/P10 boundaries shared by CLI/server. `tm-trace` remains
+`tm-egress` and `tm-mcp` are now concrete egress/MCP boundaries shared by CLI/server. `tm-trace` remains
 demand-triggered and should be extracted only with a second concrete audit/replay consumer.
 
 ### 10.2 Key types & traits
@@ -187,7 +187,7 @@ and default-deny allowlisted `http.get`. It uses `tm-artifacts` for spill/readba
 capabilities through exact `tm-host` grants, resource handlers, and approval policy.
 
 The server path now has two coding backends behind the same `CodingBackend` interface: the
-replaceable P0a `omp_acp` bridge and the native tm backend. The native Serious Engineer backend
+replaceable `omp_acp` bridge and the native tm backend. The native Serious Engineer backend
 maps approval-gated host calls such as unsafe `proc.run`, overwrites, and destructive edits into the
 same durable approval surface used by the client API; timeout still denies by default. Normal turns
 receive only their exact mode/session grants, including `modes.suggest` only when unlocked; registered

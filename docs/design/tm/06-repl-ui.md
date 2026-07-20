@@ -39,7 +39,7 @@ back to an older binding with the same name. Effects without binding edges remai
 Therefore:
 
 ```tm
-let todos = @fs.read workspace:TODO.md |> lines |> filter (contains "P6")
+let todos = @fs.read workspace:TODO.md |> lines |> filter (contains "blocked")
 ```
 
 means "read and bind this value now," not "keep `todos` reactively synchronized with the file."

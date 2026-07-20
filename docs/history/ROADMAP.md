@@ -1,6 +1,8 @@
 # TempestMiku roadmap
 
-This is the canonical roadmap for TempestMiku. Design-doc section references remain stable:
+> **Archived delivery record.** This is the historical milestone roadmap: the ordered M0–M4 / P0a–P11 build sequence, acceptance checks, and the integrated verification matrix that were used to build TempestMiku. Every milestone below is closed. For what the shipped product *is* (present tense, no milestone scaffolding), read [`../PRODUCT.md`](../PRODUCT.md); for the section-numbered specification, read [`../design/README.md`](../design/README.md). Dated acceptance evidence lives in [`../evidence/`](../evidence). This file is preserved for provenance and is not the entry point for new work.
+
+This was the canonical roadmap during development; design-doc section references remain stable:
 
 - Core runtime roadmap: §14.
 - Product roadmap and execution order: §28.
@@ -123,10 +125,10 @@ each milestone is done only when its acceptance checks pass.
 | 0 | **DONE — M0 closeout: streaming skeleton locked** | 0.5–1d | Freeze stream event contract; keep OpenAI SSE adapter tests and CLI token streaming. The original stub proof was later retired. | `cargo test`; scripted stream tests prove token deltas, tool-call assembly, execution, and final answer path. |
 | 1 | **DONE — M1 real REPL + SDK spine** | 4–7d | Ship the persistent REPL, cancel/reset, `display`, `http.get` allowlist, artifacts, `CellBudget`, and output caps. The first Deno implementation was later replaced and deleted by tm-lang. | Rust tests cover tm cells, persistence, reset, display/print capture, blocked ambient I/O, timeout/cancel, shaped output truncation, and artifact spill/readback. |
 | 2 | **DONE — host registry + approvals foundation** | 3–5d | Add `tm-host`; define `HostFn`, capability grants, `ResourceRegistry`, `ApprovalPolicy`; wire SDK dispatch from sandbox ops; fail closed on unknown schemes/capabilities. | Unit tests prove denied capability cannot execute, approval timeout denies by default, `artifact://` resolves through the registry, linked paths cannot escape roots, and unsafe operations gate or fail closed. |
-| 2.5 | **DONE — P0a OMP ACP bridge path** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | Tests cover ACP event normalization, diff/artifact events, generated approval mode, permission request round trips, approval route resolution, and replay from `Last-Event-ID`. The retained `omp/16.4.8` live dogfood used a real model, resolved one public-API approval, made the exact source edit, ran the targeted test, emitted artifact/final events, and replayed through `Last-Event-ID` (`1 passed`, `0 failed`, 31.56 s); see [`P0a live evidence`](docs/evidence/2026-07-18-p0a-omp-acp-live.json). |
+| 2.5 | **DONE — P0a OMP ACP bridge path** | 2–4d | Add an OMP ACP coding backend behind `tm-server`: spawn/connect a pinned `omp acp` process with generated linked-repo config, translate ACP session/progress/diff/final/permission messages into `session_events` + SSE, mirror outputs into artifacts/resource refs, and keep final user-facing response under Miku persona. | Tests cover ACP event normalization, diff/artifact events, generated approval mode, permission request round trips, approval route resolution, and replay from `Last-Event-ID`. The retained `omp/16.4.8` live dogfood used a real model, resolved one public-API approval, made the exact source edit, ran the targeted test, emitted artifact/final events, and replayed through `Last-Event-ID` (`1 passed`, `0 failed`, 31.56 s); see [`P0a live evidence`](../evidence/2026-07-18-p0a-omp-acp-live.json). |
 | 3 | **DONE — P0 coding-agent dogfood first pass** | 5–8d | Add config-declared linked-folder `FsPolicy`; implement explicit `fs.write/patch/move/remove`, search, argv-only `proc.run(cmd,args)`, artifact spill, minimal project memory, and a streaming CLI surface for Serious Engineer mode. | Tests prove linked-folder read/write/list/find, atomic patch plus stale-tag rejection and bounded diff spill, approval-gated overwrite/remove behavior, argv-vector `proc.run`, shell-string rejection, non-allowlisted denial, output spill, CLI tm host effects, native tm approve/deny/timeout through the HTTP approval route, serious-mode voice cap, and project summary/open-loop recall. |
 | 4 | **DONE — P1 project manager + remote control** | 4–7d | Added the project-manager layer over the existing server: mode router lock/override, `ModeChanged` events, project/open-loop/decision views, session-to-project promotion, fuller session-scoped resource gateway, and Flutter Web/PWA remote-control polish. | Tests and smoke coverage prove reconnect replay from event id, router lock/unlock, project status and decisions across sessions, `POST /sessions/:id/promote` to `project://` resources with provenance, approval/resource workflows, and Flutter Web/PWA attach/send/watch/resume behavior. |
-| 5 | **DONE — P2 personal assistant baseline** | 5–8d | Added the companion baseline: full persona overlay via SOUL + mode skill bundles, profile/user recall, bounded every-third-turn dialectic with durable replay, state capture, negative-state grounding, and approval-backed reminder/open-loop capture. | Deterministic tests cover dialectic cadence/caps/off modes/replay and a positive/negative General/grounding/Serious rubric. A retained real non-echo `gpt-5.5` `tm-e2e voice-eval` report passes every General, grounding, and Serious criterion; see [`P2 live voice evidence`](docs/evidence/2026-07-18-p2-voice-live.json). |
+| 5 | **DONE — P2 personal assistant baseline** | 5–8d | Added the companion baseline: full persona overlay via SOUL + mode skill bundles, profile/user recall, bounded every-third-turn dialectic with durable replay, state capture, negative-state grounding, and approval-backed reminder/open-loop capture. | Deterministic tests cover dialectic cadence/caps/off modes/replay and a positive/negative General/grounding/Serious rubric. A retained real non-echo `gpt-5.5` `tm-e2e voice-eval` report passes every General, grounding, and Serious criterion; see [`P2 live voice evidence`](../evidence/2026-07-18-p2-voice-live.json). |
 | 6 | **DONE — P3: handoff + sub-agent actors** | 6–10d | Added `tm-agents` with actor lifecycle, mailbox, roster, `agents.run/spawn/parallel/msg`, `agent://` + `history://` resources, child artifact spill + transcript history, actor lifecycle events in SSE stream, supervision defaults, Handoff mode wired from catalog, `CapabilityGrants` glob permit. | ✓ Fan-out N workers, only digest returns to parent context; ✓ siblings coordinate via one-shot msg; ✓ child crash isolated + `actor_failed` in SSE log; ✓ handoff matches `oh-my-pi-handoff`. |
 | 6+ | **DONE — P3+ live actor mailbox + supervision** | 4–8d | Landed per-actor bounded inbox + `Agent::run` inbox draining, `agents.send/broadcast/wait/inbox/list/cancel/pipeline`, child approval routing through the live broker, parent-session child artifacts, parent-driven cancel tokens with replayable `actor_cancelled`, plain-prose enforcement, live-wait DAG acyclicity checks, pipeline digest-reference wiring, active restart strategies (`one_for_one`, `one_for_all`, `rest_for_one`), wall-clock budget enforcement, fail-fast sibling-subtree supervision, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and tm-e2e/Flutter actor smoke coverage. | Tests prove live sibling coordination, cancel/replay, child approval routing, restart decisions, actor timeouts, fail-fast sibling-subtree cancellation, event-log resource provenance, and Flutter attach/approve/reconnect smoke coverage. |
 | 7 | **DONE — P4 dreaming + scheduler production hardening** | 6–10d | Added transactional lifecycle writes, durable approval requests/effects, fenced owner/epoch leases with heartbeat/retry limits, atomic cron cursor materialization, deny-only execution bounds, supervised worker roles, and recovery metrics. | Deterministic, gated, split-process, and physical-client verification cover stale-owner rejection, bounded retries, transactional enqueue, restart recovery, and authenticated replay. |
@@ -147,12 +149,12 @@ each milestone is done only when its acceptance checks pass.
 
 P6.6 was deferred on 2026-07-15 after its isolated feasibility and Taiwan Mandarin runs, then
 explicitly resumed by the whole-roadmap request on 2026-07-18. The historical findings remain in the
-[`P6.6 deferment evidence`](docs/evidence/2026-07-15-p6-6-on-device-asr-deferment.md); the implemented
+[`P6.6 deferment evidence`](../evidence/2026-07-15-p6-6-on-device-asr-deferment.md); the implemented
 production boundary, selected model, host reproduction, signed package, physical matrix, and
 consented-speech closeout are recorded in the
-[`P6.6 resumption evidence`](docs/evidence/2026-07-18-p6-6-on-device-asr-resumption.md), with the
+[`P6.6 resumption evidence`](../evidence/2026-07-18-p6-6-on-device-asr-resumption.md), with the
 privacy-stripped aggregate score in the retained
-[`real-speaker evaluation`](docs/evidence/2026-07-19-p6-6-real-speaker-eval.json). P6.6 and full P6
+[`real-speaker evaluation`](../evidence/2026-07-19-p6-6-real-speaker-eval.json). P6.6 and full P6
 are closed; the earlier failed attempt remains historical evidence rather than being rewritten.
 
 M4 has two explicit opt-in Linux profiles. The original `linux_bubblewrap` profile closes the
@@ -162,11 +164,11 @@ per execution, bounded CPU/memory/pids controls, kill-and-drain cleanup for succ
 and startup orphan recovery. Its disposable Linux/aarch64 and native x86_64 canaries pass, with no
 fallback when the policy, delegated subtree, or pinned roots are unavailable. Exact policy digests, canary scope, and
 the disposable boundary are recorded in the
-[`M4 hardened Linux evidence`](docs/evidence/2026-07-18-m4-linux-hardened-v1.md). The owner-selected
+[`M4 hardened Linux evidence`](../evidence/2026-07-18-m4-linux-hardened-v1.md). The owner-selected
 homolab service then closed deployment acceptance: its persistent NixOS generation, dedicated
 identity, systemd delegation, cgroup exclusivity, native selected-architecture execution,
 representative memory/pids/CPU headroom, and restart stability pass in the retained
-[`M4 homolab production evidence`](docs/evidence/2026-07-19-m4-production-homolab.md). The accepted
+[`M4 homolab production evidence`](../evidence/2026-07-19-m4-production-homolab.md). The accepted
 profile covers a hostile workload on a trusted host kernel. Hostile host-kernel containment and
 microVM isolation are intentionally not claimed.
 
@@ -175,15 +177,15 @@ freezes overall nDCG@5 `0.279754`, Recall@5 `0.444444`, held-out nDCG@5 `0.47171
 Recall@5 `0.75`, the existing 1,600-token/five-item bounds, and a 50 ms per-case p95 ceiling. The
 versioned record/evidence and embedding-provenance contracts compile through both stores; the
 machine-readable baseline and limitations are recorded in the
-[`P8.1 recall baseline evidence`](docs/evidence/2026-07-15-p8-1-recall-baseline.md). P8.2 closed on
+[`P8.1 recall baseline evidence`](../evidence/2026-07-15-p8-1-recall-baseline.md). P8.2 closed on
 the same date with ordered scoped tables, legacy mirroring, correction/unlink denial, and readiness;
 its storage-only contract and gates are recorded in the
-[`P8.2 durable memory evidence`](docs/evidence/2026-07-15-p8-2-durable-memory-spine.md). P8.3 then
+[`P8.2 durable memory evidence`](../evidence/2026-07-15-p8-2-durable-memory-spine.md). P8.3 then
 closed with a local-only batch embedding boundary, pgvector/HNSW generation tables, resumable leased
 jobs, an atomic active-version pointer, and deterministic FTS+dense RRF that preserves evidence and
 authority. Missing pgvector, disabled/provider-loss, partial/stale re-embedding, and dimension/model
 mismatch keep lexical-only results visible; its exact gates are in
-[`P8.3 local embedding evidence`](docs/evidence/2026-07-15-p8-3-local-embeddings-hybrid.md). P8.4/P8.5
+[`P8.3 local embedding evidence`](../evidence/2026-07-15-p8-3-local-embeddings-hybrid.md). P8.4/P8.5
 then closed hybrid turn integration, exact bounded inspection, approved typed extraction, incremental
 and resumable embedding, and the frozen quality/deployment gates. The historical frozen closeout
 improved overall nDCG@5 from `0.279754` to `1.0` and held-out nDCG@5 from `0.471713` to `1.0`, with
@@ -191,7 +193,7 @@ no Recall@5 regression and zero unsafe inclusions. The later review-hardening re
 2/2/1 prompt allocation recorded overall/held-out nDCG@5 of `0.813059`/`0.721713`, Recall@5 of
 `1.0`/`1.0`, and zero unsafe inclusions; it still passes the frozen baseline-relative contract.
 The local lumo provider, provider-loss/restart, server restart, and exact gate matrix are recorded in
-[`P8 fuller-memory closeout evidence`](docs/evidence/2026-07-15-p8-5-fuller-memory.md).
+[`P8 fuller-memory closeout evidence`](../evidence/2026-07-15-p8-5-fuller-memory.md).
 The follow-up PR review hardening adds serialized scope revocation and approved writes, monotonic
 scope-revision-pinned embedding generations, exact authority-first dense queries, balanced 2/2/1
 prompt allocation, and isolated oversized-input recovery without reopening P8 or changing the frozen
@@ -223,13 +225,13 @@ P8.1 control. The owner-priority tm-lang runtime, P7.2b, P9, and P10 are closed.
 | Prior signed APK: consented real-speaker review path | FUNCTION PASS / QUALITY FAIL | Editable local draft opened, destination stayed unselected, Send stayed disabled, and no message was sent; exact reference was not retained, so no CER is fabricated |
 | Final diagnostics APK on physical Android | HISTORICAL INSTALL/REVIEW PASS | Installed `1.0.2+3` matched the host SHA-256 byte for byte, retained pairing, cold-launched, and one consented exact-reference recording reached editable review with healthy aggregate diagnostics and no send; the later `1.0.3+4` rows supersede this partial checkpoint. |
 | Self-hosted-option APK on physical Android | SUCCESS/FAILURE PASS | `1.0.3+4` installed in place with an exact host/device hash match and retained pairing. The healthy route returned an exact-reference editable review and cancelled with no message. With the real homolab unit stopped and health connection refused, another explicitly selected home capture created no local/remote review, fallback, or message; the selected session remained at 0 messages. The service was restored to healthy and the app reset to local. |
-| Android streaming baseline vs offline-Paraformer candidate A/B | PASS | Same physical installation/build/APK/corpus verified 50/50 + 3/3 long runs for both engines. Streaming/candidate converted CER: 0.08709/0.06540; code-switch: 0.18855/0.12112; peak RSS: 712,772/864,112 KiB; max RTF: 0.11879/0.08577; no thermal escalation. Retained [JSON](docs/evidence/2026-07-19-p6-6-android-asr-ab.json) |
+| Android streaming baseline vs offline-Paraformer candidate A/B | PASS | Same physical installation/build/APK/corpus verified 50/50 + 3/3 long runs for both engines. Streaming/candidate converted CER: 0.08709/0.06540; code-switch: 0.18855/0.12112; peak RSS: 712,772/864,112 KiB; max RTF: 0.11879/0.08577; no thermal escalation. Retained [JSON](../evidence/2026-07-19-p6-6-android-asr-ab.json) |
 | Android non-recording model/permission lifecycle | PASS | Signed release permission denial showed no active capture and was restored; delete/reinstall, force-stop interrupted download, cold-start staging cleanup, verified-model persistence, backup exclusion, and zero external residue pass. Isolated current `.uitest` code detected an injected unexpected file as corrupt, recovered to the three exact model hashes, and deleted its test model without touching production |
 | Android recording lifecycle and exact sends | PASS | Backgrounding stopped and released AudioRecord with no review/send; force-stop plus cold launch produced no replay or external residue. One reviewed local draft entered the existing session and another entered a distinct new session; PostgreSQL contained each exact user content once. No destination was inferred and no auto-send occurred. |
-| Consented production-local real-speaker corpus | PASS / 10/10 | Mean CER `0.132922` ≤ `0.20`, p90 `0.241379` ≤ `0.35`, code-switch mean `0.281980` ≤ `0.30`; zero empty, truncated, or signal-warning items. Audio was neither retained nor uploaded; raw references, hypotheses, capture ids, and device fingerprint were removed after independently recomputed aggregate verification. Retained [JSON](docs/evidence/2026-07-19-p6-6-real-speaker-eval.json). |
+| Consented production-local real-speaker corpus | PASS / 10/10 | Mean CER `0.132922` ≤ `0.20`, p90 `0.241379` ≤ `0.35`, code-switch mean `0.281980` ≤ `0.30`; zero empty, truncated, or signal-warning items. Audio was neither retained nor uploaded; raw references, hypotheses, capture ids, and device fingerprint were removed after independently recomputed aggregate verification. Retained [JSON](../evidence/2026-07-19-p6-6-real-speaker-eval.json). |
 | M4 homolab production service | PASS | Persistent NixOS generation, UID/GID `23017`, loopback-only server, exact `cpu memory pids` delegation, clean cgroup ownership, 256 MiB/16-child/750 ms workload peaks, 4× memory headroom, native retained report, and post-switch restart all pass. A microVM is not claimed under the selected trusted-host-kernel contract. |
 | P2 bounded dialectic + frozen voice calibration | PASS | Deterministic cadence/off/cap/replay tests and eight positive/negative rubric fixtures pass |
-| P2 actual-output General/grounding/Serious rubric | PASS / 3/3 | Retained non-echo `gpt-5.5` public-API [JSON](docs/evidence/2026-07-18-p2-voice-live.json) passes all criteria and exact finals differ from prompts |
+| P2 actual-output General/grounding/Serious rubric | PASS / 3/3 | Retained non-echo `gpt-5.5` public-API [JSON](../evidence/2026-07-18-p2-voice-live.json) passes all criteria and exact finals differ from prompts |
 
 ### Immediate next task queue
 

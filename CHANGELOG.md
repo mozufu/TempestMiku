@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+- Reframed the documentation around [`docs/PRODUCT.md`](docs/PRODUCT.md) as the present-tense,
+  as-built product definition; rewrote the root and docs indexes around product, specification,
+  operation, and provenance; moved the completed roadmap and task ledger to `docs/history/`; and
+  removed milestone-stage narration from the active core, product, and `tm` specifications.
+
 ### Added
 - Closed P2 actual-output voice parity with a retained non-echo General/grounding/Serious live
   report; negative-state grounding now makes its one `<=10 minute` action bound explicit.

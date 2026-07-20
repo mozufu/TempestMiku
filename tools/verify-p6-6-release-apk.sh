@@ -6,6 +6,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 APK="${1:-$ROOT/clients/miku_flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk}"
 PACKAGE="org.mozufu.tempestmiku"
 EXPECTED_CERT_SHA256="503f865843464347cb2d2f90be3ab4dbf68bae690443bf8fd262e0dcc0b58ee1"
+ARM64_SPLIT_VERSION_CODE_OFFSET=2000
 
 for tool in unzip shasum; do
   command -v "$tool" >/dev/null || {
@@ -82,14 +83,15 @@ version_code="$(sed -n "s/.* versionCode='\([^']*\)'.*/\1/p" <<<"$package_line")
 version_name="$(sed -n "s/.* versionName='\([^']*\)'.*/\1/p" <<<"$package_line")"
 declared_version="$(awk '$1 == "version:" {print $2; exit}' "$ROOT/clients/miku_flutter/pubspec.yaml")"
 expected_version_name="${declared_version%+*}"
-expected_version_code="${declared_version#*+}"
+declared_build_number="${declared_version#*+}"
+expected_version_code="$((declared_build_number + ARM64_SPLIT_VERSION_CODE_OFFSET))"
 
 [[ "$application_id" == "$PACKAGE" ]] || {
   echo "release APK package id is not $PACKAGE" >&2
   exit 1
 }
 [[ "$version_name" == "$expected_version_name" && "$version_code" == "$expected_version_code" ]] || {
-  echo "release APK version $version_name+$version_code does not match pubspec $declared_version" >&2
+  echo "release APK version $version_name+$version_code does not match pubspec $declared_version with the arm64 split offset (+$ARM64_SPLIT_VERSION_CODE_OFFSET)" >&2
   exit 1
 }
 if grep -q '^application-debuggable' <<<"$badging" ||
@@ -148,7 +150,6 @@ forbidden="$(
 
 apksigner="$(find_apksigner)"
 signature="$("$apksigner" verify --verbose --print-certs "$APK" 2>&1)"
-grep -q 'Verified using v1 scheme (JAR signing): true' <<<"$signature"
 grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' <<<"$signature"
 grep -q 'Number of signers: 1' <<<"$signature"
 grep -qi "certificate SHA-256 digest: $EXPECTED_CERT_SHA256" <<<"$signature"

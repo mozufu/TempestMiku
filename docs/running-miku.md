@@ -439,10 +439,11 @@ nix develop --command tools/verify-p6-6-release-apk.sh
 ```
 
 `tools/verify-p6-6-release-apk.sh` is the authoritative P6.6 package check. By default it verifies
-the final split `app-arm64-v8a-release.apk`: application id and pubspec version, non-debuggable and
-backup/cleartext policy, exact permissions, arm64-only native payload, the selected sherpa-onnx
-runtime, absence of bundled model/audio files, APK signature schemes, retained release certificate,
-byte count, and SHA-256. Its printed SHA-256 is the independently supplied build identity for the
+the final split `app-arm64-v8a-release.apk`: application id and the pubspec version (including
+Flutter's `+2000` arm64 split version-code offset), non-debuggable and backup/cleartext policy,
+exact permissions, arm64-only native payload, the selected sherpa-onnx runtime, absence of bundled
+model/audio files, the Android 24+-compatible v2 signature, retained release certificate, byte
+count, and SHA-256. Its printed SHA-256 is the independently supplied build identity for the
 real-speaker scorer; a manual `apksigner` inspection is supplementary and does not replace this
 script.
 

@@ -38,6 +38,7 @@ Design doc, split by section. Read in order or jump to a section:
 27. [Server, scheduler & clients](product/27-server-and-clients.md)
 28. [Product roadmap](../../ROADMAP.md#product-roadmap-28)
 29. [Parity baseline — the current deployment](product/29-parity-baseline.md)
+30. [Projects — subject entities, and what drive means](product/30-projects.md)
 
 ## Shipping language: `tm`
 

@@ -35,6 +35,7 @@ Dogfood in this order: **coding agent → project manager → personal assistant
 | **P8 — fuller memory** ✓ | Self-hosted hybrid lexical/dense recall, scoped episodic/semantic stores, evidence-backed extraction, correction, and measured recall quality (§22) | all | — | Frozen overall/held-out nDCG and Recall gates pass with zero unsafe inclusions; hybrid turn injection, exact retry/replay resources, provider-loss fallback, resumable re-embedding, restart, strict Postgres/client gates, and lumo self-hosting evidence are closed |
 | **P9 — production egress + secret broker** ✓ | Destination-scoped audited egress and opaque secret handles at the host boundary (§07/§08) | 4/5 | M4 egress boundary (shipped) | exact destination/DNS/IP/redirect policy, durable cross-instance budgets and mutation receipts, revocation, denial, restart, audit, and live HTTPS gates pass; production egress remains disabled by default |
 | **P10 — MCP + live research** ✓ | Import selected MCP capabilities into lazy SDK/resource surfaces and run live research through P9 authority (§25) | 4/5 | M2 + P9 | one model-visible `execute(code)` tool remains; exact catalog, strict schemas/results, prompt-injection isolation, provenance, durable approval-backed writes, audit/replay, Streamable HTTP, and an official read-only live canary pass |
+| **P11 — project entity + drive playground cutover** ✓ | Re-anchor the product vocabulary decided 2026-07-20 (§30): server-owned project entities with lifecycle; folder links as pure grant attachments; memory scope rooted in the project record; drive as Miku's playground with project as a validated attribute rather than a path token; promotion demoted to session assignment | all | P5/P8 shipped | `projects` table + entity CRUD + lifecycle tombstones; `GET /projects` lists entities with 0..n attached links; `project.link/unlink` replace `drive.link/unlink` with every caller migrated; archive/delete tombstones serialize with typed-memory/embedding writes (the 0017–0018 contract re-pointed); unlink leaves project memory intact; `POST /sessions/:id/promote` and `importResourcesToDrive` removed; drive conventions drop the `projects/{project}` default; Flutter picker lists entities; strict fmt/clippy/test and narrow Postgres migration gates pass without weakening closed P5/P8 acceptance |
 
 **Parity gate (§29.5):** P0–P4 are not "done" until they reproduce the current behavior for their
 slice (coding reach, project continuity, voice, mode router, memory recall, approvals). New capability layers on *after* parity.
@@ -232,8 +233,16 @@ P8.1 control. The owner-priority tm-lang runtime, P7.2b, P9, and P10 are closed.
 
 ### Immediate next task queue
 
-No committed roadmap milestone remains open. Future work is demand-triggered and must preserve the
-acceptance boundaries below; any further real-speaker capture remains opt-in and exact-reference.
+**P11 — project entity + drive playground cutover** is closed (2026-07-20, §30
+`docs/design/product/30-projects.md`): server-owned `projects` entities with lifecycle, folder links
+as pure grant attachments, memory-scope authority rooted in the project record, drive project as a
+validated attribute, and session assignment replacing promotion all landed with the full
+fmt/clippy/workspace-test and Flutter analyze/test gates green. The gated Postgres suite
+(`TM_POSTGRES_TESTS=1`, pgvector) also passes 31/31 on a pristine schema, including the new
+`gated_postgres_project_entity_lifecycle_archives_and_fails_closed` proving migration `0021`, entity
+CRUD, and the atomic archive/scope-tombstone serialization on real Postgres. No committed roadmap
+milestone remains open. All further work is demand-triggered and must preserve the acceptance
+boundaries below; any further real-speaker capture remains opt-in and exact-reference.
 
 ### Deferred SDK namespace placement
 
@@ -244,7 +253,8 @@ These are roadmap-owned deferred tasks, not loose TODOs:
 | `memory.*` | **P2/P4 shipped; P8 expansion** | P2 exposes minimum profile/user recall and state capture. P4 owns transactional dream enqueue, supervised fenced workers, durable proposal effects, summaries, Postgres FTS, and skill/memory proposals. P8 adds self-hosted pgvector hybrid recall, richer scoped stores, evidence-backed extraction, correction, and recall-quality gates. |
 | `agents.*` | **P3 ✓ / P3+ ✓** | P3 MVP shipped: `agents.run/spawn/parallel/msg`, actor lifecycle, mailbox/roster, `agent://`+`history://` resources, SSE lifecycle events, Handoff mode. P3+ shipped bounded live inbox delivery plus `send`, `broadcast`, `wait`, `inbox`, `list`, `cancel`, and `pipeline` with digest-reference stage wiring, child approval routing, plain-prose enforcement, live-wait DAG acyclicity checks, active restart supervision, sibling-subtree cancellation policy, wall-clock budgets, status lifecycle events, typed parent `SessionEvent` actor/artifact/history links, and actor smoke coverage. |
 | `skills.*` / `skill://` reads | **P4/P7.1 shipped; P10 selected import shipped** | P4 emits approval-gated skill proposals from dreaming. P7.1 ships immutable managed versions, atomic activation/rollback, trigger-aware reload, provenance/audit, and capability-gated `skill://` read/list/preview. Selected MCP objects import only through the trusted P10 catalog and closed P9 boundary. |
-| `drive.*` | **P5 production-complete** | `tm-drive`, virtual dirs/search, transducers, approval-gated writes, `drive://`, project scopes, research fan-out, durable Postgres organizer/link/tombstone state, CAS, startup hydration, and final restart/client verification pass. |
+| `drive.*` | **P5 production-complete; P11 reframed** | `tm-drive`, virtual dirs/search, transducers, approval-gated writes, `drive://`, project scopes, research fan-out, durable Postgres organizer/link/tombstone state, CAS, startup hydration, and final restart/client verification pass. P11 (§30) made drive Miku's playground: `project` is a validated attribute (no `projects/{project}` path default), and `drive.link/unlink` moved to `project.link/unlink`. |
+| `project.*` | **P11 shipped** | Server-owned project entities (`POST /projects`, `/archive`, retroactive `/projects/:id/sessions/:sid` assignment); `project.link/unlink` host calls attach/detach linked-folder grants without minting or revoking memory scope; scope authority and archive-tombstone lifecycle live on the project record (§30). |
 | `http.*` hardening | **P9 shipped** | P5 research stays local-first over `drive://` docs. P9 supplies exact allowlists, DNS/IP/redirect policy, durable byte/request/time caps, audit, revocation, mutation replay, and secret integration for P10 live research. |
 | `secrets.use` | **P9 shipped** | P9 owns opaque egress-scoped handles: the host does not intentionally publish values into the tm heap, artifacts, logs, events, or model context, and exact literal response reflection is redacted. Transformed reflection is not an information-flow guarantee, so authenticated destinations are owner-trusted. |
 | `code.ast` / `code.lsp` | **Demand-triggered** | Start only when native patch-based dogfooding demonstrates a concrete structured-edit or navigation gap. It is not on the committed companion critical path. |

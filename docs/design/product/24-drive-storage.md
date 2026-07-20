@@ -1,12 +1,16 @@
 # 24. Smart file storage — `drive.*`
 
-> "Like Google Drive, but it figures out where things go." Grounded in three proven ideas: the system
+> **Drive is Miku's playground** (§30): the durable space of content shared with Miku — what Brian
+> uploads, and what Miku files away as worth keeping. If content is neither in drive nor behind a
+> linked-folder grant, Miku cannot see it. Grounded in three proven ideas: the system
 > **derives** where a file belongs from its content (Semantic File Systems), real folders are reached
 > **only** through an unforgeable explicit grant (object-capability model), and **your data lives on your
 > machine** (local-first).
 
-A user-facing document space layered on the FS jail (§07) and artifact store (§25), with model-driven
-filing. Drive is the one storage role the user thinks of as **"my files."**
+A Miku-facing document space layered on the FS jail (§07) and artifact store (§25), with model-driven
+filing. Drive is **not** a Google-Drive replacement and not Brian's filesystem: content enters only
+through an explicit put (upload, import, or Miku filing), so "shared with Miku" is a physical
+boundary rather than an ACL. The project entity and its semantics live in §30.
 
 ## 24.0 Design stance — three foundations
 
@@ -32,7 +36,7 @@ filing. Drive is the one storage role the user thinks of as **"my files."**
 |---|---|---|---|
 | **Blobs** | images / binaries | content hash (`blob:sha256:`) | §25 |
 | **Artifacts / actor resources** | tool outputs and sub-agent records | session `artifact://`; actor `agent://` / `history://` | §25 / §23 |
-| **Drive** | the *user's* documents | user-facing path + attributes | this doc |
+| **Drive** | content shared with Miku (uploads + filed outputs) | user-facing path + attributes | this doc / §30 |
 
 Drive entries may **reference** a blob (a filed image is a `blob:sha256:` under a drive path) — content is
 addressed once, never copied (git / IPFS CAS lineage, §25). Host-facing `drive.put` accepts inline
@@ -51,15 +55,17 @@ Capability-checked at the boundary like every host fn (§07/§08).
 | `drive.move(from, to)` | re-file; corrections feed the user model (§22) |
 | `drive.search(query)` | **hybrid** search — reuses the §22 recall engine over extracted attributes |
 | `drive.tag(path, fields)` | add / edit field-value attributes by hand |
-| `drive.link(host_path, mode)` | mint an `FsPolicy` grant **and** open the per-project memory scope (§24.4) |
-| `drive.unlink(alias_or_uri)` | revoke a linked-folder `FsPolicy` grant |
+| ~~`drive.link`~~ → `project.link(host_path, mode)` (§30) | attach an `FsPolicy` grant to a project entity; moved out of `drive.*` (it never touched the document store) and no longer mints the project or its memory scope |
+| ~~`drive.unlink`~~ → `project.unlink(alias_or_uri)` (§30) | detach and revoke a linked-folder `FsPolicy` grant; project memory is unaffected |
 | `drive.organize()` | trigger the background re-filer (§24.3) |
 
 ### 24.2.1 Implemented P5 v1 contract
 
 The first Rust slice lives in `tm-drive` and is wired into `tm-lang` and `tm-server` through the
 `DriveOperations` boundary. tm effects expose `drive.put`, `drive.get`, `drive.ls`, `drive.move`,
-`drive.search`, `drive.tag`, `drive.link`, `drive.unlink`, and `drive.organize`; every call resolves
+`drive.search`, `drive.tag`, and `drive.organize`; `drive.link` / `drive.unlink` move to
+`project.link` / `project.unlink` under §30, and the `drive_linked` / `drive_unlinked` event types
+retire with that move. Every call resolves
 through the host registry, so the model still has one chat-native tool.
 With `TM_DATABASE_URL`, `tm-server` uses a Postgres-backed metadata store over `drive_entries`,
 `drive_attributes`, `drive_tags`, `drive_proposals`, `drive_organizer_runs`, `drive_corrections`,
@@ -91,9 +97,12 @@ canonical file.
 
 `DrivePutOptions` are `auto`, `suggestedPath`, `project`, `docKind`, `tags`, `sourceUri`, `mime`,
 `title`, `approvalMode`, `dedupe`, `collision`, `overwrite`, `conventions`, and `modelExtraction`.
-Convention templates default to `projects/{project}/{docKind}/{filename}`,
-`finance/{year}/{docKind}/{filename}`, and `inbox/{date}/{filename}`; callers may override
-project/finance/inbox templates with those same safe slugged tokens. `DriveSearchOptions` are `query`,
+Convention templates default to
+`finance/{year}/{docKind}/{filename}` and `inbox/{date}/{filename}`; the historical
+`projects/{project}/{docKind}/{filename}` default is retired under §30 — project is a validated
+entity-reference attribute, never a canonical-path token, and the per-project view stays on the
+`/by-project/<project>` virtual directory. Callers may override
+finance/inbox templates with those same safe slugged tokens. `DriveSearchOptions` are `query`,
 `project`, `docKind`, `tags`, `limit`,
 `includeArchived`, `since`, `until`, and `returnSnippets`.
 For host-facing `drive.put`, `auto: true` plans the write first and then requires the existing approval
@@ -113,10 +122,11 @@ another bounded page.
 
 Replayable `session_event.data.type` values reserved for client/server use are `drive_put`, `drive_transduced`,
 `drive_path_proposed`, `drive_write_proposed`, `drive_filed`, `drive_moved`, `drive_tagged`,
-`drive_linked`, `drive_unlinked`, `drive_organizer_started`, `drive_organizer_completed`, and
-`drive_organizer_failed`. The first implementation proves the JSON wire shapes in `tm-drive`.
-Successful `drive.put`, `drive.move`, `drive.tag`, `drive.link`, and `drive.unlink` calls emit compact
-session events with mobile-friendly preview text, classification metadata, and resource refs.
+`drive_organizer_started`, `drive_organizer_completed`, and `drive_organizer_failed`; the historical
+`drive_linked` / `drive_unlinked` types retire under §30 (link events become project events). The first implementation proves the JSON wire shapes in `tm-drive`.
+Successful `drive.put`, `drive.move`, and `drive.tag` calls emit compact
+session events with mobile-friendly preview text, classification metadata, and resource refs, as do
+`project.link` / `project.unlink` (§30) on the project-event surface.
 `drive.organize` emits replayable organizer started/completed/failed events through the same host event
 sink, while each organizer proposal also appears on the shared `write_proposal` surface with
 `kind: "drive"`, mobile-friendly previews, and `drive://` source/proposed resource refs. Native server
@@ -188,36 +198,38 @@ flowchart LR
   record, while full source-event ids remain a hardening slice. `drive.search` is hybrid recall over
   drive metadata.
 
-## 24.4 Sandbox-default, linked-folder opt-in (decision C) — object-capability framing
+## 24.4 Sandbox-default, linked-folder opt-in (decision C, amended by §30)
+
+> **Amended 2026-07-20 (§30), implemented as P11.** Linking moved out of `drive.*` to
+> `project.link` / `project.unlink`, no longer mints the project or its memory scope, and unlink no
+> longer tombstones project memory. The bullets below are the live contract.
 
 - **Default = sandbox jail** (§07/§08): **no ambient real-FS authority**. The drive lives in the
   per-session sandbox workspace; nothing touches the real machine.
-- **Link = mint a capability.** P0 first pass links folders from config; P5 exposes
-  `drive.link(host_path, ro | rw)` as an approval-gated host call and `drive.unlink(alias_or_uri)` as
-  the matching approval-gated revocation call. Either link path registers an
-  **unforgeable `FsPolicy` grant** (real path, alias, canonical root, mode) in the shared
-  linked-folder registry. This **single act also opens the per-linked-project memory scope** (§22.6)
-  in the returned link plan — **one link, two grants** (filesystem + memory). The implemented v1
-  filesystem surface supports same-root mode replacement, so relinking an existing alias as `ro`
-  narrows `fs.*` access; `drive.unlink` removes the alias from the shared registry and returns the
-  canonical root, `linked://` URI, memory scope id, and revocation timestamp. Project-scoped memory
-  views are gated by the same live alias, so narrowing updates the visible mode and revocation makes
-  the project memory facade fail closed with the linked folder.
+- **Link = attach a capability to a project (§30).** `project.link(host_path, ro | rw)` is an
+  approval-gated host call, `project.unlink(alias_or_uri)` the matching revocation. Linking registers
+  an **unforgeable `FsPolicy` grant** (real path, alias, canonical root, mode) in the shared
+  linked-folder registry and attaches it to an existing project entity. The historical coupling —
+  one link also opening the per-linked-project memory scope (§22.6) — is superseded: the project
+  record owns scope creation. Same-root mode replacement still narrows `fs.*` access, and unlink
+  still removes the alias from the shared registry; both now leave project memory untouched.
 - **Durable links fail closed on restart.** Postgres persists active, revoked, and invalid link
   records with versions. Startup restores only active records whose directory still exists and whose
   canonical identity, non-symlink root, mode, and alias policy all revalidate. A failure is persisted
   as `invalid`; invalid and revoked records are not auto-reactivated on later restarts.
-- **Session scope is authority, not a query hint.** `global` sessions may access only unprojected
-  drive entries. `project:<slug>` sessions may access only entries for that project, including
-  `drive://` virtual/search listings. Drive host calls, resource reads, child actors, and organizer
-  proposal application inherit the exact server scope. Linked-folder, `fs.*`, `code.*`, and
-  `proc.*` authority always requires the matching project scope; global sessions fail closed.
-- **Attenuation & revocation.** `ro` vs `rw` is attenuation; a grant narrows or revokes, never escalates.
-  This is the **only** path by which **Serious Engineer** (§21) and `fs.*` / `proc.*` (§25) reach real
-  repos. A linked folder is exposed for read/list/preview as `linked://<alias>/…` (§9.3), and through
-  the project aggregate view as `project://<id>/linked-folders/<alias>/...`, not as `drive://`;
-  writes and commands still go through the explicit SDK capabilities. No ambient access, no `sh -c`
-  (principle #8).
+- **Session scope is authority, rooted in the project record (§30).** `global` sessions may access
+  only unprojected drive entries. `project:<slug>` sessions may access only entries for that project,
+  including `drive://` virtual/search listings. Drive host calls, resource reads, child actors, and
+  organizer proposal application inherit the exact server scope. Linked-folder, `fs.*`, `code.*`, and
+  `proc.*` authority requires **both** the matching project scope **and** a live attached grant;
+  global sessions fail closed.
+- **Attenuation & revocation are two independent axes.** `ro` vs `rw` is attenuation; a grant narrows
+  or revokes, never escalates. Unlink revokes only the filesystem axis; the memory axis dies only at
+  project archive/delete (§30.4). This remains the **only** path by which **Serious Engineer** (§21)
+  and `fs.*` / `proc.*` (§25) reach real repos. A linked folder is exposed for read/list/preview as
+  `linked://<alias>/…` (§9.3), and through the project aggregate view as
+  `project://<id>/linked-folders/<alias>/...`, not as `drive://`; writes and commands still go
+  through the explicit SDK capabilities. No ambient access, no `sh -c` (principle #8).
 
 ## 24.5 Sync — local-first (decision)
 
@@ -240,8 +252,9 @@ flowchart LR
 
 - **Transducer fails on a type** — fall back to mime + filename + recency; the file is still filed, never lost.
 - **Bad auto-placement** — `drive.move` corrects it; the correction is learned into the user model (§22).
-- **Link revoked / path vanished** — the grant invalidates; capability checks **fail closed**; the sandbox
-  copy is unaffected.
+- **Link revoked / path vanished** — the grant invalidates; capability checks **fail closed**; the
+  sandbox copy is unaffected. Project memory, items, and drive entries are also unaffected (§30);
+  only project archive/delete tombstones the memory scope.
 - **Dedup integrity** — content-addressed (`sha256`); collisions are practically nil; integrity verified on `get`.
 - **Offline / no cloud** — local-first means **full function**; later sync resumes via CRDT merge with no data loss.
 
@@ -266,5 +279,7 @@ capability addressing) and Mark S. Miller, Ka-Ping Yee & Jonathan Shapiro, *Capa
 Kleppmann, Adam Wiggins, Peter van Hardenberg & Mark McGranaghan, *Local-First Software: You Own Your Data,
 in spite of the Cloud* (**Onward! / SPLASH 2019**, Ink & Switch — seven ideals, local primary copy,
 CRDT-based sync). Content-addressable storage from git / IPFS object models (→ §25). Oh My Pi artifact /
-consolidation patterns for propose-vs-apply gating. **Decision C holds: sandbox-default, real folders only
-on an explicit link; one link grants both filesystem (`FsPolicy`) and memory scope (§22.6).**
+consolidation patterns for propose-vs-apply gating. **Decision C holds with the §30 amendment:
+sandbox-default, real folders only on an explicit link; a link grants filesystem (`FsPolicy`) access
+attached to a project entity, and memory-scope lifecycle belongs to the project record (§30), not
+the link.**

@@ -47,7 +47,7 @@ The bridge shape is deliberately small:
   approval endpoint; generated OMP config may select yolo/prompt modes, but policy is explicit per
   bridge process, never an ambient default.
 - OMP outputs are mirrored into TempestMiku artifacts or wrapped as resource refs so reconnect/replay
-  and project promotion keep provenance.
+  and project assignment (§30) keep provenance.
 - Miku owns the user-facing final answer and serious-mode voice cap; raw OMP transcript is evidence,
   not the personality layer.
 - Transcript capture is bounded and redacted while streaming: individual JSONL artifact segments are

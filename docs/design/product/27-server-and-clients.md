@@ -237,7 +237,8 @@ a dedicated cheap dialectic model until that resolver is wired.
   external references rather than gaining navigation or capability authority. New-message following
   stops when the user scrolls away and exposes an explicit jump-to-latest action.
 - **Mobile remote control (P1/P4).** Phone/browser control uses the same server API as every client: SSE
-  for tokens/events, POSTs for messages/mode locks/approval resolution, project promotion, and the
+  for tokens/events, POSTs for messages/mode locks/approval resolution, project assignment/linking (§30),
+  and the
   session-scoped resource gateway (§09) for `artifact://`, `agent://`, `workspace://`, `linked://`,
   `project://`, `memory://`, `history://`, P4 `cron://`, configured P5 `drive://`, and P7.1 managed
   `skill://` links. The phone is only a view and controller;
@@ -397,7 +398,7 @@ coverage exist. It does not replace backend evidence or assert a new physical-de
 | linked projects, session scope, bounded linked-resource reads | Project drawer | connected; a project-scoped conversation can return to `global` in place without discarding sent content or the unsent composer draft |
 | scoped Drive feed, virtual-view metadata, organizer proposals, bounded previews | Drive drawer | connected |
 | Mode catalog, explicit override, lock/unlock, skills and capabilities | session context drawer | connected |
-| project open loops, decisions, next actions, reviewed session promotion | Project drawer + review sheet | connected |
+| project open loops, decisions, next actions, reviewed session assignment (§30) | Project drawer + review sheet | connected |
 | artifacts and generic `memory://`, `history://`, `agent://`, `skill://`, `cron://`, `mcp://` resources | Resources inspector | connected through the server-registered scheme catalog, exact-URI entry, and compact preview; text-compatible non-`skill://` resources add exact 200-line selectors with append/retry that preserve already loaded content |
 | reviewed memory and persona/mode guidance proposals; immutable version history | Reviewed changes + inline approval + Resources inspector | connected; bounded typed proposals preserve the composer and never apply directly |
 | mode/persona/skill rollback initiation | Reviewed changes + inline approval | connected; exact active/target digests are validated and confirmed before creating an approval-backed proposal |
@@ -425,7 +426,9 @@ views, streaming activity, and durable manual approvals.
   `POST /sessions/:id/evolution/modes/:name/rollback`,
   `POST /sessions/:id/evolution/personas/:name/rollback`,
   `POST /sessions/:id/evolution/skills/:name/rollback`,
-  `POST /sessions/:id/promote`, `GET /modes`, authenticated `GET /projects`, mode lock / override endpoints, session-scoped
+  `POST /projects` / `POST /projects/:id/link` / `POST /projects/:id/unlink` / `POST /projects/:id/archive`
+  plus retroactive `POST /projects/:id/sessions/:session_id` (§30; `POST /sessions/:id/promote` retired),
+  `GET /modes`, authenticated `GET /projects`, mode lock / override endpoints, session-scoped
   resource endpoints (§09), protected `GET /ready`/`GET /metrics`, and minimal public `GET /health`.
   Optional addition: also expose an **OpenAI-compatible** endpoint (§11) so third-party
   clients / SDKs work drop-in, but that flattens product events to plain chat, so it is secondary and not
@@ -458,11 +461,13 @@ store is configured, and P7.1 `skill://` managed catalog/version views. `GET
 /sessions/:id/resources/preview` returns a bounded metadata envelope with empty `content`; clients
 resolve full content only on demand.
 
-`GET /projects` is the client-facing picker catalog for active local and remote linked aliases. It
-returns stable project/scope/linked-folder URIs without host or connector details. The equivalent
+`GET /projects` is the client-facing picker catalog for active project entities (§30). It
+returns stable project/scope URIs plus each project's attached linked-folder URIs without host or
+connector details; a project with no attached folder still appears and can be entered. The equivalent
 `project://` resource-list root keeps generic resource browsers navigable. Flutter uses the catalog
-to switch the current active session through `POST /sessions/:id/scope`, then opens the same-alias
-linked root directly as the flat project contents. The internal `linked-folders` collection is not a
+to switch the current active session through `POST /sessions/:id/scope`, then opens the project's
+first attached linked root directly as the flat project contents when one exists. The internal
+`linked-folders` collection is not a
 visible navigation level. Nested directories and explicitly selected files continue through the
 existing resource gateway; the browser remains read-only and bounded by the linked resource handler.
 
@@ -472,25 +477,28 @@ mobile/web views. Full document content still flows through the normal resource 
 writes remain approval/host-call mediated rather than client-authoritative.
 
 Session authority is server-owned. `TM_OWNER_SUBJECT` is persisted/backfilled on sessions;
-`POST /sessions` may choose only `global` or an active linked `project:<slug>` scope, and
+`POST /sessions` may choose only `global` or an active `project:<slug>` scope backed by a project
+entity (§30), and
 `POST /sessions/:id/scope` changes it explicitly while the session is active. Message/memory requests
 cannot supply arbitrary subject or scope, and mode changes never change memory authority. Exact
 memory/profile/drive reads compare the authorized subject/scope and return not-found on mismatch;
-persisted unlink tombstones revoke project access immediately.
+persisted project archive/delete tombstones revoke project access immediately (§30), while folder
+unlink revokes only that filesystem grant.
 
 Coding execution is a backend choice behind the same API. `TM_OMP_ACP_ENABLED=1` dispatches Serious
 Engineer / Handoff turns to the P0a OMP ACP bridge; otherwise, when a real LLM is configured,
 `tm-server` uses the native tm coding backend. The client API does not change: ACP and native tm
 events normalize into the same durable `session_event` envelope.
 
-`POST /sessions/:id/promote` turns an ad-hoc session into a project or merges it into an existing one.
-The request selects which session summary, open loops, decisions, `workspace://session` files,
-`artifact://` outputs, and linked-folder references to keep. By default workspace attachments remain
-project pointers; `importResourcesToDrive: true` materializes `workspace://session/...` or
-`project://<id>/workspace/...` files into `drive://projects/<id>/attachments/...` with source
-provenance. User-initiated promotion is the approval; Miku-initiated promotion emits a
-`write_proposal` and waits for approval. The response returns the created/updated `project://<id>` URI
-plus every promoted target and its source provenance.
+Session assignment (§30) replaces the retired `POST /sessions/:id/promote`. Declaring a session's
+project is a metadata transition, not a copy: active sessions use `POST /sessions/:id/scope`;
+retroactive `POST /projects/:id/sessions/:session_id` attaches a closed session and re-runs the
+per-turn observation extraction over its event log, so project items grow through one mechanism
+regardless of when the session was assigned. User-initiated assignment is the approval;
+Miku-initiated assignment emits a `write_proposal` and waits for approval. Session outputs worth
+keeping are filed through ordinary approval-gated `drive.put` calls with `sourceUri` provenance and
+an optional validated project reference — there is no `importResourcesToDrive` path and no
+project-slugged drive convention.
 
 ## 27.6 Approvals surface
 
@@ -511,8 +519,9 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   mutation effect.
 - **Enforced as `ApprovalPolicy` / approval-broker prompts** (§08) for: destructive / external /
   spend actions, **model-proposed mode switches** (§21 `modes.suggest`), **memory-write** (§22
-  `memory.note`), **skill-write** (§26), **project promotion** when Miku proposes it, **drive-link**
-  + auto-file (§24), and locally annotated mutating MCP calls (P10). MCP hot reload remains out of
+  `memory.note`), **skill-write** (§26), **project/session assignment** when Miku proposes it (§30),
+  **project-link**
+  + auto-file (§24/§30), and locally annotated mutating MCP calls (P10). MCP hot reload remains out of
   scope; operator restart is the explicit reload/stale-binding invalidation seam.
 - **Mode switches:** a chat model invokes `await modes.suggest(targetMode, reason)` through the
   one `execute` tool. The grant-controlled host capability emits an `approval` event with backend
@@ -551,7 +560,7 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 ## 27.7 Crate layout (`tm-server`, §28)
 
 - `api` — authenticated inbound HTTP: device pairing/revocation, session create / durable turn send,
-  turn status/scope, mode lock, approval resolve, session promote,
+  turn status/scope, mode lock, approval resolve, session assignment,
   session-scoped resource resolve/list/preview gateway for `artifact://`, `workspace://`, `linked://`,
   `project://`, `memory://`, `skill://`, and the other registered schemes (§09), browser feeds; optional
   OpenAI-compatible endpoint (§27.5).
@@ -604,8 +613,8 @@ post-commit, so a crash or local publish failure is recovered through durable ev
 
 `apps/tm-e2e` is a local/dev harness that lets a scripted or opt-in live LLM actor speak to Miku
 through the same authenticated session API as future clients. It creates sessions, sends durable turns,
-reads SSE with `Last-Event-ID`, resolves approvals, verifies memory resources, promotes project
-state, and reads resource views without adding a privileged debug endpoint or a second execution path.
+reads SSE with `Last-Event-ID`, resolves approvals, verifies memory resources, assigns sessions to
+projects, and reads resource views without adding a privileged debug endpoint or a second execution path.
 The `evolution-policy` recording also runs real post-session dreaming, recovers pending install and
 rollback approvals, activates two immutable versions, reads `skill://` through the public gateway,
 and proves catalog reload plus rollback.

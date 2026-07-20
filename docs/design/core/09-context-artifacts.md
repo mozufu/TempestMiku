@@ -114,7 +114,7 @@ until their backing subsystem registers a handler and grant.
 | `cron://[<id>]` | P4 scheduler job table: list jobs / a job's definition + run history §27.2 | scheduler §27 | `tm-server` session resource gateway |
 | `workspace://session/<path>` | current session workspace read/list/preview | workspace §07 / §08 | `tm-server` |
 | `linked://<alias>/<path>` | explicitly granted local/remote folder under an `FsPolicy` grant | host adaptor §25 | `tm-host` |
-| `project://<id>/<view>` | aggregate project surface: status, open loops, decisions, linked folders, artifacts, agents | server project layer §27 / memory §22 / host §25 | `tm-server` |
+| `project://<id>/<view>` | aggregate project surface (§30 entity): status, open loops, decisions, attached linked folders, artifacts, agents | server project layer §30 / memory §22 / host §25 | `tm-server` |
 | `mcp://<server>/resources/<source-uri-digest>` | selected remote MCP resource returned as bounded untrusted data with catalog/target/payload provenance; the remote source URI is not exposed | MCP P10 / egress P9 | `tm-mcp` + `tm-server` when configured |
 
 P7.1 promotes approved managed skills to a first-class resource scheme without opening a `skills.*`
@@ -140,8 +140,8 @@ host paths are not. A remote folder uses the same `linked://` URI — "remote" i
 behind the grant, not a public scheme.
 
 `project://<id>/<view>` is an aggregate product view, not a generic host filesystem. It composes project
-memory, the session event log, linked-folder registry, artifacts, agents, and promoted workspace
-attachments into stable surfaces such as `project://tempestmiku`,
+memory, the session event log, assigned sessions, attached linked-folder grants, artifacts, agents,
+and workspace attachments into stable surfaces such as `project://tempestmiku`,
 `project://tempestmiku/open-loops`, `project://tempestmiku/decisions`,
 `project://tempestmiku/memory`, `project://tempestmiku/linked-folders`, `project://tempestmiku/workspace`, and
 `project://tempestmiku/resources`. It links to `memory://`, `linked://`, `artifact://`, and
@@ -152,37 +152,33 @@ paging and fail-closed `FsPolicy` checks while presenting the entry inside the p
 project-scoped recall while `memory://root` remains the active session-scope view.
 
 The authenticated `GET /projects` catalog and the session resource listing root `project://` expose
-only currently active linked aliases. Each catalog entry supplies the stable project URI, matching
-`project:<id>` memory scope, and `project://<id>/linked-folders` collection URI. The catalog is a
-live view of local policies plus remote virtual aliases: it never serializes canonical host paths,
-worker endpoints, command allowlists, or other connector details, and unlink removes an entry
-immediately. Entering a project or reading a linked-folder child still requires the session's exact
-server-owned project scope.
+active project **entities** (§30), each with zero or more attached linked folders. Each catalog entry
+supplies the stable project URI, matching `project:<id>` memory scope, and `project://<id>/linked-folders`
+collection URI. The catalog never serializes canonical host paths,
+worker endpoints, command allowlists, or other connector details; unlink detaches a folder but never
+removes the project — only archive/delete does (§30). Entering a project or reading a linked-folder
+child still requires the session's exact server-owned project scope.
 
-The Flutter project picker presents each catalog alias as one flat project root. Selecting
-`<id>` lists `project://<id>/linked-folders/<id>/` directly, so the internal `linked-folders`
-collection and same-name alias do not appear as redundant navigation levels. Generic resource
+The Flutter project picker presents each catalog project as one flat root. Selecting
+`<id>` lists `project://<id>/linked-folders/<id>/` directly when a same-name folder is attached, so
+the internal `linked-folders` collection and same-name alias do not appear as redundant navigation
+levels; a project with no attached folder opens its memory/items views instead. Generic resource
 browsers may still enumerate the collection URI explicitly.
 
-### Project promotion
+### Session assignment (promotion retired, §30)
 
-Promotion copies selected session-scoped state into a durable project while preserving provenance. It is
-not a URI rename and it never writes to a linked host folder unless a separately authorized
-`fs.write` / `fs.patch` operation runs.
+Promotion as a batch copy operation is retired (§30): it duplicated the session-scope endpoint, the
+per-turn project-observation pipeline, and plain `drive.put` filing in one special endpoint that
+could only target link-backed projects. The surviving server concept is **session assignment** —
+declaring that a session belongs to a project:
 
-| source | promoted target |
-|---|---|
-| `workspace://session/<path>` | `project://<id>/workspace/<path>` |
-| `project://<id>/workspace/<path>` with `importResourcesToDrive` | `drive://projects/<id>/attachments/<path>` |
-| `artifact://<id>` | `project://<id>/artifacts/<id>` |
-| session summary / open loops / decisions | `memory://projects/<id>/…`, surfaced through `project://<id>/…` |
-| `linked://<alias>/` | listed under `project://<id>/linked-folders` |
-
-Promoted workspace files default to pointer records. When promotion sets `importResourcesToDrive`, the
-server reads the session workspace file, stores it in the local drive under
-`projects/<id>/attachments/`, and records the original `project://.../workspace` or
-`workspace://session/...` source URI, source session, timestamp, and actor. Existing drive targets
-default to keep-both; overwrites require explicit approval.
+- An active session changes scope through the existing `POST /sessions/:id/scope`; project-scoped
+  turns grow project items automatically via the per-turn observation pipeline (§27).
+- A closed session can be attached to a project retroactively; the server re-runs the same
+  observation extraction over the session's event log. Nothing is copied or renamed.
+- Keeping a session output is ordinary approval-gated drive filing: `drive.put` with `sourceUri`
+  provenance and an optional validated project reference. There is no `importResourcesToDrive` path
+  and no `drive://projects/<id>/attachments/` convention.
 
 ### Selected external read-through resources (§15)
 

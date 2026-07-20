@@ -119,6 +119,7 @@ Start with the narrowest docs for the task:
 - P7.2b closeout evidence: `docs/evidence/2026-07-18-p7-2b-persona-addenda.md`.
 - P9 closeout evidence: `docs/evidence/2026-07-18-p9-egress-secret-broker.md`.
 - P10 closeout evidence: `docs/evidence/2026-07-18-p10-mcp-runtime.md`.
+- Project/drive semantics (P11 decision): `docs/design/product/30-projects.md`.
 - M4 partial Linux isolation evidence: `docs/evidence/2026-07-18-m4-linux-proc-isolation.md`.
 - M4 hardened Linux evidence: `docs/evidence/2026-07-18-m4-linux-hardened-v1.md`.
 - M4 homolab production evidence: `docs/evidence/2026-07-19-m4-production-homolab.md`.
@@ -145,8 +146,13 @@ Start with the narrowest docs for the task:
 
 Default next work:
 
-1. No committed roadmap milestone remains open. Start demand-triggered work only for a concrete user
-   or second consumer, preserving the closed acceptance boundaries.
+1. **P11 — project entity + drive playground cutover** is closed (2026-07-20,
+   `docs/design/product/30-projects.md`): projects are server-owned durable entities, folder links
+   are pure grant attachments (`project.link/unlink`), memory-scope authority lives on the project
+   record, drive is Miku's playground (project is a validated attribute, not a path token), and
+   session assignment replaces promotion. No committed roadmap milestone remains open; all further
+   work stays demand-triggered for a concrete user or second consumer, preserving the closed
+   acceptance boundaries.
 2. Keep the native/OMP boundary boring: OMP ACP remains replaceable; tm-lang uses the existing
    `Sandbox` and host approval/artifact/resource boundaries.
 

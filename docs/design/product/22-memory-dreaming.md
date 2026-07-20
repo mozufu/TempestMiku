@@ -182,8 +182,10 @@ relations, and stores embedding provenance plus deduplicated jobs before any vec
 path while their legacy tables and lexical query remain unchanged. New records use a SHA-256 logical
 content key independent of a generated UUID and a state-bearing version key (excluding immutable
 creation time); scope/owner-filtered reads
-apply only active/effective corrections before any later ranking. Project unlink creates a durable
+apply only active/effective corrections before any later ranking. Project scope revocation creates a durable
 tombstone, immediately denies future scoped reads/writes, and cancels queued/running embedding jobs.
+The revocation trigger is re-pointed by §30: project archive/delete revokes; unlinking a folder only
+revokes that filesystem grant and leaves project memory intact.
 Startup/readiness checks report schema corruption separately from disabled/missing/unsupported
 pgvector and temporarily unavailable embeddings; a corrupt durable schema fails closed. P8.2 adds no
 vector extension/index, provider, hybrid ranker, or turn integration. The migration/restart/rollback
@@ -227,6 +229,7 @@ closed in the
 
 **Post-closeout authority/lifecycle hardening:** ordered migrations 0017–0018 serialize project
 scope revocation with every typed-memory, embedding-provenance, generation, pointer, and job write.
+Under §30 the serialized revocation event is project archive/delete rather than folder unlink.
 Approved legacy plus typed memory effects now commit in one transaction and preserve every
 contradictory predecessor. Exact resource replay and list/read paths consult the same durable scope
 authority as live recall. Each embedding generation pins a monotonic generation order, scope
@@ -272,10 +275,11 @@ follow-up hardening.
   P8.1–P8.5 and P7.2b are closed; Auto proposals consume only bounded active P8 evidence and never
   approve or activate their own persona guidance.
 - **Scope:** `owner_subject` and `memory_scope` are server-owned session authority. A session starts in
-  `global` or an active linked `project:<slug>` scope; changing modes never changes memory authority.
+  `global` or an active `project:<slug>` scope backed by a project entity (§30); changing modes never
+  changes memory authority.
   Exact read/list/recall operations compare their subject/scope to the authorized invocation context
-  and return not-found on mismatch. Unlink tombstones revoke project scope immediately and survive
-  restart (§24).
+  and return not-found on mismatch. Project archive/delete tombstones revoke project scope immediately
+  and survive restart (§30); folder unlink does not (§24.4).
 
 ### 22.6.1 P0/P1 minimum schema
 
@@ -311,7 +315,7 @@ engine while preserving project continuity:
   outbox for resumable memory/skill/drive effects (§27.6)
 
 P0/P1 recall is profile facts + scoped recall chunks, enough to remember what changed, why it changed,
-and what remains open between coding sessions and promoted projects. P4 adds deterministic
+and what remains open between coding sessions and assigned projects (§30). P4 adds deterministic
 post-session summaries, proposal generation, and summary-aware session-start recall through the same
 prompt budgeter, plus deterministic reflection summaries and recursive topic/project rollups; full
 graph/RRF fusion, dense embeddings, and LLM-backed extraction/reranking remain later §22 work.

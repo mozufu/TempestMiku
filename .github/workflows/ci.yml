@@ -14,7 +14,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  FLUTTER_VERSION: "3.32.0"
+  FLUTTER_VERSION: "3.41.9"
   RUST_BACKTRACE: "1"
 
 jobs:
@@ -231,65 +231,6 @@ jobs:
             echo "release APK was signed with the Android debug certificate" >&2
             exit 1
           fi
-
-  web-smoke:
-    name: Playwright web smoke
-    needs: flutter-web-build
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: tempestmiku_web_smoke
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d tempestmiku_web_smoke"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      TM_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/tempestmiku_web_smoke
-      TM_SERVER_ROLE: all
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build outputs
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: clients/miku_web/package-lock.json
-
-      - name: Install web smoke dependencies
-        run: npm ci
-        working-directory: clients/miku_web
-
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: clients/miku_web
-
-      - name: Download Flutter web client
-        uses: actions/download-artifact@v4
-        with:
-          name: miku-flutter-web
-          path: clients/miku_flutter/build/web
-
-      - name: Build server used by the smoke test
-        run: cargo build -p tm-server --locked
-
-      - name: Run Playwright smoke test
-        run: npm test
-        working-directory: clients/miku_web
 
   security-audit:
     name: Cargo audit

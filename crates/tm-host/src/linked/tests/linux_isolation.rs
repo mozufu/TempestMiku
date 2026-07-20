@@ -558,8 +558,10 @@ async fn gated_linux_hardened_v1_enforces_seccomp_and_cgroup_lifecycle() {
         .await
         .unwrap();
     assert_eq!(captured["exitCode"], json!(0));
-    let actions = capture.actions.lock().unwrap();
-    let action: Value = serde_json::from_str(&actions[0]).unwrap();
+    let action: Value = {
+        let actions = capture.actions.lock().unwrap();
+        serde_json::from_str(&actions[0]).unwrap()
+    };
     let details = &action["details"]["isolation"];
     assert_eq!(details["provider"], json!("linux_hardened_v1"));
     assert_eq!(

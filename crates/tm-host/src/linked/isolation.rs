@@ -1113,7 +1113,7 @@ mod tests {
             let metadata = launcher.metadata().unwrap();
             let identity = (metadata.dev(), metadata.ino());
             let launcher_file = open_pinned_file(&launcher, identity, "test launcher").unwrap();
-            return PreparedProcIsolation::LinuxBubblewrap(Box::new(PreparedBubblewrap {
+            PreparedProcIsolation::LinuxBubblewrap(Box::new(PreparedBubblewrap {
                 launcher,
                 launcher_identity: identity,
                 launcher_file: Some(Arc::new(launcher_file)),
@@ -1131,7 +1131,7 @@ mod tests {
                 limits: ProcIsolationLimits::default(),
                 profile_sha256: "digest".to_string(),
                 assurance: BubblewrapAssurance::NamespaceRlimits,
-            }));
+            }))
         }
         #[cfg(not(target_os = "linux"))]
         PreparedProcIsolation::LinuxBubblewrap(Box::new(PreparedBubblewrap {

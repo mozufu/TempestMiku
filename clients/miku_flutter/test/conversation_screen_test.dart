@@ -582,7 +582,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('loads scoped Drive content and previews a bounded document', (
+  testWidgets('opens scoped Drive playground and previews a bounded document', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(375, 812);
@@ -603,12 +603,11 @@ void main() {
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-drive')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
 
     const documentUri =
         'drive://projects/tempestmiku/research/p5-drive-workspace.md';
-    expect(find.byKey(const Key('drawer-drive-content')), findsOneWidget);
+    expect(find.byKey(const Key('drive-page-content')), findsOneWidget);
     expect(
       find.byKey(const Key('drive-document-$documentUri')),
       findsOneWidget,
@@ -630,17 +629,20 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Drive explains project scope and exposes a retryable error', (
+  testWidgets('Drive is a global playground and exposes a retryable error', (
     tester,
   ) async {
-    final unscopedClient = ScriptedMikuClient();
-    await loadApp(tester, unscopedClient);
+    // §30: drive is Miku's playground, reachable without a project. A global session opens the
+    // page and loads the unprojected feed instead of demanding a project scope first.
+    final globalClient = ScriptedMikuClient();
+    await loadApp(tester, globalClient);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-drive')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('drive-project-required')), findsOneWidget);
-    expect(unscopedClient.driveFeedRequests, 0);
+    expect(find.byKey(const Key('drive-page-content')), findsOneWidget);
+    expect(find.text('Miku 的空間'), findsOneWidget);
+    expect(globalClient.driveFeedRequests, 1);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
@@ -651,18 +653,16 @@ void main() {
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-drive')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
     expect(find.text('Drive 暫時讀不到，請再試一次。'), findsOneWidget);
 
     failingClient.failDriveFeed = false;
-    await tester.tap(find.byTooltip('重試'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
-    expect(find.byKey(const Key('drawer-drive-content')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('drive-refresh')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('drive-page-content')), findsOneWidget);
   });
 
-  testWidgets('expands server project and history and switches sessions', (
+  testWidgets('opens project page then history page and switches sessions', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(375, 812);
@@ -687,26 +687,24 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-tempestmiku')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('drawer-project-content')), findsOneWidget);
+    expect(find.byKey(const Key('project-page-content')), findsOneWidget);
     expect(find.text('Scripted project status'), findsOneWidget);
     expect(
       find.textContaining('Continue from latest session result'),
       findsOneWidget,
     );
 
+    // Back out of the project page, then open History from the drawer.
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-history')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('drawer-history-content')), findsOneWidget);
+    expect(find.byKey(const Key('history-page-content')), findsOneWidget);
     expect(find.byKey(Key('history-session-${first.id}')), findsOneWidget);
     expect(find.byKey(Key('history-session-${second.id}')), findsOneWidget);
-    expect(
-      find.byKey(const Key('drawer-project-content')),
-      findsOneWidget,
-      reason: 'Project and History should stay independently expanded.',
-    );
 
-    await tester.tap(find.byKey(const Key('drawer-project')));
-    await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(Key('history-session-${first.id}')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('history-session-${first.id}')));
@@ -716,6 +714,36 @@ void main() {
     expect(scaffold.isDrawerOpen, isFalse);
     expect(find.text('第一段對話'), findsOneWidget);
     expect((await client.createOrReuseSession()).id, first.id);
+  });
+
+  testWidgets('assigns only a closed history session to a project', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final closed = await client.createSession();
+    await client.sendMessage(
+      closed.id,
+      '封存後指派',
+      clientMessageId: 'closed-history-assignment',
+    );
+    client.endSessionForTesting(closed.id);
+    final active = await client.createSession();
+    await loadApp(tester, client);
+
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-history')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(Key('history-assign-${active.id}')), findsNothing);
+    await tester.tap(find.byKey(Key('history-assign-${closed.id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('assign-project-tempestmiku')));
+    await tester.pumpAndSettle();
+
+    expect(client.assignedSessionIds, [closed.id]);
+    expect(client.assignedProjectIds, ['tempestmiku']);
+    expect(find.textContaining('成長了 3 個 Project 項目'), findsOneWidget);
   });
 
   testWidgets(
@@ -771,7 +799,7 @@ void main() {
         isFalse,
       );
 
-      await tester.tap(find.byKey(const Key('close-left-drawer')));
+      await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.text('保留這段訊息'), findsOneWidget);
       expect(find.text('Miku heard: 保留這段訊息'), findsOneWidget);
@@ -835,7 +863,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('project drawer shows auto-grown items without a promote action', (
+  testWidgets('project page shows auto-grown items without a promote action', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(375, 812);
@@ -864,6 +892,62 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('creates a folderless project and assigns the active session', (
+    tester,
+  ) async {
+    // §30.2/§30.6: a project is a first-class entity that can exist without a folder; an active
+    // session declares its project through the scope endpoint, not the closed-session assignment API.
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('project-create')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('create-project-title')),
+      '旅遊規劃',
+    );
+    await tester.tap(find.byKey(const Key('create-project-submit')));
+    await tester.pumpAndSettle();
+
+    final created = client.createdProjects.single;
+    expect(created.title, '旅遊規劃');
+    expect(created.hasLinkedFolder, isFalse);
+    expect(created.id, startsWith('project-'));
+    expect(
+      (await client.loadSession(session.id)).session.defaultScope,
+      created.memoryScope,
+    );
+  });
+
+  testWidgets('archives a project entity and removes it from the picker', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '封存'));
+    await tester.pumpAndSettle();
+
+    expect(client.archivedProjectIds, ['tempestmiku']);
+    expect(find.byKey(const Key('project-tempestmiku')), findsNothing);
+  });
+
   testWidgets('shows project catalog empty and retryable error states', (
     tester,
   ) async {
@@ -873,7 +957,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
-    expect(find.text('尚未連結任何 Project。'), findsOneWidget);
+    expect(find.text('尚未建立任何 Project。用右上角的「＋」新增一個。'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
@@ -957,7 +1041,7 @@ void main() {
     client.failProjectResolve = true;
     const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
     await tester.drag(
-      find.byKey(const Key('drawer-project-content')),
+      find.byKey(const Key('project-page-content')),
       const Offset(0, -220),
     );
     await tester.pumpAndSettle();

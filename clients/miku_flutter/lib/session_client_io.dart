@@ -150,6 +150,16 @@ class NativeMikuSessionClient
   Future<List<ProjectCatalogEntry>> listProjects() => _listProjectsImpl();
 
   @override
+  Future<ProjectCatalogEntry> createProject(String id, {String? title}) =>
+      _createProjectImpl(id, title);
+
+  @override
+  Future<ProjectCatalogEntry> archiveProject(
+    String projectId, {
+    String? reason,
+  }) => _archiveProjectImpl(projectId, reason);
+
+  @override
   Future<String> setSessionScope(String sessionId, String scope) =>
       _setSessionScopeImpl(sessionId, scope);
 

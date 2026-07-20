@@ -152,6 +152,9 @@ impl DriveService<InMemoryDriveMetadataStore> {
             }) {
                 continue;
             }
+            if options.project.is_none() && options.unprojected && entry.project.is_some() {
+                continue;
+            }
             if options.doc_kind.as_ref().is_some_and(|kind| {
                 entry
                     .doc_kind

@@ -221,13 +221,14 @@ a dedicated cheap dialectic model until that resolver is wired.
   state is read from the runtime `GET /modes` catalog and remains in advanced controls instead of
   returning as a default chat badge.
 - **Conversation-first adaptive shell.** The transcript and composer are the only persistent center
-  surface. History, Project, Drive, Resources, reviewed changes, and Settings live in a left overlay
-  drawer or bounded sheets; Mode, scope, approvals, and session state live in the right context
-  drawer. Pairing is an explicit welcome/offline state rather than an error hidden inside chat, and
-  the replacement UI reviews either a pasted one-time link or a strict v1 camera scan before
-  exchange. Scanning only fills the review form and never auto-pairs. The same shell remains usable
-  from a phone-sized browser because remote control of the computer-hosted agent is a first-class
-  workflow.
+  surface. The left overlay drawer is a navigation hub: Drive, Project, and History open dedicated
+  full-page routes with independent loading/retry state, while Resources, reviewed changes, and
+  Settings retain their bounded inspector/control surfaces. Mode, scope, approvals, and session
+  state live in the right context drawer. Pairing is an explicit welcome/offline state rather than an
+  error hidden inside chat, and the replacement UI reviews either a pasted one-time link or a strict
+  v1 camera scan before exchange. Scanning only fills the review form and never auto-pairs. The same
+  shell remains usable from a phone-sized browser because remote control of the computer-hosted agent
+  is a first-class workflow.
 - **Chat interaction contract.** A send attempt owns its `clientMessageId` in the UI before transport,
   retains the edited draft when submission fails, and reuses that id for an explicit retry so a
   transient network failure cannot create a second durable turn. The transcript keeps the assistant
@@ -383,19 +384,20 @@ a dedicated cheap dialectic model until that resolver is wired.
 
 ### 27.4.1 Flutter capability coverage
 
-The UI stays conversation-first: the transcript and composer own the center canvas, navigation and
-collections live in the left overlay drawer, and per-session controls live in the right context
-drawer. “Connected” means a real native/Web/scripted contract and targeted local widget/contract
-coverage exist. It does not replace backend evidence or assert a new physical-device acceptance run.
+The UI stays conversation-first: the transcript and composer own the center canvas, the left overlay
+drawer launches collection/control destinations, Drive/Project/History use dedicated full-page
+routes, and per-session controls live in the right context drawer. “Connected” means a real
+native/Web/scripted contract and targeted local widget/contract coverage exist. It does not replace
+backend evidence or assert a new physical-device acceptance run.
 
 | Server or platform surface | UI home | Current coverage |
 |---|---|---|
 | durable sessions, message receipts/turn recovery, end, SSE replay, errors | conversation + History + session context | connected; caller-owned message ids, typed `202` receipts, queued/running/finalizing/terminal states, explicit retry, and reconnect recovery remain distinct |
 | manual approvals and resolution | inline conversation card | connected; exact pending detail and explicit option resolution preserve the manual authority boundary |
-| linked projects, session scope, bounded linked-resource reads | Project drawer | connected; a project-scoped conversation can return to `global` in place without discarding sent content or the unsent composer draft |
-| scoped Drive feed, virtual-view metadata, organizer proposals, bounded previews | Drive drawer | connected |
+| project entities, lifecycle, active-session scope, attached linked-resource reads | Project page | connected; lists entities rather than folder aliases, creates folderless projects, archives explicitly, browses optional attached folders, and can return a project-scoped conversation to `global` without discarding sent content or the unsent composer draft |
+| scope-relative Drive playground feed, virtual-view metadata, organizer proposals, bounded previews | Drive page | connected; global sessions load the unprojected playground and project sessions load that project's shelf |
 | Mode catalog, explicit override, lock/unlock, skills and capabilities | session context drawer | connected |
-| project open loops, decisions, next actions, reviewed session assignment (§30) | Project drawer + review sheet | connected |
+| project open loops, decisions, next actions, and closed-session assignment (§30) | Project page + History page | connected; active sessions use scope selection, only ended sessions expose assignment, and observation catch-up reports the grown item count |
 | artifacts and generic `memory://`, `history://`, `agent://`, `skill://`, `cron://`, `mcp://` resources | Resources inspector | connected through the server-registered scheme catalog, exact-URI entry, and compact preview; text-compatible non-`skill://` resources add exact 200-line selectors with append/retry that preserve already loaded content |
 | reviewed memory and persona/mode guidance proposals; immutable version history | Reviewed changes + inline approval + Resources inspector | connected; bounded typed proposals preserve the composer and never apply directly |
 | mode/persona/skill rollback initiation | Reviewed changes + inline approval | connected; exact active/target digests are validated and confirmed before creating an approval-backed proposal |

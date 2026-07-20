@@ -1,140 +1,205 @@
 part of 'conversation_screen.dart';
 
-class _DriveDrawerContent extends StatelessWidget {
-  const _DriveDrawerContent({
-    required this.loading,
-    required this.feed,
-    required this.error,
-    required this.activeProjectId,
-    required this.previewingUri,
-    required this.onRetry,
-    required this.onOpenItem,
-  });
+/// §30: Drive is Miku's playground — the durable space shared with Miku, not a project's folder.
+/// The feed is scope-relative: a project session sees that project's shelf; a global session sees
+/// the unprojected playground. The page owns its own load state so it survives push navigation.
+class _DrivePage extends StatefulWidget {
+  const _DrivePage({required this.client, required this.session});
 
-  final bool loading;
-  final DriveFeed? feed;
-  final String? error;
-  final String? activeProjectId;
-  final String? previewingUri;
-  final VoidCallback onRetry;
-  final ValueChanged<DriveFeedItem> onOpenItem;
+  final MikuSessionClient client;
+  final MikuSession session;
 
   @override
-  Widget build(BuildContext context) {
-    if (activeProjectId == null) {
-      return const _DriveScopeState();
-    }
-    if (loading && feed == null) {
-      return const _DrawerLoadingState(label: '載入 Drive…');
-    }
-    if (error != null && feed == null) {
-      return _DrawerErrorState(error: error!, onRetry: onRetry);
-    }
-    final current = feed;
-    if (current == null) return const SizedBox.shrink();
-
-    return Padding(
-      key: const Key('drawer-drive-content'),
-      padding: const EdgeInsets.fromLTRB(12, 2, 8, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  activeProjectId!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: _Palette.of(context).muted,
-                  ),
-                ),
-              ),
-              IconButton(
-                key: const Key('drive-refresh'),
-                tooltip: '重新整理 Drive',
-                onPressed: loading ? null : onRetry,
-                icon: const Icon(Icons.refresh_rounded, size: 19),
-              ),
-            ],
-          ),
-          if (loading) const LinearProgressIndicator(minHeight: 2),
-          if (error != null) ...[
-            const SizedBox(height: 8),
-            _DriveInlineError(message: error!, onRetry: onRetry),
-          ],
-          if (current.isEmpty)
-            const _DrawerEmptyState(text: '這個 Project 的 Drive 還沒有內容。')
-          else ...[
-            if (current.recent.isNotEmpty) ...[
-              const _DriveSectionLabel('最近文件'),
-              for (final item in current.recent)
-                _DriveDocumentTile(
-                  item: item,
-                  loading: previewingUri == item.uri,
-                  onTap: () => onOpenItem(item),
-                ),
-            ],
-            if (current.proposals.isNotEmpty) ...[
-              const _DriveSectionLabel('整理建議'),
-              for (final proposal in current.proposals)
-                _DriveProposalCard(proposal: proposal),
-            ],
-            if (current.pendingApprovals.isNotEmpty) ...[
-              const _DriveSectionLabel('等待確認'),
-              for (final approval in current.pendingApprovals)
-                _DrivePendingApprovalCard(approval: approval),
-            ],
-            if (current.virtualDirs.isNotEmpty) ...[
-              const _DriveSectionLabel('檢視方式'),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final directory in current.virtualDirs)
-                    Tooltip(
-                      message: directory.title,
-                      child: Chip(
-                        avatar: const Icon(Icons.filter_alt_outlined, size: 16),
-                        label: Text(_driveDirectoryLabel(directory)),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ],
-        ],
-      ),
-    );
-  }
+  State<_DrivePage> createState() => _DrivePageState();
 }
 
-class _DriveScopeState extends StatelessWidget {
-  const _DriveScopeState();
+class _DrivePageState extends State<_DrivePage> {
+  DriveFeed? _feed;
+  bool _loading = false;
+  String? _error;
+  String? _previewingUri;
+
+  String? get _projectId => _projectIdFromScope(widget.session.defaultScope);
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final feed = await widget.client.driveFeed(
+        widget.session.id,
+        project: _projectId,
+      );
+      if (!mounted) return;
+      setState(() => _feed = feed);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Drive 暫時讀不到，請再試一次。');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _openItem(DriveFeedItem item) async {
+    if (_previewingUri != null) return;
+    setState(() {
+      _previewingUri = item.uri;
+      _error = null;
+    });
+    try {
+      final resource = await widget.client.previewResource(
+        widget.session.id,
+        item.uri,
+      );
+      if (!mounted) return;
+      setState(() => _previewingUri = null);
+      await showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder:
+            (context) => _DriveDocumentSheet(item: item, resource: resource),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = '這份 Drive 文件暫時無法預覽。');
+    } finally {
+      if (mounted) setState(() => _previewingUri = null);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
-    return Padding(
-      key: const Key('drive-project-required'),
-      padding: const EdgeInsets.fromLTRB(20, 8, 12, 18),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.workspaces_outline, size: 18, color: palette.muted),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              '先在 Project 選擇工作範圍，Drive 只會顯示該範圍已授權的內容。',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: palette.muted),
-            ),
+    final project = _projectId;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Drive'),
+        actions: [
+          IconButton(
+            key: const Key('drive-refresh'),
+            tooltip: '重新整理 Drive',
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh_rounded),
           ),
         ],
       ),
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.folder_open_rounded,
+                    size: 20,
+                    color: palette.miku,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      project == null ? 'Miku 的空間' : '$project 範圍',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                project == null
+                    ? '你分享給 Miku、以及 Miku 收進來的內容都在這裡。'
+                    : '這個 Project 範圍內分享給 Miku 的內容。',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: palette.muted),
+              ),
+            ),
+            if (_loading) const LinearProgressIndicator(minHeight: 2),
+            Expanded(child: _buildBody(palette)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(_Palette palette) {
+    final feed = _feed;
+    if (_loading && feed == null) {
+      return const _DrawerLoadingState(label: '載入 Drive…');
+    }
+    if (_error != null && feed == null) {
+      return _DrawerErrorState(error: _error!, onRetry: _load);
+    }
+    if (feed == null) return const SizedBox.shrink();
+    if (feed.isEmpty) {
+      return const _DrawerEmptyState(text: 'Drive 還沒有內容。');
+    }
+    return ListView(
+      key: const Key('drive-page-content'),
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+      children: [
+        if (_error != null) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: _DriveInlineError(message: _error!, onRetry: _load),
+          ),
+        ],
+        if (feed.recent.isNotEmpty) ...[
+          const _DriveSectionLabel('最近文件'),
+          for (final item in feed.recent)
+            _DriveDocumentTile(
+              item: item,
+              loading: _previewingUri == item.uri,
+              onTap: () => _openItem(item),
+            ),
+        ],
+        if (feed.proposals.isNotEmpty) ...[
+          const _DriveSectionLabel('整理建議'),
+          for (final proposal in feed.proposals)
+            _DriveProposalCard(proposal: proposal),
+        ],
+        if (feed.pendingApprovals.isNotEmpty) ...[
+          const _DriveSectionLabel('等待確認'),
+          for (final approval in feed.pendingApprovals)
+            _DrivePendingApprovalCard(approval: approval),
+        ],
+        if (feed.virtualDirs.isNotEmpty) ...[
+          const _DriveSectionLabel('檢視方式'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final directory in feed.virtualDirs)
+                  Tooltip(
+                    message: directory.title,
+                    child: Chip(
+                      avatar: const Icon(Icons.filter_alt_outlined, size: 16),
+                      label: Text(_driveDirectoryLabel(directory)),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

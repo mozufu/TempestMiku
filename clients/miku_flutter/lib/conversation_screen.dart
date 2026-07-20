@@ -18,6 +18,7 @@ import 'voice_capture_service.dart';
 
 part 'conversation_project_browser.dart';
 part 'conversation_drive.dart';
+part 'conversation_history.dart';
 part 'conversation_session_context.dart';
 part 'conversation_settings.dart';
 part 'conversation_resources.dart';
@@ -188,31 +189,10 @@ class _ConversationScreenState extends State<ConversationScreen>
   _ServerConnectionState _serverConnection = _ServerConnectionState.connecting;
   bool _sending = false;
   String? _connectionError;
-  bool _projectExpanded = false;
-  bool _driveExpanded = false;
-  bool _historyExpanded = false;
-  bool _projectLoading = false;
-  bool _projectBrowserLoading = false;
-  bool _driveLoading = false;
   bool _modeCatalogLoading = false;
-  bool _historyLoading = false;
-  ProjectOverview? _projectOverview;
-  List<ProjectCatalogEntry>? _projectCatalog;
-  List<MikuResourceEntry>? _projectEntries;
-  DriveFeed? _driveFeed;
   ModeCatalog? _modeCatalog;
-  final List<_ProjectBrowserLocation> _projectPath = [];
-  List<SessionSummary>? _sessionHistory;
-  String? _activeProjectId;
-  String? _switchingProjectId;
-  bool _switchingToGlobal = false;
-  String? _previewingResourceUri;
-  String? _previewingDriveUri;
-  String? _projectError;
-  String? _driveError;
   String? _modeCatalogError;
   String? _changingModeId;
-  String? _historyError;
   int _connectionGeneration = 0;
   int _localSequence = 0;
   bool _initialConnectionComplete = false;
@@ -368,21 +348,6 @@ class _ConversationScreenState extends State<ConversationScreen>
                 ? _PresenceState.ended
                 : _PresenceState.here;
         _serverConnection = _ServerConnectionState.connected;
-        _projectOverview = null;
-        _projectCatalog = null;
-        _projectEntries = null;
-        _driveFeed = null;
-        _projectPath.clear();
-        _activeProjectId = _projectIdFromScope(loaded.session.defaultScope);
-        _switchingProjectId = null;
-        _switchingToGlobal = false;
-        _previewingResourceUri = null;
-        _previewingDriveUri = null;
-        _projectError = null;
-        _driveError = null;
-        _projectLoading = false;
-        _projectBrowserLoading = false;
-        _driveLoading = false;
       });
       for (final event in loaded.pendingEvents) {
         _handleEvent(event, remember: false);
@@ -393,11 +358,6 @@ class _ConversationScreenState extends State<ConversationScreen>
       unawaited(_refreshVoiceAsrEngines());
       unawaited(_recoverTrackedTurns(loaded.session.id));
       _scheduleScroll(force: true);
-      if (_projectExpanded) unawaited(_loadProject());
-      if (_driveExpanded) unawaited(_loadDrive());
-      if (_historyExpanded || _sessionHistory != null) {
-        unawaited(_loadHistory());
-      }
     } catch (error) {
       if (!mounted || generation != _connectionGeneration) return;
       setState(() {
@@ -561,27 +521,9 @@ class _ConversationScreenState extends State<ConversationScreen>
       _presence = _PresenceState.offline;
       _serverConnection = _ServerConnectionState.offline;
       _connectionError = connectionError;
-      _projectOverview = null;
-      _projectCatalog = null;
-      _projectEntries = null;
-      _driveFeed = null;
       _modeCatalog = null;
-      _sessionHistory = null;
-      _projectPath.clear();
-      _activeProjectId = null;
-      _switchingProjectId = null;
-      _switchingToGlobal = false;
-      _previewingResourceUri = null;
-      _previewingDriveUri = null;
-      _projectError = null;
-      _driveError = null;
       _modeCatalogError = null;
-      _historyError = null;
-      _projectLoading = false;
-      _projectBrowserLoading = false;
-      _driveLoading = false;
       _modeCatalogLoading = false;
-      _historyLoading = false;
     });
   }
 
@@ -724,352 +666,68 @@ class _ConversationScreenState extends State<ConversationScreen>
     }
   }
 
-  void _toggleProject() {
-    setState(() => _projectExpanded = !_projectExpanded);
-    if (_projectExpanded && _projectCatalog == null) {
-      unawaited(_loadProject());
-    }
-  }
-
-  void _toggleDrive() {
-    setState(() => _driveExpanded = !_driveExpanded);
-    if (_driveExpanded && _driveFeed == null) {
-      unawaited(_loadDrive());
-    }
-  }
-
-  void _toggleHistory() {
-    setState(() => _historyExpanded = !_historyExpanded);
-    if (_historyExpanded && _sessionHistory == null) {
-      unawaited(_loadHistory());
-    }
-  }
-
-  Future<void> _loadProject() async {
+  void _openDrivePage() {
     final session = _session;
-    if (session == null || _projectLoading) return;
-    setState(() {
-      _projectLoading = true;
-      _projectError = null;
-    });
-    try {
-      final catalog = await widget.client.listProjects();
-      if (!mounted || _session?.id != session.id) return;
-      final activeId = _projectIdFromScope(session.defaultScope);
-      setState(() {
-        _projectCatalog = catalog;
-        _activeProjectId = activeId;
-      });
-      final active = catalog.where((item) => item.id == activeId).firstOrNull;
-      if (active != null) await _loadProjectRoot(active);
-    } catch (error) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectError = _friendlyProjectError(error));
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _projectLoading = false);
-      }
-    }
-  }
-
-  Future<void> _selectProject(ProjectCatalogEntry project) async {
-    final session = _session;
-    if (session == null || _switchingProjectId != null || _switchingToGlobal) {
-      return;
-    }
-    if (_presence == _PresenceState.ended && project.id != _activeProjectId) {
-      return;
-    }
-    if (project.id == _activeProjectId) {
-      await _loadProjectRoot(project);
-      return;
-    }
-    setState(() {
-      _switchingProjectId = project.id;
-      _projectError = null;
-    });
-    try {
-      final scope = await widget.client.setSessionScope(
-        session.id,
-        project.memoryScope,
-      );
-      if (!mounted || _session?.id != session.id) return;
-      if (scope != project.memoryScope) {
-        throw StateError('server selected unexpected project scope $scope');
-      }
-      setState(() {
-        _session = _sessionWithScope(session, scope);
-        _activeProjectId = project.id;
-        _projectOverview = null;
-        _projectEntries = null;
-        _driveFeed = null;
-        _driveError = null;
-        _projectPath.clear();
-      });
-      await _loadProjectRoot(project);
-      if (_driveExpanded) await _loadDrive();
-    } catch (error) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectError = _friendlyProjectError(error));
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _switchingProjectId = null);
-      }
-    }
-  }
-
-  Future<void> _selectGlobalScope() async {
-    final session = _session;
-    if (session == null || _switchingProjectId != null || _switchingToGlobal) {
-      return;
-    }
-    if (_presence == _PresenceState.ended && _activeProjectId != null) return;
-    if (session.defaultScope == 'global') return;
-    setState(() {
-      _switchingToGlobal = true;
-      _projectError = null;
-    });
-    try {
-      final scope = await widget.client.setSessionScope(session.id, 'global');
-      if (!mounted || _session?.id != session.id) return;
-      if (scope != 'global') {
-        throw StateError('server selected unexpected global scope $scope');
-      }
-      setState(() {
-        _session = _sessionWithScope(session, scope);
-        _activeProjectId = null;
-        _projectOverview = null;
-        _projectEntries = null;
-        _driveFeed = null;
-        _driveError = null;
-        _projectPath.clear();
-      });
-      if (_driveExpanded) await _loadDrive();
-    } catch (error) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectError = _friendlyProjectError(error));
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _switchingToGlobal = false);
-      }
-    }
-  }
-
-  Future<void> _loadProjectRoot(ProjectCatalogEntry project) async {
-    final session = _session;
-    if (session == null || _projectBrowserLoading) return;
-    setState(() {
-      _projectBrowserLoading = true;
-      _projectError = null;
-    });
-    try {
-      // §30: a folderless project has no linked root; browse its project views instead.
-      final rootUri =
-          project.hasLinkedFolder ? project.rootUri : project.projectUri;
-      final overview = await widget.client.projectOverview(session.id);
-      final entries = await widget.client.listResources(session.id, rootUri);
-      if (!mounted ||
-          _session?.id != session.id ||
-          _activeProjectId != project.id) {
-        return;
-      }
-      setState(() {
-        _projectOverview = overview;
-        _projectEntries = entries;
-        _projectPath
-          ..clear()
-          ..add(_ProjectBrowserLocation(uri: rootUri, label: project.title));
-      });
-    } catch (error) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectError = _friendlyProjectError(error));
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _projectBrowserLoading = false);
-      }
-    }
-  }
-
-  Future<void> _openProjectDirectory(MikuResourceEntry entry) async {
-    if (!entry.isDirectory) return;
-    await _loadProjectLocation(
-      _ProjectBrowserLocation(uri: entry.uri, label: entry.name),
-      push: true,
+    if (session == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _DrivePage(client: widget.client, session: session),
+      ),
     );
   }
 
-  Future<void> _loadProjectLocation(
-    _ProjectBrowserLocation location, {
-    required bool push,
-  }) async {
+  void _openProjectPage() {
     final session = _session;
-    if (session == null || _projectBrowserLoading) return;
-    setState(() {
-      _projectBrowserLoading = true;
-      _projectError = null;
-    });
-    try {
-      final entries = await widget.client.listResources(
-        session.id,
-        location.uri,
-      );
-      if (!mounted || _session?.id != session.id) return;
-      setState(() {
-        _projectEntries = entries;
-        if (push) _projectPath.add(location);
-      });
-    } catch (error) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectError = _friendlyProjectError(error));
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _projectBrowserLoading = false);
-      }
-    }
-  }
-
-  Future<void> _goUpProjectDirectory() async {
-    if (_projectPath.length <= 1) {
-      setState(() {
-        _projectOverview = null;
-        _projectEntries = null;
-        _projectPath.clear();
-        _projectError = null;
-      });
-      return;
-    }
-    final parent = _projectPath[_projectPath.length - 2];
-    setState(() => _projectPath.removeLast());
-    await _loadProjectLocation(parent, push: false);
-  }
-
-  Future<void> _retryProjectBrowser() async {
-    if (_projectCatalog == null) {
-      await _loadProject();
-      return;
-    }
-    if (_projectPath.isNotEmpty) {
-      await _loadProjectLocation(_projectPath.last, push: false);
-      return;
-    }
-    final project =
-        _projectCatalog!
-            .where((item) => item.id == _activeProjectId)
-            .firstOrNull;
-    if (project != null) await _loadProjectRoot(project);
-  }
-
-  Future<void> _openProjectFile(MikuResourceEntry entry) async {
-    final session = _session;
-    if (session == null || !entry.isFile || _previewingResourceUri != null) {
-      return;
-    }
-    setState(() {
-      _previewingResourceUri = entry.uri;
-      _projectError = null;
-    });
-    try {
-      final resource = await widget.client.resolveResource(
-        session.id,
-        entry.uri,
-      );
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _previewingResourceUri = null);
-      await showModalBottomSheet<void>(
-        context: context,
-        useSafeArea: true,
-        isScrollControlled: true,
-        showDragHandle: true,
+    if (session == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
         builder:
-            (context) => _ProjectFileSheet(entry: entry, resource: resource),
-      );
-    } catch (error) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectError = _friendlyProjectError(error));
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _previewingResourceUri = null);
-      }
-    }
+            (_) => _ProjectPage(
+              client: widget.client,
+              session: session,
+              sessionEnded: _presence == _PresenceState.ended,
+              onScopeChanged: _applyScope,
+            ),
+      ),
+    );
   }
 
-  Future<void> _loadHistory() async {
-    if (_historyLoading) return;
-    setState(() {
-      _historyLoading = true;
-      _historyError = null;
-    });
-    try {
-      final sessions = await widget.client.listSessions(limit: 30);
-      if (!mounted) return;
-      setState(() => _sessionHistory = sessions);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _historyError = 'History 暫時讀不到，請再試一次。');
-    } finally {
-      if (mounted) setState(() => _historyLoading = false);
-    }
-  }
-
-  Future<void> _loadDrive() async {
-    final session = _session;
-    if (session == null || _driveLoading) return;
-    final project = _projectIdFromScope(session.defaultScope);
-    if (project == null) {
-      setState(() {
-        _driveFeed = null;
-        _driveError = null;
-      });
-      return;
-    }
-    setState(() {
-      _driveLoading = true;
-      _driveError = null;
-    });
-    try {
-      final feed = await widget.client.driveFeed(session.id, project: project);
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _driveFeed = feed);
-    } catch (_) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _driveError = 'Drive 暫時讀不到，請再試一次。');
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _driveLoading = false);
-      }
-    }
-  }
-
-  Future<void> _openDriveItem(DriveFeedItem item) async {
-    final session = _session;
-    if (session == null || _previewingDriveUri != null) return;
-    setState(() {
-      _previewingDriveUri = item.uri;
-      _driveError = null;
-    });
-    try {
-      final resource = await widget.client.previewResource(
-        session.id,
-        item.uri,
-      );
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _previewingDriveUri = null);
-      await showModalBottomSheet<void>(
-        context: context,
-        useSafeArea: true,
-        isScrollControlled: true,
-        showDragHandle: true,
+  void _openHistoryPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
         builder:
-            (context) => _DriveDocumentSheet(item: item, resource: resource),
-      );
-    } catch (_) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _driveError = '這份 Drive 文件暫時無法預覽。');
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _previewingDriveUri = null);
-      }
-    }
+            (_) => _HistoryPage(
+              client: widget.client,
+              currentSessionId: _session?.id,
+              onSelectSession: (sessionId) {
+                Navigator.of(context).pop();
+                _openHistorySession(sessionId);
+              },
+            ),
+      ),
+    );
+  }
+
+  /// Applies a committed memory-scope change reported by the project page so the composer and
+  /// session-context surfaces reflect the session's new project (or Global).
+  void _applyScope(String scope) {
+    final session = _session;
+    if (session == null || session.defaultScope == scope) return;
+    setState(() => _session = _sessionWithScope(session, scope));
+  }
+
+  MikuSession _sessionWithScope(MikuSession session, String scope) {
+    return MikuSession(
+      id: session.id,
+      status: session.status,
+      mode: session.mode,
+      label: session.label,
+      voiceCap: session.voiceCap,
+      defaultScope: scope,
+      activeSkills: session.activeSkills,
+      lastEventId: session.lastEventId,
+      locked: session.locked,
+    );
   }
 
   void _openHistorySession(String sessionId) {
@@ -1115,12 +773,6 @@ class _ConversationScreenState extends State<ConversationScreen>
         (_string(event.data['turnId']).isEmpty
             ? null
             : _string(event.data['turnId']));
-    final refreshDrive = const {
-      'drive_put',
-      'drive_moved',
-      'drive_tagged',
-      'drive_organizer_completed',
-    }.contains(event.type);
     setState(() {
       if (eventTurnId != null) {
         _applyTurnEvent(eventTurnId, event);
@@ -1328,7 +980,6 @@ class _ConversationScreenState extends State<ConversationScreen>
         _session != null) {
       unawaited(_recoverTrackedTurns(_session!.id));
     }
-    if (refreshDrive && _driveExpanded) unawaited(_loadDrive());
     _scheduleScroll();
   }
 
@@ -1738,49 +1389,9 @@ class _ConversationScreenState extends State<ConversationScreen>
         onNewConversation: _startNewConversation,
         currentSessionId: _session?.id,
         currentSessionEnded: _presence == _PresenceState.ended,
-        projectExpanded: _projectExpanded,
-        driveExpanded: _driveExpanded,
-        historyExpanded: _historyExpanded,
-        driveLoading: _driveLoading,
-        historyLoading: _historyLoading,
-        projectOverview: _projectOverview,
-        driveFeed: _driveFeed,
-        driveError: _driveError,
-        activeProjectId: _activeProjectId,
-        previewingDriveUri: _previewingDriveUri,
-        projectBrowser: _ProjectBrowserModel(
-          projects: _projectCatalog,
-          activeProjectId: _activeProjectId,
-          switchingProjectId: _switchingProjectId,
-          switchingToGlobal: _switchingToGlobal,
-          previewingResourceUri: _previewingResourceUri,
-          path: List.unmodifiable(_projectPath),
-          entries: _projectEntries,
-          catalogLoading: _projectLoading,
-          browserLoading: _projectBrowserLoading,
-          error: _projectError,
-        ),
-        sessionHistory: _sessionHistory,
-        historyError: _historyError,
-        onToggleProject: _toggleProject,
-        onToggleDrive: _toggleDrive,
-        onToggleHistory: _toggleHistory,
-        onRetryProject: _loadProject,
-        onRetryDrive: _loadDrive,
-        onOpenDriveItem: _openDriveItem,
-        onRetryProjectBrowser: _retryProjectBrowser,
-        onSelectGlobalScope: _selectGlobalScope,
-        onSelectProject: _selectProject,
-        onOpenProjectEntry: (entry) {
-          if (entry.isDirectory) {
-            unawaited(_openProjectDirectory(entry));
-          } else if (entry.isFile) {
-            unawaited(_openProjectFile(entry));
-          }
-        },
-        onProjectUp: _goUpProjectDirectory,
-        onRetryHistory: _loadHistory,
-        onSelectSession: _openHistorySession,
+        onOpenDrive: _openDrivePage,
+        onOpenProject: _openProjectPage,
+        onOpenHistory: _openHistoryPage,
       ),
       drawerEnableOpenDragGesture: true,
       drawerEdgeDragWidth: 32,
@@ -2029,32 +1640,9 @@ class _ConversationDrawer extends StatelessWidget {
     required this.onNewConversation,
     required this.currentSessionId,
     required this.currentSessionEnded,
-    required this.projectExpanded,
-    required this.driveExpanded,
-    required this.historyExpanded,
-    required this.driveLoading,
-    required this.historyLoading,
-    required this.projectOverview,
-    required this.driveFeed,
-    required this.driveError,
-    required this.activeProjectId,
-    required this.previewingDriveUri,
-    required this.projectBrowser,
-    required this.sessionHistory,
-    required this.historyError,
-    required this.onToggleProject,
-    required this.onToggleDrive,
-    required this.onToggleHistory,
-    required this.onRetryProject,
-    required this.onRetryDrive,
-    required this.onOpenDriveItem,
-    required this.onRetryProjectBrowser,
-    required this.onSelectGlobalScope,
-    required this.onSelectProject,
-    required this.onOpenProjectEntry,
-    required this.onProjectUp,
-    required this.onRetryHistory,
-    required this.onSelectSession,
+    required this.onOpenDrive,
+    required this.onOpenProject,
+    required this.onOpenHistory,
   });
 
   final VoidCallback onOpenSettings;
@@ -2063,37 +1651,14 @@ class _ConversationDrawer extends StatelessWidget {
   final VoidCallback onNewConversation;
   final String? currentSessionId;
   final bool currentSessionEnded;
-  final bool projectExpanded;
-  final bool driveExpanded;
-  final bool historyExpanded;
-  final bool driveLoading;
-  final bool historyLoading;
-  final ProjectOverview? projectOverview;
-  final DriveFeed? driveFeed;
-  final String? driveError;
-  final String? activeProjectId;
-  final String? previewingDriveUri;
-  final _ProjectBrowserModel projectBrowser;
-  final List<SessionSummary>? sessionHistory;
-  final String? historyError;
-  final VoidCallback onToggleProject;
-  final VoidCallback onToggleDrive;
-  final VoidCallback onToggleHistory;
-  final VoidCallback onRetryProject;
-  final VoidCallback onRetryDrive;
-  final ValueChanged<DriveFeedItem> onOpenDriveItem;
-  final VoidCallback onRetryProjectBrowser;
-  final VoidCallback onSelectGlobalScope;
-  final ValueChanged<ProjectCatalogEntry> onSelectProject;
-  final ValueChanged<MikuResourceEntry> onOpenProjectEntry;
-  final VoidCallback onProjectUp;
-  final VoidCallback onRetryHistory;
-  final ValueChanged<String> onSelectSession;
+  final VoidCallback onOpenDrive;
+  final VoidCallback onOpenProject;
+  final VoidCallback onOpenHistory;
 
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
-
+    final hasSession = currentSessionId != null;
     return Drawer(
       key: const Key('left-conversation-drawer'),
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -2128,58 +1693,29 @@ class _ConversationDrawer extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(8, 14, 8, 12),
                 children: [
-                  _ExpandableDrawerDestination(
-                    key: const Key('drawer-drive'),
+                  _DrawerPageDestination(
+                    pageKey: const Key('drawer-drive'),
                     icon: Icons.folder_open_rounded,
                     label: 'Drive',
-                    expanded: driveExpanded,
-                    onTap: onToggleDrive,
-                    child: _DriveDrawerContent(
-                      loading: driveLoading,
-                      feed: driveFeed,
-                      error: driveError,
-                      activeProjectId: activeProjectId,
-                      previewingUri: previewingDriveUri,
-                      onRetry: onRetryDrive,
-                      onOpenItem: onOpenDriveItem,
-                    ),
+                    subtitle: 'Miku 的空間',
+                    enabled: hasSession,
+                    onTap: onOpenDrive,
                   ),
-                  _ExpandableDrawerDestination(
-                    key: const Key('drawer-project'),
+                  _DrawerPageDestination(
+                    pageKey: const Key('drawer-project'),
                     icon: Icons.workspaces_outline,
                     label: 'Project',
-                    expanded: projectExpanded,
-                    onTap: onToggleProject,
-                    child: _ProjectDrawerContent(
-                      overview: projectOverview,
-                      browser: projectBrowser,
-                      hasSession: currentSessionId != null,
-                      sessionEnded: currentSessionEnded,
-                      onRetryCatalog: onRetryProject,
-                      onRetryBrowser: onRetryProjectBrowser,
-                      onSelectGlobalScope: onSelectGlobalScope,
-                      onSelectProject: onSelectProject,
-                      onOpenEntry: onOpenProjectEntry,
-                      onUp: onProjectUp,
-                    ),
+                    subtitle: '主題實體與工作範圍',
+                    enabled: hasSession,
+                    onTap: onOpenProject,
                   ),
-                  _ExpandableDrawerDestination(
-                    key: const Key('drawer-history'),
+                  _DrawerPageDestination(
+                    pageKey: const Key('drawer-history'),
                     icon: Icons.history_rounded,
                     label: 'History',
-                    expanded: historyExpanded,
-                    onTap: onToggleHistory,
-                    child: _HistoryDrawerContent(
-                      loading: historyLoading,
-                      sessions: sessionHistory,
-                      error: historyError,
-                      currentSessionId: currentSessionId,
-                      onRetry: onRetryHistory,
-                      onSelect: (sessionId) {
-                        Navigator.of(context).pop();
-                        onSelectSession(sessionId);
-                      },
-                    ),
+                    subtitle: '過往對話與指派',
+                    enabled: true,
+                    onTap: onOpenHistory,
                   ),
                   ListTile(
                     key: const Key('drawer-resources'),
@@ -2206,9 +1742,9 @@ class _ConversationDrawer extends StatelessWidget {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    enabled: currentSessionId != null && !currentSessionEnded,
+                    enabled: hasSession && !currentSessionEnded,
                     onTap:
-                        currentSessionId == null || currentSessionEnded
+                        !hasSession || currentSessionEnded
                             ? null
                             : () {
                               Navigator.of(context).pop();
@@ -2255,173 +1791,50 @@ class _ConversationDrawer extends StatelessWidget {
   }
 }
 
-class _ExpandableDrawerDestination extends StatelessWidget {
-  const _ExpandableDrawerDestination({
-    required super.key,
+class _DrawerPageDestination extends StatelessWidget {
+  const _DrawerPageDestination({
+    required this.pageKey,
     required this.icon,
     required this.label,
-    required this.expanded,
+    required this.subtitle,
+    required this.enabled,
     required this.onTap,
-    required this.child,
   });
 
+  final Key pageKey;
   final IconData icon;
   final String label;
-  final bool expanded;
+  final String subtitle;
+  final bool enabled;
   final VoidCallback onTap;
-  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Semantics(
-          button: true,
-          label: '$label，${expanded ? '已展開' : '已收合'}',
-          child: ListTile(
-            minTileHeight: 52,
-            leading: Icon(icon),
-            title: Text(label),
-            trailing: Icon(
-              expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-              size: 22,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            onTap: onTap,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Semantics(
+        button: true,
+        label: label,
+        child: ListTile(
+          key: pageKey,
+          minTileHeight: 52,
+          leading: Icon(icon),
+          title: Text(label),
+          subtitle: Text(subtitle),
+          trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
+          enabled: enabled,
+          onTap:
+              enabled
+                  ? () {
+                    Navigator.of(context).pop();
+                    onTap();
+                  }
+                  : null,
         ),
-        AnimatedSize(
-          duration:
-              MediaQuery.maybeOf(context)?.disableAnimations ?? false
-                  ? Duration.zero
-                  : const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          child:
-              expanded
-                  ? Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 8, 10),
-                    child: child,
-                  )
-                  : const SizedBox.shrink(),
-        ),
-      ],
-    );
-  }
-}
-
-class _ProjectDrawerContent extends StatelessWidget {
-  const _ProjectDrawerContent({
-    required this.overview,
-    required this.browser,
-    required this.hasSession,
-    required this.sessionEnded,
-    required this.onRetryCatalog,
-    required this.onRetryBrowser,
-    required this.onSelectGlobalScope,
-    required this.onSelectProject,
-    required this.onOpenEntry,
-    required this.onUp,
-  });
-
-  final ProjectOverview? overview;
-  final _ProjectBrowserModel browser;
-  final bool hasSession;
-  final bool sessionEnded;
-  final VoidCallback onRetryCatalog;
-  final VoidCallback onRetryBrowser;
-  final VoidCallback onSelectGlobalScope;
-  final ValueChanged<ProjectCatalogEntry> onSelectProject;
-  final ValueChanged<MikuResourceEntry> onOpenEntry;
-  final VoidCallback onUp;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!hasSession) {
-      return const _DrawerEmptyState(text: '還沒有可讀取的對話。');
-    }
-    return _ProjectBrowserView(
-      model: browser,
-      overview: overview,
-      sessionEnded: sessionEnded,
-      onRetryCatalog: onRetryCatalog,
-      onRetryBrowser: onRetryBrowser,
-      onSelectGlobalScope: onSelectGlobalScope,
-      onSelectProject: onSelectProject,
-      onOpenEntry: onOpenEntry,
-      onUp: onUp,
-    );
-  }
-}
-
-class _HistoryDrawerContent extends StatelessWidget {
-  const _HistoryDrawerContent({
-    required this.loading,
-    required this.sessions,
-    required this.error,
-    required this.currentSessionId,
-    required this.onRetry,
-    required this.onSelect,
-  });
-
-  final bool loading;
-  final List<SessionSummary>? sessions;
-  final String? error;
-  final String? currentSessionId;
-  final VoidCallback onRetry;
-  final ValueChanged<String> onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    if (loading && sessions == null) {
-      return const _DrawerLoadingState(label: '載入 History…');
-    }
-    if (error != null && sessions == null) {
-      return _DrawerErrorState(error: error!, onRetry: onRetry);
-    }
-    final values = sessions;
-    if (values == null) return const SizedBox.shrink();
-    if (values.isEmpty) {
-      return const _DrawerEmptyState(text: '還沒有對話紀錄。');
-    }
-    final palette = _Palette.of(context);
-    return Column(
-      key: const Key('drawer-history-content'),
-      children: [
-        for (final session in values)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: ListTile(
-              key: Key('history-session-${session.id}'),
-              minTileHeight: 52,
-              dense: true,
-              selected: session.id == currentSessionId,
-              selectedTileColor: palette.miku.withValues(alpha: 0.10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              title: Text(
-                session.title.trim().isEmpty ? '新對話' : session.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                session.preview.trim().isEmpty
-                    ? session.label
-                    : session.preview,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing:
-                  session.id == currentSessionId
-                      ? Icon(Icons.check_rounded, size: 18, color: palette.miku)
-                      : null,
-              onTap: () => onSelect(session.id),
-            ),
-          ),
-      ],
+      ),
     );
   }
 }

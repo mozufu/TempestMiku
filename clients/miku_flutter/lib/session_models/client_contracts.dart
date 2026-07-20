@@ -68,6 +68,15 @@ abstract class MikuSessionClient {
 
   Future<List<ProjectCatalogEntry>> listProjects();
 
+  /// Creates (or returns) a project entity (§30.2). Owner-initiated; idempotent on id.
+  Future<ProjectCatalogEntry> createProject(String id, {String? title});
+
+  /// Archives a project entity, tombstoning its memory scope (§30.4).
+  Future<ProjectCatalogEntry> archiveProject(
+    String projectId, {
+    String? reason,
+  });
+
   Future<String> setSessionScope(String sessionId, String scope);
 
   Future<LoadedSession> loadSession(String sessionId);

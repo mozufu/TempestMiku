@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Changed
+- Aligned the Flutter Drive, Project, and History pages with the §30 project-entity contract:
+  Drive is a global playground, project lifecycle and folder links live on the Project page, and
+  History assigns sessions to projects without promotion semantics.
 - Reframed the documentation around [`docs/PRODUCT.md`](docs/PRODUCT.md) as the present-tense,
   as-built product definition; rewrote the root and docs indexes around product, specification,
   operation, and provenance; moved the completed roadmap and task ledger to `docs/history/`; and

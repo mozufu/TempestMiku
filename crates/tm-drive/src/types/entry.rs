@@ -148,6 +148,10 @@ pub struct DriveSearchOptions {
     pub query: Option<String>,
     #[serde(default)]
     pub project: Option<String>,
+    /// When true, restrict to entries with no project attribute (§30 global playground shelf).
+    /// Ignored when `project` is set.
+    #[serde(default)]
+    pub unprojected: bool,
     #[serde(default)]
     pub doc_kind: Option<String>,
     #[serde(default)]
@@ -173,6 +177,7 @@ impl Default for DriveSearchOptions {
         Self {
             query: None,
             project: None,
+            unprojected: false,
             doc_kind: None,
             tags: Vec::new(),
             limit: default_search_limit(),

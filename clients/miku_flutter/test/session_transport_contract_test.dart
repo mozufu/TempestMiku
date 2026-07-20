@@ -160,7 +160,9 @@ void main() {
         'memoryScope': 'project:tempestmiku',
         'projectUri': 'project://tempestmiku',
         'linkedFoldersUri': 'project://tempestmiku/linked-folders',
-        'linkedFolderUris': ['project://tempestmiku/linked-folders/tempestmiku/'],
+        'linkedFolderUris': [
+          'project://tempestmiku/linked-folders/tempestmiku/',
+        ],
       });
       expect(project.id, 'tempestmiku');
       expect(project.title, 'TempestMiku');

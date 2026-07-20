@@ -59,6 +59,8 @@ class ScriptedMikuClient
   final List<String> overriddenModes = [];
   final List<String> assignedProjectIds = [];
   final List<String> assignedSessionIds = [];
+  final List<ProjectCatalogEntry> createdProjects = [];
+  final List<String> archivedProjectIds = [];
   final List<String> sentClientMessageIds = [];
   final List<String?> resolvedResourceSelectors = [];
   final List<String> revokedDeviceIds = [];
@@ -361,7 +363,7 @@ class ScriptedMikuClient
         mode: session.mode,
         label: session.label,
         updatedAt: (_updatedAt[id] ?? DateTime.now()).toIso8601String(),
-        status: 'open',
+        status: session.status,
         messageCount: messages.length,
         lastEventId: session.lastEventId,
       );
@@ -391,7 +393,8 @@ class ScriptedMikuClient
           projectUri: 'project://archive',
           linkedFoldersUri: 'project://archive/linked-folders',
         ),
-    ];
+      ...createdProjects,
+    ].where((project) => !archivedProjectIds.contains(project.id)).toList();
   }
 
   @override
@@ -951,6 +954,41 @@ class ScriptedMikuClient
     assignedProjectIds.add(projectId);
     assignedSessionIds.add(sessionId);
     return 3;
+  }
+
+  @override
+  Future<ProjectCatalogEntry> createProject(String id, {String? title}) async {
+    final slug = id.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+    final entry = ProjectCatalogEntry(
+      id: slug,
+      title: title ?? id,
+      status: 'active',
+      memoryScope: 'project:$slug',
+      projectUri: 'project://$slug',
+      linkedFoldersUri: 'project://$slug/linked-folders',
+    );
+    createdProjects.removeWhere((project) => project.id == slug);
+    archivedProjectIds.remove(slug);
+    createdProjects.add(entry);
+    return entry;
+  }
+
+  @override
+  Future<ProjectCatalogEntry> archiveProject(
+    String projectId, {
+    String? reason,
+  }) async {
+    archivedProjectIds.add(projectId);
+    final existing =
+        createdProjects.where((project) => project.id == projectId).firstOrNull;
+    return ProjectCatalogEntry(
+      id: projectId,
+      title: existing?.title ?? projectId,
+      status: 'archived',
+      memoryScope: 'project:$projectId',
+      projectUri: 'project://$projectId',
+      linkedFoldersUri: 'project://$projectId/linked-folders',
+    );
   }
 
   String _label(String mode) {

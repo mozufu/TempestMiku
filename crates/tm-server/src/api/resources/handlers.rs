@@ -67,7 +67,35 @@ where
     let session = state.store.get_session(session_id).await?;
     super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
         .await?;
-    let project = super::util::authorized_project_id(&session, query.project.as_deref())?;
+    // §30: drive is Miku's playground, not a project's folder. The feed is scope-relative: a
+    // project scope shows that project's shelf; global scope shows the unprojected playground.
+    // A project filter is only honored inside its own project scope (the object-capability
+    // boundary: global sessions never reach projected content).
+    let project = match session
+        .memory_scope
+        .strip_prefix("project:")
+        .filter(|value| !value.is_empty())
+    {
+        Some(id) => {
+            if query
+                .project
+                .as_deref()
+                .is_some_and(|requested| requested != id)
+            {
+                return Err(ServerError::NotFound(format!(
+                    "project {}",
+                    query.project.as_deref().unwrap_or_default()
+                )));
+            }
+            Some(id.to_string())
+        }
+        None => {
+            if let Some(requested) = query.project.as_deref() {
+                return Err(ServerError::NotFound(format!("project {requested}")));
+            }
+            None
+        }
+    };
     let store = state
         .drive_store
         .as_ref()
@@ -75,7 +103,8 @@ where
     let limit = query.limit.unwrap_or(20).clamp(1, 100);
     let recent = store
         .search(tm_drive::DriveSearchOptions {
-            project: Some(project.clone()),
+            project: project.clone(),
+            unprojected: project.is_none(),
             limit,
             return_snippets: true,
             ..tm_drive::DriveSearchOptions::default()
@@ -97,19 +126,28 @@ where
             })
         })
         .collect::<Vec<_>>();
-    let project_path_prefix = format!("projects/{}/", tm_drive::slug(&project));
+    // Projected proposals live under `projects/<slug>/`; the global playground shows the rest.
+    let project_path_prefix = project
+        .as_ref()
+        .map(|id| format!("projects/{}/", tm_drive::slug(id)));
     let proposals = store
         .proposals()
         .await
         .map_err(|err| ServerError::Store(err.to_string()))?
         .into_iter()
+        .filter(|proposal| proposal.status == tm_drive::ProposalStatus::Pending)
         .filter(|proposal| {
-            proposal.status == tm_drive::ProposalStatus::Pending
-                && (proposal.source_path.starts_with(&project_path_prefix)
+            let touches_project = |prefix: &str| {
+                proposal.source_path.starts_with(prefix)
                     || proposal
                         .proposed_path
                         .as_deref()
-                        .is_some_and(|path| path.starts_with(&project_path_prefix)))
+                        .is_some_and(|path| path.starts_with(prefix))
+            };
+            match &project_path_prefix {
+                Some(prefix) => touches_project(prefix),
+                None => !touches_project("projects/"),
+            }
         })
         .collect::<Vec<_>>();
     Ok(Json(json!({

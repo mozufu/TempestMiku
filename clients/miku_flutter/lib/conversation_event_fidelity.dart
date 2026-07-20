@@ -857,7 +857,13 @@ String _terminalActivityLabel(String type, _ActivityPhase phase) =>
 _ActivityPhase _runtimeTerminalPhase(MikuEvent event) {
   final status = _eventStatus(event);
   if (status.isEmpty ||
-      const {'completed', 'done', 'succeeded', 'success', 'ok'}.contains(status)) {
+      const {
+        'completed',
+        'done',
+        'succeeded',
+        'success',
+        'ok',
+      }.contains(status)) {
     return _ActivityPhase.completed;
   }
   if (const {'cancelled', 'canceled', 'denied'}.contains(status)) {
@@ -876,7 +882,13 @@ String _runtimeTerminalLabel(String type, _ActivityPhase phase) {
 }
 
 _ActivityPhase _mcpInvocationTerminalPhase(String status) {
-  if (const {'completed', 'done', 'succeeded', 'success', 'ok'}.contains(status)) {
+  if (const {
+    'completed',
+    'done',
+    'succeeded',
+    'success',
+    'ok',
+  }.contains(status)) {
     return _ActivityPhase.completed;
   }
   if (const {'denied', 'cancelled', 'canceled'}.contains(status)) {

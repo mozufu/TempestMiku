@@ -11,6 +11,30 @@ extension _NativeDriveClient on NativeMikuSessionClient {
         .toList();
   }
 
+  Future<ProjectCatalogEntry> _createProjectImpl(
+    String id,
+    String? title,
+  ) async {
+    final json = await _request(
+      'POST',
+      '/projects',
+      body: {'id': id, if (title != null) 'title': title},
+    );
+    return ProjectCatalogEntry.fromJson(json);
+  }
+
+  Future<ProjectCatalogEntry> _archiveProjectImpl(
+    String projectId,
+    String? reason,
+  ) async {
+    final json = await _request(
+      'POST',
+      '/projects/$projectId/archive',
+      body: reason == null ? const {} : {'reason': reason},
+    );
+    return ProjectCatalogEntry.fromJson(json);
+  }
+
   Future<String> _setSessionScopeImpl(String sessionId, String scope) async {
     final json = await _request(
       'POST',

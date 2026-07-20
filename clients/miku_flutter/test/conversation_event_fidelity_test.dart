@@ -176,10 +176,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(
-        of: failedCell,
-        matching: find.text('安全工作環境執行未完成'),
-      ),
+      find.descendant(of: failedCell, matching: find.text('安全工作環境執行未完成')),
       findsOneWidget,
     );
 
@@ -223,14 +220,14 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(
-        of: deniedMcp,
-        matching: find.text('外部資源查詢已拒絕或取消'),
-      ),
+      find.descendant(of: deniedMcp, matching: find.text('外部資源查詢已拒絕或取消')),
       findsOneWidget,
     );
     expect(
-      find.descendant(of: deniedMcp, matching: find.byIcon(Icons.check_rounded)),
+      find.descendant(
+        of: deniedMcp,
+        matching: find.byIcon(Icons.check_rounded),
+      ),
       findsNothing,
     );
   });

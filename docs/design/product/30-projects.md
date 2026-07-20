@@ -124,7 +124,9 @@ The two revocation axes are independent, and each fails closed on its own trigge
 4. Session-assignment endpoints; the promote endpoint and `importResourcesToDrive` removed;
    observation catch-up for closed sessions.
 5. Drive: validated project references, new filing conventions, unknown-project proposal flow.
-6. Flutter: the picker lists entities; the promote UI is replaced by assignment plus batch filing.
+6. Flutter: the entity picker and dedicated Project/Drive/History pages replace drawer expansion;
+   active sessions select scope, closed sessions expose assignment, and Drive presents the
+   scope-relative playground without treating a linked folder as the project itself.
 
 Every migration step preserves the established drive/memory acceptance boundaries or amends them
 explicitly in the same change.

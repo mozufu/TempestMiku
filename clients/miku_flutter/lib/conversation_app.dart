@@ -1,29 +1,91 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import 'asr/local_asr_engine.dart';
+import 'asr/local_asr_model.dart';
 import 'conversation_screen.dart';
+import 'notification_service.dart';
 import 'session_models.dart';
+import 'share_import_service.dart';
+import 'theme_mode_controller.dart';
+import 'voice_capture_service.dart';
 
-class TempestMikuApp extends StatelessWidget {
+class TempestMikuApp extends StatefulWidget {
   const TempestMikuApp({
     required this.client,
-    this.themeMode = ThemeMode.system,
+    this.themeMode,
+    this.themeModeController,
     this.now,
+    this.shareImports,
+    this.voiceCapture,
+    this.localAsrWorkers,
+    this.localAsrModels,
+    this.notifications,
+    this.voiceInferenceTimeout = const Duration(seconds: 45),
     super.key,
   });
 
   final MikuSessionClient client;
-  final ThemeMode themeMode;
+  final ThemeMode? themeMode;
+  final MikuThemeModeController? themeModeController;
   final DateTime Function()? now;
+  final MikuShareImportService? shareImports;
+  final MikuVoiceCaptureService? voiceCapture;
+  final LocalAsrWorkerFactory? localAsrWorkers;
+  final LocalAsrModelManager? localAsrModels;
+  final MikuNotificationService? notifications;
+  final Duration voiceInferenceTimeout;
+
+  @override
+  State<TempestMikuApp> createState() => _TempestMikuAppState();
+}
+
+class _TempestMikuAppState extends State<TempestMikuApp> {
+  late final bool _ownsThemeModeController = widget.themeModeController == null;
+  late final MikuThemeModeController _themeModeController =
+      widget.themeModeController ??
+      MikuThemeModeController(
+        initialMode: widget.themeMode ?? ThemeMode.system,
+      );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.themeMode == null) {
+      unawaited(_themeModeController.load());
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_ownsThemeModeController) _themeModeController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'TempestMiku',
-      debugShowCheckedModeBanner: false,
-      themeMode: themeMode,
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
-      home: ConversationScreen(client: client, now: now),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: _themeModeController,
+      builder:
+          (context, themeMode, _) => MaterialApp(
+            title: 'TempestMiku',
+            debugShowCheckedModeBanner: false,
+            themeMode: themeMode,
+            theme: _theme(Brightness.light),
+            darkTheme: _theme(Brightness.dark),
+            home: ConversationScreen(
+              client: widget.client,
+              themeModeController: _themeModeController,
+              now: widget.now,
+              shareImports: widget.shareImports,
+              voiceCapture: widget.voiceCapture,
+              localAsrWorkers: widget.localAsrWorkers,
+              localAsrModels: widget.localAsrModels,
+              notifications: widget.notifications,
+              voiceInferenceTimeout: widget.voiceInferenceTimeout,
+            ),
+          ),
     );
   }
 }

@@ -14,7 +14,9 @@ part 'session_client_io/auth.dart';
 part 'session_client_io/credentials.dart';
 part 'session_client_io/drive.dart';
 part 'session_client_io/events.dart';
+part 'session_client_io/proposals.dart';
 part 'session_client_io/sessions.dart';
+part 'session_client_io/settings.dart';
 part 'session_client_io/transport.dart';
 part 'session_client_io/voice_asr.dart';
 
@@ -24,6 +26,7 @@ class NativeMikuSessionClient
     implements
         MikuSessionClient,
         ServerTargetClient,
+        CurrentAuthDeviceClient,
         PushRegistrationClient,
         NotificationReplyAuthorityClient {
   NativeMikuSessionClient({
@@ -61,6 +64,9 @@ class NativeMikuSessionClient
   Future<String> serverBaseUrl() => _serverBaseUrlImpl();
 
   @override
+  Future<ServerReadiness> serverReadiness() => _serverReadinessImpl();
+
+  @override
   Future<void> setServerBaseUrl(String baseUrl) =>
       _setServerBaseUrlImpl(baseUrl);
 
@@ -72,6 +78,22 @@ class NativeMikuSessionClient
   Future<void> logout() => _logoutImpl();
 
   @override
+  Future<String?> currentAuthDeviceId() => _currentAuthDeviceIdImpl();
+
+  @override
+  Future<ServerDiagnostics> serverDiagnostics() => _serverDiagnosticsImpl();
+
+  @override
+  Future<List<AuthDevice>> authDevices() => _authDevicesImpl();
+
+  @override
+  Future<PairingCode> createPairingCode() => _createPairingCodeImpl();
+
+  @override
+  Future<void> revokeAuthDevice(String deviceId) =>
+      _revokeAuthDeviceImpl(deviceId);
+
+  @override
   Future<bool> hasDeviceCredential() => _hasDeviceCredentialImpl();
 
   @override
@@ -79,7 +101,7 @@ class NativeMikuSessionClient
       _notificationReplyAuthorityImpl();
 
   @override
-  Future<void> registerPush({
+  Future<PushRegistrationMetadata> registerPush({
     required String endpoint,
     required String p256dh,
     required String auth,
@@ -118,6 +140,9 @@ class NativeMikuSessionClient
   Future<MikuSession> createSession() => _createSessionImpl();
 
   @override
+  Future<void> endSession(String sessionId) => _endSessionImpl(sessionId);
+
+  @override
   Future<List<SessionSummary>> listSessions({int limit = 30}) =>
       _listSessionsImpl(limit: limit);
 
@@ -141,11 +166,52 @@ class NativeMikuSessionClient
       _rememberLastEventIdImpl(sessionId, lastEventId);
 
   @override
-  Future<void> sendMessage(
+  Future<TurnReceipt> sendMessage(
     String sessionId,
     String content, {
     required String clientMessageId,
   }) => _sendMessageImpl(sessionId, content, clientMessageId: clientMessageId);
+
+  @override
+  Future<SessionTurn> getTurn(String sessionId, String turnId) =>
+      _getTurnImpl(sessionId, turnId);
+
+  @override
+  Future<MemoryWriteProposalResult> proposeMemoryWrite(
+    String sessionId,
+    MemoryWriteProposalRequest request,
+  ) => _proposeMemoryWriteImpl(sessionId, request);
+
+  @override
+  Future<EvolutionReviewProposalResult> proposeEvolutionReview(
+    String sessionId,
+    EvolutionReviewProposalRequest request,
+  ) => _proposeEvolutionReviewImpl(sessionId, request);
+
+  @override
+  Future<ModeAddendumRollbackResult> proposeModeAddendumRollback(
+    String sessionId,
+    String modeId,
+    AddendumRollbackRequest request,
+  ) => _proposeModeAddendumRollbackImpl(sessionId, modeId, request);
+
+  @override
+  Future<PersonaAddendumRollbackResult> proposePersonaAddendumRollback(
+    String sessionId,
+    String personaId,
+    AddendumRollbackRequest request,
+  ) => _proposePersonaAddendumRollbackImpl(sessionId, personaId, request);
+
+  @override
+  Future<SkillRollbackResult> proposeSkillRollback(
+    String sessionId,
+    String skillName,
+    SkillRollbackRequest request,
+  ) => _proposeSkillRollbackImpl(sessionId, skillName, request);
+
+  @override
+  Future<ApprovalDetails> getApproval(String sessionId, String approvalId) =>
+      _getApprovalImpl(sessionId, approvalId);
 
   @override
   Future<void> resolveApproval(
@@ -183,8 +249,11 @@ class NativeMikuSessionClient
       _previewResourceImpl(sessionId, uri);
 
   @override
-  Future<ResourcePreview> resolveResource(String sessionId, String uri) =>
-      _resolveResourceImpl(sessionId, uri);
+  Future<ResourcePreview> resolveResource(
+    String sessionId,
+    String uri, {
+    String? selector,
+  }) => _resolveResourceImpl(sessionId, uri, selector: selector);
 
   @override
   Future<List<MikuResourceEntry>> listResources(String sessionId, String uri) =>

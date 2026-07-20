@@ -1,10 +1,71 @@
 part of '../session_models.dart';
 
 class ProjectOverview {
-  const ProjectOverview({required this.status, required this.nextActions});
+  const ProjectOverview({
+    required this.status,
+    required this.nextActions,
+    this.projectId = '',
+    this.projectUri = '',
+    this.openLoops = const [],
+    this.decisions = const [],
+    this.resources = const [],
+  });
 
   final String status;
   final List<String> nextActions;
+  final String projectId;
+  final String projectUri;
+  final List<ProjectItem> openLoops;
+  final List<ProjectItem> decisions;
+  final List<ProjectItem> resources;
+
+  static ProjectOverview fromJson(Map<String, Object?> json) {
+    List<ProjectItem> items(String key) =>
+        _mapList(json[key]).map(ProjectItem.fromJson).toList();
+    final nextActionItems = items('nextActions');
+    return ProjectOverview(
+      projectId: _stringValue(json['projectId']),
+      projectUri: _stringValue(json['projectUri']),
+      status: _stringValue(json['status']),
+      openLoops: items('openLoops'),
+      decisions: items('decisions'),
+      nextActions:
+          nextActionItems
+              .map((item) => item.text)
+              .where((text) => text.isNotEmpty)
+              .toList(),
+      resources: items('resources'),
+    );
+  }
+}
+
+class ProjectItem {
+  const ProjectItem({
+    required this.id,
+    required this.kind,
+    required this.text,
+    required this.targetUri,
+    this.sourceUri,
+    this.createdAt,
+  });
+
+  final String id;
+  final String kind;
+  final String text;
+  final String targetUri;
+  final String? sourceUri;
+  final String? createdAt;
+
+  static ProjectItem fromJson(Map<String, Object?> json) {
+    return ProjectItem(
+      id: _stringValue(json['id']),
+      kind: _stringValue(json['kind']),
+      text: _stringValue(json['text']),
+      targetUri: _stringValue(json['targetUri']),
+      sourceUri: _nullableString(json['sourceUri']),
+      createdAt: _nullableString(json['createdAt']),
+    );
+  }
 }
 
 class ResourcePreview {
@@ -16,6 +77,7 @@ class ResourcePreview {
     required this.preview,
     required this.hasMore,
     this.content = '',
+    this.selector,
     this.title,
   });
 
@@ -26,6 +88,7 @@ class ResourcePreview {
   final int sizeBytes;
   final String preview;
   final String content;
+  final String? selector;
   final bool hasMore;
 }
 

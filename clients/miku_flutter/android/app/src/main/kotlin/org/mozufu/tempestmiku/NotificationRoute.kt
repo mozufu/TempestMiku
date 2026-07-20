@@ -25,6 +25,9 @@ internal data class NotificationRoute(
 ) {
     val clientMessageId: String get() = "notification-$deliveryId"
     val notificationId: Int get() = deliveryId.hashCode()
+    val routeDedupeKey: String get() = "route:$deliveryId"
+
+    fun decisionDedupeKey(decision: String): String = "decision:$deliveryId:$decision"
 }
 
 internal object NotificationRouteParser {

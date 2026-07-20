@@ -26,6 +26,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
@@ -33,7 +34,33 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-internal data class InlineReplyAuthority(val serverBaseUrl: String, val token: String)
+internal data class InlineReplyAuthority(
+    val serverBaseUrl: String,
+    val token: String,
+    val authorityId: String,
+)
+
+internal object InlineReplyAuthorityIdentity {
+    private val canonicalPattern = Regex("^[0-9a-f]{64}$")
+
+    fun derive(serverBaseUrl: String, token: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("$serverBaseUrl\n$token".toByteArray(StandardCharsets.UTF_8))
+        return digest.joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
+
+    fun matches(expectedAuthorityId: String?, current: InlineReplyAuthority?): Boolean {
+        if (
+            expectedAuthorityId == null ||
+            !canonicalPattern.matches(expectedAuthorityId) ||
+            current == null
+        ) return false
+        return MessageDigest.isEqual(
+            expectedAuthorityId.toByteArray(StandardCharsets.US_ASCII),
+            current.authorityId.toByteArray(StandardCharsets.US_ASCII),
+        )
+    }
+}
 
 internal object InlineReplySecretStore {
     private const val KEY_ALIAS = "tempestmiku.inlineReply.v1"
@@ -69,7 +96,11 @@ internal object InlineReplySecretStore {
             val serverBaseUrl = validateServerBaseUrl(value.optString("serverBaseUrl")) ?: return null
             val token = value.optString("token")
             if (!token.startsWith("tmk_dev_") || token.length > 512) return null
-            InlineReplyAuthority(serverBaseUrl, token)
+            InlineReplyAuthority(
+                serverBaseUrl,
+                token,
+                InlineReplyAuthorityIdentity.derive(serverBaseUrl, token),
+            )
         } catch (_: Exception) {
             null
         }
@@ -136,6 +167,14 @@ internal object InlineReplySecretStore {
     }
 }
 
+internal object InlineReplyWork {
+    const val TAG = "tempestmiku-inline-reply"
+
+    fun cancelPending(context: Context) {
+        WorkManager.getInstance(context).cancelAllWorkByTag(TAG)
+    }
+}
+
 class InlineReplyReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val route = NotificationIntentData.route(intent) ?: return
@@ -150,13 +189,15 @@ class InlineReplyReceiver : BroadcastReceiver() {
             InlineReplyFeedback.failed(context, route, "Reply not sent: this notification expired.")
             return
         }
-        if (InlineReplySecretStore.readAuthority(context) == null) {
+        val authority = InlineReplySecretStore.readAuthority(context)
+        if (authority == null) {
             InlineReplyFeedback.failed(context, route, "Reply not sent: pair this device again.")
             return
         }
         val payload = JSONObject()
             .put("route", NotificationIntentData.toJson(route))
             .put("text", text)
+            .put("authorityId", authority.authorityId)
             .toString()
         val encrypted = try {
             InlineReplySecretStore.encryptWork(payload)
@@ -174,7 +215,7 @@ class InlineReplyReceiver : BroadcastReceiver() {
                 10,
                 TimeUnit.SECONDS,
             )
-            .addTag("tempestmiku-inline-reply")
+            .addTag(InlineReplyWork.TAG)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             "tempestmiku-inline-reply-${route.deliveryId}",
@@ -199,6 +240,9 @@ class InlineReplyWorker(context: Context, parameters: WorkerParameters) : Worker
         if (Instant.now() >= route.expiresAt) return terminal(route, "Reply not sent: this notification expired.")
         val authority = InlineReplySecretStore.readAuthority(applicationContext)
             ?: return terminal(route, "Reply not sent: pair this device again.")
+        if (!InlineReplyAuthorityIdentity.matches(decoded.optString("authorityId"), authority)) {
+            return terminal(route, "Reply not sent: pairing changed after this reply was queued.")
+        }
         val body = JSONObject()
             .put("clientMessageId", route.clientMessageId)
             .put("content", text)

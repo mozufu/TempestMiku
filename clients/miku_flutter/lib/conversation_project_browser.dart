@@ -12,6 +12,7 @@ class _ProjectBrowserModel {
     required this.projects,
     required this.activeProjectId,
     required this.switchingProjectId,
+    required this.switchingToGlobal,
     required this.previewingResourceUri,
     required this.path,
     required this.entries,
@@ -23,6 +24,7 @@ class _ProjectBrowserModel {
   final List<ProjectCatalogEntry>? projects;
   final String? activeProjectId;
   final String? switchingProjectId;
+  final bool switchingToGlobal;
   final String? previewingResourceUri;
   final List<_ProjectBrowserLocation> path;
   final List<MikuResourceEntry>? entries;
@@ -38,9 +40,12 @@ class _ProjectBrowserView extends StatelessWidget {
     required this.sessionEnded,
     required this.onRetryCatalog,
     required this.onRetryBrowser,
+    required this.onSelectGlobalScope,
     required this.onSelectProject,
     required this.onOpenEntry,
     required this.onUp,
+    required this.promoting,
+    required this.onPromote,
   });
 
   final _ProjectBrowserModel model;
@@ -48,9 +53,12 @@ class _ProjectBrowserView extends StatelessWidget {
   final bool sessionEnded;
   final VoidCallback onRetryCatalog;
   final VoidCallback onRetryBrowser;
+  final VoidCallback onSelectGlobalScope;
   final ValueChanged<ProjectCatalogEntry> onSelectProject;
   final ValueChanged<MikuResourceEntry> onOpenEntry;
   final VoidCallback onUp;
+  final bool promoting;
+  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -62,17 +70,16 @@ class _ProjectBrowserView extends StatelessWidget {
       return _DrawerErrorState(error: model.error!, onRetry: onRetryCatalog);
     }
     if (projects == null) return const SizedBox.shrink();
-    if (projects.isEmpty) {
-      return const _DrawerEmptyState(text: '尚未連結任何 Project。');
-    }
     if (model.path.isEmpty) {
       return _ProjectCatalogList(
         projects: projects,
         activeProjectId: model.activeProjectId,
         switchingProjectId: model.switchingProjectId,
+        switchingToGlobal: model.switchingToGlobal,
         sessionEnded: sessionEnded,
         error: model.error,
         onRetry: onRetryCatalog,
+        onSelectGlobalScope: onSelectGlobalScope,
         onSelect: onSelectProject,
       );
     }
@@ -82,6 +89,8 @@ class _ProjectBrowserView extends StatelessWidget {
       onRetry: onRetryBrowser,
       onOpenEntry: onOpenEntry,
       onUp: onUp,
+      promoting: promoting,
+      onPromote: onPromote,
     );
   }
 }
@@ -91,18 +100,22 @@ class _ProjectCatalogList extends StatelessWidget {
     required this.projects,
     required this.activeProjectId,
     required this.switchingProjectId,
+    required this.switchingToGlobal,
     required this.sessionEnded,
     required this.error,
     required this.onRetry,
+    required this.onSelectGlobalScope,
     required this.onSelect,
   });
 
   final List<ProjectCatalogEntry> projects;
   final String? activeProjectId;
   final String? switchingProjectId;
+  final bool switchingToGlobal;
   final bool sessionEnded;
   final String? error;
   final VoidCallback onRetry;
+  final VoidCallback onSelectGlobalScope;
   final ValueChanged<ProjectCatalogEntry> onSelect;
 
   @override
@@ -113,6 +126,47 @@ class _ProjectCatalogList extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (error != null) _DrawerErrorState(error: error!, onRetry: onRetry),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Semantics(
+            button: true,
+            selected: activeProjectId == null,
+            label:
+                'Global 範圍${activeProjectId == null ? '，目前使用中' : '，不綁定 Project'}',
+            child: ListTile(
+              key: const Key('project-global-scope'),
+              minTileHeight: 52,
+              dense: true,
+              selected: activeProjectId == null,
+              selectedTileColor: palette.miku.withValues(alpha: 0.10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              leading: const Icon(Icons.public_rounded, size: 21),
+              title: const Text('Global'),
+              subtitle: Text(
+                activeProjectId == null ? '目前對話' : '不綁定 Project 記憶',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing:
+                  switchingToGlobal
+                      ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : activeProjectId == null
+                      ? Icon(Icons.check_rounded, size: 18, color: palette.miku)
+                      : const Icon(Icons.chevron_right_rounded, size: 20),
+              enabled:
+                  switchingProjectId == null &&
+                  !switchingToGlobal &&
+                  (!sessionEnded || activeProjectId == null),
+              onTap: onSelectGlobalScope,
+            ),
+          ),
+        ),
+        if (projects.isEmpty) const _DrawerEmptyState(text: '尚未連結任何 Project。'),
         for (final project in projects)
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
@@ -160,6 +214,7 @@ class _ProjectCatalogList extends StatelessWidget {
                         : const Icon(Icons.chevron_right_rounded, size: 20),
                 enabled:
                     switchingProjectId == null &&
+                    !switchingToGlobal &&
                     (!sessionEnded || project.id == activeProjectId),
                 onTap: () => onSelect(project),
               ),
@@ -177,6 +232,8 @@ class _ProjectDirectoryView extends StatelessWidget {
     required this.onRetry,
     required this.onOpenEntry,
     required this.onUp,
+    required this.promoting,
+    required this.onPromote,
   });
 
   final _ProjectBrowserModel model;
@@ -184,6 +241,8 @@ class _ProjectDirectoryView extends StatelessWidget {
   final VoidCallback onRetry;
   final ValueChanged<MikuResourceEntry> onOpenEntry;
   final VoidCallback onUp;
+  final bool promoting;
+  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -229,7 +288,11 @@ class _ProjectDirectoryView extends StatelessWidget {
           ),
           Divider(height: 1, color: palette.outline),
           if (model.path.length == 1 && overview != null)
-            _ProjectOverviewSummary(overview: overview!),
+            _ProjectOverviewSummary(
+              overview: overview!,
+              promoting: promoting,
+              onPromote: onPromote,
+            ),
           if (model.error != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 6, 6, 2),
@@ -258,9 +321,15 @@ class _ProjectDirectoryView extends StatelessWidget {
 }
 
 class _ProjectOverviewSummary extends StatelessWidget {
-  const _ProjectOverviewSummary({required this.overview});
+  const _ProjectOverviewSummary({
+    required this.overview,
+    required this.promoting,
+    required this.onPromote,
+  });
 
   final ProjectOverview overview;
+  final bool promoting;
+  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -291,8 +360,82 @@ class _ProjectOverviewSummary extends StatelessWidget {
                 ),
               ),
           ],
+          if (overview.openLoops.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _ProjectItemGroup(
+              label: 'Open loops',
+              icon: Icons.pending_actions_outlined,
+              items: overview.openLoops,
+            ),
+          ],
+          if (overview.decisions.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _ProjectItemGroup(
+              label: 'Decisions',
+              icon: Icons.rule_rounded,
+              items: overview.decisions,
+            ),
+          ],
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            key: const Key('promote-session'),
+            onPressed: promoting ? null : onPromote,
+            icon:
+                promoting
+                    ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                    : const Icon(Icons.playlist_add_check_rounded, size: 18),
+            label: const Text('整理這段對話'),
+          ),
         ],
       ),
+    );
+  }
+}
+
+class _ProjectItemGroup extends StatelessWidget {
+  const _ProjectItemGroup({
+    required this.label,
+    required this.icon,
+    required this.items,
+  });
+
+  final String label;
+  final IconData icon;
+  final List<ProjectItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 16, color: palette.muted),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: palette.muted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        for (final item in items.take(3))
+          Padding(
+            padding: const EdgeInsets.only(top: 3, left: 22),
+            child: Text(
+              item.text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+      ],
     );
   }
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:web/web.dart' as web;
 
 import 'session_models.dart';
@@ -14,9 +15,170 @@ class _AmbiguousWebTransportFailure implements Exception {
   const _AmbiguousWebTransportFailure();
 }
 
-class WebMikuSessionClient implements MikuSessionClient {
+class WebMikuSessionClient
+    implements MikuSessionClient, ServerTargetClient, CurrentAuthDeviceClient {
+  WebMikuSessionClient({this.pairRequestForTesting});
+
   static const _sessionIdKey = 'tempestmiku.sessionId';
   static const _lastEventIdKey = 'tempestmiku.lastEventId';
+  static const _currentDeviceIdKey = 'tempestmiku.currentAuthDeviceId';
+  static const _currentDeviceOriginKey = 'tempestmiku.currentAuthDeviceOrigin';
+
+  @visibleForTesting
+  final Future<Map<String, Object?>> Function(MikuPairingTarget target)?
+  pairRequestForTesting;
+
+  @override
+  String pairingDeviceName() => 'TempestMiku web';
+
+  @override
+  Future<String> serverBaseUrl() async => web.window.location.origin;
+
+  @override
+  Future<void> setServerBaseUrl(String baseUrl) async {
+    final normalized = normalizeMikuServerBaseUrl(baseUrl);
+    if (normalized != web.window.location.origin) {
+      throw UnsupportedError(
+        'the Web client can pair only with its current server origin',
+      );
+    }
+  }
+
+  @override
+  Future<void> pairWithCode(MikuPairingTarget target) async {
+    await setServerBaseUrl(target.serverBaseUrl);
+    late final PairedAuthDeviceIdentity identity;
+    try {
+      final requestOverride = pairRequestForTesting;
+      final json =
+          requestOverride == null
+              ? await _request(
+                'POST',
+                '/auth/pair',
+                body: {
+                  'code': target.code,
+                  'deviceName': pairingDeviceName(),
+                  'platform': 'web',
+                },
+              )
+              : await requestOverride(target);
+      identity = PairedAuthDeviceIdentity.fromPairResponse(
+        json,
+        serverBaseUrl: target.serverBaseUrl,
+      );
+    } on StateError {
+      // `_request` uses StateError for a definitive non-2xx response. The
+      // server does not rotate the auth cookie on a rejected pairing code, so
+      // retain the still-valid local marker for the existing authority.
+      rethrow;
+    } catch (_) {
+      // A successful HTTP response may already have rotated the HttpOnly
+      // cookie even when its body cannot be decoded. Never associate that
+      // unknown authority with the previously paired device row.
+      _forgetCurrentAuthDevice();
+      rethrow;
+    }
+    web.window.localStorage.removeItem(_sessionIdKey);
+    web.window.localStorage.removeItem(_lastEventIdKey);
+    _rememberCurrentAuthDevice(identity);
+  }
+
+  @override
+  Future<ServerDiagnostics> serverDiagnostics() async {
+    final json = await _request('GET', '/metrics');
+    return ServerDiagnostics.fromJson(json, baseUrl: await serverBaseUrl());
+  }
+
+  @override
+  Future<ServerReadiness> serverReadiness() async {
+    late final web.Response response;
+    try {
+      response = await _fetch(
+        'GET',
+        '/ready',
+        headers: const {'accept': 'application/json'},
+      );
+    } catch (_) {
+      throw const _AmbiguousWebTransportFailure();
+    }
+    final status = response.status;
+    if (status == 0) throw const _AmbiguousWebTransportFailure();
+    final text = await _responseText(response);
+    if (status != 200 && status != 503) {
+      throw StateError('request failed: $status $text');
+    }
+    if (text.isEmpty) {
+      throw const FormatException('server readiness response was empty');
+    }
+    final decoded = jsonDecode(text);
+    if (decoded is! Map) {
+      throw const FormatException(
+        'server returned a non-object readiness response',
+      );
+    }
+    return ServerReadiness.fromJson(decoded.cast<String, Object?>());
+  }
+
+  @override
+  Future<List<AuthDevice>> authDevices() async {
+    final json = await _request('GET', '/auth/devices');
+    return ((json['devices'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((item) => AuthDevice.fromJson(item.cast<String, Object?>()))
+        .toList();
+  }
+
+  @override
+  Future<PairingCode> createPairingCode() async {
+    final json = await _request('POST', '/auth/pairing-codes');
+    return PairingCode.fromJson(json);
+  }
+
+  @override
+  Future<void> revokeAuthDevice(String deviceId) async {
+    await _request('DELETE', '/auth/devices/$deviceId');
+  }
+
+  @override
+  Future<void> logout() async {
+    try {
+      await _request('POST', '/auth/logout');
+    } finally {
+      web.window.localStorage.removeItem(_sessionIdKey);
+      web.window.localStorage.removeItem(_lastEventIdKey);
+      _forgetCurrentAuthDevice();
+    }
+  }
+
+  @override
+  Future<String?> currentAuthDeviceId() async {
+    final identity = PairedAuthDeviceIdentity.fromStored(
+      serverBaseUrl: web.window.localStorage.getItem(_currentDeviceOriginKey),
+      deviceId: web.window.localStorage.getItem(_currentDeviceIdKey),
+    );
+    if (identity == null ||
+        !identity.matchesServer(web.window.location.origin)) {
+      _forgetCurrentAuthDevice();
+      return null;
+    }
+    return identity.deviceId;
+  }
+
+  void _rememberCurrentAuthDevice(PairedAuthDeviceIdentity identity) {
+    // The id is the publication point. A crash after writing only the origin
+    // leaves the identity unknown instead of associating an old id with it.
+    web.window.localStorage.removeItem(_currentDeviceIdKey);
+    web.window.localStorage.setItem(
+      _currentDeviceOriginKey,
+      identity.serverBaseUrl,
+    );
+    web.window.localStorage.setItem(_currentDeviceIdKey, identity.deviceId);
+  }
+
+  void _forgetCurrentAuthDevice() {
+    web.window.localStorage.removeItem(_currentDeviceIdKey);
+    web.window.localStorage.removeItem(_currentDeviceOriginKey);
+  }
 
   @override
   Future<VoiceAsrEngineCatalog> voiceAsrEngines() async {
@@ -109,6 +271,11 @@ class WebMikuSessionClient implements MikuSessionClient {
     final session = _sessionFromJson(json);
     _rememberSession(session);
     return session;
+  }
+
+  @override
+  Future<void> endSession(String sessionId) async {
+    await _request('POST', '/sessions/$sessionId/end');
   }
 
   @override
@@ -330,22 +497,112 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   @override
-  Future<void> sendMessage(
+  Future<TurnReceipt> sendMessage(
     String sessionId,
     String content, {
     required String clientMessageId,
-  }) async {
-    await sendIdempotentMessageWithRetry(
+  }) {
+    return sendIdempotentMessageWithRetry<TurnReceipt>(
       clientMessageId: clientMessageId,
       isAmbiguousFailure: (error) => error is _AmbiguousWebTransportFailure,
       send: (stableClientMessageId) async {
-        await _request(
+        final json = await _request(
           'POST',
           '/sessions/$sessionId/messages',
           body: {'clientMessageId': stableClientMessageId, 'content': content},
         );
+        return TurnReceipt.fromJson(json);
       },
     );
+  }
+
+  @override
+  Future<SessionTurn> getTurn(String sessionId, String turnId) async {
+    final json = await _request('GET', '/sessions/$sessionId/turns/$turnId');
+    return SessionTurn.fromJson(json);
+  }
+
+  @override
+  Future<MemoryWriteProposalResult> proposeMemoryWrite(
+    String sessionId,
+    MemoryWriteProposalRequest request,
+  ) async {
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/memory/proposals',
+      body: request.toJson(),
+    );
+    return MemoryWriteProposalResult.fromJson(json);
+  }
+
+  @override
+  Future<EvolutionReviewProposalResult> proposeEvolutionReview(
+    String sessionId,
+    EvolutionReviewProposalRequest request,
+  ) async {
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/evolution/review-proposals',
+      body: request.toJson(),
+    );
+    return EvolutionReviewProposalResult.fromJson(json);
+  }
+
+  @override
+  Future<ModeAddendumRollbackResult> proposeModeAddendumRollback(
+    String sessionId,
+    String modeId,
+    AddendumRollbackRequest request,
+  ) async {
+    final name = Uri.encodeComponent(modeId);
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/evolution/modes/$name/rollback',
+      body: request.toJson(),
+    );
+    return ModeAddendumRollbackResult.fromJson(json);
+  }
+
+  @override
+  Future<PersonaAddendumRollbackResult> proposePersonaAddendumRollback(
+    String sessionId,
+    String personaId,
+    AddendumRollbackRequest request,
+  ) async {
+    final name = Uri.encodeComponent(personaId);
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/evolution/personas/$name/rollback',
+      body: request.toJson(),
+    );
+    return PersonaAddendumRollbackResult.fromJson(json);
+  }
+
+  @override
+  Future<SkillRollbackResult> proposeSkillRollback(
+    String sessionId,
+    String skillName,
+    SkillRollbackRequest request,
+  ) async {
+    final name = Uri.encodeComponent(skillName);
+    final json = await _request(
+      'POST',
+      '/sessions/$sessionId/evolution/skills/$name/rollback',
+      body: request.toJson(),
+    );
+    return SkillRollbackResult.fromJson(json);
+  }
+
+  @override
+  Future<ApprovalDetails> getApproval(
+    String sessionId,
+    String approvalId,
+  ) async {
+    final json = await _request(
+      'GET',
+      '/sessions/$sessionId/approvals/$approvalId',
+    );
+    return ApprovalDetails.fromJson(json);
   }
 
   @override
@@ -392,15 +649,7 @@ class WebMikuSessionClient implements MikuSessionClient {
   @override
   Future<ProjectOverview> projectOverview(String sessionId) async {
     final json = await _request('GET', '/sessions/$sessionId/project');
-    return ProjectOverview(
-      status: json['status'] as String? ?? '',
-      nextActions:
-          ((json['nextActions'] as List?) ?? const [])
-              .whereType<Map>()
-              .map((item) => item['text'] as String? ?? '')
-              .where((text) => text.isNotEmpty)
-              .toList(),
-    );
+    return ProjectOverview.fromJson(json);
   }
 
   @override
@@ -436,8 +685,18 @@ class WebMikuSessionClient implements MikuSessionClient {
   }
 
   @override
-  Future<ResourcePreview> resolveResource(String sessionId, String uri) async {
-    final query = Uri(queryParameters: {'uri': uri}).query;
+  Future<ResourcePreview> resolveResource(
+    String sessionId,
+    String uri, {
+    String? selector,
+  }) async {
+    final query =
+        Uri(
+          queryParameters: {
+            'uri': uri,
+            if (selector != null) 'selector': selector,
+          },
+        ).query;
     final json = await _request(
       'GET',
       '/sessions/$sessionId/resources/resolve?$query',
@@ -473,6 +732,7 @@ class WebMikuSessionClient implements MikuSessionClient {
       sizeBytes: json['size_bytes'] as int? ?? json['sizeBytes'] as int? ?? 0,
       preview: json['preview'] as String? ?? '',
       content: json['content'] as String? ?? '',
+      selector: _nullableString(json['selector']),
       hasMore: json['has_more'] as bool? ?? json['hasMore'] as bool? ?? false,
     );
   }
@@ -625,6 +885,8 @@ class WebMikuSessionClient implements MikuSessionClient {
       type: json['type'] as String? ?? '',
       id: _nullableString(json['id']),
       data: data,
+      turnId: _nullableString(json['turnId'] ?? json['turn_id']),
+      createdAt: _nullableString(json['createdAt'] ?? json['created_at']),
     );
   }
 

@@ -53,9 +53,10 @@ android {
     buildFeatures {
         buildConfig = true
     }
-    // The retained platform bridges and their pinned Android dependencies require API 36 headers.
+    // Match the pinned Flutter toolchain; current plugins require NDK 27 and
+    // Android NDKs are backward-compatible, so the installed NDK 28 is used.
     compileSdk = 36
-    ndkVersion = "26.1.10909125"
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         coreLibraryDesugaringEnabled true
@@ -72,7 +73,7 @@ android {
         applicationId = "org.mozufu.tempestmiku"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23
+        minSdkVersion = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

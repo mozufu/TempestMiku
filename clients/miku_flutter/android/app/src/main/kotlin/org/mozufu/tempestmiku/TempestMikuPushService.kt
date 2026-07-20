@@ -75,6 +75,7 @@ class TempestMikuPushService : PushService() {
                 route.sessionId,
                 route.approvalId ?: return,
                 "",
+                route,
             )
             NotificationRouteKind.APPROVAL_RESOLVED ->
                 ApprovalNotifications.cancel(this, route.approvalId ?: return)

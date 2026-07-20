@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'notification_service_platform.dart';
@@ -15,11 +16,19 @@ const _unifiedPushEvents = EventChannel(
 MikuNotificationService createNotificationService() =>
     _AndroidNotificationService();
 
+@visibleForTesting
+MikuNotificationService createAndroidNotificationServiceForTesting() =>
+    _AndroidNotificationService(supportedOverride: true);
+
 class _AndroidNotificationService
     implements
         MikuNotificationService,
         UnifiedPushNotificationService,
         ActionableNotificationService {
+  _AndroidNotificationService({bool? supportedOverride})
+    : _supportedOverride = supportedOverride;
+
+  final bool? _supportedOverride;
   bool _initialized = false;
   late final Stream<Map<Object?, Object?>> _actionEvents =
       _notificationActions
@@ -28,20 +37,13 @@ class _AndroidNotificationService
           .asBroadcastStream();
 
   @override
-  bool get isSupported => Platform.isAndroid;
+  bool get isSupported => _supportedOverride ?? Platform.isAndroid;
 
   @override
   Stream<ApprovalNotificationAction> get actions {
     if (!isSupported) return const Stream.empty();
     return _actionEvents
-        .map((value) {
-          return ApprovalNotificationAction(
-            sessionId: value['sessionId']?.toString() ?? '',
-            approvalId: value['approvalId']?.toString() ?? '',
-            decision: value['decision']?.toString() ?? '',
-            requiresConfirmation: value['requiresConfirmation'] == true,
-          );
-        })
+        .map(ApprovalNotificationAction.fromMap)
         .where(
           (action) =>
               action.sessionId.isNotEmpty &&
@@ -55,16 +57,7 @@ class _AndroidNotificationService
     if (!isSupported) return const Stream.empty();
     return _actionEvents
         .where((value) => value['type'] == 'route')
-        .map(
-          (value) => NotificationRouteAction(
-            sessionId: value['sessionId']?.toString() ?? '',
-            kind: value['routeKind']?.toString() ?? '',
-            approvalId:
-                (value['approvalId']?.toString() ?? '').isEmpty
-                    ? null
-                    : value['approvalId']?.toString(),
-          ),
-        )
+        .map(NotificationRouteAction.fromMap)
         .where(
           (route) =>
               route.sessionId.isNotEmpty &&
@@ -80,10 +73,28 @@ class _AndroidNotificationService
   }) async {
     if (!isSupported) return;
     await initialize();
+    if ((serverBaseUrl == null) != (deviceToken == null)) {
+      throw ArgumentError(
+        'serverBaseUrl and deviceToken must both be set or both be null',
+      );
+    }
+    if (serverBaseUrl == null) {
+      await _notifications.invokeMethod<void>('clearInlineReply', {
+        'cancelPendingReplies': true,
+      });
+      return;
+    }
     await _notifications.invokeMethod<void>('configureInlineReply', {
-      if (serverBaseUrl != null) 'serverBaseUrl': serverBaseUrl,
-      if (deviceToken != null) 'deviceToken': deviceToken,
+      'serverBaseUrl': serverBaseUrl,
+      'deviceToken': deviceToken,
     });
+  }
+
+  @override
+  Future<void> cancelPendingReplies() async {
+    if (!isSupported) return;
+    await initialize();
+    await _notifications.invokeMethod<void>('cancelPendingInlineReplies');
   }
 
   @override
@@ -114,6 +125,23 @@ class _AndroidNotificationService
     if (!isSupported || _initialized) return;
     await _notifications.invokeMethod<void>('initialize');
     _initialized = true;
+  }
+
+  @override
+  Future<NotificationPermissionStatus> permissionStatus() async {
+    if (!isSupported) return NotificationPermissionStatus.unsupported;
+    await initialize();
+    final value = await _notifications.invokeMethod<Object?>(
+      'notificationPermissionStatus',
+    );
+    return switch (value) {
+      true || 'granted' => NotificationPermissionStatus.granted,
+      false || 'denied' => NotificationPermissionStatus.denied,
+      _ =>
+        throw FormatException(
+          'native notification permission status was invalid: $value',
+        ),
+    };
   }
 
   @override

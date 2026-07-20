@@ -28,6 +28,7 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  cupertino_icons: ^1.0.8
   flutter:
     sdk: flutter
   flutter_markdown_plus: ^1.0.12
@@ -36,6 +37,7 @@ dependencies:
   flutter_mermaid: ^0.1.0
   flutter_secure_storage: 10.3.1
   markdown: ^7.3.1
+  mobile_scanner: 7.2.1
   sherpa_onnx: 1.13.4
   shared_preferences: ^2.5.3
   web: ^1.1.1

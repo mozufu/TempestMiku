@@ -17,6 +17,10 @@ class _NoopNotificationService implements MikuNotificationService {
   Future<void> initialize() async {}
 
   @override
+  Future<NotificationPermissionStatus> permissionStatus() async =>
+      NotificationPermissionStatus.unsupported;
+
+  @override
   Future<bool> requestPermission() async => false;
 
   @override

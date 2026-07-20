@@ -8,11 +8,13 @@
 The core declared UI / deployment out of scope (design README). This is the deliberate expansion
 (decision A): the Rust core runs as a long-lived service; clients are thin views over its event stream.
 
-**Implementation status (2026-07-19):** the server/API and historical client acceptance evidence
-remain valid, but the previous Flutter/Web presentation layer has been intentionally removed for a
-clean rewrite. The repository retains the typed Dart HTTP/SSE transports, wire models, credential
-handling, and native notification/share/voice/ASR bridges. This section still specifies the target
-client contract; it no longer describes a checked-in runnable UI.
+**Implementation status (2026-07-20):** the server/API and historical client acceptance evidence
+remain valid. A runnable Flutter/Web presentation layer now uses the retained typed Dart HTTP/SSE
+transports and platform bridges. Chat, durable turns, sessions, projects, scoped Drive/resources,
+reviewed changes, approvals, Mode controls, runtime activity, protected settings, voice, and the
+notification bridge are connected as described in §27.4.1. That table records the current local
+software boundary, including the restored reviewed camera-QR flow; it does not replace or extend
+signed physical acceptance evidence.
 
 ## 27.0 Design stance
 
@@ -211,20 +213,21 @@ a dedicated cheap dialectic model until that resolver is wired.
 - **Flutter client (single codebase).** P1 has shipped a **project-manager dogfooding** client on top of
   the P0 coding loop for Web/PWA and Android: message input, streamed token rendering, final response,
   approval prompts, artifact/resource links, and project/open-loop views. The normal product surface
-  uses Material 3 with restrained translucent/glass treatment on fixed navigation and status chrome;
-  content, dialogs, and long scrolling regions remain opaque enough for contrast and predictable
-  rendering. An abstract storm-cat mark is the constant Tempest Miku identity across the app and
-  launcher assets without turning the normal chat surface into debug or character-art chrome.
-  System, light, and dark theme modes are explicit choices, persist locally, and keep system mode as
-  the default. Mode/skill-bundle state is read from the runtime `GET /modes` catalog and remains in
-  advanced controls instead of returning as a default chat badge.
-- **Adaptive client shell.** Chat, Sessions, and Drive are stable top-level destinations. Compact
-  widths use bottom navigation, medium widths use a navigation rail, and expanded widths can keep
-  session navigation, the active chat, and its contextual approval/activity surface visible together.
-  Pairing is an explicit welcome state with a primary scan action rather than a connection error
-  hidden inside chat; disconnect clears the origin-bound client state and returns to that welcome
-  state. The same shell remains usable from a phone-sized browser because remote control of the
-  computer-hosted agent is a first-class workflow.
+  uses Material 3 with restrained color and status chrome; content, dialogs, and long scrolling
+  regions stay opaque for contrast and predictable rendering. An understated Miku presence mark and
+  cyan palette preserve identity without turning normal chat into debug or character-art chrome.
+  Light and dark definitions exist, `ThemeMode.system` is the default, and Settings persists an
+  explicit system/light/dark choice on that installation with fail-safe rollback. Mode/skill-bundle
+  state is read from the runtime `GET /modes` catalog and remains in advanced controls instead of
+  returning as a default chat badge.
+- **Conversation-first adaptive shell.** The transcript and composer are the only persistent center
+  surface. History, Project, Drive, Resources, reviewed changes, and Settings live in a left overlay
+  drawer or bounded sheets; Mode, scope, approvals, and session state live in the right context
+  drawer. Pairing is an explicit welcome/offline state rather than an error hidden inside chat, and
+  the replacement UI reviews either a pasted one-time link or a strict v1 camera scan before
+  exchange. Scanning only fills the review form and never auto-pairs. The same shell remains usable
+  from a phone-sized browser because remote control of the computer-hosted agent is a first-class
+  workflow.
 - **Chat interaction contract.** A send attempt owns its `clientMessageId` in the UI before transport,
   retains the edited draft when submission fails, and reuses that id for an explicit retry so a
   transient network failure cannot create a second durable turn. The transcript keeps the assistant
@@ -246,13 +249,16 @@ a dedicated cheap dialectic model until that resolver is wired.
   adds evolution audit history, typed persona/mode review-proposal resources, and
   P7.1 active/immutable managed-skill versions and P7.2a typed mode-addendum review/apply/rollback,
   with compact previews and fail-closed unknown paths (§22.9 / §26.4).
-- **Android target (P6 security slice).** The same Flutter app uses an in-app camera scanner
-  (`mobile_scanner` 7.2.0, bundled ML Kit) for versioned one-time pairing QR data. No exported Android
-  intent filter accepts the `tempestmiku://pair?...` payload and URL-only target changes are disabled.
-  Before exchange it confirms HTTPS origin, host, effective port, and device name. The origin-bound
-  bearer token lives in `flutter_secure_storage` 10.3.1; server/session cursor preferences are cleared
-  with the credential when origins change. Android min SDK is 23, credential backup/transfer is
-  excluded, release cleartext is disabled, and release builds require a configured non-debug key.
+- **Android target (P6 security slice).** The signed P6 acceptance client used an in-app camera
+  scanner (`mobile_scanner` 7.2.0, bundled ML Kit) for versioned one-time pairing QR data. The current
+  replacement reconnects that camera route with strict v1 parsing, permission/error/cancel states,
+  lifecycle fencing, and the same reviewed exchange; a scan alone never pairs or changes authority.
+  No exported Android intent filter accepts the `tempestmiku://pair?...` payload and URL-only target
+  changes are disabled. Before exchange it confirms HTTPS origin, host, effective port, and device
+  name. The origin-bound bearer token lives in `flutter_secure_storage` 10.3.1; server/session cursor
+  preferences are cleared with the credential when origins change. The current Flutter 3.41.9 target
+  supports Android API 24+, credential backup/transfer is excluded, release cleartext is disabled,
+  and release builds require a configured non-debug key.
   Debug/profile retain emulator-only cleartext support. The provider-neutral push foundation binds
   encrypted registration secrets to existing device authority, materializes approval request and
   resolution deliveries through a leased Postgres outbox, and keeps provider payloads limited to
@@ -288,7 +294,11 @@ a dedicated cheap dialectic model until that resolver is wired.
   the expandable direct-reply surface instead of retaining an invisible action. Native code
   sanitizes and bounds the text, encrypts the minimum WorkManager retry envelope with an
   Android Keystore key, and posts one stable client message id through the existing origin-bound
-  device credential and durable message API. Revocation, expiry, missing sessions, permanent
+  device credential and durable message API. Each queued envelope is bound to a stable digest of
+  that exact server origin and device token; re-pairing cannot replay an old envelope under the new
+  authority, and clearing authority cancels pending reply work. Native route/action forwarding
+  retains its delivery id, event sequence, expiry, and dedupe key when present while accepting the
+  older identifier-only intents. Revocation, expiry, missing sessions, permanent
   failures, and bounded transient retry fail visibly without selecting another session, exposing
   reply text on the lock screen, or running a model. The deterministic Kotlin, Flutter, server API,
   and gated Postgres tests pass. The signed Android 15 canary on 2026-07-14 preserved the established
@@ -373,6 +383,36 @@ a dedicated cheap dialectic model until that resolver is wired.
 - All targets consume the same SSE stream, POST control plane, and resource gateway; nothing
   client-specific lives in the core.
 
+### 27.4.1 Flutter capability coverage
+
+The UI stays conversation-first: the transcript and composer own the center canvas, navigation and
+collections live in the left overlay drawer, and per-session controls live in the right context
+drawer. “Connected” means a real native/Web/scripted contract and targeted local widget/contract
+coverage exist. It does not replace backend evidence or assert a new physical-device acceptance run.
+
+| Server or platform surface | UI home | Current coverage |
+|---|---|---|
+| durable sessions, message receipts/turn recovery, end, SSE replay, errors | conversation + History + session context | connected; caller-owned message ids, typed `202` receipts, queued/running/finalizing/terminal states, explicit retry, and reconnect recovery remain distinct |
+| manual approvals and resolution | inline conversation card | connected; exact pending detail and explicit option resolution preserve the manual authority boundary |
+| linked projects, session scope, bounded linked-resource reads | Project drawer | connected; a project-scoped conversation can return to `global` in place without discarding sent content or the unsent composer draft |
+| scoped Drive feed, virtual-view metadata, organizer proposals, bounded previews | Drive drawer | connected |
+| Mode catalog, explicit override, lock/unlock, skills and capabilities | session context drawer | connected |
+| project open loops, decisions, next actions, reviewed session promotion | Project drawer + review sheet | connected |
+| artifacts and generic `memory://`, `history://`, `agent://`, `skill://`, `cron://`, `mcp://` resources | Resources inspector | connected through the server-registered scheme catalog, exact-URI entry, and compact preview; text-compatible non-`skill://` resources add exact 200-line selectors with append/retry that preserve already loaded content |
+| reviewed memory and persona/mode guidance proposals; immutable version history | Reviewed changes + inline approval + Resources inspector | connected; bounded typed proposals preserve the composer and never apply directly |
+| mode/persona/skill rollback initiation | Reviewed changes + inline approval | connected; exact active/target digests are validated and confirmed before creating an approval-backed proposal |
+| cell/effect/scope, actor, OMP/MCP, memory, dream/cron, Drive, egress/secret, and proposal events | inline activity under the assistant response | connected; correlated ids update one row, links open bounded exact-resource previews, and unknown/raw payloads stay quiet |
+| protected readiness, queue/runtime diagnostics, device inventory/revocation, logout | Settings | connected; HTTP 503 readiness bodies remain inspectable and are not confused with metrics availability; a newly paired origin-bound device is marked as this device and uses the dedicated logout path rather than self-revocation |
+| first-run/re-pairing with a reviewed one-time link | offline notice + Settings | connected; paste and Android camera QR both feed the same strict v1 target review with no auto-pair |
+| local system/light/dark appearance preference | Settings | connected; system remains the default and failed reads/writes fail safe without changing server state |
+| background notification opt-in, push registration receipt, session routes, and approval actions | Settings + native notification handoff | connected in local software; boot never prompts, status distinguishes permission/endpoint/current-launch receipt/cleanup uncertainty, and every approval action re-fetches exact pending state before resolution |
+| foreground voice capture, verified local-model install/delete, explicit ASR engine selection, editable review | composer + Settings + review sheet | connected; local remains default, remote requires disclosure, neither path falls back, cleanup gates authority changes, and every transcript requires explicit current/new-session send |
+| share/selected-text/quick-capture review and explicit current/new send | review sheet | connected to the retained Android import stream |
+
+The client must not expose model-side SDK namespaces as ambient user controls. `fs.*`, `code.*`,
+`proc.*`, agents, egress, secrets, and MCP mutation authority remain behind session grants, resource
+views, streaming activity, and durable manual approvals.
+
 ## 27.5 API shape (resolved for the hardened server surface)
 
 - **Outbound** (server→LLM): **settled** — OpenAI-compatible chat completions with `stream: true`
@@ -382,6 +422,8 @@ a dedicated cheap dialectic model until that resolver is wired.
   `POST /sessions/:id/scope`, `POST /sessions/:id/end`, `GET /sessions/:id/events`,
   `GET|POST /sessions/:id/approvals/:approval_id`, `POST /sessions/:id/memory/proposals`,
   `POST /sessions/:id/evolution/review-proposals`,
+  `POST /sessions/:id/evolution/modes/:name/rollback`,
+  `POST /sessions/:id/evolution/personas/:name/rollback`,
   `POST /sessions/:id/evolution/skills/:name/rollback`,
   `POST /sessions/:id/promote`, `GET /modes`, authenticated `GET /projects`, mode lock / override endpoints, session-scoped
   resource endpoints (§09), protected `GET /ready`/`GET /metrics`, and minimal public `GET /health`.
@@ -399,7 +441,11 @@ SSE connections on their periodic auth check.
 Push registration extends that same device identity rather than creating a second credential model.
 `PUT /auth/push-registration` upserts the authenticated device's provider token and
 `DELETE /auth/push-registration` disables it. Registration secrets are XChaCha20-Poly1305 encrypted
-with device/provider-bound AAD and never serialized or logged. Logout, device revocation, invalid
+with device/provider-bound AAD and never serialized or logged. The Flutter contract parses the
+successful `PUT` response as typed registration metadata; this is an acknowledgement observed by
+the current client process, not a durable status query, because no registration `GET` endpoint
+exists. Notification permission inspection is a separate non-prompting native call; only an
+explicit owner action may invoke the OS permission request. Logout, device revocation, invalid
 provider registrations, approval expiry, and approval resolution all close the corresponding
 notification lifecycle. Notification approval omits `optionId`, so the existing broker selects
 `allow_once` before any wider allow option.
@@ -528,9 +574,10 @@ post-commit, so a crash or local publish failure is recovered through durable ev
   homolab HTTP executor. The coordinator registers the connector into each tm-lang sandbox through
   the existing `SessionHostConnector`; the worker reuses `tm-host` policy, linked-path, approval,
   artifact, and Linux-isolation implementations rather than defining a second capability system.
-- Client contracts live **outside** the Rust workspace in `clients/miku_flutter`. The previous app
-  entrypoint, presentation widgets, Web shell, and `clients/miku_web` Playwright suite were removed
-  before the UI rewrite; `lib/miku_api.dart` is the retained public boundary.
+- Client contracts and the runnable Flutter presentation live **outside** the Rust workspace in
+  `clients/miku_flutter`; `lib/miku_api.dart` remains the public boundary and `lib/main.dart` plus the
+  package Web shell host the replacement UI. The obsolete `clients/miku_web` presentation and its
+  Playwright suite remain removed.
 
 ## 27.8 Failure modes & degradation
 

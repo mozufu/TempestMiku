@@ -68,23 +68,29 @@ extension _NativeSessionsClient on NativeMikuSessionClient {
     );
   }
 
-  Future<void> _sendMessageImpl(
+  Future<TurnReceipt> _sendMessageImpl(
     String sessionId,
     String content, {
     required String clientMessageId,
   }) async {
-    await sendIdempotentMessageWithRetry(
+    return sendIdempotentMessageWithRetry(
       clientMessageId: clientMessageId,
       isAmbiguousFailure:
           (error) => error is IOException || error is TimeoutException,
       send: (stableClientMessageId) async {
-        await _request(
+        final json = await _request(
           'POST',
           '/sessions/$sessionId/messages',
           body: {'clientMessageId': stableClientMessageId, 'content': content},
         );
+        return TurnReceipt.fromJson(json);
       },
     );
+  }
+
+  Future<SessionTurn> _getTurnImpl(String sessionId, String turnId) async {
+    final json = await _request('GET', '/sessions/$sessionId/turns/$turnId');
+    return SessionTurn.fromJson(json);
   }
 
   Future<void> _resolveApprovalImpl(
@@ -211,6 +217,8 @@ extension _NativeSessionsClient on NativeMikuSessionClient {
     return MikuEvent(
       type: json['type'] as String? ?? '',
       id: _nullableString(json['id']),
+      turnId: _nullableString(json['turnId'] ?? json['turn_id']),
+      createdAt: _nullableString(json['createdAt'] ?? json['created_at']),
       data: data,
     );
   }

@@ -58,6 +58,23 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
       final approvalId = 'approval-${_nextEventId++}';
       _approvalSessions[approvalId] = sessionId;
       _approvalBackends[approvalId] = 'native-tm';
+      const approvalScope = {
+        'actorId': 'Worker0',
+        'capability': 'proc.run',
+        'timeoutMs': 60000,
+      };
+      const approvalOptions = [
+        {'optionId': 'allow', 'name': 'Allow once', 'kind': 'allow_once'},
+        {'optionId': 'reject', 'name': 'Reject once', 'kind': 'reject_once'},
+      ];
+      _recordPendingApproval(
+        sessionId,
+        approvalId: approvalId,
+        backend: 'native-tm',
+        action: 'proc.run cargo clean',
+        scope: approvalScope,
+        options: approvalOptions,
+      );
       final approvalEvent = MikuEvent(
         type: 'approval',
         id: _eventId(),
@@ -65,15 +82,8 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
           'approvalId': approvalId,
           'backend': 'native-tm',
           'action': 'proc.run cargo clean',
-          'scope': const {'actorId': 'Worker0', 'capability': 'proc.run'},
-          'options': const [
-            {'optionId': 'allow', 'name': 'Allow once', 'kind': 'allow_once'},
-            {
-              'optionId': 'reject',
-              'name': 'Reject once',
-              'kind': 'reject_once',
-            },
-          ],
+          'scope': approvalScope,
+          'options': approvalOptions,
           'timeoutMs': 60000,
         },
       );
@@ -214,6 +224,18 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
           'timeoutMs': 60000,
         },
       );
+      _recordPendingApproval(
+        sessionId,
+        approvalId: approvalId,
+        backend: 'memory',
+        action: 'memory.write profile_fact',
+        scope: (approvalEvent.data['scope'] as Map).cast<String, Object?>(),
+        options:
+            (approvalEvent.data['options'] as List)
+                .whereType<Map>()
+                .map((item) => item.cast<String, Object?>())
+                .toList(),
+      );
       controller.add(approvalEvent);
       _pendingEvents.putIfAbsent(sessionId, () => []).add(approvalEvent);
     }
@@ -231,16 +253,28 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
       return;
     }
     final proposalId = _approvalProposals[approvalId];
+    final proposalEventId = _approvalProposalEventIds[approvalId];
     _pendingEvents[sessionId]?.removeWhere(
       (event) =>
           (event.type == 'approval' &&
               event.data['approvalId'] == approvalId) ||
           (proposalId != null &&
               event.type == 'write_proposal' &&
-              event.data['proposalId'] == proposalId),
+              (event.data['proposalId'] == proposalId ||
+                  event.id == proposalEventId)),
     );
     final approved = decision == 'approve';
     final backend = _approvalBackends[approvalId] ?? 'memory';
+    final detail = _approvalDetails[approvalId];
+    if (detail != null) {
+      final resolvedAt = DateTime.now().toUtc().toIso8601String();
+      _approvalDetails[approvalId] = {
+        ...detail,
+        'status': approved ? 'approved' : 'denied',
+        'resolvedAt': resolvedAt,
+        'serverTime': resolvedAt,
+      };
+    }
     controller.add(
       MikuEvent(
         type: 'approval_resolved',
@@ -255,7 +289,11 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
       ),
     );
     final proposal = _proposals[proposalId];
-    if (proposal == null) return;
+    if (proposal == null) {
+      _completeScriptedMemoryProposal(approvalId, approved: approved);
+      return;
+    }
+    final isMemory = proposal['kind'] == 'memory';
     controller.add(
       MikuEvent(
         type: 'write_proposal',
@@ -263,7 +301,7 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
         data: {
           ...proposal,
           'status': approved ? 'approved' : 'denied',
-          if (approved)
+          if (approved && isMemory)
             'record': {
               'id': proposal['recordId'],
               'uri': 'memory://profile/brian/facts/${proposal['recordId']}',
@@ -272,5 +310,6 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
         },
       ),
     );
+    _completeScriptedMemoryProposal(approvalId, approved: approved);
   }
 }

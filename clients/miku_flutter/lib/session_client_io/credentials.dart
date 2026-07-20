@@ -1,31 +1,51 @@
 part of '../session_client_io.dart';
 
 class DeviceCredential {
-  const DeviceCredential({required this.serverBaseUrl, required this.token});
+  const DeviceCredential({
+    required this.serverBaseUrl,
+    required this.token,
+    this.deviceId,
+  });
 
   final String serverBaseUrl;
   final String token;
+  final String? deviceId;
 
   String encode() => jsonEncode({
-    'version': 1,
+    'version': deviceId == null ? 1 : 2,
     'serverBaseUrl': serverBaseUrl,
     'token': token,
+    if (deviceId != null) 'deviceId': deviceId,
   });
 
   static DeviceCredential? decode(String? value) {
     if (value == null || value.isEmpty) return null;
     try {
       final json = jsonDecode(value);
-      if (json is! Map || json['version'] != 1) return null;
+      if (json is! Map || (json['version'] != 1 && json['version'] != 2)) {
+        return null;
+      }
       final serverBaseUrl = json['serverBaseUrl'];
       final token = json['token'];
+      final deviceId = json['version'] == 2 ? json['deviceId'] : null;
       if (serverBaseUrl is! String ||
           serverBaseUrl.isEmpty ||
           token is! String ||
-          !token.startsWith('tmk_dev_')) {
+          !token.startsWith('tmk_dev_') ||
+          (json['version'] == 2 &&
+              (deviceId is! String ||
+                  PairedAuthDeviceIdentity.fromStored(
+                        serverBaseUrl: serverBaseUrl,
+                        deviceId: deviceId,
+                      ) ==
+                      null))) {
         return null;
       }
-      return DeviceCredential(serverBaseUrl: serverBaseUrl, token: token);
+      return DeviceCredential(
+        serverBaseUrl: serverBaseUrl,
+        token: token,
+        deviceId: deviceId as String?,
+      );
     } catch (_) {
       return null;
     }

@@ -86,14 +86,39 @@ class MainActivity : FlutterActivity() {
                     val serverBaseUrl = call.argument<String>("serverBaseUrl")
                     val deviceToken = call.argument<String>("deviceToken")
                     if (serverBaseUrl == null || deviceToken == null) {
-                        InlineReplySecretStore.clearAuthority(this)
-                        result.success(null)
-                    } else if (InlineReplySecretStore.saveAuthority(this, serverBaseUrl, deviceToken)) {
+                        clearInlineReplyAuthority(cancelPendingReplies = true)
                         result.success(null)
                     } else {
-                        result.error("invalid_reply_authority", "reply authority was rejected", null)
+                        val previousAuthorityId =
+                            InlineReplySecretStore.readAuthority(this)?.authorityId
+                        if (InlineReplySecretStore.saveAuthority(this, serverBaseUrl, deviceToken)) {
+                            val currentAuthorityId =
+                                InlineReplySecretStore.readAuthority(this)?.authorityId
+                            if (
+                                previousAuthorityId != null &&
+                                currentAuthorityId != previousAuthorityId
+                            ) {
+                                InlineReplyWork.cancelPending(this)
+                            }
+                            result.success(null)
+                        } else {
+                            result.error("invalid_reply_authority", "reply authority was rejected", null)
+                        }
                     }
                 }
+                "clearInlineReply" -> {
+                    clearInlineReplyAuthority(
+                        cancelPendingReplies =
+                            call.argument<Boolean>("cancelPendingReplies") != false,
+                    )
+                    result.success(null)
+                }
+                "cancelPendingInlineReplies" -> {
+                    InlineReplyWork.cancelPending(this)
+                    result.success(null)
+                }
+                "notificationPermissionStatus" ->
+                    result.success(currentNotificationPermissionStatus())
                 "requestPermission" -> requestNotificationPermission(result)
                 "showApproval" -> {
                     val sessionId = call.argument<String>("sessionId")
@@ -135,6 +160,7 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "unregisterUnifiedPush" -> {
+                    InlineReplyWork.cancelPending(this)
                     UnifiedPush.unregister(this)
                     UnifiedPushEvents.emit(mapOf("type" to "unregistered"))
                     result.success(null)
@@ -276,6 +302,27 @@ class MainActivity : FlutterActivity() {
         }
         permissionResult = result
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+    }
+
+    private fun currentNotificationPermissionStatus(): String {
+        val requiresRuntimePermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val runtimePermissionGranted =
+            !requiresRuntimePermission ||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        val notificationsEnabled =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.N ||
+                getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+        return NotificationPermissionPolicy.status(
+            requiresRuntimePermission = requiresRuntimePermission,
+            runtimePermissionGranted = runtimePermissionGranted,
+            notificationsEnabled = notificationsEnabled,
+        )
+    }
+
+    private fun clearInlineReplyAuthority(cancelPendingReplies: Boolean) {
+        InlineReplySecretStore.clearAuthority(this)
+        if (cancelPendingReplies) InlineReplyWork.cancelPending(this)
     }
 
     private fun requestVoicePermission(result: MethodChannel.Result) {
@@ -483,35 +530,51 @@ class MainActivity : FlutterActivity() {
             val approvalId = route?.approvalId ?: intent.getStringExtra(EXTRA_APPROVAL_ID)
             val routeKind = route?.kind?.wireName ?: intent.getStringExtra(EXTRA_ROUTE_KIND).orEmpty()
             if (sessionId.isNotEmpty() && routeKind in setOf("session_ready", "approval_requested")) {
+                val payload = mutableMapOf<String, Any>(
+                    "type" to "route",
+                    "sessionId" to sessionId,
+                    "routeKind" to routeKind,
+                    "approvalId" to approvalId.orEmpty(),
+                )
+                route?.let { payload.putAll(notificationRouteMetadata(it)) }
                 emitNotificationAction(
-                    mapOf(
-                        "type" to "route",
-                        "sessionId" to sessionId,
-                        "routeKind" to routeKind,
-                        if (approvalId != null) "approvalId" to approvalId else "approvalId" to "",
-                    ),
-                    "route:$routeKind:$sessionId:${approvalId.orEmpty()}",
+                    payload,
+                    route?.routeDedupeKey
+                        ?: "route:$routeKind:$sessionId:${approvalId.orEmpty()}",
                 )
             }
             clearNotificationIntent(intent)
             return
         }
         if (intent?.action != ACTION_APPROVAL_DECISION) return
-        val sessionId = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
-        val approvalId = intent.getStringExtra(EXTRA_APPROVAL_ID).orEmpty()
+        val route = NotificationIntentData.route(intent)
+        val sessionId = route?.sessionId ?: intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+        val approvalId = route?.approvalId ?: intent.getStringExtra(EXTRA_APPROVAL_ID).orEmpty()
         val decision = intent.getStringExtra(EXTRA_DECISION).orEmpty()
         if (sessionId.isEmpty() || approvalId.isEmpty() || decision !in setOf("approve", "deny")) {
             return
         }
-        val payload = mapOf(
+        val payload = mutableMapOf<String, Any>(
             "sessionId" to sessionId,
             "approvalId" to approvalId,
             "decision" to decision,
             "requiresConfirmation" to (Build.VERSION.SDK_INT < Build.VERSION_CODES.S),
         )
-        emitNotificationAction(payload, "decision:$approvalId:$decision")
+        route?.let { payload.putAll(notificationRouteMetadata(it)) }
+        emitNotificationAction(
+            payload,
+            route?.decisionDedupeKey(decision)
+                ?: "decision:$approvalId:$decision",
+        )
         clearNotificationIntent(intent)
     }
+
+    private fun notificationRouteMetadata(route: NotificationRoute): Map<String, Any> =
+        buildMap {
+            put("deliveryId", route.deliveryId)
+            put("expiresAt", route.expiresAt.toString())
+            route.eventSeq?.let { put("eventSeq", it) }
+        }
 
     private fun emitNotificationAction(payload: Map<String, Any>, dedupeKey: String) {
         val withKey = payload + ("dedupeKey" to dedupeKey)
@@ -596,6 +659,20 @@ class MainActivity : FlutterActivity() {
 
 }
 
+internal object NotificationPermissionPolicy {
+    fun status(
+        requiresRuntimePermission: Boolean,
+        runtimePermissionGranted: Boolean,
+        notificationsEnabled: Boolean,
+    ): String = if (
+        (!requiresRuntimePermission || runtimePermissionGranted) && notificationsEnabled
+    ) {
+        "granted"
+    } else {
+        "denied"
+    }
+}
+
 internal object ApprovalNotifications {
     private const val APPROVAL_CHANNEL_ID = "approval_requests"
     private const val APPROVAL_CHANNEL_NAME = "Approval requests"
@@ -613,14 +690,27 @@ internal object ApprovalNotifications {
         notificationManager(context).createNotificationChannel(channel)
     }
 
-    fun show(context: Context, sessionId: String, approvalId: String, action: String) {
+    fun show(
+        context: Context,
+        sessionId: String,
+        approvalId: String,
+        action: String,
+        route: NotificationRoute? = null,
+    ) {
         ensureChannel(context)
+        val canonicalRoute = route?.takeIf {
+            it.kind == NotificationRouteKind.APPROVAL_REQUESTED &&
+                it.sessionId == sessionId &&
+                it.approvalId == approvalId
+        }
         val openApp = Intent(context, MainActivity::class.java).apply {
             this.action = ACTION_OPEN_NOTIFICATION_ROUTE
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_SESSION_ID, sessionId)
             putExtra(EXTRA_APPROVAL_ID, approvalId)
             putExtra(EXTRA_ROUTE_KIND, "approval_requested")
+        }.let { intent ->
+            canonicalRoute?.let { NotificationIntentData.put(intent, it) } ?: intent
         }
         val contentIntent = PendingIntent.getActivity(
             context,
@@ -628,8 +718,22 @@ internal object ApprovalNotifications {
             openApp,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val approve = notificationAction(context, sessionId, approvalId, "approve", "Approve once")
-        val deny = notificationAction(context, sessionId, approvalId, "deny", "Deny")
+        val approve = notificationAction(
+            context,
+            sessionId,
+            approvalId,
+            "approve",
+            "Approve once",
+            canonicalRoute,
+        )
+        val deny = notificationAction(
+            context,
+            sessionId,
+            approvalId,
+            "deny",
+            "Deny",
+            canonicalRoute,
+        )
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(context, APPROVAL_CHANNEL_ID)
         } else {
@@ -672,6 +776,7 @@ internal object ApprovalNotifications {
         approvalId: String,
         decision: String,
         title: String,
+        route: NotificationRoute?,
     ): Notification.Action {
         val intent = Intent(context, MainActivity::class.java).apply {
             action = ACTION_APPROVAL_DECISION
@@ -679,7 +784,7 @@ internal object ApprovalNotifications {
             putExtra(EXTRA_SESSION_ID, sessionId)
             putExtra(EXTRA_APPROVAL_ID, approvalId)
             putExtra(EXTRA_DECISION, decision)
-        }
+        }.let { intent -> route?.let { NotificationIntentData.put(intent, it) } ?: intent }
         val pendingIntent = PendingIntent.getActivity(
             context,
             "$approvalId:$decision".hashCode(),

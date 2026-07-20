@@ -194,12 +194,12 @@ class MemoryWriteProposal {
     return parts.join(' ');
   }
 
-  String get scopeLabel => scope.isEmpty ? 'global' : scope;
+  String get scopeLabel => scope.isEmpty ? 'scope in full proposal' : scope;
 
   String get provenanceText {
     if (provenanceLabel.isNotEmpty) return provenanceLabel;
     if (source.isNotEmpty) return source;
-    return 'unlabeled source';
+    return 'full proposal resource';
   }
 
   static MemoryWriteProposal? fromEvent(Map<String, Object?> data) {
@@ -214,7 +214,10 @@ class MemoryWriteProposal {
           _stringValue(data['status']).isEmpty
               ? 'pending'
               : _stringValue(data['status']),
-      text: _stringValue(data['text']),
+      text:
+          _stringValue(data['text']).isEmpty
+              ? _stringValue(data['preview'])
+              : _stringValue(data['text']),
       scope: _stringValue(data['scope']),
       subject: _stringValue(data['subject']),
       provenanceLabel: _stringValue(data['provenanceLabel']),

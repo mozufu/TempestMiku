@@ -24,15 +24,7 @@ extension _NativeDriveClient on NativeMikuSessionClient {
 
   Future<ProjectOverview> _projectOverviewImpl(String sessionId) async {
     final json = await _request('GET', '/sessions/$sessionId/project');
-    return ProjectOverview(
-      status: json['status'] as String? ?? '',
-      nextActions:
-          ((json['nextActions'] as List?) ?? const [])
-              .whereType<Map>()
-              .map((item) => item['text'] as String? ?? '')
-              .where((text) => text.isNotEmpty)
-              .toList(),
-    );
+    return ProjectOverview.fromJson(json);
   }
 
   Future<DriveFeed> _driveFeedImpl(
@@ -70,9 +62,16 @@ extension _NativeDriveClient on NativeMikuSessionClient {
 
   Future<ResourcePreview> _resolveResourceImpl(
     String sessionId,
-    String uri,
-  ) async {
-    final query = Uri(queryParameters: {'uri': uri}).query;
+    String uri, {
+    String? selector,
+  }) async {
+    final query =
+        Uri(
+          queryParameters: {
+            'uri': uri,
+            if (selector != null) 'selector': selector,
+          },
+        ).query;
     final json = await _request(
       'GET',
       '/sessions/$sessionId/resources/resolve?$query',
@@ -131,6 +130,7 @@ extension _NativeDriveClient on NativeMikuSessionClient {
       sizeBytes: json['size_bytes'] as int? ?? json['sizeBytes'] as int? ?? 0,
       preview: json['preview'] as String? ?? '',
       content: json['content'] as String? ?? '',
+      selector: _nullableString(json['selector']),
       hasMore: json['has_more'] as bool? ?? json['hasMore'] as bool? ?? false,
     );
   }

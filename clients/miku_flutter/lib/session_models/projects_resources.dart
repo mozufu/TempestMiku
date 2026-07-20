@@ -53,7 +53,9 @@ class MikuResourceEntry {
   final int? sizeBytes;
   final String? modifiedAt;
 
-  bool get isDirectory => kind == 'linked_folder' || kind == 'dir';
+  bool get isDirectory =>
+      kind == 'linked_folder' || kind == 'dir' || kind == 'virtual_dir';
 
-  bool get isFile => kind == 'file' || kind == 'text';
+  bool get isFile =>
+      kind == 'file' || kind == 'text' || kind == 'drive_document';
 }

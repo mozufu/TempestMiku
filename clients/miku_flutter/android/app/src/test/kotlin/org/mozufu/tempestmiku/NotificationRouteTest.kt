@@ -1,6 +1,7 @@
 package org.mozufu.tempestmiku
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,6 +18,8 @@ class NotificationRouteTest {
         assertEquals(NotificationRouteKind.SESSION_READY, session?.kind)
         assertEquals("notification-$deliveryId", session?.clientMessageId)
         assertEquals(42L, session?.eventSeq)
+        assertEquals("route:$deliveryId", session?.routeDedupeKey)
+        assertEquals("decision:$deliveryId:deny", session?.decisionDedupeKey("deny"))
 
         val approval = parse(kind = "approval_requested", approvalId = approvalId)
         assertEquals(NotificationRouteKind.APPROVAL_REQUESTED, approval?.kind)
@@ -95,6 +98,62 @@ class NotificationRouteTest {
             InlineReplyDisposition.PERMANENT_FAILURE,
             InlineReplyOutcomePolicy.classify(409, 0, now, expiry),
         )
+    }
+
+    @Test
+    fun notificationPermissionPolicyInspectsWithoutConflatingRuntimeAndAppState() {
+        assertEquals(
+            "granted",
+            NotificationPermissionPolicy.status(
+                requiresRuntimePermission = false,
+                runtimePermissionGranted = false,
+                notificationsEnabled = true,
+            ),
+        )
+        assertEquals(
+            "denied",
+            NotificationPermissionPolicy.status(
+                requiresRuntimePermission = true,
+                runtimePermissionGranted = false,
+                notificationsEnabled = true,
+            ),
+        )
+        assertEquals(
+            "denied",
+            NotificationPermissionPolicy.status(
+                requiresRuntimePermission = true,
+                runtimePermissionGranted = true,
+                notificationsEnabled = false,
+            ),
+        )
+    }
+
+    @Test
+    fun queuedReplyAuthorityMatchesOnlyTheOriginAndTokenThatCreatedIt() {
+        val firstId = InlineReplyAuthorityIdentity.derive(
+            "https://miku.example",
+            "tmk_dev_first",
+        )
+        val first = InlineReplyAuthority(
+            "https://miku.example",
+            "tmk_dev_first",
+            firstId,
+        )
+        val replacementId = InlineReplyAuthorityIdentity.derive(
+            "https://miku.example",
+            "tmk_dev_replacement",
+        )
+        val replacement = InlineReplyAuthority(
+            "https://miku.example",
+            "tmk_dev_replacement",
+            replacementId,
+        )
+
+        assertEquals(firstId, InlineReplyAuthorityIdentity.derive(first.serverBaseUrl, first.token))
+        assertTrue(InlineReplyAuthorityIdentity.matches(firstId, first))
+        assertFalse(InlineReplyAuthorityIdentity.matches(firstId, replacement))
+        assertFalse(InlineReplyAuthorityIdentity.matches(null, first))
+        assertFalse(InlineReplyAuthorityIdentity.matches("not-a-digest", first))
     }
 
     private fun parse(

@@ -11,6 +11,16 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+
+    // Flutter 3.41 supports API 24+. Plugin unit-test variants must use the
+    // same floor; otherwise an unqualified `testDebugUnitTest` can
+    // evaluate a plugin at its historical API 19 default and fail manifest
+    // merging against current AndroidX libraries that require API 21.
+    plugins.withId("com.android.library") {
+        androidComponents.finalizeDsl { extension ->
+            extension.defaultConfig.minSdk = 24
+        }
+    }
 }
 
 tasks.register("clean", Delete) {

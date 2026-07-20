@@ -6,10 +6,12 @@ import 'session_models.dart';
 part 'session_client_stub/drive_scenarios.dart';
 part 'session_client_stub/message_scenarios.dart';
 part 'session_client_stub/mode_catalog.dart';
+part 'session_client_stub/proposal_scenarios.dart';
 
 MikuSessionClient createClient() => ScriptedMikuClient();
 
-class ScriptedMikuClient implements MikuSessionClient {
+class ScriptedMikuClient
+    implements MikuSessionClient, ServerTargetClient, CurrentAuthDeviceClient {
   ScriptedMikuClient({
     this.pauseBeforeFinal = false,
     this.projectCatalogEmpty = false,
@@ -18,6 +20,8 @@ class ScriptedMikuClient implements MikuSessionClient {
     this.failProjectScope = false,
     this.failProjectResources = false,
     this.failProjectResolve = false,
+    this.failDriveFeed = false,
+    this.failResourceResolve = false,
   });
 
   final bool pauseBeforeFinal;
@@ -27,16 +31,27 @@ class ScriptedMikuClient implements MikuSessionClient {
   bool failProjectScope;
   bool failProjectResources;
   bool failProjectResolve;
+  bool failDriveFeed;
+  bool failResourceResolve;
   final Map<String, StreamController<MikuEvent>> _controllers = {};
   final Map<String, MikuSession> _sessions = {};
   final Map<String, DateTime> _updatedAt = {};
   final Map<String, List<SessionMessage>> _messages = {};
   final Map<String, List<MikuEvent>> _pendingEvents = {};
+  final Map<String, SessionTurn> _turns = {};
+  final Map<String, String> _turnIdsByMessageKey = {};
+  final Map<String, String> _activeTurnIds = {};
+  final Map<String, String> _pausedTurnIds = {};
+  final Map<String, String> _eventTurnIds = {};
   final Map<String, DriveFeed> _driveFeeds = {};
   final Map<String, String> _approvalSessions = {};
   final Map<String, String> _approvalProposals = {};
+  final Map<String, String> _approvalProposalEventIds = {};
   final Map<String, String> _approvalBackends = {};
+  final Map<String, Map<String, Object?>> _approvalDetails = {};
   final Map<String, Map<String, Object?>> _proposals = {};
+  final Map<String, Completer<MemoryWriteProposalResult>>
+  _memoryProposalCompleters = {};
   final Map<String, String> rememberedLastEventIds = {};
   final List<String?> eventResumeIds = [];
   final List<String> resolvedApprovals = [];
@@ -45,13 +60,139 @@ class ScriptedMikuClient implements MikuSessionClient {
   final List<List<String>> promotedResources = [];
   final List<String?> promotedSummaries = [];
   final List<String> sentClientMessageIds = [];
+  final List<String?> resolvedResourceSelectors = [];
+  final List<String> revokedDeviceIds = [];
+  final List<AuthDevice> _authDevices =
+      const [
+        AuthDevice(
+          id: 'device-current',
+          name: 'TempestMiku scripted',
+          platform: 'android',
+          createdAt: '2026-07-18T10:00:00Z',
+          lastSeenAt: '2026-07-20T10:00:00Z',
+        ),
+        AuthDevice(
+          id: 'device-browser',
+          name: 'Laptop browser',
+          platform: 'web',
+          createdAt: '2026-07-19T10:00:00Z',
+          lastSeenAt: '2026-07-20T09:00:00Z',
+        ),
+      ].toList();
+  final List<MikuPairingTarget> pairedTargets = [];
+  String selectedServerBaseUrl = 'https://miku.example';
   int driveFeedRequests = 0;
+  int logoutCount = 0;
   final Set<String> _acceptedMessageKeys = {};
   final Map<String, String> _pausedFinalTexts = {};
   int unlockCount = 0;
   int _nextId = 0;
   int _nextEventId = 1;
   String? _currentId;
+  String? _currentAuthDeviceId = 'device-current';
+  String? _emittingTurnId;
+
+  @override
+  String pairingDeviceName() => 'TempestMiku scripted';
+
+  @override
+  Future<String> serverBaseUrl() async => selectedServerBaseUrl;
+
+  @override
+  Future<void> setServerBaseUrl(String baseUrl) async {
+    final normalized = normalizeMikuServerBaseUrl(baseUrl);
+    if (normalized != selectedServerBaseUrl) {
+      _currentAuthDeviceId = null;
+      selectedServerBaseUrl = normalized;
+    }
+  }
+
+  @override
+  Future<void> pairWithCode(MikuPairingTarget target) async {
+    pairedTargets.add(target);
+    selectedServerBaseUrl = target.serverBaseUrl;
+    _currentAuthDeviceId = 'device-current';
+  }
+
+  @override
+  Future<String?> currentAuthDeviceId() async => _currentAuthDeviceId;
+
+  @override
+  Future<ServerDiagnostics> serverDiagnostics() async {
+    return const ServerDiagnostics(
+      baseUrl: 'https://miku.example',
+      role: 'all',
+      postgres: true,
+      migrationsApplied: true,
+      workersEnabled: true,
+      shuttingDown: false,
+      turnQueueDepth: 0,
+      dreamQueueDepth: 1,
+      schedulerQueueDepth: 0,
+      approvalEffectQueueDepth: 0,
+      pushQueueDepth: 0,
+      pendingApprovals: 0,
+      leaseReclaims: 0,
+      heartbeatFailures: 0,
+      linkHydrationFailures: 0,
+    );
+  }
+
+  @override
+  Future<ServerReadiness> serverReadiness() async {
+    return ServerReadiness.fromJson(const {
+      'status': 'ready',
+      'runtime': {
+        'role': 'all',
+        'postgres': true,
+        'migrationsApplied': true,
+        'workersEnabled': true,
+        'shuttingDown': false,
+        'memoryReadiness': {
+          'schema': 'ready',
+          'pgvector': 'ready',
+          'embeddings': 'ready',
+        },
+      },
+      'selfEvolution': {'tier': 'conservative'},
+    });
+  }
+
+  @override
+  Future<List<AuthDevice>> authDevices() async =>
+      List.unmodifiable(_authDevices);
+
+  @override
+  Future<PairingCode> createPairingCode() async => const PairingCode(
+    code: 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899',
+    pairingLink:
+        'tempestmiku://pair?v=1&server=https%3A%2F%2Fmiku.example&code=aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899',
+    expiresAt: '2026-07-20T10:05:00Z',
+  );
+
+  @override
+  Future<void> revokeAuthDevice(String deviceId) async {
+    revokedDeviceIds.add(deviceId);
+    final index = _authDevices.indexWhere((device) => device.id == deviceId);
+    if (index >= 0) {
+      final device = _authDevices[index];
+      _authDevices[index] = AuthDevice(
+        id: device.id,
+        name: device.name,
+        platform: device.platform,
+        createdAt: device.createdAt,
+        lastSeenAt: device.lastSeenAt,
+        revokedAt: '2026-07-20T10:01:00Z',
+      );
+    }
+  }
+
+  @override
+  Future<void> logout() async {
+    logoutCount++;
+    _currentId = null;
+    _currentAuthDeviceId = null;
+  }
 
   @override
   Future<VoiceAsrEngineCatalog> voiceAsrEngines() async =>
@@ -126,6 +267,14 @@ class ScriptedMikuClient implements MikuSessionClient {
     return session;
   }
 
+  @override
+  Future<void> endSession(String sessionId) async {
+    endSessionForTesting(sessionId);
+    _controllers[sessionId]?.add(
+      MikuEvent(type: 'session_end', id: _eventId(), data: const {}),
+    );
+  }
+
   void seedPendingApproval(
     String sessionId, {
     required String approvalId,
@@ -139,6 +288,14 @@ class ScriptedMikuClient implements MikuSessionClient {
   }) {
     _approvalSessions[approvalId] = sessionId;
     _approvalBackends[approvalId] = backend;
+    _recordPendingApproval(
+      sessionId,
+      approvalId: approvalId,
+      backend: backend,
+      action: action,
+      scope: scope,
+      options: options,
+    );
     final event = MikuEvent(
       type: 'approval',
       id: _eventId(),
@@ -276,7 +433,20 @@ class ScriptedMikuClient implements MikuSessionClient {
     eventResumeIds.add(lastEventId);
     return _controllers
         .putIfAbsent(sessionId, () => StreamController<MikuEvent>.broadcast())
-        .stream;
+        .stream
+        .map((event) {
+          final turnId =
+              event.turnId ??
+              (event.id == null ? null : _eventTurnIds[event.id!]);
+          if (turnId == event.turnId) return event;
+          return MikuEvent(
+            type: event.type,
+            id: event.id,
+            data: event.data,
+            turnId: turnId,
+            createdAt: event.createdAt,
+          );
+        });
   }
 
   @override
@@ -285,17 +455,137 @@ class ScriptedMikuClient implements MikuSessionClient {
   }
 
   @override
-  Future<void> sendMessage(
+  Future<TurnReceipt> sendMessage(
     String sessionId,
     String content, {
     required String clientMessageId,
-  }) {
-    return _sendScriptedMessage(
-      sessionId,
-      content,
+  }) async {
+    final messageKey = '$sessionId\u{0}$clientMessageId';
+    final duplicateTurnId = _turnIdsByMessageKey[messageKey];
+    if (duplicateTurnId != null) {
+      sentClientMessageIds.add(clientMessageId);
+      final duplicate = _turns[duplicateTurnId]!;
+      return TurnReceipt(
+        turnId: duplicate.id,
+        clientMessageId: duplicate.clientMessageId,
+        status: duplicate.status,
+      );
+    }
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    final turnId = 'scripted-turn-${_nextId++}';
+    _turnIdsByMessageKey[messageKey] = turnId;
+    _activeTurnIds[sessionId] = turnId;
+    _emittingTurnId = turnId;
+    _turns[turnId] = SessionTurn.fromJson({
+      'id': turnId,
+      'sessionId': sessionId,
+      'clientMessageId': clientMessageId,
+      'content': content,
+      'contentHash': 'scripted:$clientMessageId',
+      'status': 'queued',
+      'createdAt': now,
+      'updatedAt': now,
+    });
+
+    try {
+      await _sendScriptedMessage(
+        sessionId,
+        content,
+        clientMessageId: clientMessageId,
+      );
+    } catch (error) {
+      final failedAt = DateTime.now().toUtc().toIso8601String();
+      _turns[turnId] = SessionTurn.fromJson({
+        'id': turnId,
+        'sessionId': sessionId,
+        'clientMessageId': clientMessageId,
+        'content': content,
+        'contentHash': 'scripted:$clientMessageId',
+        'status': 'failed',
+        'createdAt': now,
+        'updatedAt': failedAt,
+        'startedAt': now,
+        'completedAt': failedAt,
+        'error': error.toString(),
+      });
+      _activeTurnIds.remove(sessionId);
+      if (_emittingTurnId == turnId) _emittingTurnId = null;
+      rethrow;
+    }
+
+    final updatedAt = DateTime.now().toUtc().toIso8601String();
+    final status = pauseBeforeFinal ? 'running' : 'completed';
+    _turns[turnId] = SessionTurn.fromJson({
+      'id': turnId,
+      'sessionId': sessionId,
+      'clientMessageId': clientMessageId,
+      'content': content,
+      'contentHash': 'scripted:$clientMessageId',
+      'status': status,
+      'createdAt': now,
+      'updatedAt': updatedAt,
+      'startedAt': now,
+      if (!pauseBeforeFinal) 'completedAt': updatedAt,
+    });
+    if (pauseBeforeFinal) {
+      _pausedTurnIds[sessionId] = turnId;
+    } else {
+      _activeTurnIds.remove(sessionId);
+    }
+    if (_emittingTurnId == turnId) _emittingTurnId = null;
+    return TurnReceipt(
+      turnId: turnId,
       clientMessageId: clientMessageId,
+      status: status,
     );
   }
+
+  @override
+  Future<SessionTurn> getTurn(String sessionId, String turnId) async {
+    final turn = _turns[turnId];
+    if (turn == null || turn.sessionId != sessionId) {
+      throw StateError('unknown turn $turnId for session $sessionId');
+    }
+    return turn;
+  }
+
+  @override
+  Future<MemoryWriteProposalResult> proposeMemoryWrite(
+    String sessionId,
+    MemoryWriteProposalRequest request,
+  ) => _proposeMemoryWriteImpl(sessionId, request);
+
+  @override
+  Future<EvolutionReviewProposalResult> proposeEvolutionReview(
+    String sessionId,
+    EvolutionReviewProposalRequest request,
+  ) => _proposeEvolutionReviewImpl(sessionId, request);
+
+  @override
+  Future<ModeAddendumRollbackResult> proposeModeAddendumRollback(
+    String sessionId,
+    String modeId,
+    AddendumRollbackRequest request,
+  ) => _proposeModeAddendumRollbackImpl(sessionId, modeId, request);
+
+  @override
+  Future<PersonaAddendumRollbackResult> proposePersonaAddendumRollback(
+    String sessionId,
+    String personaId,
+    AddendumRollbackRequest request,
+  ) => _proposePersonaAddendumRollbackImpl(sessionId, personaId, request);
+
+  @override
+  Future<SkillRollbackResult> proposeSkillRollback(
+    String sessionId,
+    String skillName,
+    SkillRollbackRequest request,
+  ) => _proposeSkillRollbackImpl(sessionId, skillName, request);
+
+  @override
+  Future<ApprovalDetails> getApproval(String sessionId, String approvalId) =>
+      _getApprovalImpl(sessionId, approvalId);
 
   void completePausedTurn({String? sessionId}) {
     final id = sessionId ?? _currentId;
@@ -303,11 +593,36 @@ class ScriptedMikuClient implements MikuSessionClient {
     final text = _pausedFinalTexts.remove(id);
     if (text == null) return;
     _emitFinal(id, text);
+    final turnId = _pausedTurnIds.remove(id);
+    final turn = turnId == null ? null : _turns[turnId];
+    if (turn != null) {
+      final completedAt = DateTime.now().toUtc().toIso8601String();
+      _turns[turn.id] = SessionTurn.fromJson({
+        'id': turn.id,
+        'sessionId': turn.sessionId,
+        'clientMessageId': turn.clientMessageId,
+        'content': turn.content,
+        'contentHash': turn.contentHash,
+        'status': 'completed',
+        'createdAt': turn.createdAt,
+        'updatedAt': completedAt,
+        if (turn.startedAt != null) 'startedAt': turn.startedAt,
+        'completedAt': completedAt,
+        if (turn.workerId != null) 'workerId': turn.workerId,
+      });
+    }
+    _activeTurnIds.remove(id);
   }
 
   void _emitFinal(String sessionId, String text) {
     _controllers[sessionId]?.add(
-      MikuEvent(type: 'final', id: _eventId(), data: {'text': text}),
+      MikuEvent(
+        type: 'final',
+        id: _eventId(),
+        data: {'text': text},
+        turnId: _activeTurnIds[sessionId],
+        createdAt: DateTime.now().toUtc().toIso8601String(),
+      ),
     );
     _appendMessage(sessionId, 'assistant', text);
   }
@@ -357,14 +672,16 @@ class ScriptedMikuClient implements MikuSessionClient {
   @override
   Future<void> unlockMode(String sessionId) async {
     unlockCount++;
-    _sessions[sessionId] = _sessionForMode(sessionId, 'personal_assistant');
+    final current = _sessions[sessionId];
+    final mode = current?.mode ?? 'personal_assistant';
+    _sessions[sessionId] = _sessionForMode(sessionId, mode);
     _controllers[sessionId]?.add(
-      const MikuEvent(
+      MikuEvent(
         type: 'mode',
         data: {
-          'mode': 'personal_assistant',
-          'label': 'Personal Assistant',
-          'activeSkills': ['miku-voice', 'personal-assistant-state-capture'],
+          'mode': mode,
+          'label': _label(mode),
+          'activeSkills': _activeSkills(mode),
         },
       ),
     );
@@ -390,8 +707,26 @@ class ScriptedMikuClient implements MikuSessionClient {
   @override
   Future<ProjectOverview> projectOverview(String sessionId) async {
     return const ProjectOverview(
+      projectId: 'tempestmiku',
+      projectUri: 'project://tempestmiku',
       status: 'Scripted project status',
       nextActions: ['Continue from latest session result'],
+      openLoops: [
+        ProjectItem(
+          id: 'scripted-open-loop',
+          kind: 'open_loop',
+          text: 'Verify the next UI slice',
+          targetUri: 'project://tempestmiku/open-loops/scripted',
+        ),
+      ],
+      decisions: [
+        ProjectItem(
+          id: 'scripted-decision',
+          kind: 'decision',
+          text: 'Keep chat as the primary surface',
+          targetUri: 'project://tempestmiku/decisions/scripted',
+        ),
+      ],
     );
   }
 
@@ -402,6 +737,7 @@ class ScriptedMikuClient implements MikuSessionClient {
     String? project,
   }) async {
     driveFeedRequests++;
+    if (failDriveFeed) throw StateError('drive feed unavailable');
     final feed =
         _driveFeeds[sessionId] ??
         DriveFeed(
@@ -426,6 +762,17 @@ class ScriptedMikuClient implements MikuSessionClient {
 
   @override
   Future<ResourcePreview> previewResource(String sessionId, String uri) async {
+    if (uri == 'artifact://scripted-report') {
+      return const ResourcePreview(
+        uri: 'artifact://scripted-report',
+        kind: 'text',
+        mime: 'text/plain',
+        title: 'Scripted report',
+        sizeBytes: 4096,
+        preview: 'Preview for artifact://scripted-report (compact)',
+        hasMore: true,
+      );
+    }
     if (uri.startsWith('drive://')) {
       return ResourcePreview(
         uri: uri,
@@ -449,8 +796,32 @@ class ScriptedMikuClient implements MikuSessionClient {
   }
 
   @override
-  Future<ResourcePreview> resolveResource(String sessionId, String uri) async {
+  Future<ResourcePreview> resolveResource(
+    String sessionId,
+    String uri, {
+    String? selector,
+  }) async {
+    resolvedResourceSelectors.add(selector);
+    if (failResourceResolve) {
+      throw StateError('resource page unavailable');
+    }
     if (failProjectResolve) throw StateError('project resource unavailable');
+    if (uri == 'artifact://scripted-report' && selector != null) {
+      return ResourcePreview(
+        uri: uri,
+        kind: 'text',
+        mime: 'text/plain',
+        title: 'Scripted report',
+        sizeBytes: 4096,
+        preview: 'Resolved preview for $selector',
+        content:
+            selector == '1-200'
+                ? 'Resolved lines 1-200'
+                : 'Resolved lines 201-400',
+        selector: selector,
+        hasMore: selector == '1-200',
+      );
+    }
     if (uri.startsWith('project://tempestmiku/linked-folders/')) {
       return ResourcePreview(
         uri: uri,
@@ -484,6 +855,49 @@ class ScriptedMikuClient implements MikuSessionClient {
     String uri,
   ) async {
     if (failProjectResources) throw StateError('project listing unavailable');
+    if (uri.isEmpty) {
+      return const [
+        MikuResourceEntry(uri: 'artifact://', name: 'artifact', kind: 'scheme'),
+        MikuResourceEntry(uri: 'memory://', name: 'memory', kind: 'scheme'),
+        MikuResourceEntry(uri: 'agent://', name: 'agent', kind: 'scheme'),
+        MikuResourceEntry(uri: 'history://', name: 'history', kind: 'scheme'),
+        MikuResourceEntry(uri: 'skill://', name: 'skill', kind: 'scheme'),
+      ];
+    }
+    if (uri == 'artifact://') {
+      return const [
+        MikuResourceEntry(
+          uri: 'artifact://scripted-report',
+          name: 'scripted-report',
+          kind: 'text',
+          title: 'Scripted report',
+          sizeBytes: 48,
+        ),
+      ];
+    }
+    if (uri == 'memory://' || uri == 'agent://') return const [];
+    if (uri == 'skill://') {
+      return const [
+        MikuResourceEntry(
+          uri: 'skill://scripted-skill',
+          name: 'scripted-skill',
+          kind: 'managed_skill',
+          title: 'Scripted managed skill',
+        ),
+      ];
+    }
+    if (uri == 'skill://scripted-skill') {
+      return const [
+        MikuResourceEntry(
+          uri:
+              'skill://scripted-skill/versions/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          name:
+              'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          kind: 'managed_skill_version',
+          title: 'Earlier scripted version',
+        ),
+      ];
+    }
     final scope = _sessions[sessionId]?.defaultScope;
     if (scope != 'project:tempestmiku') {
       throw StateError('404 active project scope');
@@ -633,5 +1047,10 @@ class ScriptedMikuClient implements MikuSessionClient {
     }
   }
 
-  String _eventId() => '${_nextEventId++}';
+  String _eventId() {
+    final id = '${_nextEventId++}';
+    final turnId = _emittingTurnId;
+    if (turnId != null) _eventTurnIds[id] = turnId;
+    return id;
+  }
 }

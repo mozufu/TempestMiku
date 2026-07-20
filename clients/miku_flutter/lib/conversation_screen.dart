@@ -1,21 +1,59 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
+import 'asr/local_asr_engine.dart';
+import 'asr/local_asr_model.dart';
+import 'conversation_notifications.dart';
+import 'notification_service.dart';
+import 'pairing_scanner.dart';
 import 'rich_message.dart';
 import 'session_models.dart';
+import 'share_import_service.dart';
+import 'theme_mode_controller.dart';
+import 'voice_capture_service.dart';
 
 part 'conversation_project_browser.dart';
+part 'conversation_drive.dart';
+part 'conversation_session_context.dart';
+part 'conversation_project_promotion.dart';
+part 'conversation_settings.dart';
+part 'conversation_resources.dart';
+part 'conversation_reviewed_changes.dart';
+part 'conversation_import_review.dart';
+part 'conversation_voice.dart';
+part 'conversation_event_fidelity.dart';
 
 const _showRichResponseShowcase = bool.fromEnvironment(
   'TM_RICH_RESPONSE_SHOWCASE',
 );
 
 class ConversationScreen extends StatefulWidget {
-  const ConversationScreen({required this.client, this.now, super.key});
+  const ConversationScreen({
+    required this.client,
+    required this.themeModeController,
+    this.now,
+    this.shareImports,
+    this.voiceCapture,
+    this.localAsrWorkers,
+    this.localAsrModels,
+    this.notifications,
+    this.voiceInferenceTimeout = const Duration(seconds: 45),
+    super.key,
+  });
 
   final MikuSessionClient client;
+  final MikuThemeModeController themeModeController;
   final DateTime Function()? now;
+  final MikuShareImportService? shareImports;
+  final MikuVoiceCaptureService? voiceCapture;
+  final LocalAsrWorkerFactory? localAsrWorkers;
+  final LocalAsrModelManager? localAsrModels;
+  final MikuNotificationService? notifications;
+  final Duration voiceInferenceTimeout;
 
   @override
   State<ConversationScreen> createState() => _ConversationScreenState();
@@ -45,12 +83,49 @@ class _MessageItem extends _ConversationItem {
 }
 
 class _ActivityItem extends _ConversationItem {
-  _ActivityItem({required String key, required this.label, this.detail})
-    : super(key);
+  _ActivityItem({
+    required String key,
+    required this.label,
+    this.detail,
+    this.correlationKey,
+    this.phase = _ActivityPhase.running,
+    List<_ActivityResourceLink> links = const [],
+  }) : links = List.of(links),
+       super(key);
 
   String label;
   String? detail;
-  bool running = true;
+  final String? correlationKey;
+  _ActivityPhase phase;
+  final List<_ActivityResourceLink> links;
+
+  bool get running => phase == _ActivityPhase.running;
+
+  set running(bool value) {
+    if (value) {
+      phase = _ActivityPhase.running;
+    } else if (phase == _ActivityPhase.running) {
+      phase = _ActivityPhase.completed;
+    }
+  }
+}
+
+class _TurnItem extends _ConversationItem {
+  _TurnItem({
+    required String key,
+    required this.clientMessageId,
+    required this.status,
+    this.turnId,
+    this.error,
+  }) : super(key);
+
+  final String clientMessageId;
+  String status;
+  String? turnId;
+  String? error;
+
+  bool get isTerminal =>
+      const {'completed', 'failed', 'cancelled', 'timed_out'}.contains(status);
 }
 
 class _ApprovalItem extends _ConversationItem {
@@ -73,47 +148,146 @@ class _NoticeItem extends _ConversationItem {
   final bool isError;
 }
 
-class _ConversationScreenState extends State<ConversationScreen> {
+class _ConversationScreenState extends State<ConversationScreen>
+    with WidgetsBindingObserver {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   final _composerController = TextEditingController();
   final _composerFocus = FocusNode();
   final _scrollController = ScrollController();
   final List<_ConversationItem> _items = [];
+  final List<SharedContent> _pendingImports = [];
+  final List<String> _recentImportEventIds = [];
+  final Map<String, Set<String>> _trackedTurnIdsBySession = {};
+  final Map<String, String> _observedTurnStatuses = {};
+  final Map<String, String?> _observedTurnErrors = {};
+  final Set<String> _refreshingTurnIds = {};
 
   StreamSubscription<MikuEvent>? _eventSubscription;
+  StreamSubscription<SharedContent>? _shareImportSubscription;
+  late final MikuShareImportService _shareImports;
+  late final MikuVoiceCaptureService _voiceCapture;
+  late final LocalAsrModelManager _localAsrModels;
+  late final BackgroundNotificationCoordinator _notificationCoordinator;
+  late final Future<VoiceAppBuildFingerprint?> _voiceBuildFingerprint;
+  LocalAsrTranscriber? _voiceTranscriber;
+  LocalAsrModelStatus? _voiceModelStatus;
+  VoiceAsrEngineCatalog _voiceAsrCatalog = VoiceAsrEngineCatalog.localOnly();
+  VoiceAsrEngineKind _voiceAsrSelection = VoiceAsrEngineKind.local;
+  VoiceAsrEngineKind? _activeVoiceAsrSelection;
+  AppLifecycleState _appLifecycle = AppLifecycleState.resumed;
+  Timer? _voiceLimitTimer;
+  String? _voiceCaptureId;
+  String? _voiceError;
+  int _voiceOperationEpoch = 0;
+  int _serverAuthorityEpoch = 0;
+  bool _voiceRecording = false;
+  bool _voiceProcessing = false;
+  bool _voicePermissionPending = false;
+  bool _voiceAsrCatalogLoading = false;
   MikuSession? _session;
   _PresenceState _presence = _PresenceState.loading;
   _ServerConnectionState _serverConnection = _ServerConnectionState.connecting;
   bool _sending = false;
   String? _connectionError;
   bool _projectExpanded = false;
+  bool _driveExpanded = false;
   bool _historyExpanded = false;
   bool _projectLoading = false;
   bool _projectBrowserLoading = false;
+  bool _driveLoading = false;
+  bool _modeCatalogLoading = false;
+  bool _promotingProject = false;
   bool _historyLoading = false;
   ProjectOverview? _projectOverview;
   List<ProjectCatalogEntry>? _projectCatalog;
   List<MikuResourceEntry>? _projectEntries;
+  DriveFeed? _driveFeed;
+  ModeCatalog? _modeCatalog;
   final List<_ProjectBrowserLocation> _projectPath = [];
   List<SessionSummary>? _sessionHistory;
   String? _activeProjectId;
   String? _switchingProjectId;
+  bool _switchingToGlobal = false;
   String? _previewingResourceUri;
+  String? _previewingDriveUri;
   String? _projectError;
+  String? _driveError;
+  String? _modeCatalogError;
+  String? _changingModeId;
   String? _historyError;
   int _connectionGeneration = 0;
   int _localSequence = 0;
+  bool _initialConnectionComplete = false;
+  bool _processingImports = false;
+  ValueNotifier<SharedContent>? _activeImport;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _notificationCoordinator = BackgroundNotificationCoordinator(
+      client: widget.client,
+      notifications: widget.notifications ?? createNotificationService(),
+      onOpenSession: _openNotificationSession,
+      onOpenApproval: _openNotificationApproval,
+      onConfirmLegacyAction: _confirmLegacyNotificationAction,
+      onQuietNotice: _showNotificationNotice,
+    );
+    unawaited(_notificationCoordinator.initialize());
+    _shareImports = widget.shareImports ?? createShareImportService();
+    _voiceCapture = widget.voiceCapture ?? createVoiceCaptureService();
+    _localAsrModels = widget.localAsrModels ?? createLocalAsrModelManager();
+    _voiceTranscriber =
+        widget.localAsrWorkers == null
+            ? null
+            : LocalAsrTranscriber(
+              workers: widget.localAsrWorkers!,
+              timeout: widget.voiceInferenceTimeout,
+            );
+    if (widget.localAsrWorkers != null) {
+      _voiceModelStatus = const LocalAsrModelStatus(
+        state: LocalAsrModelState.ready,
+        reason: 'injected worker factory',
+        encoder: 'injected',
+        decoder: 'injected',
+        tokens: 'injected',
+      );
+    } else if (_localAsrModels.isSupported) {
+      unawaited(_refreshVoiceModel().catchError((_) => null));
+    }
+    _voiceBuildFingerprint = _inspectVoiceBuild();
+    if (_voiceCapture.isSupported) {
+      unawaited(_voiceCapture.recoverOrphans().catchError((_) => 0));
+    }
     _composerController.addListener(_composerChanged);
+    if (_shareImports.isSupported) {
+      _shareImportSubscription = _shareImports.imports.listen(
+        _enqueueImport,
+        onError: (_) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('收到的分享內容無法讀取。')));
+        },
+      );
+    }
     unawaited(_connect());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _eventSubscription?.cancel();
+    _shareImportSubscription?.cancel();
+    _notificationCoordinator.dispose();
+    _voiceLimitTimer?.cancel();
+    _voiceOperationEpoch += 1;
+    unawaited(_voiceCapture.cancel(_voiceCaptureId).catchError((_) => false));
+    if (_activeVoiceAsrSelection == VoiceAsrEngineKind.remote) {
+      unawaited(widget.client.cancelVoiceAsrTranscription());
+    }
+    final transcriber = _voiceTranscriber;
+    if (transcriber != null) unawaited(transcriber.cancel());
     _composerController
       ..removeListener(_composerChanged)
       ..dispose();
@@ -122,9 +296,21 @@ class _ConversationScreenState extends State<ConversationScreen> {
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appLifecycle = state;
+    _notificationCoordinator.setLifecycleState(state);
+    if (state != AppLifecycleState.resumed &&
+        (_voiceRecording || (_voiceProcessing && !_voicePermissionPending))) {
+      unawaited(_cancelVoiceCapture());
+    }
+  }
+
   void _composerChanged() {
     if (mounted) setState(() {});
   }
+
+  void _voiceSetState(VoidCallback update) => setState(update);
 
   void _cancelEventStream() {
     final subscription = _eventSubscription;
@@ -187,13 +373,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
         _projectOverview = null;
         _projectCatalog = null;
         _projectEntries = null;
+        _driveFeed = null;
         _projectPath.clear();
         _activeProjectId = _projectIdFromScope(loaded.session.defaultScope);
         _switchingProjectId = null;
+        _switchingToGlobal = false;
         _previewingResourceUri = null;
+        _previewingDriveUri = null;
         _projectError = null;
+        _driveError = null;
         _projectLoading = false;
         _projectBrowserLoading = false;
+        _driveLoading = false;
       });
       for (final event in loaded.pendingEvents) {
         _handleEvent(event, remember: false);
@@ -201,8 +392,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
       if (_presence != _PresenceState.ended) {
         _listenForEvents(loaded.session.id, loaded.session.lastEventId);
       }
+      unawaited(_refreshVoiceAsrEngines());
+      unawaited(_recoverTrackedTurns(loaded.session.id));
       _scheduleScroll(force: true);
       if (_projectExpanded) unawaited(_loadProject());
+      if (_driveExpanded) unawaited(_loadDrive());
       if (_historyExpanded || _sessionHistory != null) {
         unawaited(_loadHistory());
       }
@@ -213,19 +407,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
         _serverConnection = _ServerConnectionState.offline;
         _connectionError = _friendlyError(error);
       });
+    } finally {
+      if (mounted && generation == _connectionGeneration) {
+        _initialConnectionComplete = true;
+        _notificationCoordinator.setInitialConnectionComplete();
+        unawaited(_drainImports());
+      }
     }
-  }
-
-  void _showDrawerDestination(String label) {
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    messenger
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('$label 入口已準備好，內容下一步接上。'),
-          duration: const Duration(milliseconds: 1600),
-        ),
-      );
   }
 
   void _startNewConversation() {
@@ -233,10 +421,322 @@ class _ConversationScreenState extends State<ConversationScreen> {
     unawaited(_connect(createNew: true));
   }
 
+  Future<bool> _prepareDeviceAuthorityMutation(
+    bool preserveNotificationIntent,
+  ) async {
+    final voiceCleaned = await _prepareForAuthorityMutation();
+    if (!voiceCleaned) return false;
+    return _notificationCoordinator.prepareAuthorityChange(
+      preserveIntent: preserveNotificationIntent,
+    );
+  }
+
+  Future<void> _openNotificationSession(String sessionId) async {
+    if (!mounted || sessionId.trim().isEmpty) return;
+    if (_session?.id != sessionId) {
+      await _connect(sessionId: sessionId);
+    }
+  }
+
+  Future<void> _openNotificationApproval(
+    String sessionId,
+    ApprovalDetails approval,
+  ) async {
+    if (!mounted ||
+        sessionId.trim().isEmpty ||
+        approval.sessionId != sessionId ||
+        !approval.isPending) {
+      return;
+    }
+    if (_session?.id != sessionId) {
+      await _connect(sessionId: sessionId);
+    }
+    if (!mounted || _session?.id != sessionId) return;
+    setState(() {
+      if (!_items.whereType<_ApprovalItem>().any(
+        (item) => item.prompt.approvalId == approval.approvalId,
+      )) {
+        _items.add(
+          _ApprovalItem(
+            key: 'approval-${approval.approvalId}',
+            prompt: approval.prompt,
+          ),
+        );
+      }
+      _presence = _PresenceState.here;
+    });
+    _scheduleScroll(force: true);
+  }
+
+  Future<bool> _confirmLegacyNotificationAction(
+    ApprovalNotificationAction action,
+    ApprovalDetails approval,
+  ) async {
+    if (!mounted || approval.sessionId != action.sessionId) return false;
+    final approving = action.decision == 'approve';
+    return await showDialog<bool>(
+          context: context,
+          builder:
+              (context) => AlertDialog(
+                title: Text(approving ? '確認允許？' : '確認拒絕？'),
+                content: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 480),
+                  child: Text('${approval.action}\n\n伺服器已重新確認這個核准仍在等待中。'),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    key: const Key('confirm-legacy-notification-action'),
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: Text(approving ? '確認允許' : '確認拒絕'),
+                  ),
+                ],
+              ),
+        ) ??
+        false;
+  }
+
+  void _showNotificationNotice(String message) {
+    if (!mounted || message.trim().isEmpty) return;
+    setState(() {
+      _items.add(
+        _NoticeItem(key: _nextKey('notification-notice'), text: message),
+      );
+    });
+    _scheduleScroll();
+  }
+
+  Future<void> _openSettings() async {
+    final result = await showModalBottomSheet<_SettingsResult>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder:
+          (context) => _SettingsSheet(
+            client: widget.client,
+            themeModeController: widget.themeModeController,
+            voiceSupported: _voiceCapture.isSupported,
+            initialVoiceModelStatus: _voiceModelStatus,
+            initialVoiceCatalog: _voiceAsrCatalog,
+            initialVoiceSelection: _voiceAsrSelection,
+            onPrepareDeviceAuthorityChange: _prepareDeviceAuthorityMutation,
+            onAuthorityChangeCommitted:
+                _notificationCoordinator.commitAuthorityChange,
+            onAuthorityChangeAborted:
+                _notificationCoordinator.abortAuthorityChange,
+            onRefreshVoiceModel: _refreshVoiceModel,
+            onInstallVoiceModel: _installVoiceModel,
+            onDeleteVoiceModel: _deleteVoiceModel,
+            onRefreshVoiceCatalog:
+                () => _refreshVoiceAsrEngines(allowFallback: false),
+            onSelectVoiceEngine: _selectVoiceAsrEngine,
+            notificationSettingsPanel: BackgroundNotificationsSettingsPanel(
+              coordinator: _notificationCoordinator,
+            ),
+          ),
+    );
+    if (!mounted || result == null) return;
+    if (result == _SettingsResult.paired) {
+      _clearAuthorityBoundUi();
+      await _connect();
+      return;
+    }
+    _clearAuthorityBoundUi(connectionError: '已登出這台裝置。重新配對後即可繼續。');
+  }
+
+  void _clearAuthorityBoundUi({String? connectionError}) {
+    _cancelEventStream();
+    _resetVoiceAuthorityState();
+    _composerController.clear();
+    _pendingImports.clear();
+    _trackedTurnIdsBySession.clear();
+    _observedTurnStatuses.clear();
+    _observedTurnErrors.clear();
+    _refreshingTurnIds.clear();
+    setState(() {
+      _session = null;
+      _items.clear();
+      _presence = _PresenceState.offline;
+      _serverConnection = _ServerConnectionState.offline;
+      _connectionError = connectionError;
+      _projectOverview = null;
+      _projectCatalog = null;
+      _projectEntries = null;
+      _driveFeed = null;
+      _modeCatalog = null;
+      _sessionHistory = null;
+      _projectPath.clear();
+      _activeProjectId = null;
+      _switchingProjectId = null;
+      _switchingToGlobal = false;
+      _previewingResourceUri = null;
+      _previewingDriveUri = null;
+      _projectError = null;
+      _driveError = null;
+      _modeCatalogError = null;
+      _historyError = null;
+      _projectLoading = false;
+      _projectBrowserLoading = false;
+      _driveLoading = false;
+      _modeCatalogLoading = false;
+      _historyLoading = false;
+    });
+  }
+
+  Future<void> _openResources() async {
+    final session = _session;
+    if (session == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('先建立對話，才能讀取授權資源。')));
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder:
+          (context) => _ResourceInspectorSheet(
+            client: widget.client,
+            sessionId: session.id,
+          ),
+    );
+  }
+
+  void _openSessionContext() {
+    _scaffoldKey.currentState?.openEndDrawer();
+    if (_modeCatalog == null) unawaited(_loadModeCatalog());
+  }
+
+  Future<void> _loadModeCatalog() async {
+    if (_modeCatalogLoading) return;
+    setState(() {
+      _modeCatalogLoading = true;
+      _modeCatalogError = null;
+    });
+    try {
+      final catalog = await widget.client.modeCatalog();
+      if (!mounted) return;
+      setState(() => _modeCatalog = catalog);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _modeCatalogError = 'Mode 清單暫時讀不到，請再試一次。');
+    } finally {
+      if (mounted) setState(() => _modeCatalogLoading = false);
+    }
+  }
+
+  Future<void> _switchMode(ModeProfile profile) async {
+    final session = _session;
+    if (session == null ||
+        session.status == 'ended' ||
+        _changingModeId != null ||
+        profile.id == session.mode) {
+      return;
+    }
+    setState(() {
+      _changingModeId = profile.id;
+      _modeCatalogError = null;
+    });
+    try {
+      await widget.client.overrideMode(session.id, profile.id);
+      if (!mounted || _session?.id != session.id) return;
+      setState(() {
+        _session = _sessionWithMode(session, profile: profile, locked: false);
+      });
+    } catch (_) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _modeCatalogError = 'Mode 沒有切換，請再試一次。');
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _changingModeId = null);
+      }
+    }
+  }
+
+  Future<void> _setModeLocked(bool locked) async {
+    final session = _session;
+    if (session == null ||
+        session.status == 'ended' ||
+        _changingModeId != null ||
+        session.locked == locked) {
+      return;
+    }
+    setState(() {
+      _changingModeId = session.mode;
+      _modeCatalogError = null;
+    });
+    try {
+      if (locked) {
+        await widget.client.lockMode(session.id, session.mode);
+      } else {
+        await widget.client.unlockMode(session.id);
+      }
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _session = _copySessionWithLock(session, locked));
+    } catch (_) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _modeCatalogError = 'Mode 鎖定狀態沒有變更，請再試一次。');
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _changingModeId = null);
+      }
+    }
+  }
+
+  Future<void> _endCurrentSession() async {
+    final session = _session;
+    if (session == null || session.status == 'ended') return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('結束這段對話？'),
+            content: const Text('對話與事件會保留為唯讀記錄；之後請開新對話才能繼續傳送訊息。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                key: const Key('confirm-end-session'),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('結束對話'),
+              ),
+            ],
+          ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.client.endSession(session.id);
+      if (!mounted || _session?.id != session.id) return;
+      setState(() {
+        _session = _copySessionWithStatus(session, 'ended');
+        _presence = _PresenceState.ended;
+      });
+      _cancelEventStream();
+    } catch (_) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _connectionError = '沒有結束這段對話，請再試一次。');
+    }
+  }
+
   void _toggleProject() {
     setState(() => _projectExpanded = !_projectExpanded);
     if (_projectExpanded && _projectCatalog == null) {
       unawaited(_loadProject());
+    }
+  }
+
+  void _toggleDrive() {
+    setState(() => _driveExpanded = !_driveExpanded);
+    if (_driveExpanded && _driveFeed == null) {
+      unawaited(_loadDrive());
     }
   }
 
@@ -276,7 +776,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   Future<void> _selectProject(ProjectCatalogEntry project) async {
     final session = _session;
-    if (session == null || _switchingProjectId != null) return;
+    if (session == null || _switchingProjectId != null || _switchingToGlobal) {
+      return;
+    }
     if (_presence == _PresenceState.ended && project.id != _activeProjectId) {
       return;
     }
@@ -302,15 +804,55 @@ class _ConversationScreenState extends State<ConversationScreen> {
         _activeProjectId = project.id;
         _projectOverview = null;
         _projectEntries = null;
+        _driveFeed = null;
+        _driveError = null;
         _projectPath.clear();
       });
       await _loadProjectRoot(project);
+      if (_driveExpanded) await _loadDrive();
     } catch (error) {
       if (!mounted || _session?.id != session.id) return;
       setState(() => _projectError = _friendlyProjectError(error));
     } finally {
       if (mounted && _session?.id == session.id) {
         setState(() => _switchingProjectId = null);
+      }
+    }
+  }
+
+  Future<void> _selectGlobalScope() async {
+    final session = _session;
+    if (session == null || _switchingProjectId != null || _switchingToGlobal) {
+      return;
+    }
+    if (_presence == _PresenceState.ended && _activeProjectId != null) return;
+    if (session.defaultScope == 'global') return;
+    setState(() {
+      _switchingToGlobal = true;
+      _projectError = null;
+    });
+    try {
+      final scope = await widget.client.setSessionScope(session.id, 'global');
+      if (!mounted || _session?.id != session.id) return;
+      if (scope != 'global') {
+        throw StateError('server selected unexpected global scope $scope');
+      }
+      setState(() {
+        _session = _sessionWithScope(session, scope);
+        _activeProjectId = null;
+        _projectOverview = null;
+        _projectEntries = null;
+        _driveFeed = null;
+        _driveError = null;
+        _projectPath.clear();
+      });
+      if (_driveExpanded) await _loadDrive();
+    } catch (error) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _projectError = _friendlyProjectError(error));
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _switchingToGlobal = false);
       }
     }
   }
@@ -455,6 +997,67 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
+  Future<void> _openProjectPromotion() async {
+    final session = _session;
+    final project = _activeProjectId;
+    if (session == null || project == null || _promotingProject) return;
+    final draft = await showModalBottomSheet<_ProjectPromotionDraft>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder:
+          (context) => _ProjectPromotionSheet(
+            projectId: project,
+            suggestedSummary: _latestAssistantText(),
+          ),
+    );
+    if (draft == null || !mounted || _session?.id != session.id) return;
+    setState(() {
+      _promotingProject = true;
+      _projectError = null;
+    });
+    try {
+      final result = await widget.client.promoteSession(
+        session.id,
+        summary: draft.summary,
+        openLoops: draft.openLoops,
+        decisions: draft.decisions,
+        resources: draft.resources,
+      );
+      if (!mounted || _session?.id != session.id) return;
+      await _loadProject();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              '已整理 ${result.promotedCount} 項到 ${result.projectUri}。',
+            ),
+          ),
+        );
+    } catch (_) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _projectError = '沒有完成 Project 整理，請再試一次。');
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _promotingProject = false);
+      }
+    }
+  }
+
+  String _latestAssistantText() {
+    for (final item in _items.reversed) {
+      if (item is _MessageItem &&
+          item.role == 'assistant' &&
+          item.text.trim().isNotEmpty) {
+        return item.text.trim();
+      }
+    }
+    return '';
+  }
+
   Future<void> _loadHistory() async {
     if (_historyLoading) return;
     setState(() {
@@ -470,6 +1073,67 @@ class _ConversationScreenState extends State<ConversationScreen> {
       setState(() => _historyError = 'History 暫時讀不到，請再試一次。');
     } finally {
       if (mounted) setState(() => _historyLoading = false);
+    }
+  }
+
+  Future<void> _loadDrive() async {
+    final session = _session;
+    if (session == null || _driveLoading) return;
+    final project = _projectIdFromScope(session.defaultScope);
+    if (project == null) {
+      setState(() {
+        _driveFeed = null;
+        _driveError = null;
+      });
+      return;
+    }
+    setState(() {
+      _driveLoading = true;
+      _driveError = null;
+    });
+    try {
+      final feed = await widget.client.driveFeed(session.id, project: project);
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _driveFeed = feed);
+    } catch (_) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _driveError = 'Drive 暫時讀不到，請再試一次。');
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _driveLoading = false);
+      }
+    }
+  }
+
+  Future<void> _openDriveItem(DriveFeedItem item) async {
+    final session = _session;
+    if (session == null || _previewingDriveUri != null) return;
+    setState(() {
+      _previewingDriveUri = item.uri;
+      _driveError = null;
+    });
+    try {
+      final resource = await widget.client.previewResource(
+        session.id,
+        item.uri,
+      );
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _previewingDriveUri = null);
+      await showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder:
+            (context) => _DriveDocumentSheet(item: item, resource: resource),
+      );
+    } catch (_) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() => _driveError = '這份 Drive 文件暫時無法預覽。');
+    } finally {
+      if (mounted && _session?.id == session.id) {
+        setState(() => _previewingDriveUri = null);
+      }
     }
   }
 
@@ -505,7 +1169,27 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   void _handleEvent(MikuEvent event, {bool remember = true}) {
     if (!mounted) return;
+    final notificationApproval =
+        event.type == 'approval' ? _approvalFromEvent(event) : null;
+    final resolvedNotificationApprovalId =
+        event.type == 'approval_resolved'
+            ? _string(event.data['approvalId'])
+            : '';
+    final eventTurnId =
+        event.turnId ??
+        (_string(event.data['turnId']).isEmpty
+            ? null
+            : _string(event.data['turnId']));
+    final refreshDrive = const {
+      'drive_put',
+      'drive_moved',
+      'drive_tagged',
+      'drive_organizer_completed',
+    }.contains(event.type);
     setState(() {
+      if (eventTurnId != null) {
+        _applyTurnEvent(eventTurnId, event);
+      }
       switch (event.type) {
         case 'text':
           _appendTextDelta(_string(event.data['delta']));
@@ -524,10 +1208,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
           _addActivity(event, '正在執行', detail: '受控能力');
           _presence = _PresenceState.working;
         case 'effect_suspended':
-          _pauseLatestActivity();
+          _pauseActivity(event);
           _presence = _PresenceState.here;
         case 'effect_resumed':
-          _resumeLatestActivity();
+          _resumeActivity(event);
           _presence = _PresenceState.working;
         case 'actor_spawned':
           _addActivity(event, '正在分工處理', detail: _string(event.data['task']));
@@ -543,17 +1227,33 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 : _string(event.data['label']),
           );
           _presence = _PresenceState.working;
-        case 'actor_completed':
         case 'cell_result':
         case 'effect_end':
         case 'effect_result':
-          _completeLatestActivity(event);
+          final phase = _runtimeTerminalPhase(event);
+          _completeActivity(
+            event,
+            label: _runtimeTerminalLabel(event.type, phase),
+            phase: phase,
+          );
+        case 'actor_completed':
+          _completeActivity(
+            event,
+            label: '分工處理完成',
+            links: _activityResourceLinks(event),
+          );
         case 'mcp_invocation':
-          if (_string(event.data['status']) == 'requested') {
+          final status = _eventStatus(event);
+          if (status == 'requested') {
             _addActivity(event, '正在查詢外部資源');
             _presence = _PresenceState.working;
           } else {
-            _completeLatestActivity(event);
+            final phase = _mcpInvocationTerminalPhase(status);
+            _completeActivity(
+              event,
+              label: _mcpInvocationTerminalLabel(phase),
+              phase: phase,
+            );
           }
         case 'approval':
           final prompt = _approvalFromEvent(event);
@@ -597,17 +1297,84 @@ class _ConversationScreenState extends State<ConversationScreen> {
           _presence = _PresenceState.here;
         case 'session_end':
           _finishActivities();
+          final session = _session;
+          if (session != null) {
+            _session = _copySessionWithStatus(session, 'ended');
+          }
           _presence = _PresenceState.ended;
         case 'connection':
           _updateConnectionState(_string(event.data['status']));
         case 'mode':
-        case 'write_proposal':
+          final session = _session;
+          if (session != null) {
+            _session = _sessionFromModeEvent(session, event.data);
+          }
+          _changingModeId = null;
           break;
+        case 'display':
+        case 'binding_committed':
+        case 'scope_start':
+        case 'scope_progress':
+        case 'scope_result':
+        case 'actor_status':
+        case 'actor_message':
+        case 'actor_failed':
+        case 'actor_supervision':
+        case 'actor_cancelled':
+        case 'actor_resources_linked':
+        case 'tool_call_update':
+        case 'diff':
+        case 'artifact':
+        case 'memory_recall':
+        case 'dream_queued':
+        case 'dream_started':
+        case 'dream_progress':
+        case 'dream_completed':
+        case 'dream_failed':
+        case 'cron_run_started':
+        case 'cron_run_completed':
+        case 'drive_put':
+        case 'drive_transduced':
+        case 'drive_path_proposed':
+        case 'drive_write_proposed':
+        case 'drive_filed':
+        case 'drive_moved':
+        case 'drive_tagged':
+        case 'drive_linked':
+        case 'drive_unlinked':
+        case 'drive_organizer_started':
+        case 'drive_organizer_completed':
+        case 'drive_organizer_failed':
+        case 'egress_started':
+        case 'egress_completed':
+        case 'egress_failed':
+        case 'egress_denied':
+        case 'secret_handle_issued':
+          _recordFidelityEvent(event);
+        case 'write_proposal':
+          _upsertProposal(event);
         default:
           break;
       }
     });
     final session = _session;
+    if (notificationApproval != null && session != null) {
+      unawaited(
+        _notificationCoordinator.showApprovalWhileBackgrounded(
+          sessionId: session.id,
+          approval: notificationApproval,
+          expiresAt:
+              _string(event.data['expiresAt']).isEmpty
+                  ? null
+                  : _string(event.data['expiresAt']),
+        ),
+      );
+    }
+    if (resolvedNotificationApprovalId.isNotEmpty) {
+      unawaited(
+        _notificationCoordinator.cancelApproval(resolvedNotificationApprovalId),
+      );
+    }
     if (remember &&
         session != null &&
         event.id != null &&
@@ -617,6 +1384,16 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if (event.type == 'session_end') {
       unawaited(_eventSubscription?.cancel());
     }
+    if (eventTurnId != null &&
+        (event.type == 'final' || event.type == 'error')) {
+      unawaited(_refreshTurnUntilTerminal(eventTurnId));
+    }
+    if (event.type == 'connection' &&
+        _string(event.data['status']) == 'connected' &&
+        _session != null) {
+      unawaited(_recoverTrackedTurns(_session!.id));
+    }
+    if (refreshDrive && _driveExpanded) unawaited(_loadDrive());
     _scheduleScroll();
   }
 
@@ -655,49 +1432,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  void _addActivity(MikuEvent event, String label, {String? detail}) {
-    _items.add(
-      _ActivityItem(
-        key: event.id ?? _nextKey('activity'),
-        label: label,
-        detail: detail?.isEmpty == true ? null : detail,
-      ),
-    );
-  }
-
-  void _completeLatestActivity(MikuEvent event) {
-    for (final item in _items.reversed.whereType<_ActivityItem>()) {
-      if (!item.running) continue;
-      item.running = false;
-      final result =
-          _string(event.data['resultPreview']).isNotEmpty
-              ? _string(event.data['resultPreview'])
-              : _string(event.data['summary']);
-      if (result.isNotEmpty) item.detail = result;
-      return;
-    }
-  }
-
-  void _pauseLatestActivity() {
-    for (final item in _items.reversed.whereType<_ActivityItem>()) {
-      if (!item.running) continue;
-      item
-        ..running = false
-        ..label = '等待確認';
-      return;
-    }
-  }
-
-  void _resumeLatestActivity() {
-    for (final item in _items.reversed.whereType<_ActivityItem>()) {
-      if (item.running || item.label != '等待確認') continue;
-      item
-        ..running = true
-        ..label = '繼續執行';
-      return;
-    }
-  }
-
   void _updateConnectionState(String status) {
     switch (status) {
       case 'connected':
@@ -727,9 +1461,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
-  Future<void> _send() async {
+  Future<void> _send() => _sendContent(_composerController.text.trim());
+
+  Future<void> _sendContent(
+    String content, {
+    bool preserveComposerDraft = false,
+  }) async {
     final session = _session;
-    final content = _composerController.text.trim();
     if (session == null ||
         content.isEmpty ||
         _sending ||
@@ -738,36 +1476,213 @@ class _ConversationScreenState extends State<ConversationScreen> {
         _presence == _PresenceState.ended) {
       return;
     }
+    final clientMessageId = newClientMessageId();
     final item = _MessageItem(
       key: _nextKey('user'),
       role: 'user',
       text: content,
     );
+    final turnItem = _TurnItem(
+      key: _nextKey('turn'),
+      clientMessageId: clientMessageId,
+      status: 'submitting',
+    );
     setState(() {
-      _items.add(item);
-      _composerController.clear();
+      _items.addAll([item, turnItem]);
+      if (!preserveComposerDraft) _composerController.clear();
       _sending = true;
       _connectionError = null;
     });
     _scheduleScroll(force: true);
     try {
-      await widget.client.sendMessage(
+      final receipt = await widget.client.sendMessage(
         session.id,
         content,
-        clientMessageId: newClientMessageId(),
+        clientMessageId: clientMessageId,
       );
-    } catch (error) {
       if (!mounted) return;
       setState(() {
+        turnItem.turnId = receipt.turnId;
+        turnItem.status =
+            _observedTurnStatuses[receipt.turnId] ?? receipt.status;
+        turnItem.error = _observedTurnErrors[receipt.turnId];
+        if (!turnItem.isTerminal) {
+          _trackedTurnIdsBySession
+              .putIfAbsent(session.id, () => <String>{})
+              .add(receipt.turnId);
+        }
+      });
+      if (turnItem.status == 'finalizing' || receipt.isTerminal) {
+        unawaited(_refreshTurnUntilTerminal(receipt.turnId));
+      }
+    } catch (error) {
+      if (!mounted || _session?.id != session.id) return;
+      setState(() {
         _items.remove(item);
-        _composerController.text = content;
-        _composerController.selection = TextSelection.collapsed(
-          offset: content.length,
-        );
-        _connectionError = '沒有送出去。內容已經放回輸入框。';
+        _items.remove(turnItem);
+        if (!preserveComposerDraft) {
+          final currentDraft = _composerController.text;
+          final restored =
+              currentDraft.trim().isEmpty
+                  ? content
+                  : '$content\n\n$currentDraft';
+          _composerController.text = restored;
+          _composerController.selection = TextSelection.collapsed(
+            offset: restored.length,
+          );
+        }
+        _connectionError =
+            preserveComposerDraft
+                ? '匯入內容沒有送出去。原本的輸入草稿仍然保留。'
+                : '沒有送出去。內容已經放回輸入框。';
       });
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _applyTurnEvent(String turnId, MikuEvent event) {
+    final nextStatus = switch (event.type) {
+      'final' => 'finalizing',
+      'error' => 'failed',
+      'approval' => 'waiting',
+      'effect_suspended' => 'waiting',
+      'write_proposal'
+          when _string(event.data['status']).toLowerCase() == 'pending' =>
+        'waiting',
+      'text' ||
+      'tool_call' ||
+      'tool_call_update' ||
+      'diff' ||
+      'artifact' ||
+      'cell_start' ||
+      'cell_result' ||
+      'effect_start' ||
+      'effect_resumed' ||
+      'effect_end' ||
+      'effect_result' ||
+      'display' ||
+      'binding_committed' ||
+      'scope_start' ||
+      'scope_progress' ||
+      'scope_result' ||
+      'actor_spawned' ||
+      'actor_status' ||
+      'actor_message' ||
+      'actor_completed' ||
+      'actor_failed' ||
+      'actor_supervision' ||
+      'actor_cancelled' ||
+      'actor_resources_linked' ||
+      'reasoning' ||
+      'progress' ||
+      'mcp_invocation' ||
+      'memory_recall' ||
+      'drive_put' ||
+      'drive_transduced' ||
+      'drive_path_proposed' ||
+      'drive_write_proposed' ||
+      'drive_filed' ||
+      'drive_moved' ||
+      'drive_tagged' ||
+      'drive_linked' ||
+      'drive_unlinked' ||
+      'drive_organizer_started' ||
+      'drive_organizer_completed' ||
+      'drive_organizer_failed' ||
+      'egress_started' ||
+      'egress_completed' ||
+      'egress_failed' ||
+      'egress_denied' ||
+      'secret_handle_issued' ||
+      'write_proposal' => 'running',
+      _ => null,
+    };
+    if (nextStatus == null) return;
+    final error =
+        event.type == 'error' && _string(event.data['message']).isNotEmpty
+            ? _string(event.data['message'])
+            : null;
+    _observedTurnStatuses[turnId] = nextStatus;
+    _observedTurnErrors[turnId] = error;
+    for (final item in _items.whereType<_TurnItem>()) {
+      if (item.turnId != turnId) continue;
+      item
+        ..status = nextStatus
+        ..error = error;
+    }
+  }
+
+  Future<void> _recoverTrackedTurns(String sessionId) async {
+    final turnIds = List<String>.from(
+      _trackedTurnIdsBySession[sessionId] ?? const <String>{},
+    );
+    for (final turnId in turnIds) {
+      if (!mounted || _session?.id != sessionId) return;
+      await _refreshTurnUntilTerminal(turnId, maxAttempts: 1);
+    }
+  }
+
+  Future<void> _refreshTurnUntilTerminal(
+    String turnId, {
+    int maxAttempts = 4,
+  }) async {
+    final session = _session;
+    if (session == null || !_refreshingTurnIds.add(turnId)) return;
+    try {
+      for (var attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          final turn = await widget.client.getTurn(session.id, turnId);
+          if (!mounted || _session?.id != session.id) return;
+          setState(() => _applyTurnRecord(session.id, turn));
+          if (turn.isTerminal) return;
+        } catch (_) {
+          if (!mounted || _session?.id != session.id) return;
+        }
+        if (attempt + 1 < maxAttempts) {
+          await Future<void>.delayed(
+            Duration(milliseconds: 200 * (attempt + 1)),
+          );
+        }
+      }
+    } finally {
+      _refreshingTurnIds.remove(turnId);
+    }
+  }
+
+  void _applyTurnRecord(String sessionId, SessionTurn turn) {
+    _observedTurnStatuses[turn.id] = turn.status;
+    _observedTurnErrors[turn.id] = turn.error;
+    _TurnItem? item;
+    for (final candidate in _items.whereType<_TurnItem>()) {
+      if (candidate.turnId == turn.id) {
+        item = candidate;
+        break;
+      }
+    }
+    if (item != null) {
+      item
+        ..status = turn.status
+        ..error = turn.error;
+    } else if (!turn.isTerminal || turn.status != 'completed') {
+      _items.add(
+        _TurnItem(
+          key: 'recovered-turn-${turn.id}',
+          clientMessageId: turn.clientMessageId,
+          turnId: turn.id,
+          status: turn.status,
+          error: turn.error,
+        ),
+      );
+    }
+    final tracked = _trackedTurnIdsBySession.putIfAbsent(
+      sessionId,
+      () => <String>{},
+    );
+    if (turn.isTerminal) {
+      tracked.remove(turn.id);
+    } else {
+      tracked.add(turn.id);
     }
   }
 
@@ -793,6 +1708,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
         approve ? 'approve' : 'deny',
         optionId: option.optionId,
       );
+      await _notificationCoordinator.cancelApproval(item.prompt.approvalId);
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -881,19 +1797,27 @@ class _ConversationScreenState extends State<ConversationScreen> {
     return Scaffold(
       key: _scaffoldKey,
       drawer: _ConversationDrawer(
-        onOpenDestination: _showDrawerDestination,
-        onOpenSettings: () => _showDrawerDestination('設定'),
+        onOpenSettings: _openSettings,
+        onOpenResources: _openResources,
+        onOpenReviewedChanges: _openReviewedChanges,
         onNewConversation: _startNewConversation,
         currentSessionId: _session?.id,
         currentSessionEnded: _presence == _PresenceState.ended,
         projectExpanded: _projectExpanded,
+        driveExpanded: _driveExpanded,
         historyExpanded: _historyExpanded,
+        driveLoading: _driveLoading,
         historyLoading: _historyLoading,
         projectOverview: _projectOverview,
+        driveFeed: _driveFeed,
+        driveError: _driveError,
+        activeProjectId: _activeProjectId,
+        previewingDriveUri: _previewingDriveUri,
         projectBrowser: _ProjectBrowserModel(
           projects: _projectCatalog,
           activeProjectId: _activeProjectId,
           switchingProjectId: _switchingProjectId,
+          switchingToGlobal: _switchingToGlobal,
           previewingResourceUri: _previewingResourceUri,
           path: List.unmodifiable(_projectPath),
           entries: _projectEntries,
@@ -904,9 +1828,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
         sessionHistory: _sessionHistory,
         historyError: _historyError,
         onToggleProject: _toggleProject,
+        onToggleDrive: _toggleDrive,
         onToggleHistory: _toggleHistory,
         onRetryProject: _loadProject,
+        onRetryDrive: _loadDrive,
+        onOpenDriveItem: _openDriveItem,
         onRetryProjectBrowser: _retryProjectBrowser,
+        onSelectGlobalScope: _selectGlobalScope,
         onSelectProject: _selectProject,
         onOpenProjectEntry: (entry) {
           if (entry.isDirectory) {
@@ -915,12 +1843,26 @@ class _ConversationScreenState extends State<ConversationScreen> {
             unawaited(_openProjectFile(entry));
           }
         },
+        promotingProject: _promotingProject,
+        onPromoteProject: _openProjectPromotion,
         onProjectUp: _goUpProjectDirectory,
         onRetryHistory: _loadHistory,
         onSelectSession: _openHistorySession,
       ),
       drawerEnableOpenDragGesture: true,
       drawerEdgeDragWidth: 32,
+      endDrawer: _SessionContextDrawer(
+        session: _session,
+        catalog: _modeCatalog,
+        loading: _modeCatalogLoading,
+        error: _modeCatalogError,
+        changingModeId: _changingModeId,
+        onRetry: _loadModeCatalog,
+        onSelectMode: _switchMode,
+        onSetLocked: _setModeLocked,
+        onEndSession: _endCurrentSession,
+      ),
+      endDrawerEnableOpenDragGesture: true,
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -934,8 +1876,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
                     children: [
                       _PresenceBar(
                         connection: _serverConnection,
+                        session: _session,
                         onOpenDrawer:
                             () => _scaffoldKey.currentState?.openDrawer(),
+                        onOpenContext: _openSessionContext,
                       ),
                       Divider(height: 1, color: palette.outline),
                       Expanded(child: _buildConversation(palette)),
@@ -944,6 +1888,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
                           text: _connectionError!,
                           canRetry: _presence == _PresenceState.offline,
                           onRetry: _connect,
+                          onPair:
+                              _session == null &&
+                                      widget.client is ServerTargetClient
+                                  ? _openSettings
+                                  : null,
                         ),
                       _Composer(
                         controller: _composerController,
@@ -952,6 +1901,17 @@ class _ConversationScreenState extends State<ConversationScreen> {
                         disabledHint: _disabledComposerHint,
                         sending: _sending,
                         onSend: _send,
+                        voiceVisible: _voiceCapture.isSupported,
+                        voiceReady: _selectedVoiceAsrReady,
+                        voiceRecording: _voiceRecording,
+                        voiceProcessing: _voiceProcessing,
+                        voiceSummary: _selectedVoiceAsrSummary,
+                        voiceError: _voiceError,
+                        onVoiceAction:
+                            _voiceRecording
+                                ? _stopVoiceCapture
+                                : _startVoiceCapture,
+                        onVoiceCancel: _cancelVoiceCapture,
                       ),
                     ],
                   ),
@@ -996,11 +1956,27 @@ class _ConversationScreenState extends State<ConversationScreen> {
       itemCount: _items.length,
       itemBuilder: (context, index) {
         final item = _items[index];
+        final followedByTurn =
+            item is _MessageItem &&
+            index + 1 < _items.length &&
+            _items[index + 1] is _TurnItem;
         return Padding(
-          padding: const EdgeInsets.only(bottom: 18),
+          padding: EdgeInsets.only(
+            bottom:
+                followedByTurn
+                    ? 6
+                    : item is _TurnItem
+                    ? 14
+                    : 18,
+          ),
           child: switch (item) {
             _MessageItem message => _MessageRow(message: message),
-            _ActivityItem activity => _ActivityRow(activity: activity),
+            _TurnItem turn => _TurnStatusRow(turn: turn),
+            _ActivityItem activity => _ActivityRow(
+              activity: activity,
+              onOpenResource: _openEventResource,
+            ),
+            _ProposalItem proposal => _ProposalRow(proposal: proposal),
             _ApprovalItem approval => _ApprovalCard(
               item: approval,
               onSelect: (option) => _resolveApproval(approval, option),
@@ -1037,10 +2013,17 @@ class _ConversationScreenState extends State<ConversationScreen> {
 }
 
 class _PresenceBar extends StatelessWidget {
-  const _PresenceBar({required this.connection, required this.onOpenDrawer});
+  const _PresenceBar({
+    required this.connection,
+    required this.session,
+    required this.onOpenDrawer,
+    required this.onOpenContext,
+  });
 
   final _ServerConnectionState connection;
+  final MikuSession? session;
   final VoidCallback onOpenDrawer;
+  final VoidCallback onOpenContext;
 
   @override
   Widget build(BuildContext context) {
@@ -1092,6 +2075,12 @@ class _PresenceBar extends StatelessWidget {
                 ],
               ),
             ),
+            IconButton(
+              key: const Key('open-session-context'),
+              tooltip: '開啟對話狀態',
+              onPressed: session == null ? null : onOpenContext,
+              icon: const Icon(Icons.tune_rounded),
+            ),
           ],
         ),
       ),
@@ -1101,47 +2090,73 @@ class _PresenceBar extends StatelessWidget {
 
 class _ConversationDrawer extends StatelessWidget {
   const _ConversationDrawer({
-    required this.onOpenDestination,
     required this.onOpenSettings,
+    required this.onOpenResources,
+    required this.onOpenReviewedChanges,
     required this.onNewConversation,
     required this.currentSessionId,
     required this.currentSessionEnded,
     required this.projectExpanded,
+    required this.driveExpanded,
     required this.historyExpanded,
+    required this.driveLoading,
     required this.historyLoading,
     required this.projectOverview,
+    required this.driveFeed,
+    required this.driveError,
+    required this.activeProjectId,
+    required this.previewingDriveUri,
     required this.projectBrowser,
     required this.sessionHistory,
     required this.historyError,
     required this.onToggleProject,
+    required this.onToggleDrive,
     required this.onToggleHistory,
     required this.onRetryProject,
+    required this.onRetryDrive,
+    required this.onOpenDriveItem,
     required this.onRetryProjectBrowser,
+    required this.onSelectGlobalScope,
     required this.onSelectProject,
     required this.onOpenProjectEntry,
+    required this.promotingProject,
+    required this.onPromoteProject,
     required this.onProjectUp,
     required this.onRetryHistory,
     required this.onSelectSession,
   });
 
-  final ValueChanged<String> onOpenDestination;
   final VoidCallback onOpenSettings;
+  final VoidCallback onOpenResources;
+  final VoidCallback onOpenReviewedChanges;
   final VoidCallback onNewConversation;
   final String? currentSessionId;
   final bool currentSessionEnded;
   final bool projectExpanded;
+  final bool driveExpanded;
   final bool historyExpanded;
+  final bool driveLoading;
   final bool historyLoading;
   final ProjectOverview? projectOverview;
+  final DriveFeed? driveFeed;
+  final String? driveError;
+  final String? activeProjectId;
+  final String? previewingDriveUri;
   final _ProjectBrowserModel projectBrowser;
   final List<SessionSummary>? sessionHistory;
   final String? historyError;
   final VoidCallback onToggleProject;
+  final VoidCallback onToggleDrive;
   final VoidCallback onToggleHistory;
   final VoidCallback onRetryProject;
+  final VoidCallback onRetryDrive;
+  final ValueChanged<DriveFeedItem> onOpenDriveItem;
   final VoidCallback onRetryProjectBrowser;
+  final VoidCallback onSelectGlobalScope;
   final ValueChanged<ProjectCatalogEntry> onSelectProject;
   final ValueChanged<MikuResourceEntry> onOpenProjectEntry;
+  final bool promotingProject;
+  final VoidCallback onPromoteProject;
   final VoidCallback onProjectUp;
   final VoidCallback onRetryHistory;
   final ValueChanged<String> onSelectSession;
@@ -1184,14 +2199,21 @@ class _ConversationDrawer extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(8, 14, 8, 12),
                 children: [
-                  _DrawerDestination(
+                  _ExpandableDrawerDestination(
                     key: const Key('drawer-drive'),
                     icon: Icons.folder_open_rounded,
                     label: 'Drive',
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      onOpenDestination('Drive');
-                    },
+                    expanded: driveExpanded,
+                    onTap: onToggleDrive,
+                    child: _DriveDrawerContent(
+                      loading: driveLoading,
+                      feed: driveFeed,
+                      error: driveError,
+                      activeProjectId: activeProjectId,
+                      previewingUri: previewingDriveUri,
+                      onRetry: onRetryDrive,
+                      onOpenItem: onOpenDriveItem,
+                    ),
                   ),
                   _ExpandableDrawerDestination(
                     key: const Key('drawer-project'),
@@ -1206,9 +2228,12 @@ class _ConversationDrawer extends StatelessWidget {
                       sessionEnded: currentSessionEnded,
                       onRetryCatalog: onRetryProject,
                       onRetryBrowser: onRetryProjectBrowser,
+                      onSelectGlobalScope: onSelectGlobalScope,
                       onSelectProject: onSelectProject,
                       onOpenEntry: onOpenProjectEntry,
                       onUp: onProjectUp,
+                      promoting: promotingProject,
+                      onPromote: onPromoteProject,
                     ),
                   ),
                   _ExpandableDrawerDestination(
@@ -1228,6 +2253,40 @@ class _ConversationDrawer extends StatelessWidget {
                         onSelectSession(sessionId);
                       },
                     ),
+                  ),
+                  ListTile(
+                    key: const Key('drawer-resources'),
+                    minTileHeight: 52,
+                    leading: const Icon(Icons.inventory_2_outlined),
+                    title: const Text('Resources'),
+                    subtitle: const Text('進階唯讀檢視'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      onOpenResources();
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('drawer-reviewed-changes'),
+                    minTileHeight: 52,
+                    leading: const Icon(Icons.rule_folder_outlined),
+                    title: const Text('經審核的變更'),
+                    subtitle: const Text('記憶、guidance 與 rollback'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    enabled: currentSessionId != null && !currentSessionEnded,
+                    onTap:
+                        currentSessionId == null || currentSessionEnded
+                            ? null
+                            : () {
+                              Navigator.of(context).pop();
+                              onOpenReviewedChanges();
+                            },
                   ),
                 ],
               ),
@@ -1334,9 +2393,12 @@ class _ProjectDrawerContent extends StatelessWidget {
     required this.sessionEnded,
     required this.onRetryCatalog,
     required this.onRetryBrowser,
+    required this.onSelectGlobalScope,
     required this.onSelectProject,
     required this.onOpenEntry,
     required this.onUp,
+    required this.promoting,
+    required this.onPromote,
   });
 
   final ProjectOverview? overview;
@@ -1345,9 +2407,12 @@ class _ProjectDrawerContent extends StatelessWidget {
   final bool sessionEnded;
   final VoidCallback onRetryCatalog;
   final VoidCallback onRetryBrowser;
+  final VoidCallback onSelectGlobalScope;
   final ValueChanged<ProjectCatalogEntry> onSelectProject;
   final ValueChanged<MikuResourceEntry> onOpenEntry;
   final VoidCallback onUp;
+  final bool promoting;
+  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -1360,9 +2425,12 @@ class _ProjectDrawerContent extends StatelessWidget {
       sessionEnded: sessionEnded,
       onRetryCatalog: onRetryCatalog,
       onRetryBrowser: onRetryBrowser,
+      onSelectGlobalScope: onSelectGlobalScope,
       onSelectProject: onSelectProject,
       onOpenEntry: onOpenEntry,
       onUp: onUp,
+      promoting: promoting,
+      onPromote: onPromote,
     );
   }
 }
@@ -1509,31 +2577,6 @@ class _DrawerEmptyState extends StatelessWidget {
           context,
         ).textTheme.bodySmall?.copyWith(color: _Palette.of(context).muted),
       ),
-    );
-  }
-}
-
-class _DrawerDestination extends StatelessWidget {
-  const _DrawerDestination({
-    required super.key,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      minTileHeight: 52,
-      leading: Icon(icon),
-      title: Text(label),
-      trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      onTap: onTap,
     );
   }
 }
@@ -1691,16 +2734,115 @@ class _StreamingDotState extends State<_StreamingDot>
   }
 }
 
+class _TurnStatusRow extends StatelessWidget {
+  const _TurnStatusRow({required this.turn});
+
+  final _TurnItem turn;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+    final failed = const {
+      'failed',
+      'cancelled',
+      'timed_out',
+    }.contains(turn.status);
+    final complete = turn.status == 'completed';
+    final label = switch (turn.status) {
+      'submitting' => '正在送到伺服器',
+      'queued' => '已排入安全佇列',
+      'running' => 'Miku 正在處理',
+      'waiting' => '等待你的確認',
+      'finalizing' => '回覆已收到，正在確認保存',
+      'completed' => '已完成並保存',
+      'failed' => '處理失敗',
+      'cancelled' => '已取消',
+      'timed_out' => '處理逾時',
+      _ => '伺服器狀態：${turn.status}',
+    };
+    final color = failed ? Theme.of(context).colorScheme.error : palette.muted;
+    return Semantics(
+      liveRegion: !turn.isTerminal,
+      label: '$label${turn.error == null ? '' : '，${turn.error}'}',
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Row(
+              key: Key('turn-status-${turn.key}'),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child:
+                      complete
+                          ? Icon(
+                            Icons.cloud_done_outlined,
+                            size: 15,
+                            color: palette.miku,
+                          )
+                          : failed
+                          ? Icon(
+                            Icons.error_outline_rounded,
+                            size: 15,
+                            color: color,
+                          )
+                          : SizedBox.square(
+                            dimension: 13,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: palette.miku,
+                            ),
+                          ),
+                ),
+                const SizedBox(width: 7),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: color,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (turn.error != null && turn.error!.trim().isNotEmpty)
+                        Text(
+                          turn.error!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodySmall?.copyWith(color: color),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ActivityRow extends StatelessWidget {
-  const _ActivityRow({required this.activity});
+  const _ActivityRow({required this.activity, required this.onOpenResource});
 
   final _ActivityItem activity;
+  final ValueChanged<String> onOpenResource;
 
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
     return Semantics(
-      liveRegion: activity.running,
+      key: Key('activity-${activity.correlationKey ?? activity.key}'),
+      liveRegion: activity.running || activity.phase == _ActivityPhase.paused,
       label:
           '${activity.label}${activity.detail == null ? '' : '，${activity.detail}'}',
       child: Padding(
@@ -1713,17 +2855,7 @@ class _ActivityRow extends StatelessWidget {
               child: SizedBox(
                 width: 12,
                 height: 12,
-                child:
-                    activity.running
-                        ? CircularProgressIndicator(
-                          strokeWidth: 1.6,
-                          color: palette.miku,
-                        )
-                        : Icon(
-                          Icons.check_rounded,
-                          size: 13,
-                          color: palette.miku,
-                        ),
+                child: _ActivityStatusMark(activity: activity),
               ),
             ),
             const SizedBox(width: 9),
@@ -1747,6 +2879,32 @@ class _ActivityRow extends StatelessWidget {
                         color: palette.muted.withValues(alpha: 0.78),
                       ),
                     ),
+                  if (activity.links.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 2,
+                      children: [
+                        for (final link in activity.links)
+                          TextButton.icon(
+                            key: Key(
+                              'activity-resource-${link.kind}-${link.uri}',
+                            ),
+                            style: TextButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              tapTargetSize: MaterialTapTargetSize.padded,
+                              visualDensity: VisualDensity.standard,
+                            ),
+                            onPressed: () => onOpenResource(link.uri),
+                            icon: Icon(link.icon, size: 17),
+                            label: Text(link.label),
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1767,6 +2925,18 @@ class _ApprovalCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
     final resolved = item.resolvedStatus;
+    final memoryProposal = MemoryWriteProposal.fromApproval(item.prompt);
+    final evolutionProposal = EvolutionReviewProposal.fromEvent({
+      ...item.prompt.scope,
+      'status': 'pending',
+    });
+    final rollbackProposal = _rollbackReviewDetails(item.prompt.scope);
+    final genericScope =
+        memoryProposal == null &&
+                evolutionProposal == null &&
+                rollbackProposal == null
+            ? _scopeLabel(item.prompt.scope)
+            : null;
     return Semantics(
       liveRegion: true,
       container: true,
@@ -1794,7 +2964,7 @@ class _ApprovalCard extends StatelessWidget {
               item.prompt.action,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
-            if (_scopeLabel(item.prompt.scope) case final scope?) ...[
+            if (genericScope case final scope?) ...[
               const SizedBox(height: 5),
               Text(
                 scope,
@@ -1802,6 +2972,16 @@ class _ApprovalCard extends StatelessWidget {
                   context,
                 ).textTheme.bodySmall?.copyWith(color: palette.muted),
               ),
+            ],
+            if (memoryProposal case final proposal?) ...[
+              const SizedBox(height: 12),
+              _MemoryProposalDetails(proposal: proposal),
+            ] else if (evolutionProposal case final proposal?) ...[
+              const SizedBox(height: 12),
+              _EvolutionProposalDetails(proposal: proposal),
+            ] else if (rollbackProposal case final proposal?) ...[
+              const SizedBox(height: 12),
+              _RollbackProposalDetails(details: proposal),
             ],
             if (item.error != null) ...[
               const SizedBox(height: 8),
@@ -1813,7 +2993,7 @@ class _ApprovalCard extends StatelessWidget {
             const SizedBox(height: 14),
             if (resolved != null)
               Text(
-                resolved == 'approved' ? '已允許' : '已拒絕',
+                _approvalResolutionLabel(resolved),
                 key: const Key('approval-resolution'),
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
                   color: resolved == 'approved' ? palette.miku : palette.muted,
@@ -1842,6 +3022,111 @@ class _ApprovalCard extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _MemoryProposalDetails extends StatelessWidget {
+  const _MemoryProposalDetails({required this.proposal});
+
+  final MemoryWriteProposal proposal;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+    return Container(
+      key: const Key('memory-proposal-details'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: palette.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              Chip(
+                avatar: const Icon(Icons.psychology_outlined, size: 16),
+                label: Text(proposal.kindLabel),
+                visualDensity: VisualDensity.compact,
+              ),
+              Chip(
+                label: Text(proposal.scopeLabel),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SelectableText(proposal.displayText),
+          const SizedBox(height: 8),
+          Text(
+            '來源：${proposal.provenanceText}',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: palette.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EvolutionProposalDetails extends StatelessWidget {
+  const _EvolutionProposalDetails({required this.proposal});
+
+  final EvolutionReviewProposal proposal;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+    final targetLabel = proposal.targetKind == 'persona' ? 'Persona' : 'Mode';
+    return Container(
+      key: const Key('evolution-proposal-details'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: palette.outline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_fix_high_outlined, size: 17),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  '$targetLabel · ${proposal.targetId}',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SelectableText(proposal.preview),
+          const SizedBox(height: 8),
+          Text(
+            proposal.applyEnabled
+                ? '核准後會建立不可變版本並啟用。'
+                : '核准後只保留為 review，不會自動啟用。',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: palette.muted),
+          ),
+          if (proposal.isAutoCandidate && proposal.evidenceCount != null)
+            Text(
+              '跨對話候選 · ${proposal.evidenceCount} 筆證據',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.muted),
+            ),
+        ],
       ),
     );
   }
@@ -1905,11 +3190,13 @@ class _ConnectionNotice extends StatelessWidget {
     required this.text,
     required this.canRetry,
     required this.onRetry,
+    this.onPair,
   });
 
   final String text;
   final bool canRetry;
   final VoidCallback onRetry;
+  final VoidCallback? onPair;
 
   @override
   Widget build(BuildContext context) {
@@ -1917,22 +3204,38 @@ class _ConnectionNotice extends StatelessWidget {
       liveRegion: true,
       child: Padding(
         padding: const EdgeInsets.only(top: 8),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Text(
-                text,
-                key: const Key('connection-notice'),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.error,
-                ),
+            Text(
+              text,
+              key: const Key('connection-notice'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
               ),
             ),
-            if (canRetry)
-              TextButton(
-                key: const Key('retry-connection'),
-                onPressed: onRetry,
-                child: const Text('重新連線'),
+            if (canRetry || onPair != null)
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 4,
+                  children: [
+                    if (canRetry)
+                      TextButton(
+                        key: const Key('retry-connection'),
+                        onPressed: onRetry,
+                        child: const Text('重新連線'),
+                      ),
+                    if (onPair != null)
+                      FilledButton.tonalIcon(
+                        key: const Key('open-pairing-settings'),
+                        onPressed: onPair,
+                        icon: const Icon(Icons.link_rounded),
+                        label: const Text('設定與配對'),
+                      ),
+                  ],
+                ),
               ),
           ],
         ),
@@ -1949,6 +3252,14 @@ class _Composer extends StatelessWidget {
     required this.disabledHint,
     required this.sending,
     required this.onSend,
+    required this.voiceVisible,
+    required this.voiceReady,
+    required this.voiceRecording,
+    required this.voiceProcessing,
+    required this.voiceSummary,
+    required this.voiceError,
+    required this.onVoiceAction,
+    required this.onVoiceCancel,
   });
 
   final TextEditingController controller;
@@ -1957,55 +3268,172 @@ class _Composer extends StatelessWidget {
   final String disabledHint;
   final bool sending;
   final VoidCallback onSend;
+  final bool voiceVisible;
+  final bool voiceReady;
+  final bool voiceRecording;
+  final bool voiceProcessing;
+  final String voiceSummary;
+  final String? voiceError;
+  final VoidCallback onVoiceAction;
+  final VoidCallback onVoiceCancel;
 
   @override
   Widget build(BuildContext context) {
-    final canSend = enabled && !sending && controller.text.trim().isNotEmpty;
+    final voiceBusy = voiceRecording || voiceProcessing;
+    final canSend =
+        enabled && !sending && !voiceBusy && controller.text.trim().isNotEmpty;
+    final canStartVoice = enabled && !sending && voiceReady && !voiceProcessing;
     final colors = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 10, 0, 12),
-      child: Semantics(
-        textField: true,
-        label: '告訴 Miku',
-        child: TextField(
-          key: const Key('conversation-composer'),
-          controller: controller,
-          focusNode: focusNode,
-          enabled: enabled,
-          minLines: 1,
-          maxLines: 6,
-          textCapitalization: TextCapitalization.sentences,
-          keyboardType: TextInputType.multiline,
-          textInputAction: TextInputAction.newline,
-          decoration: InputDecoration(
-            hintText: enabled ? '告訴 Miku…' : disabledHint,
-            suffixIcon: Padding(
-              padding: const EdgeInsets.all(5),
-              child: IconButton.filled(
-                key: const Key('send-message'),
-                tooltip: '送出',
-                onPressed: canSend ? onSend : null,
-                style: IconButton.styleFrom(
-                  backgroundColor: colors.primary,
-                  foregroundColor: colors.onPrimary,
-                  disabledBackgroundColor: colors.onSurface.withValues(
-                    alpha: 0.12,
-                  ),
-                  disabledForegroundColor: colors.onSurface.withValues(
-                    alpha: 0.38,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (voiceVisible && (voiceBusy || voiceError != null)) ...[
+            Semantics(
+              liveRegion: true,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 12, 7),
+                child: Row(
+                  children: [
+                    Icon(
+                      voiceRecording
+                          ? Icons.fiber_manual_record_rounded
+                          : voiceError != null
+                          ? Icons.error_outline_rounded
+                          : Icons.graphic_eq_rounded,
+                      size: 16,
+                      color:
+                          voiceError != null
+                              ? colors.error
+                              : voiceRecording
+                              ? colors.error
+                              : colors.primary,
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        voiceError ??
+                            (voiceRecording
+                                ? '錄音中 · 點停止後才會開始轉寫'
+                                : '正在轉寫 · 完成後會先開啟可編輯草稿'),
+                        key: const Key('voice-composer-status'),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color:
+                              voiceError != null
+                                  ? colors.error
+                                  : _Palette.of(context).muted,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          Semantics(
+            textField: true,
+            label: '告訴 Miku',
+            child: TextField(
+              key: const Key('conversation-composer'),
+              controller: controller,
+              focusNode: focusNode,
+              enabled: enabled,
+              minLines: 1,
+              maxLines: 6,
+              textCapitalization: TextCapitalization.sentences,
+              keyboardType: TextInputType.multiline,
+              textInputAction: TextInputAction.newline,
+              decoration: InputDecoration(
+                hintText: enabled ? '告訴 Miku…' : disabledHint,
+                suffixIconConstraints: const BoxConstraints(minHeight: 54),
+                suffixIcon: Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 5),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (voiceVisible) ...[
+                        IconButton(
+                          key: const Key('voice-capture-action'),
+                          tooltip:
+                              voiceRecording
+                                  ? '停止錄音並轉寫'
+                                  : voiceProcessing
+                                  ? '語音正在清理或轉寫'
+                                  : voiceReady
+                                  ? '開始語音輸入 · $voiceSummary'
+                                  : '語音模型尚未就緒，請到設定檢查',
+                          constraints: const BoxConstraints.tightFor(
+                            width: 44,
+                            height: 44,
+                          ),
+                          onPressed:
+                              voiceRecording
+                                  ? onVoiceAction
+                                  : canStartVoice
+                                  ? onVoiceAction
+                                  : null,
+                          icon:
+                              voiceProcessing && !voiceRecording
+                                  ? const SizedBox.square(
+                                    dimension: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                  : Icon(
+                                    voiceRecording
+                                        ? Icons.stop_rounded
+                                        : Icons.mic_none_rounded,
+                                  ),
+                        ),
+                        if (voiceBusy)
+                          IconButton(
+                            key: const Key('voice-capture-cancel'),
+                            tooltip: '取消語音輸入並清除錄音',
+                            constraints: const BoxConstraints.tightFor(
+                              width: 44,
+                              height: 44,
+                            ),
+                            onPressed: onVoiceCancel,
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                      ],
+                      IconButton.filled(
+                        key: const Key('send-message'),
+                        tooltip: '送出',
+                        constraints: const BoxConstraints.tightFor(
+                          width: 44,
+                          height: 44,
+                        ),
+                        onPressed: canSend ? onSend : null,
+                        style: IconButton.styleFrom(
+                          backgroundColor: colors.primary,
+                          foregroundColor: colors.onPrimary,
+                          disabledBackgroundColor: colors.onSurface.withValues(
+                            alpha: 0.12,
+                          ),
+                          disabledForegroundColor: colors.onSurface.withValues(
+                            alpha: 0.38,
+                          ),
+                        ),
+                        icon:
+                            sending
+                                ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                                : const Icon(Icons.arrow_upward_rounded),
+                      ),
+                    ],
                   ),
                 ),
-                icon:
-                    sending
-                        ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                        : const Icon(Icons.arrow_upward_rounded),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -2084,6 +3512,14 @@ String _fallbackOptionName(String kind) {
   if (kind.contains('allow') || kind.contains('approve')) return '允許一次';
   return '拒絕';
 }
+
+String _approvalResolutionLabel(String status) => switch (status) {
+  'approved' => '已允許',
+  'denied' => '已拒絕',
+  'timed_out' => '已逾時，未執行',
+  'cancelled' => '已取消，未執行',
+  _ => '已結束：$status',
+};
 
 String? _scopeLabel(Map<String, Object?> scope) {
   final capability = _string(scope['capability']);

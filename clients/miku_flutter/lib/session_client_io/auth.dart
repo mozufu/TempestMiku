@@ -52,6 +52,10 @@ extension _NativeAuthClient on NativeMikuSessionClient {
         'pairing response did not include a device token',
       );
     }
+    final identity = PairedAuthDeviceIdentity.fromPairResponse(
+      json,
+      serverBaseUrl: normalized,
+    );
     final prefs = await SharedPreferences.getInstance();
     final previous = prefs.getString(NativeMikuSessionClient._serverBaseUrlKey);
     final previousNormalized =
@@ -70,6 +74,7 @@ extension _NativeAuthClient on NativeMikuSessionClient {
     final credential = DeviceCredential(
       serverBaseUrl: normalized,
       token: token,
+      deviceId: identity.deviceId,
     );
     await _tokenStore.write(credential);
     _cachedCredential = credential;
@@ -85,12 +90,35 @@ extension _NativeAuthClient on NativeMikuSessionClient {
   Future<void> _logoutImpl() async {
     try {
       await _request('POST', '/auth/logout');
+    } catch (_) {
+      // Losing the network must not strand a locally retained bearer token. The
+      // server-side device may still need revocation from another paired client.
     } finally {
       await _clearDeviceToken();
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(NativeMikuSessionClient._sessionIdKey);
       await prefs.remove(NativeMikuSessionClient._lastEventIdKey);
     }
+  }
+
+  Future<String?> _currentAuthDeviceIdImpl() async {
+    final selectedServer = _normalizeServerBaseUrl(await serverBaseUrl());
+    if (!_tokenLoaded) {
+      _cachedCredential = await _tokenStore.read();
+      _tokenLoaded = true;
+    }
+    final credential = _cachedCredential;
+    if (credential == null || credential.serverBaseUrl != selectedServer) {
+      return null;
+    }
+    final identity = PairedAuthDeviceIdentity.fromStored(
+      serverBaseUrl: credential.serverBaseUrl,
+      deviceId: credential.deviceId,
+    );
+    if (identity == null || !identity.matchesServer(selectedServer)) {
+      return null;
+    }
+    return identity.deviceId;
   }
 
   Future<bool> _hasDeviceCredentialImpl() async {
@@ -111,12 +139,12 @@ extension _NativeAuthClient on NativeMikuSessionClient {
     );
   }
 
-  Future<void> _registerPushImpl({
+  Future<PushRegistrationMetadata> _registerPushImpl({
     required String endpoint,
     required String p256dh,
     required String auth,
   }) async {
-    await _request(
+    final response = await _request(
       'PUT',
       '/auth/push-registration',
       body: {
@@ -128,6 +156,13 @@ extension _NativeAuthClient on NativeMikuSessionClient {
         }),
       },
     );
+    final metadata = response['registration'];
+    if (metadata is! Map) {
+      throw const FormatException(
+        'push registration response did not include registration metadata',
+      );
+    }
+    return PushRegistrationMetadata.fromJson(metadata.cast<String, Object?>());
   }
 
   Future<void> _unregisterPushImpl() async {

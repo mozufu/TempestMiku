@@ -2,7 +2,7 @@
 
 This guide covers the local development run paths for TempestMiku:
 
-- the retained Flutter client contracts used by the UI rewrite
+- the Flutter conversation client and retained platform bridges
 - the HTTP/SSE API
 - the one-shot `tm` CLI
 - the local e2e harness
@@ -50,12 +50,12 @@ If both `OPENAI_API_KEY` and `OPENAI_BASE_URL` are unset or empty, `tm-server` s
 mode. Echo mode is useful for UI/API smoke tests, but it is not live Miku. The CLI always uses the
 OpenAI-compatible client and needs a reachable endpoint.
 
-## Frontend rewrite status
+## Flutter client
 
-The previous Flutter/Web UI has been removed. `clients/miku_flutter` is currently a contract package:
-it retains the HTTP/SSE clients, wire models, credential handling, and native platform bridges, but
-deliberately has no `lib/main.dart`, screens, widgets, theme, or Web shell. See its package README
-before starting the replacement UI.
+`clients/miku_flutter` contains the runnable Web/Android app plus its HTTP/SSE clients, wire models,
+credential handling, and native platform bridges. The chat-first shell connects the current
+user-facing server/platform surfaces while keeping mutation authority behind explicit review and
+approval boundaries; see its package README and §27.4.1 for the exact coverage map.
 
 The API server remains runnable during the rewrite:
 
@@ -73,11 +73,17 @@ The minimal server-owned pairing bootstrap remains available at:
 http://127.0.0.1:8787/pair
 ```
 
-There is no application at `/` until the replacement frontend is added. The static hosting hook is
-retained so a replacement Web build can be tested without changing the API server:
+Build the Web app and point the existing static hosting hook at the output without changing the API
+server:
 
 ```sh
-TM_WEBUI_DIR=/absolute/path/to/web-build nix develop --command cargo run -p tm-server
+cd clients/miku_flutter
+nix develop --command flutter build web
+cd ../..
+```
+
+```sh
+TM_WEBUI_DIR="$PWD/clients/miku_flutter/build/web" nix develop --command cargo run -p tm-server
 ```
 
 Useful server variables:

@@ -835,7 +835,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('reviews and explicitly promotes conversation project items', (
+  testWidgets('project drawer shows auto-grown items without a promote action', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(375, 812);
@@ -849,7 +849,7 @@ void main() {
     await client.sendMessage(
       session.id,
       'Summarize the project update',
-      clientMessageId: 'promotion-summary-message',
+      clientMessageId: 'project-items-message',
     );
     await loadApp(tester, client);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
@@ -857,39 +857,10 @@ void main() {
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
 
+    // §30: items grow from the session's turns; there is no promote affordance.
     expect(find.text('Open loops'), findsOneWidget);
     expect(find.text('Decisions'), findsOneWidget);
-    await tester.ensureVisible(find.byKey(const Key('promote-session')));
-    await tester.tap(find.byKey(const Key('promote-session')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('promotion-title')), findsOneWidget);
-    expect(
-      tester
-          .widget<TextField>(find.byKey(const Key('promotion-summary')))
-          .controller!
-          .text,
-      isNotEmpty,
-    );
-
-    await tester.enterText(
-      find.byKey(const Key('promotion-open-loops')),
-      'Run device check\nUpdate evidence',
-    );
-    await tester.enterText(
-      find.byKey(const Key('promotion-decisions')),
-      'Keep the chat-first shell',
-    );
-    await tester.enterText(
-      find.byKey(const Key('promotion-resources')),
-      'artifact://scripted-result',
-    );
-    await tester.tap(find.byKey(const Key('confirm-promotion')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
-
-    expect(client.promotedSummaries.single, isNotEmpty);
-    expect(client.promotedResources.single, ['artifact://scripted-result']);
-    expect(find.textContaining('已整理'), findsOneWidget);
+    expect(find.byKey(const Key('promote-session')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

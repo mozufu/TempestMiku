@@ -92,16 +92,6 @@ class ResourcePreview {
   final bool hasMore;
 }
 
-class ProjectPromotion {
-  const ProjectPromotion({
-    required this.projectUri,
-    required this.promotedCount,
-  });
-
-  final String projectUri;
-  final int promotedCount;
-}
-
 String normalizeMikuServerBaseUrl(
   String value, {
   bool requireHttps = kReleaseMode,

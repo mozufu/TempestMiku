@@ -19,7 +19,6 @@ import 'voice_capture_service.dart';
 part 'conversation_project_browser.dart';
 part 'conversation_drive.dart';
 part 'conversation_session_context.dart';
-part 'conversation_project_promotion.dart';
 part 'conversation_settings.dart';
 part 'conversation_resources.dart';
 part 'conversation_reviewed_changes.dart';
@@ -196,7 +195,6 @@ class _ConversationScreenState extends State<ConversationScreen>
   bool _projectBrowserLoading = false;
   bool _driveLoading = false;
   bool _modeCatalogLoading = false;
-  bool _promotingProject = false;
   bool _historyLoading = false;
   ProjectOverview? _projectOverview;
   List<ProjectCatalogEntry>? _projectCatalog;
@@ -865,11 +863,11 @@ class _ConversationScreenState extends State<ConversationScreen>
       _projectError = null;
     });
     try {
+      // §30: a folderless project has no linked root; browse its project views instead.
+      final rootUri =
+          project.hasLinkedFolder ? project.rootUri : project.projectUri;
       final overview = await widget.client.projectOverview(session.id);
-      final entries = await widget.client.listResources(
-        session.id,
-        project.rootUri,
-      );
+      final entries = await widget.client.listResources(session.id, rootUri);
       if (!mounted ||
           _session?.id != session.id ||
           _activeProjectId != project.id) {
@@ -880,9 +878,7 @@ class _ConversationScreenState extends State<ConversationScreen>
         _projectEntries = entries;
         _projectPath
           ..clear()
-          ..add(
-            _ProjectBrowserLocation(uri: project.rootUri, label: project.id),
-          );
+          ..add(_ProjectBrowserLocation(uri: rootUri, label: project.title));
       });
     } catch (error) {
       if (!mounted || _session?.id != session.id) return;
@@ -995,67 +991,6 @@ class _ConversationScreenState extends State<ConversationScreen>
         setState(() => _previewingResourceUri = null);
       }
     }
-  }
-
-  Future<void> _openProjectPromotion() async {
-    final session = _session;
-    final project = _activeProjectId;
-    if (session == null || project == null || _promotingProject) return;
-    final draft = await showModalBottomSheet<_ProjectPromotionDraft>(
-      context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder:
-          (context) => _ProjectPromotionSheet(
-            projectId: project,
-            suggestedSummary: _latestAssistantText(),
-          ),
-    );
-    if (draft == null || !mounted || _session?.id != session.id) return;
-    setState(() {
-      _promotingProject = true;
-      _projectError = null;
-    });
-    try {
-      final result = await widget.client.promoteSession(
-        session.id,
-        summary: draft.summary,
-        openLoops: draft.openLoops,
-        decisions: draft.decisions,
-        resources: draft.resources,
-      );
-      if (!mounted || _session?.id != session.id) return;
-      await _loadProject();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              '已整理 ${result.promotedCount} 項到 ${result.projectUri}。',
-            ),
-          ),
-        );
-    } catch (_) {
-      if (!mounted || _session?.id != session.id) return;
-      setState(() => _projectError = '沒有完成 Project 整理，請再試一次。');
-    } finally {
-      if (mounted && _session?.id == session.id) {
-        setState(() => _promotingProject = false);
-      }
-    }
-  }
-
-  String _latestAssistantText() {
-    for (final item in _items.reversed) {
-      if (item is _MessageItem &&
-          item.role == 'assistant' &&
-          item.text.trim().isNotEmpty) {
-        return item.text.trim();
-      }
-    }
-    return '';
   }
 
   Future<void> _loadHistory() async {
@@ -1340,8 +1275,8 @@ class _ConversationScreenState extends State<ConversationScreen>
         case 'drive_filed':
         case 'drive_moved':
         case 'drive_tagged':
-        case 'drive_linked':
-        case 'drive_unlinked':
+        case 'project_linked':
+        case 'project_unlinked':
         case 'drive_organizer_started':
         case 'drive_organizer_completed':
         case 'drive_organizer_failed':
@@ -1585,8 +1520,8 @@ class _ConversationScreenState extends State<ConversationScreen>
       'drive_filed' ||
       'drive_moved' ||
       'drive_tagged' ||
-      'drive_linked' ||
-      'drive_unlinked' ||
+      'project_linked' ||
+      'project_unlinked' ||
       'drive_organizer_started' ||
       'drive_organizer_completed' ||
       'drive_organizer_failed' ||
@@ -1843,8 +1778,6 @@ class _ConversationScreenState extends State<ConversationScreen>
             unawaited(_openProjectFile(entry));
           }
         },
-        promotingProject: _promotingProject,
-        onPromoteProject: _openProjectPromotion,
         onProjectUp: _goUpProjectDirectory,
         onRetryHistory: _loadHistory,
         onSelectSession: _openHistorySession,
@@ -2119,8 +2052,6 @@ class _ConversationDrawer extends StatelessWidget {
     required this.onSelectGlobalScope,
     required this.onSelectProject,
     required this.onOpenProjectEntry,
-    required this.promotingProject,
-    required this.onPromoteProject,
     required this.onProjectUp,
     required this.onRetryHistory,
     required this.onSelectSession,
@@ -2155,8 +2086,6 @@ class _ConversationDrawer extends StatelessWidget {
   final VoidCallback onSelectGlobalScope;
   final ValueChanged<ProjectCatalogEntry> onSelectProject;
   final ValueChanged<MikuResourceEntry> onOpenProjectEntry;
-  final bool promotingProject;
-  final VoidCallback onPromoteProject;
   final VoidCallback onProjectUp;
   final VoidCallback onRetryHistory;
   final ValueChanged<String> onSelectSession;
@@ -2232,8 +2161,6 @@ class _ConversationDrawer extends StatelessWidget {
                       onSelectProject: onSelectProject,
                       onOpenEntry: onOpenProjectEntry,
                       onUp: onProjectUp,
-                      promoting: promotingProject,
-                      onPromote: onPromoteProject,
                     ),
                   ),
                   _ExpandableDrawerDestination(
@@ -2397,8 +2324,6 @@ class _ProjectDrawerContent extends StatelessWidget {
     required this.onSelectProject,
     required this.onOpenEntry,
     required this.onUp,
-    required this.promoting,
-    required this.onPromote,
   });
 
   final ProjectOverview? overview;
@@ -2411,8 +2336,6 @@ class _ProjectDrawerContent extends StatelessWidget {
   final ValueChanged<ProjectCatalogEntry> onSelectProject;
   final ValueChanged<MikuResourceEntry> onOpenEntry;
   final VoidCallback onUp;
-  final bool promoting;
-  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -2429,8 +2352,6 @@ class _ProjectDrawerContent extends StatelessWidget {
       onSelectProject: onSelectProject,
       onOpenEntry: onOpenEntry,
       onUp: onUp,
-      promoting: promoting,
-      onPromote: onPromote,
     );
   }
 }

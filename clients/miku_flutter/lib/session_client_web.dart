@@ -738,28 +738,13 @@ class WebMikuSessionClient
   }
 
   @override
-  Future<ProjectPromotion> promoteSession(
-    String sessionId, {
-    String? summary,
-    List<String> openLoops = const [],
-    List<String> decisions = const [],
-    List<String> resources = const [],
-  }) async {
+  Future<int> assignSessionToProject(String projectId, String sessionId) async {
     final json = await _request(
       'POST',
-      '/sessions/$sessionId/promote',
-      body: {
-        if (summary != null && summary.trim().isNotEmpty)
-          'summary': summary.trim(),
-        'openLoops': openLoops,
-        'decisions': decisions,
-        'resources': resources,
-      },
+      '/projects/$projectId/sessions/$sessionId',
+      body: const {},
     );
-    return ProjectPromotion(
-      projectUri: json['projectUri'] as String? ?? '',
-      promotedCount: ((json['promoted'] as List?) ?? const []).length,
-    );
+    return (json['assigned'] as num?)?.toInt() ?? 0;
   }
 
   Future<Map<String, Object?>> _request(

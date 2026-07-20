@@ -288,8 +288,8 @@ extension _ConversationEventFidelity on _ConversationScreenState {
       case 'drive_filed':
       case 'drive_moved':
       case 'drive_tagged':
-      case 'drive_linked':
-      case 'drive_unlinked':
+      case 'project_linked':
+      case 'project_unlinked':
         _addActivity(
           event,
           _driveEventLabel(event.type),
@@ -971,8 +971,8 @@ String _driveEventLabel(String type) => switch (type) {
   'drive_filed' => 'Drive 文件已歸檔',
   'drive_moved' => 'Drive 文件已移動',
   'drive_tagged' => 'Drive 標籤已更新',
-  'drive_linked' => 'Project 資料夾已連結',
-  'drive_unlinked' => 'Project 資料夾已解除連結',
+  'project_linked' => 'Project 資料夾已連結',
+  'project_unlinked' => 'Project 資料夾已解除連結',
   _ => 'Drive 已更新',
 };
 

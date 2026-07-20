@@ -94,28 +94,16 @@ extension _NativeDriveClient on NativeMikuSessionClient {
         .toList();
   }
 
-  Future<ProjectPromotion> _promoteSessionImpl(
-    String sessionId, {
-    String? summary,
-    List<String> openLoops = const [],
-    List<String> decisions = const [],
-    List<String> resources = const [],
-  }) async {
+  Future<int> _assignSessionToProjectImpl(
+    String projectId,
+    String sessionId,
+  ) async {
     final json = await _request(
       'POST',
-      '/sessions/$sessionId/promote',
-      body: {
-        if (summary != null && summary.trim().isNotEmpty)
-          'summary': summary.trim(),
-        'openLoops': openLoops,
-        'decisions': decisions,
-        'resources': resources,
-      },
+      '/projects/$projectId/sessions/$sessionId',
+      body: const {},
     );
-    return ProjectPromotion(
-      projectUri: json['projectUri'] as String? ?? '',
-      promotedCount: ((json['promoted'] as List?) ?? const []).length,
-    );
+    return (json['assigned'] as num?)?.toInt() ?? 0;
   }
 
   ResourcePreview _resourcePreviewFromJson(

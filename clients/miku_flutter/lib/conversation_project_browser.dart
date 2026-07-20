@@ -44,8 +44,6 @@ class _ProjectBrowserView extends StatelessWidget {
     required this.onSelectProject,
     required this.onOpenEntry,
     required this.onUp,
-    required this.promoting,
-    required this.onPromote,
   });
 
   final _ProjectBrowserModel model;
@@ -57,8 +55,6 @@ class _ProjectBrowserView extends StatelessWidget {
   final ValueChanged<ProjectCatalogEntry> onSelectProject;
   final ValueChanged<MikuResourceEntry> onOpenEntry;
   final VoidCallback onUp;
-  final bool promoting;
-  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -89,8 +85,6 @@ class _ProjectBrowserView extends StatelessWidget {
       onRetry: onRetryBrowser,
       onOpenEntry: onOpenEntry,
       onUp: onUp,
-      promoting: promoting,
-      onPromote: onPromote,
     );
   }
 }
@@ -186,7 +180,7 @@ class _ProjectCatalogList extends StatelessWidget {
                 ),
                 leading: const Icon(Icons.folder_copy_outlined, size: 21),
                 title: Text(
-                  project.id,
+                  project.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -195,7 +189,9 @@ class _ProjectCatalogList extends StatelessWidget {
                       ? '目前對話'
                       : sessionEnded
                       ? '請先開新對話'
-                      : project.memoryScope,
+                      : project.hasLinkedFolder
+                      ? project.memoryScope
+                      : '${project.memoryScope}（無連結資料夾）',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -232,8 +228,6 @@ class _ProjectDirectoryView extends StatelessWidget {
     required this.onRetry,
     required this.onOpenEntry,
     required this.onUp,
-    required this.promoting,
-    required this.onPromote,
   });
 
   final _ProjectBrowserModel model;
@@ -241,8 +235,6 @@ class _ProjectDirectoryView extends StatelessWidget {
   final VoidCallback onRetry;
   final ValueChanged<MikuResourceEntry> onOpenEntry;
   final VoidCallback onUp;
-  final bool promoting;
-  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -288,11 +280,7 @@ class _ProjectDirectoryView extends StatelessWidget {
           ),
           Divider(height: 1, color: palette.outline),
           if (model.path.length == 1 && overview != null)
-            _ProjectOverviewSummary(
-              overview: overview!,
-              promoting: promoting,
-              onPromote: onPromote,
-            ),
+            _ProjectOverviewSummary(overview: overview!),
           if (model.error != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 6, 6, 2),
@@ -321,15 +309,9 @@ class _ProjectDirectoryView extends StatelessWidget {
 }
 
 class _ProjectOverviewSummary extends StatelessWidget {
-  const _ProjectOverviewSummary({
-    required this.overview,
-    required this.promoting,
-    required this.onPromote,
-  });
+  const _ProjectOverviewSummary({required this.overview});
 
   final ProjectOverview overview;
-  final bool promoting;
-  final VoidCallback onPromote;
 
   @override
   Widget build(BuildContext context) {
@@ -376,19 +358,6 @@ class _ProjectOverviewSummary extends StatelessWidget {
               items: overview.decisions,
             ),
           ],
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            key: const Key('promote-session'),
-            onPressed: promoting ? null : onPromote,
-            icon:
-                promoting
-                    ? const SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                    : const Icon(Icons.playlist_add_check_rounded, size: 18),
-            label: const Text('整理這段對話'),
-          ),
         ],
       ),
     );

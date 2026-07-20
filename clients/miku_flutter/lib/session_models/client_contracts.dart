@@ -149,13 +149,9 @@ abstract class MikuSessionClient {
 
   Future<List<MikuResourceEntry>> listResources(String sessionId, String uri);
 
-  Future<ProjectPromotion> promoteSession(
-    String sessionId, {
-    String? summary,
-    List<String> openLoops = const [],
-    List<String> decisions = const [],
-    List<String> resources = const [],
-  });
+  /// Assigns a closed session to a project (§30); returns the number of project items grown by the
+  /// server's observation catch-up.
+  Future<int> assignSessionToProject(String projectId, String sessionId);
 }
 
 abstract class ServerTargetClient {

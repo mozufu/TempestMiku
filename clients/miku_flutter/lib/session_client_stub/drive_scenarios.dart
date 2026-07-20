@@ -98,7 +98,7 @@ extension _ScriptedDriveScenarios on ScriptedMikuClient {
 
     controller.add(
       MikuEvent(
-        type: 'drive_linked',
+        type: 'project_linked',
         id: _eventId(),
         data: const {
           'action': 'link',

@@ -155,16 +155,33 @@ void main() {
     () {
       final project = ProjectCatalogEntry.fromJson({
         'id': 'tempestmiku',
+        'title': 'TempestMiku',
+        'status': 'active',
         'memoryScope': 'project:tempestmiku',
         'projectUri': 'project://tempestmiku',
         'linkedFoldersUri': 'project://tempestmiku/linked-folders',
+        'linkedFolderUris': ['project://tempestmiku/linked-folders/tempestmiku/'],
       });
       expect(project.id, 'tempestmiku');
+      expect(project.title, 'TempestMiku');
+      expect(project.status, 'active');
       expect(project.memoryScope, 'project:tempestmiku');
+      expect(project.hasLinkedFolder, isTrue);
       expect(
         project.rootUri,
         'project://tempestmiku/linked-folders/tempestmiku/',
       );
+
+      final folderless = ProjectCatalogEntry.fromJson({
+        'id': 'planning',
+        'title': 'Planning',
+        'status': 'active',
+        'memoryScope': 'project:planning',
+        'projectUri': 'project://planning',
+        'linkedFoldersUri': 'project://planning/linked-folders',
+      });
+      expect(folderless.hasLinkedFolder, isFalse);
+      expect(folderless.rootUri, isEmpty);
 
       final directory = MikuResourceEntry.fromJson({
         'uri': 'project://tempestmiku/linked-folders/tempestmiku/docs/',

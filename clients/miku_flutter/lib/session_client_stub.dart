@@ -57,8 +57,8 @@ class ScriptedMikuClient
   final List<String> resolvedApprovals = [];
   final List<String> lockedModes = [];
   final List<String> overriddenModes = [];
-  final List<List<String>> promotedResources = [];
-  final List<String?> promotedSummaries = [];
+  final List<String> assignedProjectIds = [];
+  final List<String> assignedSessionIds = [];
   final List<String> sentClientMessageIds = [];
   final List<String?> resolvedResourceSelectors = [];
   final List<String> revokedDeviceIds = [];
@@ -375,13 +375,18 @@ class ScriptedMikuClient
     return [
       const ProjectCatalogEntry(
         id: 'tempestmiku',
+        title: 'TempestMiku',
+        status: 'active',
         memoryScope: 'project:tempestmiku',
         projectUri: 'project://tempestmiku',
         linkedFoldersUri: 'project://tempestmiku/linked-folders',
+        linkedFolderUris: ['project://tempestmiku/linked-folders/tempestmiku/'],
       ),
       if (includeArchiveProject)
         const ProjectCatalogEntry(
           id: 'archive',
+          title: 'Archive',
+          status: 'active',
           memoryScope: 'project:archive',
           projectUri: 'project://archive',
           linkedFoldersUri: 'project://archive/linked-folders',
@@ -937,24 +942,15 @@ class ScriptedMikuClient
           sizeBytes: 64,
         ),
       ],
-      _ => const [],
+      _ => const <MikuResourceEntry>[],
     };
   }
 
   @override
-  Future<ProjectPromotion> promoteSession(
-    String sessionId, {
-    String? summary,
-    List<String> openLoops = const [],
-    List<String> decisions = const [],
-    List<String> resources = const [],
-  }) async {
-    promotedSummaries.add(summary);
-    promotedResources.add(List<String>.from(resources));
-    return ProjectPromotion(
-      projectUri: 'project://tempestmiku',
-      promotedCount: resources.length + (summary == null ? 0 : 1),
-    );
+  Future<int> assignSessionToProject(String projectId, String sessionId) async {
+    assignedProjectIds.add(projectId);
+    assignedSessionIds.add(sessionId);
+    return 3;
   }
 
   String _label(String mode) {

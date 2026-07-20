@@ -260,19 +260,8 @@ class NativeMikuSessionClient
       _listResourcesImpl(sessionId, uri);
 
   @override
-  Future<ProjectPromotion> promoteSession(
-    String sessionId, {
-    String? summary,
-    List<String> openLoops = const [],
-    List<String> decisions = const [],
-    List<String> resources = const [],
-  }) => _promoteSessionImpl(
-    sessionId,
-    summary: summary,
-    openLoops: openLoops,
-    decisions: decisions,
-    resources: resources,
-  );
+  Future<int> assignSessionToProject(String projectId, String sessionId) =>
+      _assignSessionToProjectImpl(projectId, sessionId);
 
   @visibleForTesting
   Future<String?> deviceTokenForTesting() => _deviceToken();

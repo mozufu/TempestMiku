@@ -3,26 +3,43 @@ part of '../session_models.dart';
 class ProjectCatalogEntry {
   const ProjectCatalogEntry({
     required this.id,
+    required this.title,
+    required this.status,
     required this.memoryScope,
     required this.projectUri,
     required this.linkedFoldersUri,
+    this.linkedFolderUris = const [],
   });
 
   factory ProjectCatalogEntry.fromJson(Map<String, Object?> json) {
+    final id = _stringValue(json['id']);
+    final title = _stringValue(json['title']);
+    final status = _stringValue(json['status']);
     return ProjectCatalogEntry(
-      id: _stringValue(json['id']),
+      id: id,
+      title: title.isEmpty ? id : title,
+      status: status.isEmpty ? 'active' : status,
       memoryScope: _stringValue(json['memoryScope']),
       projectUri: _stringValue(json['projectUri']),
       linkedFoldersUri: _stringValue(json['linkedFoldersUri']),
+      linkedFolderUris: _stringList(json['linkedFolderUris']),
     );
   }
 
   final String id;
+  final String title;
+  final String status;
   final String memoryScope;
   final String projectUri;
   final String linkedFoldersUri;
+  final List<String> linkedFolderUris;
 
-  String get rootUri => '$linkedFoldersUri/$id/';
+  /// True when the project has at least one attached linked folder (§30).
+  bool get hasLinkedFolder => linkedFolderUris.isNotEmpty;
+
+  /// The flat folder root shown in the picker; empty for a folderless project.
+  String get rootUri =>
+      linkedFolderUris.isNotEmpty ? linkedFolderUris.first : '';
 }
 
 class MikuResourceEntry {

@@ -286,7 +286,7 @@ impl<S, M, C> AppState<S, M, C> {
 
     /// Installs only the exact destination and secret references configured for production
     /// egress. The turn builder applies them only to an existing mode envelope that already owns
-    /// the read-only `http.get` capability; registration alone never grants authority.
+    /// the `http.request` capability; registration alone never grants authority.
     pub fn with_egress_config(mut self, config: &EgressConfig) -> Self {
         self.egress_turn_capabilities = Arc::new(config.turn_capabilities());
         self
@@ -307,7 +307,7 @@ impl<S, M, C> AppState<S, M, C> {
 
     fn extend_egress_turn_capabilities(&self, capabilities: &mut Vec<String>) {
         let base = CapabilityGrants::default().allow_many(capabilities.iter().cloned());
-        if !base.permits("http.get") {
+        if !base.permits("http.request") {
             return;
         }
         capabilities.extend(self.egress_turn_capabilities.iter().cloned());
@@ -320,7 +320,7 @@ impl<S, M, C> AppState<S, M, C> {
     /// interpreter sessions cannot retain bindings from an older generation or digest.
     ///
     /// Registration remains separate from authority. Only modes whose existing envelope permits
-    /// `http.get` receive the exact imported object and underlying P9 destination/secret grants.
+    /// `http.request` receive the exact imported object and underlying P9 destination/secret grants.
     pub fn with_mcp_runtime(
         mut self,
         catalog: McpCatalogView,
@@ -397,7 +397,7 @@ impl<S, M, C> AppState<S, M, C> {
 
     fn extend_mcp_turn_capabilities(&self, capabilities: &mut Vec<String>) {
         let base = CapabilityGrants::default().allow_many(capabilities.iter().cloned());
-        if !base.permits("http.get") {
+        if !base.permits("http.request") {
             return;
         }
         capabilities.extend(self.mcp_turn_capabilities.iter().cloned());

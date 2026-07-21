@@ -1,26 +1,16 @@
 use serde_json::{Value, json};
 
-use crate::{
-    DriveEntry, DriveLinkPlan, DriveOrganizerConfig, DriveUnlinkResult, OrganizerActionKind,
-    OrganizerProposal,
-};
+use crate::{DriveEntry, DriveLinkPlan, DriveUnlinkResult, OrganizerActionKind, OrganizerProposal};
 
-pub(crate) fn organizer_started_payload(apply: bool, config: &DriveOrganizerConfig) -> Value {
+pub(crate) fn organizer_started_payload(apply: bool) -> Value {
     json!({
         "apply": apply,
-        "tier": config.tier,
-        "autoApplyRules": config.auto_apply.len(),
     })
 }
 
-pub(crate) fn organizer_completed_payload(
-    apply: bool,
-    config: &DriveOrganizerConfig,
-    proposals: &[OrganizerProposal],
-) -> Value {
+pub(crate) fn organizer_completed_payload(apply: bool, proposals: &[OrganizerProposal]) -> Value {
     json!({
         "apply": apply,
-        "tier": config.tier,
         "runId": proposals.first().map(|proposal| proposal.source_run_id),
         "proposalCount": proposals.len(),
         "proposals": proposals.iter().map(organizer_proposal_event_payload).collect::<Vec<_>>(),
@@ -28,23 +18,17 @@ pub(crate) fn organizer_completed_payload(
     })
 }
 
-pub(crate) fn organizer_failed_payload(
-    apply: bool,
-    config: &DriveOrganizerConfig,
-    error: &str,
-) -> Value {
-    organizer_failed_payload_with_proposals(apply, config, error, &[])
+pub(crate) fn organizer_failed_payload(apply: bool, error: &str) -> Value {
+    organizer_failed_payload_with_proposals(apply, error, &[])
 }
 
 pub(crate) fn organizer_failed_payload_with_proposals(
     apply: bool,
-    config: &DriveOrganizerConfig,
     error: &str,
     proposals: &[OrganizerProposal],
 ) -> Value {
     json!({
         "apply": apply,
-        "tier": config.tier,
         "error": error,
         "runId": proposals.first().map(|proposal| proposal.source_run_id),
         "proposalCount": proposals.len(),

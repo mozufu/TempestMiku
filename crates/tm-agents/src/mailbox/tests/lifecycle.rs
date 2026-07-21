@@ -210,21 +210,19 @@ async fn one_for_all_supervision_cancels_siblings_and_emits_decision() {
 }
 
 #[tokio::test]
-async fn mark_complete_with_digest_stores_uris() {
+async fn mark_complete_with_resources_stores_uris() {
     let registry = MailboxRegistry::new();
     let id = ActorId::new("Worker").unwrap();
     registry.track(test_record("Worker")).await;
     registry
-        .mark_complete_with_digest(
+        .mark_complete_with_resources(
             &id,
-            "summary".to_string(),
             Some("artifact://1".to_string()),
             Some("history://Worker".to_string()),
         )
         .await;
     let rec = registry.get(&id).await.unwrap();
     assert_eq!(rec.status, ActorStatus::Terminated);
-    assert_eq!(rec.last_summary.as_deref(), Some("summary"));
     assert_eq!(rec.artifact_uri.as_deref(), Some("artifact://1"));
     assert_eq!(rec.history_uri.as_deref(), Some("history://Worker"));
 }

@@ -311,26 +311,26 @@ pub(super) struct Patch {
     docs: ToolDocs,
 }
 
-pub(super) struct ProductionHttpGet {
+pub(super) struct ProductionHttpRequest {
     docs: ToolDocs,
 }
 
-impl ProductionHttpGet {
+impl ProductionHttpRequest {
     pub(super) fn new() -> Self {
         Self {
             docs: ToolDocs {
-                name: "http.get".into(),
+                name: "http.request".into(),
                 namespace: "http".into(),
                 summary: "Production-bound HTTP test handler".into(),
                 description: None,
-                signature: "http.get(args)".into(),
+                signature: "http.request(args)".into(),
                 args_schema: json!({"type":"object"}),
                 result_schema: Some(json!({"type":"object"})),
                 examples: vec![],
                 errors: vec![],
                 grants: vec![GrantDoc {
                     kind: "capability".into(),
-                    description: "http.get".into(),
+                    description: "http.request".into(),
                 }],
                 sensitive: true,
                 approval: "none".into(),
@@ -342,7 +342,7 @@ impl ProductionHttpGet {
 }
 
 #[async_trait]
-impl HostFn for ProductionHttpGet {
+impl HostFn for ProductionHttpRequest {
     fn docs(&self) -> &ToolDocs {
         &self.docs
     }

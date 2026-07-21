@@ -19,10 +19,10 @@ use super::{
 };
 use crate::{
     DriveCollisionStrategy, DriveCorrectionRecord, DriveDedupeMode, DriveEntry, DriveEntryStatus,
-    DriveLinkPlan, DriveLinkRecord, DriveLinkStatus, DriveListOptions, DriveOrganizerConfig,
-    DrivePutOptions, DrivePutResult, DriveSearchOptions, DriveSearchResult, OrganizerActionKind,
-    OrganizerProposal, OrganizerRun, OrganizerRunStatus, PolicyDecision, ProposalStatus,
-    generate_organizer_proposals_for_run, initial_record_version,
+    DriveLinkPlan, DriveLinkRecord, DriveLinkStatus, DriveListOptions, DrivePutOptions,
+    DrivePutResult, DriveSearchOptions, DriveSearchResult, OrganizerActionKind, OrganizerProposal,
+    OrganizerRun, OrganizerRunStatus, ProposalStatus, generate_organizer_proposals_for_run,
+    initial_record_version,
 };
 
 #[async_trait]
@@ -49,15 +49,9 @@ pub trait DriveOperations: Debug + Send + Sync {
         collision: DriveCollisionStrategy,
     ) -> crate::Result<DriveEntry>;
     async fn tag_entry(&self, path_or_uri: &str, tags: Vec<String>) -> crate::Result<DriveEntry>;
-    async fn organize_with_config(
-        &self,
-        config: DriveOrganizerConfig,
-    ) -> crate::Result<Vec<OrganizerProposal>>;
-    async fn organize_scoped_with_config(
-        &self,
-        project: Option<&str>,
-        config: DriveOrganizerConfig,
-    ) -> crate::Result<Vec<OrganizerProposal>>;
+    async fn organize(&self) -> crate::Result<Vec<OrganizerProposal>>;
+    async fn organize_scoped(&self, project: Option<&str>)
+    -> crate::Result<Vec<OrganizerProposal>>;
     async fn pending_proposal_ids(&self) -> crate::Result<Vec<Uuid>>;
     async fn mark_proposals_status(
         &self,
@@ -347,10 +341,7 @@ where
             .await
     }
 
-    async fn organize_with_config(
-        &self,
-        config: DriveOrganizerConfig,
-    ) -> crate::Result<Vec<OrganizerProposal>> {
+    async fn organize(&self) -> crate::Result<Vec<OrganizerProposal>> {
         let now = Utc::now();
         let active = self
             .metadata
@@ -415,30 +406,6 @@ where
             proposals.push(self.metadata.insert_proposal(proposal).await?);
         }
 
-        let mut auto_apply_ids = Vec::new();
-        for proposal in &mut proposals {
-            if !super::core::organizer_auto_apply_allowed(proposal, &config) {
-                continue;
-            }
-            let mut replacement = proposal.clone();
-            replacement.policy_decision = PolicyDecision::AutoApply;
-            *proposal = self
-                .metadata
-                .compare_and_swap_proposal(proposal.id, proposal.version, replacement)
-                .await?;
-            auto_apply_ids.push(proposal.id);
-        }
-        if !auto_apply_ids.is_empty() {
-            for applied in self.apply_proposals(&auto_apply_ids).await? {
-                if let Some(proposal) = proposals
-                    .iter_mut()
-                    .find(|proposal| proposal.id == applied.id)
-                {
-                    *proposal = applied;
-                }
-            }
-        }
-
         let completed_at = Utc::now();
         let mut completed = running.clone();
         completed.status = OrganizerRunStatus::Completed;
@@ -453,10 +420,9 @@ where
         Ok(proposals)
     }
 
-    async fn organize_scoped_with_config(
+    async fn organize_scoped(
         &self,
         project: Option<&str>,
-        config: DriveOrganizerConfig,
     ) -> crate::Result<Vec<OrganizerProposal>> {
         let now = Utc::now();
         let active = self
@@ -535,29 +501,6 @@ where
         let mut proposals = Vec::with_capacity(generated.len());
         for proposal in generated {
             proposals.push(self.metadata.insert_proposal(proposal).await?);
-        }
-        let mut auto_apply_ids = Vec::new();
-        for proposal in &mut proposals {
-            if !super::core::organizer_auto_apply_allowed(proposal, &config) {
-                continue;
-            }
-            let mut replacement = proposal.clone();
-            replacement.policy_decision = PolicyDecision::AutoApply;
-            *proposal = self
-                .metadata
-                .compare_and_swap_proposal(proposal.id, proposal.version, replacement)
-                .await?;
-            auto_apply_ids.push(proposal.id);
-        }
-        if !auto_apply_ids.is_empty() {
-            for applied in self.apply_proposals(&auto_apply_ids).await? {
-                if let Some(proposal) = proposals
-                    .iter_mut()
-                    .find(|proposal| proposal.id == applied.id)
-                {
-                    *proposal = applied;
-                }
-            }
         }
         let completed_at = Utc::now();
         let mut completed = running.clone();

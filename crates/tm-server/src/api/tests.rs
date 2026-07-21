@@ -42,8 +42,9 @@ fn test_app(persona: ModesConfig, auth: AuthConfig) -> (Router, Arc<InMemoryStor
         safe_args: Vec::new(),
     }])
     .expect("test linked project");
-    let state =
-        AppState::new(store.clone(), memory, chat, persona, auth).with_linked_folders(linked);
+    let state = AppState::new(store.clone(), memory, chat, persona, auth)
+        .with_linked_folders(linked)
+        .with_coding_backend(Arc::new(EchoCodingBackend));
     (app(state), store)
 }
 
@@ -294,6 +295,36 @@ impl CodingBackend for RecordingBackend {
     ) -> Result<CodingTurnResult> {
         self.turns.lock().push(turn);
         let final_text = "recorded coding turn".to_string();
+        sink.emit(
+            "final",
+            serde_json::to_value(StoreEvent::Final {
+                text: final_text.clone(),
+            })?,
+        )
+        .await?;
+        Ok(CodingTurnResult {
+            final_text,
+            transcript_artifact: None,
+        })
+    }
+}
+
+/// Coding-mode analogue of `EchoChatRunner`: completes any coding turn with a
+/// deterministic non-empty response and a replayable `final` event. Used by the
+/// shared `test_app` so serious_engineer/handoff turns dispatch and complete
+/// under the fail-closed backend contract without asserting on a specific backend.
+struct EchoCodingBackend;
+
+#[async_trait]
+impl CodingBackend for EchoCodingBackend {
+    async fn run_turn(
+        &self,
+        turn: CodingTurn,
+        sink: Arc<dyn CodingEventSink>,
+    ) -> Result<CodingTurnResult> {
+        let final_text = format!("Miku heard: {}", turn.user_prompt);
+        sink.emit("text", json!({ "event": "text", "delta": &final_text }))
+            .await?;
         sink.emit(
             "final",
             serde_json::to_value(StoreEvent::Final {

@@ -109,29 +109,43 @@ async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
         tool_turn(),
         final_turn(),
     ]));
+    let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+    let cfg = AgentConfig {
+        model: "fake".to_string(),
+        max_turns: 3,
+        ..AgentConfig::default()
+    };
     let chat = Arc::new(AgentChatRunner::tm(
         llm.clone(),
-        AgentConfig {
-            model: "fake".to_string(),
-            max_turns: 3,
-            ..AgentConfig::default()
-        },
+        cfg.clone(),
         TmSandboxOptions {
-            artifact_root,
+            artifact_root: artifact_root.clone(),
             linked_folders: Some(linked.clone()),
             ..TmSandboxOptions::default()
         },
     ));
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
-    let state = AppState::new(
+    let mut state = AppState::new(
         store,
         memory,
         chat,
         ModesConfig::default(),
         AuthConfig::NoAuth,
     )
-    .with_linked_folders(linked);
+    .with_linked_folders(linked.clone());
+    let backend = NativeTmBackend::new(
+        llm_for_backend,
+        cfg,
+        TmSandboxOptions {
+            artifact_root,
+            linked_folders: Some(linked),
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Deny,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
     let router = app(state);
 
     for mode in ["general", "handoff"] {
@@ -183,7 +197,7 @@ let unsafeProc = handle (@proc.run {cmd: "cargo", args: ["clean"], cwd: "repo:"}
   | ApprovalTimeoutError {message, ...} -> {name: "ApprovalTimeoutError", message: message}
   | other -> rethrow other
 };
-let deniedHttp = handle (@http.get {url: "https://evil.test/"}) with error {
+let deniedHttp = handle (@http.request {method: "GET", url: "https://evil.test/"}) with error {
   | CapabilityDeniedError {message, ...} -> {name: "CapabilityDeniedError", message: message}
   | other -> rethrow other
 };
@@ -223,19 +237,11 @@ let deniedHttp = handle (@http.get {url: "https://evil.test/"}) with error {
         },
         ..AgentConfig::default()
     };
-    let chat = Arc::new(AgentChatRunner::tm(
-        llm.clone(),
-        cfg,
-        TmSandboxOptions {
-            artifact_root: artifact_root.clone(),
-            linked_folders: Some(linked.clone()),
-            approval_timeout: Duration::from_millis(1),
-            ..TmSandboxOptions::default()
-        },
-    ));
+    let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+    let chat = Arc::new(EchoChatRunner);
     let store = Arc::new(InMemoryStore::default());
     let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
-    let state = AppState::new(
+    let mut state = AppState::new(
         store.clone(),
         memory,
         chat,
@@ -243,7 +249,20 @@ let deniedHttp = handle (@http.get {url: "https://evil.test/"}) with error {
         AuthConfig::NoAuth,
     )
     .with_artifact_root(artifact_root.clone())
-    .with_linked_folders(linked);
+    .with_linked_folders(linked.clone());
+    let backend = NativeTmBackend::new(
+        llm_for_backend,
+        cfg,
+        TmSandboxOptions {
+            artifact_root: artifact_root.clone(),
+            linked_folders: Some(linked),
+            approval_timeout: Duration::from_millis(1),
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Manual,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
     let router = app(state);
     let session = create_with_body(
         &router,
@@ -381,7 +400,7 @@ async fn serious_engineer_native_tm_uses_linked_repo_and_scoped_drive_search() {
     let code = format!(
         r#"
 let read = @fs.read {{path: "repo:src/lib.rs"}};
-let hits = @code.search {{pattern: "linked_answer", paths: ["repo:src/lib.rs"], regex: false}};
+let hits = @fs.grep {{pattern: "linked_answer", paths: ["repo:src/lib.rs"], regex: false}};
 let driveHits = @drive.search {{query: "Scoped", project: "repo", returnSnippets: true}};
 let driveHit = match driveHits {{ | first :: _ -> first | [] -> null }};
 {{

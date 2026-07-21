@@ -31,20 +31,19 @@ impl MailboxRegistry {
         true
     }
 
-    /// Mark an actor as successfully terminated and store its full digest (P3.3).
+    /// Mark an actor as successfully terminated and store its output/history URIs (P3.3).
     ///
-    /// Stores summary (seeds `agents.msg` continuations), artifact URI, and history URI.
-    pub async fn mark_complete_with_digest_for_session(
+    /// Stores artifact URI and history URI. Digest summaries are returned by the orchestration
+    /// calls, not cached in the roster.
+    pub async fn mark_complete_with_resources_for_session(
         &self,
         session_id: &str,
         id: &ActorId,
-        summary: String,
         artifact_uri: Option<String>,
         history_uri: Option<String>,
     ) -> bool {
-        let summary = tm_memory::redact_dream_text(&summary).text;
         let Some(supervisor_id) = self
-            .mark_complete_record(session_id, id, Some((summary, artifact_uri, history_uri)))
+            .mark_complete_record(session_id, id, Some((artifact_uri, history_uri)))
             .await
         else {
             return false;
@@ -152,7 +151,7 @@ impl MailboxRegistry {
         &self,
         session_id: &str,
         id: &ActorId,
-        digest: Option<(String, Option<String>, Option<String>)>,
+        resources: Option<(Option<String>, Option<String>)>,
     ) -> Option<ActorId> {
         let mut actors = self.actors.write().await;
         let rec = actors.get_mut(&ActorKey::new(session_id, id))?;
@@ -161,8 +160,7 @@ impl MailboxRegistry {
         }
         rec.status = ActorStatus::Terminated;
         rec.completed_at = Some(Utc::now());
-        if let Some((summary, artifact_uri, history_uri)) = digest {
-            rec.last_summary = Some(summary);
+        if let Some((artifact_uri, history_uri)) = resources {
             rec.artifact_uri = artifact_uri;
             rec.history_uri = history_uri;
         }

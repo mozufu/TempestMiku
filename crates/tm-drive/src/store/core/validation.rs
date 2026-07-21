@@ -177,22 +177,6 @@ pub(crate) fn host_drive_put_options(mut options: DrivePutOptions) -> DrivePutOp
     options
 }
 
-pub(crate) fn validate_host_organizer_config(config: &DriveOrganizerConfig) -> tm_host::Result<()> {
-    if config.tier != DriveAutomationTier::Conservative {
-        return Err(HostError::InvalidArgs(
-            "drive.organize host calls only accept conservative tier; auto-apply is server-policy only"
-                .to_string(),
-        ));
-    }
-    if !config.auto_apply.is_empty() {
-        return Err(HostError::InvalidArgs(
-            "drive.organize host calls cannot include autoApply rules; auto-apply is server-policy only"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn linked_alias_from_target(target: &str) -> tm_host::Result<String> {
     let target = target.trim();
     if target.is_empty() {

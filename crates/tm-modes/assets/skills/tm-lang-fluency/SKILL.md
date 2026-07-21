@@ -17,7 +17,7 @@ Write tm, not JavaScript, TypeScript, Python, or shell.
 - Calls use whitespace. Pipelines pass their left value as the final argument. Write lambdas as
   `fun value -> expr`.
 - Call host effects with a literal `@`, for example
-  `@code.search {pattern: "TODO", paths: ["repo:src"], regex: false}`.
+  `@fs.grep {pattern: "TODO", paths: ["repo:src"], regex: false}`.
 - Records are JSON-shaped but have no spread. Update with `merge {field: value} base`. Write
   semicolon-separated effect sequences as `do { effect; final_value }`.
 - Core transformations are data-last: `text |> lines`, `text |> split ","`,
@@ -37,7 +37,7 @@ Write tm, not JavaScript, TypeScript, Python, or shell.
   escaped strings, or broad reads.
 
 ```tm
-let hits = @code.search {pattern: "TODO", paths: ["repo:src"], regex: false};
+let hits = @fs.grep {pattern: "TODO", paths: ["repo:src"], regex: false};
 let paths = hits |> map (fun hit -> hit.path);
 paths |> display {kind: "table", title: "Matches"};
 paths

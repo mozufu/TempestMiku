@@ -87,10 +87,10 @@ impl Sandbox for TmSandbox {
         .map_err(|error| tm_core::Error::Sandbox(error.to_string()))?;
         let mut registry = self.options.host_registry.clone();
         // The in-memory URL map is a deterministic M1/test fixture. An application-provided
-        // production `http.get` handler owns the name and must never be replaced while opening a
+        // production `http.request` handler owns the name and must never be replaced while opening a
         // persistent tm session.
-        if !registry.contains("http.get") {
-            registry.register(Arc::new(HttpGetFn::new(
+        if !registry.contains("http.request") {
+            registry.register(Arc::new(HttpRequestFixtureFn::new(
                 self.options.http_allowlist.clone(),
             )));
         }
@@ -178,38 +178,21 @@ impl Sandbox for TmSandbox {
         ] {
             registry.register(Arc::new(ResourceFn::new(operation, resources.clone())));
         }
-        for operation in [
-            ArtifactOperation::Put,
-            ArtifactOperation::Get,
-            ArtifactOperation::Slice,
-            ArtifactOperation::List,
-        ] {
-            registry.register(Arc::new(ArtifactFn::new(operation, artifacts.clone())));
-        }
+        registry.register(Arc::new(ArtifactFn::new(artifacts.clone())));
         // Session-local output spilling and granted-catalog inspection are intrinsic tm runtime
         // operations. They do not add host, resource-read, network, or child authority.
-        invocation.grants = invocation.grants.clone().allow_many([
-            "artifacts.put",
-            "tools.search",
-            "tools.docs",
-            "tools.call",
-        ]);
-        if invocation.grants.permits("resources.read:artifact") {
-            invocation.grants = invocation.grants.clone().allow_many([
-                "artifacts.get",
-                "artifacts.slice",
-                "artifacts.list",
-            ]);
-            if !catalog_schemes.iter().any(|scheme| scheme == "artifact") {
-                catalog_schemes.push("artifact".into());
-            }
+        invocation.grants =
+            invocation
+                .grants
+                .clone()
+                .allow_many(["artifacts.put", "tools.search", "tools.docs"]);
+        if invocation.grants.permits("resources.read:artifact")
+            && !catalog_schemes.iter().any(|scheme| scheme == "artifact")
+        {
+            catalog_schemes.push("artifact".into());
         }
         let catalog_registry = Arc::new(registry.clone());
-        for operation in [
-            CatalogOperation::Search,
-            CatalogOperation::Docs,
-            CatalogOperation::Call,
-        ] {
+        for operation in [CatalogOperation::Search, CatalogOperation::Docs] {
             registry.register(Arc::new(CatalogFn::new(
                 operation,
                 Arc::clone(&catalog_registry),
@@ -234,7 +217,6 @@ mod adapters;
 mod session;
 
 use adapters::{
-    ArtifactFn, ArtifactOperation, CatalogFn, CatalogOperation, HttpGetFn, ResourceFn,
-    ResourceOperation,
+    ArtifactFn, CatalogFn, CatalogOperation, HttpRequestFixtureFn, ResourceFn, ResourceOperation,
 };
 use session::TmSession;

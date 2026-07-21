@@ -66,7 +66,7 @@ impl AgentsParallelFn {
                 result_schema: Some(json!({ "type": "array", "items": { "type": "object" } })),
                 examples: vec![ToolExample {
                     title: Some("Research three topics in parallel".to_string()),
-                    code: "let results = @agents.parallel {tasks: [\n  {role: \"researcher\", task: \"Research and summarize §21\"},\n  {role: \"researcher\", task: \"Research and summarize §22\"}\n], opts: {capabilities: [\"http.get\", \"resources.read:artifact\"]}};\nresults |> map (fun d -> d.summary) |> display {kind: \"json\"}"
+                    code: "let results = @agents.parallel {tasks: [\n  {role: \"researcher\", task: \"Research and summarize §21\"},\n  {role: \"researcher\", task: \"Research and summarize §22\"}\n], opts: {capabilities: [\"http.request\", \"resources.read:artifact\"]}};\nresults |> map (fun d -> d.summary) |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some(
                         "The parent must hold every explicitly delegated capability. Digests only — use d.historyUri for the full output of each actor."
@@ -171,7 +171,6 @@ impl HostFn for AgentsParallelFn {
                                 completed_at: None,
                                 cancelled: false,
                                 failure_reason: None,
-                                last_summary: None,
                                 artifact_uri: None,
                                 history_uri: None,
                             },

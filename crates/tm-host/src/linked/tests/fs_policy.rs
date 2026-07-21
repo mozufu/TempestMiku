@@ -374,10 +374,10 @@ async fn mutations_reject_files_above_the_bounded_read_limit() {
 }
 
 #[tokio::test]
-async fn code_search_returns_tag_and_context() {
+async fn fs_grep_returns_tag_and_context() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("lib.rs"), "before\nneedle here\nafter\n").unwrap();
-    let search = CodeSearchFn::new(temp_linked(root.path(), FsMode::Rw));
+    let search = FsGrepFn::new(temp_linked(root.path(), FsMode::Rw));
     let value = call_fn(
         &search,
         json!({"pattern":"needle","paths":["tempestmiku:lib.rs"],"regex":false,"contextLines":1}),
@@ -408,7 +408,7 @@ async fn linked_walk_and_search_arguments_are_hard_bounded() {
     let linked = temp_linked(root.path(), FsMode::Ro);
     let ls = FsLsFn::new(linked.clone());
     let find = FsFindFn::new(linked.clone());
-    let search = CodeSearchFn::new(linked);
+    let search = FsGrepFn::new(linked);
 
     let ls_error = ls
         .call(json!({"path":"tempestmiku:","limit":10_001}), &ctx())

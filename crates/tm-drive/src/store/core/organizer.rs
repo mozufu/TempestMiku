@@ -2,31 +2,12 @@ use super::*;
 
 impl DriveService<InMemoryDriveMetadataStore> {
     pub fn organize(&self) -> crate::Result<Vec<OrganizerProposal>> {
-        self.organize_with_config(DriveOrganizerConfig::default())
-    }
-
-    pub fn organize_with_config(
-        &self,
-        config: DriveOrganizerConfig,
-    ) -> crate::Result<Vec<OrganizerProposal>> {
         let now = Utc::now();
         self.enqueue_organizer_run("manual", now);
         let run = self
             .claim_ready_organizer_run(now, Duration::seconds(30))?
             .ok_or_else(|| DriveError::Store("organizer worker already running".to_string()))?;
-        let mut proposals = self.generate_organizer_proposals_for_run(run.id)?;
-        let auto_apply_ids = self.mark_auto_apply_proposals(&proposals, &config);
-        if !auto_apply_ids.is_empty() {
-            let applied = self.apply_organizer_proposals(&auto_apply_ids)?;
-            for updated in applied {
-                if let Some(proposal) = proposals
-                    .iter_mut()
-                    .find(|proposal| proposal.id == updated.id)
-                {
-                    *proposal = updated;
-                }
-            }
-        }
+        let proposals = self.generate_organizer_proposals_for_run(run.id)?;
         let proposal_ids = proposals
             .iter()
             .map(|proposal| proposal.id)
@@ -196,26 +177,6 @@ impl DriveService<InMemoryDriveMetadataStore> {
         Ok(proposals)
     }
 
-    fn mark_auto_apply_proposals(
-        &self,
-        proposals: &[OrganizerProposal],
-        config: &DriveOrganizerConfig,
-    ) -> Vec<Uuid> {
-        let mut inner = self.metadata.inner.lock();
-        let mut ids = Vec::new();
-        for proposal in proposals {
-            if !organizer_auto_apply_allowed(proposal, config) {
-                continue;
-            }
-            if let Some(stored) = inner.proposals.get_mut(&proposal.id) {
-                stored.policy_decision = PolicyDecision::AutoApply;
-                bump_version(&mut stored.version);
-                ids.push(stored.id);
-            }
-        }
-        ids
-    }
-
     pub fn pending_proposal_ids(&self) -> Vec<Uuid> {
         self.metadata
             .inner
@@ -293,35 +254,6 @@ pub(crate) fn running_organizer_run_mut(
         )));
     }
     Ok(run)
-}
-
-pub(crate) fn organizer_auto_apply_allowed(
-    proposal: &OrganizerProposal,
-    config: &DriveOrganizerConfig,
-) -> bool {
-    if matches!(config.tier, DriveAutomationTier::Conservative) {
-        return false;
-    }
-    config.auto_apply.iter().any(|rule| {
-        !rule.actions.is_empty()
-            && rule.actions.iter().any(|action| action == &proposal.action)
-            && proposal.confidence >= rule.min_confidence
-            && optional_class_match(&rule.doc_kinds, proposal.proposed_doc_kind.as_deref())
-            && optional_class_match(&rule.projects, proposal.proposed_project.as_deref())
-    })
-}
-
-pub(crate) fn optional_class_match(allowed: &[String], value: Option<&str>) -> bool {
-    if allowed.is_empty() {
-        return true;
-    }
-    let Some(value) = value else {
-        return false;
-    };
-    let value = value.trim();
-    allowed
-        .iter()
-        .any(|allowed| allowed.trim().eq_ignore_ascii_case(value))
 }
 
 pub(crate) fn apply_organizer_proposal(

@@ -1,6 +1,6 @@
 //! TempestMiku actor lifecycle, mailbox, orchestration, supervision, and agent:// resources.
 //!
-//! P3/P3-plus implementation — `agents.run`, `agents.spawn`, `agents.parallel`, `agents.msg`,
+//! P3/P3-plus implementation — `agents.run`, `agents.spawn`, `agents.parallel`,
 //! and the live mailbox primitives (`agents.send`, `agents.broadcast`, `agents.wait`,
 //! `agents.inbox`, `agents.list`, `agents.cancel`) are live when an `ActorExecutor`
 //! is injected at startup.

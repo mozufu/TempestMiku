@@ -11,11 +11,9 @@ mod authority;
 mod linked;
 mod operations;
 mod organizer;
-mod research;
 
 pub(crate) use authority::drive_authority;
 use linked::{DriveLinkFn, DriveUnlinkFn};
-use research::ResearchDriveFn;
 
 pub fn register_drive_functions(
     host_registry: &mut HostRegistry,
@@ -40,7 +38,6 @@ pub fn register_drive_functions(
         linked_for_unlink,
     )));
     host_registry.register(Arc::new(DriveOrganizeFn::new(store.clone())));
-    host_registry.register(Arc::new(ResearchDriveFn::new(store.clone())));
     resource_registry.register(Arc::new(DriveResourceHandler::new(store)));
 }
 

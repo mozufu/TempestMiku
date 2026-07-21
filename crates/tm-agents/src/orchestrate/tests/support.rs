@@ -43,7 +43,6 @@ pub(super) async fn track_actor(
                 completed_at: matches!(status, ActorStatus::Terminated).then(chrono::Utc::now),
                 cancelled: false,
                 failure_reason: None,
-                last_summary: None,
                 artifact_uri: None,
                 history_uri: None,
             },

@@ -40,7 +40,7 @@ character + mode, budget, and capability grant. Cast as an actor:
 | **Behavior** | current **mode** (§21) + **role** + capability grant; resolved per message (late binding) |
 | **Designate next behavior** | mode switch / scope update between messages (persona self-edit, §21) |
 | **Create** | `agents.spawn` / `agents.run` |
-| **Send** | `agents.msg` plus `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
+| **Send** | `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
 
 Encapsulation is hard: one actor **never** reaches into another's context or transcript. `history://<id>`
 is **read-only** observation, not state access; coordination is by message, not by shared memory.
@@ -48,7 +48,7 @@ is **read-only** observation, not state access; coordination is by message, not 
 ## 23.2 Messaging substrate — the only inter-agent coupling
 
 Async message passing is the sole way actors affect one another (Hewitt; Kay). No shared state, ever. The
-reference implementation is the harness `irc` model. `agents.msg` provides handle-based messaging;
+reference implementation is the harness `irc` model. `agents.send` provides handle-based messaging;
 the table below is the complete live mailbox surface:
 
 | Primitive | Semantics |
@@ -91,19 +91,18 @@ The concrete call surface:
 | `agents.run(role, task, opts.capabilities?)` | spawn one actor, await its result; optionally delegate a bounded capability subset |
 | `agents.spawn(role, task, opts.capabilities?) -> handle` | non-blocking; optionally delegate a bounded capability subset, then coordinate via the handle / messages |
 | `agents.parallel([{role, task, timeoutMs?, budget?}, …], opts.capabilities?)` | fan-out, bounded pool, **one wave**, ordered results with optional per-child budget and shared delegated subset |
-| `agents.msg(handle, text, opts?)` | send to a spawned actor (request / reply or fire-and-forget) |
 
-> **Live mailbox and supervision.** `agents.msg` remains the handle-oriented convenience primitive,
-> while bounded per-actor inbox queues provide resident delivery: fire-and-forget reaches a live actor
-> inbox, `opts.await = true` waits for a live reply when the target is still running, and already
-> completed actors keep the seeded-continuation fallback. Lower-level
+> **Live mailbox and supervision.** Bounded per-actor inbox queues provide resident delivery:
+> `agents.send` fire-and-forget reaches a live actor inbox, `opts.await = true` waits for a live
+> reply when the target is still running, and delivery to an unreachable actor returns a failed
+> receipt. Lower-level
 > `send`/`broadcast`/`wait`/`inbox`/`list` are live. Child approval requests route through the parent
 > session's live `HttpApprovalPolicy` + `ApprovalBroker`, so approval-gated effects inside child actors
 > emit replayable SSE `approval` / `approval_resolved` events and resolve through the same UI/API path
 > as top-level coding turns. `agents.cancel` uses per-actor cancellation tokens: a direct parent can
 > trip a running child, the actor record becomes terminal, and one replayable `actor_cancelled` event
 > lands in the parent session log. Plain-prose message enforcement rejects control-payload blobs at
-> the `agents.msg` / `agents.send` / `agents.broadcast` boundary. DAG enforcement rejects targeted
+> the `agents.send` / `agents.broadcast` boundary. DAG enforcement rejects targeted
 > live waits where a real actor would wait on itself or its own descendant. `agents.pipeline` runs
 > staged actor waves with a barrier between stages and feeds compact digest references downstream:
 > `agent://` / `history://` / artifact handles plus a bounded summary, never an upstream transcript.
@@ -132,7 +131,7 @@ are server control planes and are never delegable. The list accepts at most 32 n
 ```tm
 let results = @agents.parallel {
   tasks: [{role: "researcher", task: "Research and summarize the supplied artifact."}],
-  opts: {capabilities: ["http.get", "resources.read:artifact"]}
+  opts: {capabilities: ["http.request", "resources.read:artifact"]}
 };
 ```
 
@@ -204,7 +203,7 @@ message type baked into the protocol. This is Kay's *"extreme late-binding of al
 
 ## 23.7 `agents.*` capability + `agent://` resources
 
-- **Orchestration calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.msg`.
+- **Orchestration calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.pipeline`.
 - **Mailbox calls:** lower-level primitives `agents.send`, `agents.broadcast`, `agents.wait`,
   `agents.inbox`, `agents.list`, `agents.cancel`, and `agents.pipeline`.
 - **Supervision behavior:** active restart supervision, wall-clock budget enforcement, fail-fast

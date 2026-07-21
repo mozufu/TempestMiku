@@ -5,7 +5,7 @@ use tm_host::{CapabilityGrants, InvocationCtx};
 fn delegation_context() -> InvocationCtx {
     InvocationCtx::new(CapabilityGrants::default().allow_many([
         "agents.*",
-        "http.get",
+        "http.request",
         "resources.read:artifact",
     ]))
 }
@@ -33,7 +33,7 @@ impl crate::executor::ActorExecutor for GrantCaptureExecutor {
 }
 
 fn delegated_opts() -> Value {
-    json!({"capabilities": ["http.get", "resources.read:artifact"]})
+    json!({"capabilities": ["http.request", "resources.read:artifact"]})
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn child_grants_are_an_explicit_bounded_parent_subset() {
     let grants = child_agent_grants(&ctx, Some(&delegated_opts())).unwrap();
     assert_eq!(
         grants.names().collect::<Vec<_>>(),
-        vec!["http.get", "resources.read:artifact"]
+        vec!["http.request", "resources.read:artifact"]
     );
     assert!(!grants.permits("agents.run"));
 
@@ -74,7 +74,7 @@ fn child_grants_are_an_explicit_bounded_parent_subset() {
     ));
 
     let too_many = (0..=MAX_CHILD_CAPABILITIES)
-        .map(|_| Value::String("http.get".to_string()))
+        .map(|_| Value::String("http.request".to_string()))
         .collect::<Vec<_>>();
     assert!(matches!(
         child_agent_grants(&ctx, Some(&json!({"capabilities": too_many}))),
@@ -83,7 +83,7 @@ fn child_grants_are_an_explicit_bounded_parent_subset() {
 
     let egress_parent = InvocationCtx::new(CapabilityGrants::default().allow_many([
         "agents.*",
-        "http.get",
+        "http.request",
         "egress.destination:research",
         "secrets.use",
         "secrets.use:research_api",
@@ -91,7 +91,7 @@ fn child_grants_are_an_explicit_bounded_parent_subset() {
     let egress_child = child_agent_grants(
         &egress_parent,
         Some(&json!({"capabilities": [
-            "http.get",
+            "http.request",
             "egress.destination:research",
             "secrets.use",
             "secrets.use:research_api"
@@ -102,7 +102,7 @@ fn child_grants_are_an_explicit_bounded_parent_subset() {
         egress_child.names().collect::<Vec<_>>(),
         vec![
             "egress.destination:research",
-            "http.get",
+            "http.request",
             "secrets.use",
             "secrets.use:research_api",
         ]
@@ -175,7 +175,7 @@ async fn delegation_opts_reach_run_spawn_parallel_and_pipeline() {
         assert_eq!(
             grants,
             &[
-                "http.get".to_string(),
+                "http.request".to_string(),
                 "resources.read:artifact".to_string()
             ]
         );
@@ -243,7 +243,6 @@ fn caps_module_defines_mvp_set() {
     assert_eq!(caps::AGENTS_SPAWN, "agents.spawn");
     assert_eq!(caps::AGENTS_PARALLEL, "agents.parallel");
     assert_eq!(caps::AGENTS_PIPELINE, "agents.pipeline");
-    assert_eq!(caps::AGENTS_MSG, "agents.msg");
     assert_eq!(caps::AGENTS_SEND, "agents.send");
     assert_eq!(caps::AGENTS_BROADCAST, "agents.broadcast");
     assert_eq!(caps::AGENTS_CANCEL, "agents.cancel");

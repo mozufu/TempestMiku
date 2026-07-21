@@ -4,7 +4,7 @@
 
 - Outputs above the per-cell cap are **content-addressed** and stored; the model receives
   `artifact://<id>`, a MIME type, a size, and a short preview.
-- The model re-reads on demand: `artifacts.slice(id, start, end)` — paged, never the whole blob.
+- The model re-reads on demand: `resources.read(artifact://<id>, selector)` — paged, never the whole blob.
 - Artifacts are referenceable across cells and persist for the session (optionally the workspace).
 - This is the mechanism that keeps a 2 MB fetch from ever entering the window: it lands in the
   store, the code works on it in-sandbox, and only `display(summary)` reaches context.
@@ -52,8 +52,8 @@ Every handler implements the same shape (`ResourceHandler`, §10.2):
 - **`scheme`** — the URI scheme it owns; one registry entry per scheme.
 - **capability gate** — checked at the boundary like every host fn (§07 / §08); a scheme the run
   lacks authority for **fails closed**.
-- **`read(uri, selector?)`** — returns content, **paged via the same selector semantics as
-  `artifacts.slice`** (§9.1); never the whole blob in one shot.
+- **`read(uri, selector?)`** — returns content, **paged via selector semantics**
+  (§9.1); never the whole blob in one shot.
 - **`list(uri?)`** — optional enumeration (roster / index views).
 - **preview + MIME** — only a preview / summary returns until the model slices (**progressive
   disclosure**, §07).

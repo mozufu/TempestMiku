@@ -25,29 +25,28 @@ Configured linked folders, drive availability, registered handlers, or previous 
 authority into the current turn. Unknown capabilities and resource schemes fail closed.
 
 Wildcard grants are namespace bounded (`drive.*`, `agents.*`); exact grants such as
-`resources.read:drive` and `research.drive` remain separate. Child actors receive only explicitly
+`resources.read:drive` remain separate. Child actors receive only explicitly
 delegated grants through `opts.capabilities` on `agents.run/spawn/parallel/pipeline`. Omitted options
-delegate nothing, including the former read-only `http.get` + `resources.read:artifact` pair. Every
+delegate nothing, including the former read-only `http.request` + `resources.read:artifact` pair. Every
 requested name must already be held by the parent and be delegable; `backend.*` and `modes.*` remain
 server control planes and cannot be delegated. The list is bounded to 32 names, 128 ASCII bytes per
 name, and 2 KiB total.
 
 ## 7.3 Available namespaces
 
-- `tools.search`, `tools.docs`, `tools.call` — bounded catalog discovery/late-bound invocation.
+- `tools.search`, `tools.docs` — bounded catalog discovery and schema inspection. Invocation is
+  always static `@namespace.fn` source, never a dynamic dispatch call.
 - `resources.read`, `resources.preview`, `resources.list` — capability-gated access to registered
-  URI schemes.
+  URI schemes. `artifacts.put` creates output; `resources.read`/`resources.list` inspect
+  `artifact://` under the explicit `resources.read:artifact` grant.
 - `artifacts.put` — intrinsic content-addressed session output and spill references.
-- `artifacts.get`, `artifacts.slice`, `artifacts.list` — session artifact inspection, available only
-  with the explicit `resources.read:artifact` grant.
-- `http.get`, `http.request`, `secrets.use` — the default-disabled, exact-destination HTTPS egress
-  and opaque-secret boundary. Non-GET requests require approval.
-- `fs.read/write/list/find`, `code.search/edit`, `proc.run` — curated linked-repo reach.
-- `drive.put/get/ls/move/search/tag/link/unlink/organize` — local-first drive operations.
-- `research.drive` — bounded deterministic local digests and `drive://` citations. It is a Rust
-  host capability after the tm-only cut; `maxWorkers` is retained in the result contract but local
-  execution reports zero agent documents.
-- `agents.run/spawn/parallel/msg/send/broadcast/wait/inbox/list/cancel/pipeline` — bounded actor
+- `http.request`, `secrets.use` — the default-disabled, exact-destination HTTPS egress
+  and opaque-secret boundary. GET is `http.request {method: "GET", ...}` and stays approval-free;
+  every other method requires approval.
+- `fs.read/write/patch/move/remove/ls/find/grep`, `proc.run` — curated linked-repo reach.
+- `drive.put/get/ls/move/search/tag/organize` — local-first drive operations; linked-folder grants
+  are `project.link/unlink`.
+- `agents.run/spawn/parallel/send/broadcast/wait/inbox/list/cancel/pipeline` — bounded actor
   orchestration when the turn holds `agents.*`.
 - `modes.suggest` — approval-backed mode suggestion available only to eligible unlocked turns.
 
@@ -57,7 +56,7 @@ through capability-gated resources.
 
 ### 7.3.1 Production egress
 
-`tm-egress` is the concrete transport behind `http.get`, `http.request`, and `secrets.use`. An enabled
+`tm-egress` is the concrete transport behind `http.request` and `secrets.use`. An enabled
 destination fixes HTTPS scheme, host, port, path prefixes, methods, redirect edges, caller header
 names, request/response limits, and a positive policy version. Calls require the SDK capability plus
 the exact `egress.destination:<id>` grant; opaque secret handles additionally require
@@ -96,9 +95,9 @@ and must not be granted an authenticated destination merely to rely on response 
 
 Artifact storage bounds both bytes and namespace shape: per-session artifact/blob counts,
 aggregate artifact metadata, blob-reference metadata, and directory entries all fail closed.
-`artifacts.list` accepts `{offset?, limit?}`, defaults to 100 entries, and caps each page at 256;
-resource-registry listing is likewise capped at 256. Async host paths move artifact open/read/write
-and listing scans onto blocking workers so a bounded disk scan cannot stall the runtime executor.
+Generic `resources.list` is capped at 256 entries; artifact and directory listings are likewise
+bounded. Async host paths move artifact open/read/write and listing scans onto blocking workers so a
+bounded disk scan cannot stall the runtime executor.
 
 ## 7.4 Real-repo boundary
 

@@ -110,65 +110,34 @@ where
     let chat_host_functions = vec![mode_suggest_host];
 
     let (response, runtime) = if turn_profile.has_capability("backend.coding") {
-        if let Some(backend) = &state.coding_backend {
-            let sink = Arc::new(StoreCodingEventSink::for_turn(
-                session_id,
-                durable_turn.id,
-                Arc::clone(&state.store),
-                state.sender(session_id),
-            ));
-            let response = backend
-                .run_turn(
-                    CodingTurn {
-                        session_id,
-                        durable_turn_id: Some(durable_turn.id),
-                        user_prompt,
-                        system_prompt: persona_prompt.system_prompt.clone(),
-                        mode: session.mode_state.mode.clone(),
-                        scope: scope.clone(),
-                        capabilities: chat_capabilities.clone(),
-                        prior_messages: prior_messages.clone(),
-                    },
-                    sink,
-                )
-                .await?
-                .final_text;
-            (response, TurnRuntime::Coding)
-        } else {
-            let sink = Arc::new(PersistingEventSink::for_turn(
-                session_id,
-                Some(durable_turn.id),
-                Arc::clone(&state.store),
-                state.sender(session_id),
-            ));
-            let response = state
-                .chat
-                .run_turn(
-                    ChatTurn {
-                        session_id,
-                        durable_turn_id: Some(durable_turn.id),
-                        user_prompt,
-                        system_prompt: persona_prompt.system_prompt.clone(),
-                        mode: session.mode_state.mode.clone(),
-                        scope: scope.clone(),
-                        capabilities: chat_capabilities.clone(),
-                        prior_messages: prior_messages.clone(),
-                        dialectic: dialectic.clone(),
-                        limits: crate::ChatRunLimits::default(),
-                        deny_approvals: false,
-                        host_functions: chat_host_functions.clone(),
-                    },
-                    sink.clone(),
-                )
-                .await;
-            let flushed = sink.flush().await;
-            let response = match (response, flushed) {
-                (Ok(response), Ok(())) => response,
-                (Err(error), _) => return Err(error),
-                (Ok(_), Err(error)) => return Err(error),
-            };
-            (response, TurnRuntime::Chat)
-        }
+        let backend = state.coding_backend.as_ref().ok_or_else(|| {
+            ServerError::Backend(
+                "backend.coding is granted but no coding backend is configured".to_string(),
+            )
+        })?;
+        let sink = Arc::new(StoreCodingEventSink::for_turn(
+            session_id,
+            durable_turn.id,
+            Arc::clone(&state.store),
+            state.sender(session_id),
+        ));
+        let response = backend
+            .run_turn(
+                CodingTurn {
+                    session_id,
+                    durable_turn_id: Some(durable_turn.id),
+                    user_prompt,
+                    system_prompt: persona_prompt.system_prompt.clone(),
+                    mode: session.mode_state.mode.clone(),
+                    scope: scope.clone(),
+                    capabilities: chat_capabilities.clone(),
+                    prior_messages: prior_messages.clone(),
+                },
+                sink,
+            )
+            .await?
+            .final_text;
+        (response, TurnRuntime::Coding)
     } else {
         let sink = Arc::new(PersistingEventSink::for_turn(
             session_id,

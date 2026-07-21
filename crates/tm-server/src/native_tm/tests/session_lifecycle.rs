@@ -70,7 +70,7 @@ async fn native_sessions_reuse_state_isolate_sessions_and_reset_on_profile_chang
     .await
     .unwrap();
     let mut changed_profile = coding_turn(first);
-    changed_profile.capabilities = vec!["http.get".to_string()];
+    changed_profile.capabilities = vec!["http.request".to_string()];
     run_turn(
         &backend,
         changed_profile,

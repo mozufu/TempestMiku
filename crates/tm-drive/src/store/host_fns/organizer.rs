@@ -7,9 +7,9 @@ use super::{
     authority::{DriveAuthority, authorized_proposal_ids, drive_authority},
 };
 use crate::{
-    DriveOrganizerConfig, OrganizerProposal, ProposalStatus,
+    OrganizerProposal, ProposalStatus,
     store::{
-        core::{drive_error_to_host, validate_host_organizer_config},
+        core::drive_error_to_host,
         payloads::{
             drive_write_proposal_payload, organizer_completed_payload, organizer_failed_payload,
             organizer_failed_payload_with_proposals, organizer_started_payload,
@@ -22,8 +22,6 @@ use crate::{
 struct DriveOrganizeArgs {
     #[serde(default)]
     apply: bool,
-    #[serde(default)]
-    config: DriveOrganizerConfig,
 }
 
 impl DriveOrganizeFn {
@@ -34,33 +32,24 @@ impl DriveOrganizeFn {
     ) -> tm_host::Result<Value> {
         let args: DriveOrganizeArgs =
             serde_json::from_value(args).map_err(|err| HostError::InvalidArgs(err.to_string()))?;
-        validate_host_organizer_config(&args.config)?;
         let store = &self.store;
         let authority = drive_authority(ctx)?;
         ctx.emit_event(
             "drive_organizer_started",
-            organizer_started_payload(args.apply, &args.config),
+            organizer_started_payload(args.apply),
         )
         .await?;
         if !args.apply {
             let proposals = match match &authority {
-                DriveAuthority::Trusted => store.organize_with_config(args.config.clone()).await,
-                DriveAuthority::Global => {
-                    store
-                        .organize_scoped_with_config(None, args.config.clone())
-                        .await
-                }
-                DriveAuthority::Project(project) => {
-                    store
-                        .organize_scoped_with_config(Some(project), args.config.clone())
-                        .await
-                }
+                DriveAuthority::Trusted => store.organize().await,
+                DriveAuthority::Global => store.organize_scoped(None).await,
+                DriveAuthority::Project(project) => store.organize_scoped(Some(project)).await,
             } {
                 Ok(proposals) => proposals,
                 Err(err) => {
                     ctx.emit_event(
                         "drive_organizer_failed",
-                        organizer_failed_payload(args.apply, &args.config, &err.to_string()),
+                        organizer_failed_payload(args.apply, &err.to_string()),
                     )
                     .await?;
                     return Err(drive_error_to_host(err));
@@ -69,7 +58,7 @@ impl DriveOrganizeFn {
             emit_drive_write_proposals(ctx, &proposals).await?;
             ctx.emit_event(
                 "drive_organizer_completed",
-                organizer_completed_payload(args.apply, &args.config, &proposals),
+                organizer_completed_payload(args.apply, &proposals),
             )
             .await?;
             return serde_json::to_value(proposals)
@@ -86,23 +75,15 @@ impl DriveOrganizeFn {
         let mut generated = Vec::<OrganizerProposal>::new();
         if ids.is_empty() {
             generated = match match &authority {
-                DriveAuthority::Trusted => store.organize_with_config(args.config.clone()).await,
-                DriveAuthority::Global => {
-                    store
-                        .organize_scoped_with_config(None, args.config.clone())
-                        .await
-                }
-                DriveAuthority::Project(project) => {
-                    store
-                        .organize_scoped_with_config(Some(project), args.config.clone())
-                        .await
-                }
+                DriveAuthority::Trusted => store.organize().await,
+                DriveAuthority::Global => store.organize_scoped(None).await,
+                DriveAuthority::Project(project) => store.organize_scoped(Some(project)).await,
             } {
                 Ok(proposals) => proposals,
                 Err(err) => {
                     ctx.emit_event(
                         "drive_organizer_failed",
-                        organizer_failed_payload(args.apply, &args.config, &err.to_string()),
+                        organizer_failed_payload(args.apply, &err.to_string()),
                     )
                     .await?;
                     return Err(drive_error_to_host(err));
@@ -123,7 +104,7 @@ impl DriveOrganizeFn {
             emit_drive_write_proposals(ctx, &generated).await?;
             ctx.emit_event(
                 "drive_organizer_completed",
-                organizer_completed_payload(args.apply, &args.config, &generated),
+                organizer_completed_payload(args.apply, &generated),
             )
             .await?;
             return serde_json::to_value(generated)
@@ -149,12 +130,7 @@ impl DriveOrganizeFn {
             emit_drive_write_proposals(ctx, &proposals).await?;
             ctx.emit_event(
                 "drive_organizer_failed",
-                organizer_failed_payload_with_proposals(
-                    args.apply,
-                    &args.config,
-                    &err.to_string(),
-                    &proposals,
-                ),
+                organizer_failed_payload_with_proposals(args.apply, &err.to_string(), &proposals),
             )
             .await?;
             return Err(err);
@@ -164,7 +140,7 @@ impl DriveOrganizeFn {
             Err(err) => {
                 ctx.emit_event(
                     "drive_organizer_failed",
-                    organizer_failed_payload(args.apply, &args.config, &err.to_string()),
+                    organizer_failed_payload(args.apply, &err.to_string()),
                 )
                 .await?;
                 return Err(drive_error_to_host(err));
@@ -174,7 +150,7 @@ impl DriveOrganizeFn {
             emit_drive_write_proposals(ctx, &proposals).await?;
             ctx.emit_event(
                 "drive_organizer_completed",
-                organizer_completed_payload(args.apply, &args.config, &proposals),
+                organizer_completed_payload(args.apply, &proposals),
             )
             .await?;
             return serde_json::to_value(proposals)
@@ -193,7 +169,7 @@ impl DriveOrganizeFn {
         emit_drive_write_proposals(ctx, &generated).await?;
         ctx.emit_event(
             "drive_organizer_completed",
-            organizer_completed_payload(args.apply, &args.config, &generated),
+            organizer_completed_payload(args.apply, &generated),
         )
         .await?;
         serde_json::to_value(generated).map_err(|err| HostError::HostCall(err.to_string()))

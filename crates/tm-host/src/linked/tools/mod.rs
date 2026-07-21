@@ -33,16 +33,14 @@ use super::util::{
 };
 use super::{LinkedFolders, docs::docs};
 
-mod code;
 #[path = "fs.rs"]
 mod fs_tools;
 mod proc;
 mod resources;
 
-pub(in crate::linked) use code::CodeSearchFn;
 pub use fs_tools::FsEntry;
 pub(in crate::linked) use fs_tools::{
-    FsFindFn, FsLsFn, FsMoveFn, FsPatchFn, FsReadFn, FsRemoveFn, FsWriteFn, PatchHunk,
+    FsFindFn, FsGrepFn, FsLsFn, FsMoveFn, FsPatchFn, FsReadFn, FsRemoveFn, FsWriteFn, PatchHunk,
 };
 pub(in crate::linked) use proc::ProcRunFn;
 pub use resources::LinkedResourceHandler;
@@ -82,7 +80,7 @@ pub fn register_p0_linked_folder_functions_with_isolation(
     host_registry.register(Arc::new(FsRemoveFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsLsFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(FsFindFn::new(linked_folders.clone())));
-    host_registry.register(Arc::new(CodeSearchFn::new(linked_folders.clone())));
+    host_registry.register(Arc::new(FsGrepFn::new(linked_folders.clone())));
     host_registry.register(Arc::new(ProcRunFn::with_timeout_and_isolation(
         linked_folders.clone(),
         artifact_store,

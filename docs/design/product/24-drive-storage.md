@@ -133,21 +133,15 @@ sink, while each organizer proposal also appears on the shared `write_proposal` 
 sessions persist both event families to `session_events` and emit them through the single versioned
 `event: session_event` SSE envelope; pending drive proposals remain visible through
 the existing pending-events transcript shape. Organizer apply uses the same `InvocationCtx` approval
-policy path as `fs.*`, `code.*`, `proc.*`, and other drive writes rather than a drive-only approval
+policy path as `fs.*`, `proc.*`, and other drive writes rather than a drive-only approval
 channel. Broader drag/drop browser UI remains demand-triggered.
 
-The local research workspace is the Rust host capability `@research.drive {query, ...}`. It searches
-the authorized drive scope, reads bounded `drive://` selectors, and returns deterministic local
-digests. The returned corpus contains only resource refs, selectors, snippets, content hashes,
-digests, and citations; full document text stays inside the bounded host operation.
-Local citations and corpus refs carry `sourceKind: "drive"` so later external/fetched research can be
-distinguished without changing the result envelope.
-`maxDocs`, `maxSnippets`, `maxBytesPerDoc`, `maxDigestBytes`, and `maxWorkers` are clamped by the
-handler, and the result reports the effective budget. `workerTimeoutMs` and `totalTimeoutMs` remain
-in the result contract for bounded compatibility, but the tm-only implementation reports zero
-agent documents and an empty `workerFailures` list. Explicit actor research can still be composed
-with `agents.*` by tm code when a turn holds those grants. External/network research is available
-only through operator-selected MCP objects crossing the default-disabled egress/opaque-secret
+Local research composes the drive primitives directly: `@drive.search {query, project?, returnSnippets?}`
+returns bounded hits with `drive://` citations, and `@drive.get {uri, selector?}` reads a bounded
+selector of a cited document. Drive citations carry `drive://` URIs so later external/fetched research
+can be distinguished without a dedicated research envelope. Explicit actor research can still be
+composed with `agents.*` by tm code when a turn holds those grants. External/network research is
+available only through operator-selected MCP objects crossing the default-disabled egress/opaque-secret
 boundary. Drive remains local-first and has no ambient publish/send namespace; destructive
 local mutations retain the existing approval gates.
 
@@ -160,7 +154,7 @@ flowchart LR
   T --> IDX[attribute + embedding index]
   P --> VD[virtual dirs: by-project / by-type / recent]
   IDX --> MEM[feeds memory stores §22]
-  P --> AP{tier / write-approval}
+  P --> AP{write-approval}
   AP -- apply --> FILED[filed]
   AP -- propose --> ASK[suggest path to Brian]
 ```
@@ -174,24 +168,24 @@ flowchart LR
 - **Propose a canonical path** from attributes + the user model's conventions (§22: *"invoices under
   `finance/YYYY/`"*). **Virtual directories** then give query-views (`/by-project/X`, `/by-type/invoice`,
   `/recent`) **without** moving the canonical file.
-- **Apply vs propose** is gated by the **self-evolution tier** (§26) and **write-approval**: sandbox host
-  calls stay conservative and ask before durable writes; trusted server/background policy may auto-file
-  low-risk types by calling the store with `DriveApprovalMode::Auto`. Organizer automation follows the
-  same split: host `drive.organize()` records pending proposals by default and `drive.organize({ apply:
-  true })` applies them only after approval, while moderate/aggressive `autoApply` rules are reserved for
-  trusted background policy paths rather than model-controlled SDK calls.
-- **Background organizer** (the files analog of §22 "dreaming"): periodically re-files, **dedups**
-  (content-hash), and proposes a better tree; lease + heartbeat to avoid double-runs.
-  The manual `drive.organize()` path proposes by default; `drive.organize({ apply: true })` applies
-  pending/current proposals only after approval, and marks denied/timeout/stale proposals with a
-  replayable status instead of mutating silently. `DriveMetadataStore` records organizer runs with
-  queued/running/completed/failed status, attempts, locked heartbeat time, retry availability, terminal
-  errors, and the proposal ids produced by a completed run; stale leases can be reclaimed, while duplicate
-  workers cannot claim a fresh running organizer lease. Postgres persists those rows, proposals,
-  corrections, version counters, entries, links, and tombstones; moves and organizer application use
-  compare-and-swap so concurrent workers mutate once. Organizer event payloads include proposal ids,
-  source/proposed `drive://` refs, statuses, confidence, and compact previews so session replay and
-  mobile clients can show pending filing decisions without reading full document bodies.
+- **Apply vs propose** is gated by **write-approval**: sandbox host calls stay conservative and ask
+  before durable writes. Organizer host calls follow the same split: `drive.organize()` records
+  pending Move proposals by default and `drive.organize({ apply: true })` applies authorized
+  pending/approved proposals only after approval. There is no auto-apply/config policy layer.
+- **Organizer generator.** The implemented generator proposes deterministic **Move** proposals only;
+  it does not run background dedupe or policy auto-application. The manual `drive.organize()` path
+  proposes by default; `drive.organize({ apply: true })` applies pending/approved proposals only after
+  approval, and marks denied/timeout/stale proposals with a replayable status instead of mutating
+  silently. `DriveMetadataStore` records organizer runs with queued/running/completed/failed status,
+  attempts, locked heartbeat time, retry availability, terminal errors, and the proposal ids produced
+  by a completed run; stale leases can be reclaimed, while duplicate workers cannot claim a fresh
+  running organizer lease. Postgres persists those rows, proposals, corrections, version counters,
+  entries, links, and tombstones; moves and organizer application use compare-and-swap so concurrent
+  workers mutate once. `OrganizerActionKind::{Tag,Dedupe,Archive,SetDocKind,SetProject}` remain
+  decodable and applicable for already-persisted proposal rows but are not generated or advertised.
+  Organizer event payloads include proposal ids, source/proposed `drive://` refs, statuses,
+  confidence, and compact previews so session replay and mobile clients can show pending filing
+  decisions without reading full document bodies.
 - Extracted attributes also flow into the **memory stores** (§22 semantic / lexical), so filed docs become
   **recallable**. The current server bridge persists project-scoped recall chunks with `drive://` and
   content-hash provenance after turns; move/tag changes update the same content-hash-keyed recall

@@ -102,7 +102,7 @@ async fn registry_wildcard_grant_exposes_only_matching_effects() {
 
     let called = session
         .eval(
-            "@tools.call {name: \"fs.patch\", args: {patch: \"late-bound-secret\"}}",
+            "@fs.patch {patch: \"late-bound-secret\"}",
             CellBudget::default(),
         )
         .await
@@ -117,61 +117,16 @@ async fn registry_wildcard_grant_exposes_only_matching_effects() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn tools_call_never_widens_target_authority_or_recurses() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let mut registry = HostRegistry::new();
-    registry.register(Arc::new(Patch::new(Arc::clone(&calls))));
-    let mut session = TmSandbox::new(TmSandboxOptions {
-        host_registry: registry,
-        grants: CapabilityGrants::default(),
-        ..TmSandboxOptions::default()
-    })
-    .open(SessionConfig::default())
-    .await
-    .unwrap();
-
-    let denied = session
-        .eval(
-            "@tools.call {name: \"fs.patch\", args: {patch: \"denied\"}}",
-            CellBudget::default(),
-        )
-        .await
-        .unwrap();
-    assert!(
-        denied.error.as_deref().is_some_and(|error| {
-            error.contains("capability denied") || error.contains("unknown capability")
-        }),
-        "{denied:?}"
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-
-    let recursive = session
-        .eval(
-            "@tools.call {name: \"tools.call\", args: null}",
-            CellBudget::default(),
-        )
-        .await
-        .unwrap();
-    assert!(
-        recursive
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("cannot recursively invoke itself")),
-        "{recursive:?}"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn application_http_handler_takes_precedence_over_fixture_allowlist() {
     let mut registry = HostRegistry::new();
-    registry.register(Arc::new(ProductionHttpGet::new()));
+    registry.register(Arc::new(ProductionHttpRequest::new()));
     let mut session = TmSandbox::new(TmSandboxOptions {
         http_allowlist: BTreeMap::from([(
             "https://example.test/data".to_string(),
             "fixture-body".to_string(),
         )]),
         host_registry: registry,
-        grants: CapabilityGrants::default().allow("http.get"),
+        grants: CapabilityGrants::default().allow("http.request"),
         ..TmSandboxOptions::default()
     })
     .open(SessionConfig::default())
@@ -180,7 +135,7 @@ async fn application_http_handler_takes_precedence_over_fixture_allowlist() {
 
     let output = session
         .eval(
-            "@http.get {url: \"https://example.test/data\"}",
+            "@http.request {method: \"GET\", url: \"https://example.test/data\"}",
             CellBudget::default(),
         )
         .await
@@ -214,7 +169,10 @@ async fn artifact_adapter_redacts_and_preserves_read_authority() {
         .unwrap();
     assert_eq!(put.result.as_ref().unwrap()["uri"], "artifact://0");
     let get = session
-        .eval("@artifacts.get artifact://0", CellBudget::default())
+        .eval(
+            "@resources.read {uri: \"artifact://0\", selector: \"1-1\"}",
+            CellBudget::default(),
+        )
         .await
         .unwrap();
     assert!(get.error.is_none(), "{get:?}");
@@ -222,56 +180,10 @@ async fn artifact_adapter_redacts_and_preserves_read_authority() {
     assert!(!content.contains("secret-token-123456"));
     assert!(content.contains("[REDACTED_"));
     let listed = session
-        .eval("@artifacts.list null", CellBudget::default())
+        .eval("@resources.list \"artifact://0\"", CellBudget::default())
         .await
         .unwrap();
-    let listed = listed.result.unwrap();
-    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
-    assert_eq!(listed["offset"], 0);
-    assert_eq!(listed["hasMore"], false);
-    assert!(listed["nextOffset"].is_null());
-
-    for value in ["second", "third"] {
-        let output = session
-            .eval(
-                &format!("@artifacts.put {{data: \"{value}\"}}"),
-                CellBudget::default(),
-            )
-            .await
-            .unwrap();
-        assert!(output.error.is_none(), "{output:?}");
-    }
-    let first_page = session
-        .eval("@artifacts.list {limit: 1}", CellBudget::default())
-        .await
-        .unwrap()
-        .result
-        .unwrap();
-    assert_eq!(first_page["items"].as_array().unwrap().len(), 1);
-    assert_eq!(first_page["hasMore"], true);
-    assert_eq!(first_page["nextOffset"], 1);
-    let last_page = session
-        .eval(
-            "@artifacts.list {offset: 2, limit: 1}",
-            CellBudget::default(),
-        )
-        .await
-        .unwrap()
-        .result
-        .unwrap();
-    assert_eq!(last_page["items"][0]["uri"], "artifact://2");
-    assert_eq!(last_page["hasMore"], false);
-    let invalid_page = session
-        .eval("@artifacts.list {limit: 257}", CellBudget::default())
-        .await
-        .unwrap();
-    assert!(
-        invalid_page
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("1..=256")),
-        "{invalid_page:?}"
-    );
+    assert!(listed.error.is_none(), "{listed:?}");
     for source in [
         "@resources.read artifact://0",
         "@resources.preview artifact://0",
@@ -280,14 +192,7 @@ async fn artifact_adapter_redacts_and_preserves_read_authority() {
         let output = session.eval(source, CellBudget::default()).await.unwrap();
         assert!(output.error.is_none(), "{source}: {output:?}");
     }
-    for capability in [
-        "artifacts.get",
-        "artifacts.slice",
-        "artifacts.list",
-        "resources.read",
-        "resources.preview",
-        "resources.list",
-    ] {
+    for capability in ["resources.read", "resources.preview", "resources.list"] {
         let docs = session
             .eval(
                 &format!("@tools.docs \"{capability}\""),
@@ -304,6 +209,18 @@ async fn artifact_adapter_redacts_and_preserves_read_authority() {
             docs.result.as_ref().unwrap()["approval"],
             "none",
             "{capability}"
+        );
+    }
+    for retired in ["artifacts.get", "artifacts.slice", "artifacts.list"] {
+        let docs = session
+            .eval(&format!("@tools.docs \"{retired}\""), CellBudget::default())
+            .await
+            .unwrap();
+        assert!(
+            docs.error
+                .as_deref()
+                .is_some_and(|error| error.contains(retired) || error.contains("not found")),
+            "retired {retired} must not be catalogued: {docs:?}"
         );
     }
     let encoded_events = serde_json::to_string(&*events.0.lock().unwrap()).unwrap();
@@ -329,14 +246,25 @@ async fn artifact_adapter_redacts_and_preserves_read_authority() {
         .open(SessionConfig::default())
         .await
         .unwrap();
+    let denied_put = denied
+        .eval(
+            "@artifacts.put {data: \"still allowed\"}",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    assert!(denied_put.error.is_none(), "{denied_put:?}");
     let denied = denied
-        .eval("@artifacts.get artifact://0", CellBudget::default())
+        .eval("@resources.read artifact://0", CellBudget::default())
         .await
         .unwrap();
     assert!(
         denied
             .error
-            .unwrap()
-            .contains("unknown capability artifacts.get")
+            .as_deref()
+            .is_some_and(|error| error.contains("unknown capability")
+                || error.contains("unknown resource scheme")
+                || error.contains("capability denied")),
+        "{denied:?}"
     );
 }

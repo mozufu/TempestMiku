@@ -71,7 +71,7 @@ async fn native_tm_public_route_approves_one_redacted_effect_and_replays_trace()
             "effect_resumed",
             "effect_result"
         ],
-        "code.search and the exactly-once fs.remove each own one effect node"
+        "fs.grep and the exactly-once fs.remove each own one effect node"
     );
     let remove_start = effect_events
         .iter()

@@ -156,8 +156,6 @@ extension _ScriptedDriveScenarios on ScriptedMikuClient {
         id: _eventId(),
         data: const {
           'apply': false,
-          'tier': 'conservative',
-          'autoApplyRules': 0,
         },
       ),
     );
@@ -167,7 +165,6 @@ extension _ScriptedDriveScenarios on ScriptedMikuClient {
         id: _eventId(),
         data: {
           'apply': false,
-          'tier': 'conservative',
           'runId': 'scripted-run',
           'proposalCount': 1,
           'proposals': [proposalPayload],

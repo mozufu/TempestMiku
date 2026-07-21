@@ -67,7 +67,7 @@ grants are active now.\n",
         capability_notes.push_str(&format!(
             "\
 Known linked-repo schemas; call these directly without tools.search/help:
-- Search: @code.search {{pattern: \"needle\", paths: [\"{alias}:src\"], regex: false, contextLines: 2, limit: 20}}
+- Search: @fs.grep {{pattern: \"needle\", paths: [\"{alias}:src\"], regex: false, contextLines: 2, limit: 20}}
 - Read a bounded slice: @fs.read {{path: \"{alias}:src/file.ts\", selector: \"120-220\"}}
 - Patch from a fresh search tag: @fs.patch {{path: hit.path, tag: hit.tag, hunks: [{{op: \"replace\", startLine: hit.line, endLine: hit.line, expectedLines: [hit.text], lines: [\"replacement\"]}}]}}
 - Delete lines with an explicit range: @fs.patch {{path: hit.path, tag: hit.tag, hunks: [{{op: \"delete\", startLine: hit.line, endLine: hit.line, expectedLines: [hit.text]}}]}}

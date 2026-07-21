@@ -73,7 +73,7 @@ async fn capability_downgrade_reopens_session_without_prior_authority_or_state()
     let session_id = Uuid::from_u128(23);
     let mut elevated = chat_turn(session_id);
     elevated.capabilities = vec![
-        "http.get".to_string(),
+        "http.request".to_string(),
         "resources.read:artifact".to_string(),
     ];
 

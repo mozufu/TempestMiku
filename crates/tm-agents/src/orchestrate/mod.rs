@@ -30,7 +30,6 @@ pub mod caps {
     pub const AGENTS_SPAWN: &str = "agents.spawn";
     pub const AGENTS_PARALLEL: &str = "agents.parallel";
     pub const AGENTS_PIPELINE: &str = "agents.pipeline";
-    pub const AGENTS_MSG: &str = "agents.msg";
     pub const AGENTS_SEND: &str = "agents.send";
     pub const AGENTS_BROADCAST: &str = "agents.broadcast";
     pub const AGENTS_CANCEL: &str = "agents.cancel";
@@ -99,7 +98,6 @@ macro_rules! check_grant {
 }
 
 mod mailbox_fns;
-mod msg;
 mod parallel;
 mod pipeline;
 mod run;
@@ -111,7 +109,6 @@ mod tests;
 use mailbox_fns::{
     AgentsBroadcastFn, AgentsCancelFn, AgentsInboxFn, AgentsListFn, AgentsSendFn, AgentsWaitFn,
 };
-use msg::AgentsMsgFn;
 use parallel::AgentsParallelFn;
 use pipeline::AgentsPipelineFn;
 use run::AgentsRunFn;
@@ -132,7 +129,6 @@ pub fn register(
     host_registry.register(Arc::new(AgentsSpawnFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsParallelFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsPipelineFn::new(Arc::clone(&roster))));
-    host_registry.register(Arc::new(AgentsMsgFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsSendFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsBroadcastFn::new(Arc::clone(&roster))));
     host_registry.register(Arc::new(AgentsCancelFn::new(Arc::clone(&roster))));
@@ -269,10 +265,9 @@ async fn mark_actor_completed(
             .await;
     }
     let completed = roster
-        .mark_complete_with_digest_for_session(
+        .mark_complete_with_resources_for_session(
             session_id,
             actor_id,
-            digest.summary.clone(),
             digest.artifact_uri.clone(),
             digest.history_uri.clone(),
         )

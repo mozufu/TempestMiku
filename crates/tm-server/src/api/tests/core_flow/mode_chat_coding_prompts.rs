@@ -20,13 +20,16 @@ async fn user_model_dialectic_is_third_turn_only_and_disabled_for_serious_mode()
     let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
     let chat = Arc::new(RecordingChatRunner::default());
     let turns = Arc::clone(&chat.turns);
+    let backend = Arc::new(RecordingBackend::default());
+    let coding_turns = Arc::clone(&backend.turns);
     let state = AppState::new(
         Arc::clone(&store),
         memory,
         chat,
         ModesConfig::default(),
         AuthConfig::NoAuth,
-    );
+    )
+    .with_coding_backend(backend);
     let app = app(state);
 
     let general = create(&app).await;
@@ -43,7 +46,11 @@ async fn user_model_dialectic_is_third_turn_only_and_disabled_for_serious_mode()
     }
 
     let turns = turns.lock();
-    assert_eq!(turns.len(), 6);
+    assert_eq!(
+        turns.len(),
+        3,
+        "only the three general turns run through ChatRunner"
+    );
     assert!(turns[0].dialectic.is_none());
     assert!(turns[1].dialectic.is_none());
     let crate::DialecticTurn::Generate(request) = turns[2]
@@ -66,9 +73,19 @@ async fn user_model_dialectic_is_third_turn_only_and_disabled_for_serious_mode()
             .source_uri
             .starts_with("memory://profile/brian/facts/")
     );
+    // Serious/engineering turns dispatch to the coding backend, whose turn payload has no
+    // user-model dialectic concept at all: the auxiliary pass is structurally excluded from
+    // coding mode, not merely left unset on a chat turn.
+    let coding_turns = coding_turns.lock();
+    assert_eq!(
+        coding_turns.len(),
+        3,
+        "the three serious turns run through the coding backend"
+    );
     assert!(
-        turns[3..].iter().all(|turn| turn.dialectic.is_none()),
-        "serious/engineering turns never receive the user-model dialectic"
+        coding_turns
+            .iter()
+            .all(|turn| turn.mode == ModeId::from("serious_engineer"))
     );
 }
 
@@ -166,12 +183,13 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
     // All three turns stay in `general` mode now: ambiguity-grill and negative-state-grounding
     // are triggered layered skills, not separate modes, so they never change turns[*].mode.
     assert_eq!(turns[0].mode, ModeId::from("general"));
-    assert!(
-        turns[0]
-            .capabilities
-            .iter()
-            .any(|cap| cap == "memory.recall")
-    );
+    assert!(turns[0].capabilities.iter().any(|cap| cap == "drive.*"));
+    for retired in ["memory.recall", "memory.propose"] {
+        assert!(
+            !turns[0].capabilities.iter().any(|cap| cap == retired),
+            "general turn unexpectedly received retired {retired}"
+        );
+    }
     for denied in ["fs.*", "code.*", "proc.*", "resources.read:linked"] {
         assert!(
             !turns[0].capabilities.iter().any(|cap| cap == denied),

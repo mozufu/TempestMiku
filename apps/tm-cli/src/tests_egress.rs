@@ -50,7 +50,6 @@ async fn cli_uses_production_egress_catalog_and_exact_configured_grants() {
     .unwrap();
     let mut session = sandbox.open(SessionConfig::default()).await.unwrap();
     for (tool, summary) in [
-        ("http.get", "exact configured destination"),
         ("http.request", "destination-scoped egress boundary"),
         ("secrets.use", "opaque handle"),
     ] {
@@ -62,6 +61,16 @@ async fn cli_uses_production_egress_catalog_and_exact_configured_grants() {
         let encoded = serde_json::to_string(docs.result.as_ref().unwrap()).unwrap();
         assert!(encoded.contains(summary), "{tool}: {encoded}");
     }
+    let retired = session
+        .eval("@tools.docs \"http.get\"", CellBudget::default())
+        .await
+        .unwrap();
+    let encoded =
+        serde_json::to_string(retired.result.as_ref().unwrap_or(&serde_json::Value::Null)).unwrap();
+    assert!(
+        !encoded.contains("http.get"),
+        "retired http.get must not be catalogued: {encoded}"
+    );
 }
 
 #[test]

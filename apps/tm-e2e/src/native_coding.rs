@@ -715,7 +715,7 @@ fn create_fixture_repo(root: &Path) -> Result<()> {
 
 fn approved_code() -> &'static str {
     r#"
-let hits = @code.search {pattern: "    1", paths: ["repo:src/lib.rs"], regex: false};
+let hits = @fs.grep {pattern: "    1", paths: ["repo:src/lib.rs"], regex: false};
 let hit = match hits { | first :: _ -> first | [] -> null };
 let edit = @fs.patch {
   path: hit.path,

@@ -12,7 +12,7 @@ rendered by help/checker output as an effect signature:
 ```
 eff fs.read   : (path: Path) -> ResourceContent
 eff fs.write  : (path: Path, data: Data) -> Unit
-eff http.get  : (url: Url) -> Bytes
+eff http.request : (method: String, url: Url) -> HttpResponse   -- GET is approval-free
 eff fs.patch  : (path: Path, tag: Tag, hunks: List Hunk) -> PatchResult
 eff fs.remove : (path: Path, tag: Tag) -> RemoveResult
 eff proc.run  : (cmd: String, args: List String) -> ProcResult
@@ -61,10 +61,10 @@ runs*:
 ### Fail-closed becomes a type error
 
 ```
-fun oops url = @http.get url   -- inferred <http.get>, not granted
+fun oops url = @http.request {method: "GET", url: url}   -- inferred <http.request>, not granted
 ```
 
-If the session's granted effect row does not include `http.get`, this is **rejected before
+If the session's granted effect row does not include `http.request`, this is **rejected before
 eval** — not a runtime missing namespace, not a `CapabilityDeniedError` thrown mid-cell. The
 offending capability never enters the transcript because the cell never runs. This is strictly
 stronger than §7's runtime-policy approach.
@@ -162,17 +162,17 @@ The approval boundary (AGENTS.md: "manual approvals" as a parity invariant) beco
 |---|---|---|
 | `print` | capped diagnostic output | no grant or approval |
 | `display` | core presentation effect, never a host capability | no grant or approval |
-| `help`, `tools.search/docs/call` | `tools.docs` / `tools.search` / `tools.call` | no approval |
+| `help`, `tools.search/docs` | `tools.docs` / `tools.search` | no approval |
 | `@fs.read` / `@fs.ls` / `@fs.find` | `fs.read` / `fs.ls` / `fs.find` | normally none |
 | `@fs.write` | `fs.write` | `on-write`, resumable |
-| `@code.search` | `code.search` | normally none |
+| `@fs.grep` | `fs.grep` | normally none |
 | `@fs.patch` | `fs.patch` | none after the linked-folder write grant and fresh-tag check |
 | `@fs.move` | `fs.move` | `on-overwrite`, resumable |
 | `@fs.remove` | `fs.remove` | `always`, resumable |
 | `@proc.run` | `proc.run` | `always`, resumable per §7 |
 | `@resources.read` / `@resources.preview` / `@resources.list` | `resources.read` / `resources.preview` / `resources.list` | none |
-| `@artifacts.put` / `@artifacts.get` / `@artifacts.slice` / `@artifacts.list` | `artifacts.put` / `artifacts.get` / `artifacts.slice` / `artifacts.list` | capability-specific, normally none |
-| `@http.*` (future) | `http.*` | policy-dependent |
+| `@artifacts.put` | `artifacts.put` | capability-specific, normally none |
+| `@http.request` | `http.request` | none for GET; approval for other methods |
 | `@secrets.*` (future) | `secrets.resolve` etc. — returns a handle, never a value (§3.4) | resumable approval |
 | `@memory.*` / `@skills.*` / `@agents.*` / `@mcp.*` (future/imported) | their own effects | per-capability |
 

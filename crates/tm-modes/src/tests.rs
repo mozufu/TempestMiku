@@ -323,7 +323,7 @@ fn mode_profiles_map_expected_skills_and_scope() {
     );
     assert_eq!(assistant.default_scope, "global");
     assert!(assistant.captures_personal_state());
-    assert!(assistant.has_capability("http.get"));
+    assert!(assistant.has_capability("http.request"));
     assert!(assistant.has_capability("resources.read:artifact"));
 
     let serious = assets
@@ -336,7 +336,7 @@ fn mode_profiles_map_expected_skills_and_scope() {
     assert!(serious.has_capability("fs.move"));
     assert!(serious.has_capability("fs.remove"));
     assert!(serious.has_capability("proc.run"));
-    assert!(serious.has_capability("http.get"));
+    assert!(serious.has_capability("http.request"));
     assert!(serious.has_capability("resources.read:artifact"));
     assert!(serious.has_capability("resources.read:linked"));
     assert!(serious.has_capability("backend.coding"));
@@ -347,16 +347,11 @@ fn mode_profiles_map_expected_skills_and_scope() {
         .modes
         .profile(&ModeId::from("handoff"))
         .expect("handoff profile");
-    assert!(handoff.has_capability("http.get"));
+    assert!(handoff.has_capability("http.request"));
     assert!(handoff.has_capability("resources.read:agent"));
     assert!(handoff.has_capability("resources.read:artifact"));
     assert!(handoff.has_capability("resources.read:history"));
-    for capability in [
-        "fs.read",
-        "code.search",
-        "proc.run",
-        "resources.read:linked",
-    ] {
+    for capability in ["fs.read", "fs.grep", "proc.run", "resources.read:linked"] {
         assert!(!assistant.has_capability(capability));
         assert!(!handoff.has_capability(capability));
     }
@@ -499,7 +494,7 @@ fn custom_modes_json() -> String {
                 "description": "Loaded only from runtime mode assets.",
                 "defaultScope": "global",
                 "activeSkills": ["custom-skill"],
-                "capabilities": ["memory.recall"],
+                "capabilities": ["drive.search"],
                 "capabilityClass": "conversation",
                 "route": {
                     "isDefault": true,

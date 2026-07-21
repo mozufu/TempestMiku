@@ -91,41 +91,6 @@ pub(crate) fn drive_docs(name: &str, summary: &str, approval: &str, sensitive: b
     }
 }
 
-pub(crate) fn research_drive_docs() -> ToolDocs {
-    let mut docs = drive_docs(
-        "research.drive",
-        "Build a bounded, cited research digest from local drive documents",
-        "none",
-        false,
-    );
-    docs.namespace = "research".to_string();
-    docs.signature = "@research.drive ResearchDriveOptions -> ResearchDriveResult".to_string();
-    docs.args_schema = json!({
-        "type": "object",
-        "properties": {
-            "query": { "type": "string" },
-            "project": { "type": "string" },
-            "docKind": { "type": "string" },
-            "tags": { "type": "array", "items": { "type": "string" } },
-            "selector": { "type": "string" },
-            "maxDocs": { "type": "integer", "minimum": 1, "maximum": 10 },
-            "maxSnippets": { "type": "integer", "minimum": 1, "maximum": 10 },
-            "maxBytesPerDoc": { "type": "integer", "minimum": 1, "maximum": 8000 },
-            "maxDigestBytes": { "type": "integer", "minimum": 32, "maximum": 2000 },
-            "maxWorkers": { "type": "integer", "minimum": 0, "maximum": 10 },
-            "workerTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
-            "totalTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 300000 }
-        }
-    });
-    docs.result_schema = Some(json!({ "type": "object" }));
-    docs.examples = vec![ToolExample {
-        title: None,
-        code: "let result = @research.drive {query: \"approval policy\", project: \"TempestMiku\", maxDocs: 3}".to_string(),
-        notes: Some("Returns deterministic local digests and drive:// citations.".to_string()),
-    }];
-    docs
-}
-
 fn drive_signature(name: &str) -> String {
     match name {
         "drive.put" => "@drive.put {content, options?} -> DrivePutResult",
@@ -197,15 +162,7 @@ fn drive_args_schema(name: &str) -> Value {
         "drive.organize" => json!({
             "type": "object",
             "properties": {
-                "apply": { "type": "boolean" },
-                "config": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "description": "Host SDK calls generate conservative proposals only; auto-apply rules are trusted server policy.",
-                    "properties": {
-                        "tier": { "enum": ["conservative"], "default": "conservative" }
-                    }
-                }
+                "apply": { "type": "boolean", "default": false }
             }
         }),
         _ => json!({ "type": "object" }),
@@ -243,7 +200,7 @@ fn drive_examples(name: &str) -> Vec<ToolExample> {
         }
         "project.unlink" => "let revoked = @project.unlink {alias: \"tempestmiku\"}",
         "drive.organize" => "let proposals = @drive.organize {}",
-        _ => "@tools.call {name: \"drive.unknown\", args: {}}",
+        _ => return Vec::new(),
     };
     vec![ToolExample {
         title: None,

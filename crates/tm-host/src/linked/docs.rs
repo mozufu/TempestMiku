@@ -109,9 +109,9 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
             result_schema: Some(fs_patch_result_schema()),
             examples: vec![ToolExample {
                 title: Some("Replace one line".to_string()),
-                code: "let hits = @code.search {pattern: \"old\", paths: [\"tempestmiku:src/lib.rs\"], regex: false};\nlet hit = match hits { | first :: _ -> first | [] -> null };\n@fs.patch {path: hit.path, tag: hit.tag, hunks: [{op: \"replace\", startLine: hit.line, endLine: hit.line, expectedLines: [hit.text], lines: [\"new\"]}]}"
+                code: "let hits = @fs.grep {pattern: \"old\", paths: [\"tempestmiku:src/lib.rs\"], regex: false};\nlet hit = match hits { | first :: _ -> first | [] -> null };\n@fs.patch {path: hit.path, tag: hit.tag, hunks: [{op: \"replace\", startLine: hit.line, endLine: hit.line, expectedLines: [hit.text], lines: [\"new\"]}]}"
                     .to_string(),
-                notes: Some("Use fs.write for new files. Existing files require a fresh tag from code.search or another tagged read path.".to_string()),
+                notes: Some("Use fs.write for new files. Existing files require a fresh tag from fs.grep or another tagged read path.".to_string()),
             }],
             errors: vec![
                 tool_error("CapabilityDeniedError", "fs.patch is not granted or the linked folder is read-only.", false),
@@ -255,12 +255,12 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
             approval: "none".to_string(),
             ..base
         },
-        "code.search" => ToolDocs {
+        "fs.grep" => ToolDocs {
             description: Some(
                 "Search UTF-8 files with regex or literal text and return optimistic-concurrency tags."
                     .to_string(),
             ),
-            signature: "@code.search CodeSearchQuery -> List CodeSearchResult"
+            signature: "@fs.grep {pattern, paths, caseSensitive?, regex?, contextLines?, limit?} -> List SearchMatch"
                 .to_string(),
             args_schema: json!({
                 "type": "object",
@@ -275,14 +275,14 @@ pub(super) fn docs(name: &str, namespace: &str, summary: &str, sensitive: bool) 
                     "limit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1000 }
                 }
             }),
-            result_schema: Some(json!({ "type": "array", "items": code_search_result_schema() })),
+            result_schema: Some(json!({ "type": "array", "items": search_match_schema() })),
             examples: vec![ToolExample {
                 title: Some("Search literal text".to_string()),
-                code: "let hits = @code.search {pattern: \"TODO\", paths: [\"tempestmiku:\"], regex: false, contextLines: 1}"
+                code: "let hits = @fs.grep {pattern: \"TODO\", paths: [\"tempestmiku:\"], regex: false, contextLines: 1}"
                     .to_string(),
                 notes: Some("Use a hit's tag with fs.patch, fs.move, or fs.remove.".to_string()),
             }],
-            errors: read_only_errors("code.search"),
+            errors: read_only_errors("fs.grep"),
             grants: vec![linked_grant("Read/search access to the target linked folder.")],
             approval: "none".to_string(),
             ..base
@@ -343,7 +343,7 @@ pub fn linked_tool_docs(name: &str) -> Option<ToolDocs> {
         "fs.remove" => ("fs", "Remove a linked file"),
         "fs.ls" => ("fs", "List linked-folder entries"),
         "fs.find" => ("fs", "Find linked-folder entries"),
-        "code.search" => ("code", "Search UTF-8 linked files"),
+        "fs.grep" => ("fs", "Search UTF-8 linked files"),
         "proc.run" => ("proc", "Run allowlisted argv-vector commands"),
         _ => return None,
     };
@@ -472,7 +472,7 @@ fn fs_entry_schema() -> Value {
     })
 }
 
-fn code_search_result_schema() -> Value {
+fn search_match_schema() -> Value {
     json!({
         "type": "object",
         "required": ["path", "uri", "line", "column", "text", "before", "after", "tag"],

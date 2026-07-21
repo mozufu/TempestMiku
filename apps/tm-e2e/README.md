@@ -148,7 +148,7 @@ and research workspace. It starts a Serious Engineer session, sends a scripted
 native-tm turn that files a dropped `drop://` document through `drive.put`,
 watches the shared approval appear in transcript `pendingEvents`, approves it
 through the normal approval route, then verifies `drive_put` replay, `drive://`
-preview/resolve, the compact drive feed, `drive.search`, `research.drive`, and
+preview/resolve, the compact drive feed, `drive.search`, `drive.get`, and
 `Last-Event-ID` replay.
 
 ## Native Actor Coordination
@@ -185,7 +185,7 @@ cargo run -p tm-e2e -- record native-coding
 
 It creates a disposable linked Rust crate inside the evidence directory, keeps
 all model responses scripted, and drives three durable turns through HTTP/SSE.
-The successful coding turn uses real `code.search`, `fs.patch`, and an argv-vector
+The successful coding turn uses real `fs.grep`, `fs.patch`, and an argv-vector
 `@proc.run {cmd: "cargo", ...}`, then forces process output into `artifact://` and
 opens both the spill and patched `linked://` source through the resource
 gateway. The denied and timed-out turns attempt guarded overwrites and prove

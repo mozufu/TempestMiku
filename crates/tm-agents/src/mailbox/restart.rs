@@ -105,7 +105,6 @@ impl MailboxRegistry {
                 completed_at: None,
                 cancelled: false,
                 failure_reason: None,
-                last_summary: None,
                 artifact_uri: None,
                 history_uri: None,
             });
@@ -117,7 +116,6 @@ impl MailboxRegistry {
             record.completed_at = None;
             record.cancelled = false;
             record.failure_reason = None;
-            record.last_summary = None;
             record.artifact_uri = None;
             record.history_uri = None;
         }

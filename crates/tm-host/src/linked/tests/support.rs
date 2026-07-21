@@ -126,7 +126,7 @@ pub(super) fn ctx() -> InvocationCtx {
         "fs.ls",
         "fs.find",
         "fs.move",
-        "code.search",
+        "fs.grep",
         "fs.patch",
         "fs.remove",
         "proc.run",

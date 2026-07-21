@@ -99,22 +99,6 @@ fn drive_payloads_use_stable_camel_case_wire_shapes() {
     );
     assert!(value["proposal"]["sourceRunId"].is_string());
 
-    let config = DriveOrganizerConfig {
-        tier: DriveAutomationTier::Moderate,
-        auto_apply: vec![DriveOrganizerAutoApplyRule {
-            actions: vec![OrganizerActionKind::Move],
-            doc_kinds: vec!["note".to_string()],
-            projects: vec!["TempestMiku".to_string()],
-            min_confidence: 0.7,
-        }],
-    };
-    let value = serde_json::to_value(config).unwrap();
-    assert_eq!(value["tier"], json!("moderate"));
-    assert_eq!(value["autoApply"][0]["actions"][0], json!("move"));
-    assert_eq!(value["autoApply"][0]["docKinds"][0], json!("note"));
-    assert_eq!(value["autoApply"][0]["projects"][0], json!("TempestMiku"));
-    assert!((value["autoApply"][0]["minConfidence"].as_f64().unwrap() - 0.7).abs() < 1e-6);
-
     let run = OrganizerRun {
         id: Uuid::nil(),
         version: initial_record_version(),

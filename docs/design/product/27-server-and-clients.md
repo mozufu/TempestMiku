@@ -49,7 +49,7 @@ flowchart TD
   SRV --> CORE[agent loop + sandbox + registry]
   CORE --> SUBS[persona / memory / agents / drive]
   CORE -->|signed bounded jobs over Tailnet| WORKER[tm-worker<br/>linked host on homolab]
-  WORKER -->|fs.* / code.search / proc.run / linked://| REPO[operator-provisioned linked repo]
+  WORKER -->|fs.* / proc.run / linked://| REPO[operator-provisioned linked repo]
 ```
 
 There is exactly one authoritative `tm-server` in the production topology: lumo owns auth,

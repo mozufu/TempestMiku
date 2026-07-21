@@ -14,7 +14,7 @@ fn capability_grants_glob_match() {
     assert!(g.permits("agents.run"));
     assert!(g.permits("agents.spawn"));
     assert!(g.permits("agents.parallel"));
-    assert!(g.permits("agents.msg"));
+    assert!(g.permits("agents.broadcast"));
     assert!(g.permits("agents.send"));
     assert!(g.permits("agents.wait"));
     assert!(g.permits("agents.inbox"));

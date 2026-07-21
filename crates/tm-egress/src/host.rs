@@ -1,12 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tm_host::{
-    GrantDoc, HostError, HostFn, HostRegistry, InvocationCtx, SecretHandle, ToolDocs, ToolErrorDoc,
-    ToolExample,
+    GrantDoc, HostError, HostFn, HostRegistry, InvocationCtx, ToolDocs, ToolErrorDoc, ToolExample,
 };
 use url::Url;
 
@@ -56,64 +55,6 @@ impl HostFn for SecretsUseFn {
             .await
             .map_err(|error| error.into_host())?;
         serde_json::to_value(handle).map_err(|error| HostError::HostCall(error.to_string()))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct HttpGetFn {
-    runtime: EgressRuntime,
-    docs: ToolDocs,
-}
-
-impl HttpGetFn {
-    pub fn new(runtime: EgressRuntime) -> Self {
-        Self {
-            runtime,
-            docs: tool_docs(
-                "http.get",
-                "http",
-                "Fetch bounded UTF-8 text from an exact configured destination",
-                "http.get({ url, headers?, auth?, timeoutMs? }) -> HttpResponse",
-                "none; policy, exact destination grant, DNS, and budgets are still enforced",
-            ),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct GetArgs {
-    url: String,
-    #[serde(default)]
-    headers: BTreeMap<String, String>,
-    #[serde(default)]
-    auth: Option<SecretHandle>,
-    #[serde(default)]
-    timeout_ms: Option<u64>,
-}
-
-#[async_trait]
-impl HostFn for HttpGetFn {
-    fn docs(&self) -> &ToolDocs {
-        &self.docs
-    }
-
-    async fn call(&self, args: Value, ctx: &InvocationCtx) -> tm_host::Result<Value> {
-        let args: GetArgs = serde_json::from_value(args)
-            .map_err(|error| HostError::InvalidArgs(error.to_string()))?;
-        execute_and_encode(
-            &self.runtime,
-            ctx,
-            HttpRequest {
-                method: "GET".into(),
-                url: args.url,
-                headers: args.headers,
-                body: None,
-                auth: args.auth,
-                timeout_ms: args.timeout_ms,
-            },
-        )
-        .await
     }
 }
 
@@ -189,7 +130,6 @@ impl HostFn for HttpRequestFn {
 
 pub fn register_egress_functions(registry: &mut HostRegistry, runtime: EgressRuntime) {
     registry.register(Arc::new(SecretsUseFn::new(runtime.clone())));
-    registry.register(Arc::new(HttpGetFn::new(runtime.clone())));
     registry.register(Arc::new(HttpRequestFn::new(runtime)));
 }
 

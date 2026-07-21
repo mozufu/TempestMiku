@@ -439,7 +439,7 @@ where
     let session = state.store.get_session(session_id).await?;
     let profile = super::super::modes::mode_profile(&state.persona, &session.mode_state.mode);
     let base = CapabilityGrants::default().allow_many(profile.capabilities);
-    if !base.permits("http.get") {
+    if !base.permits("http.request") {
         return Err(ServerError::Policy(format!(
             "mode {} does not permit network-backed MCP resources",
             session.mode_state.mode

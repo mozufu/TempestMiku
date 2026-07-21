@@ -231,15 +231,15 @@ stay private simply never enters.
 
 Serious Engineer and Handoff modes call capabilities **as code** through the one `execute` tool, not
 N chat-native tools — Oh My Pi's coverage re-expressed as SDK namespaces (§25). The current native
-runtime exposes `print`, `display`, `tools`, `resources`, `artifacts`, `fs`, `code`, `proc`, and the
-default-deny allowlisted `http.get`; `agents.*` is present when a Handoff/orchestration turn holds the
+runtime exposes `print`, `display`, `tools`, `resources`, `artifacts`, `fs`, `proc`, and the
+default-deny allowlisted `http.request`; `agents.*` is present when a Handoff/orchestration turn holds the
 grant; `secrets` / `memory` / `skills` stay `undefined` until a turn is granted them.
 
 - **Curated real-repo reach.** The raw terminal of the source deployment is deliberately dropped for
   `proc.run(cmd, args)` — an **argv-vector** invocation (no `sh -c`, structurally immune to shell
   injection), **allowlisted**, scoped to a **linked folder**, and **always approval-gated** because an
   allowlisted build/test command can still run repository-controlled code.
-- **Filesystem operations.** `fs.read/write/list/find` and `code.search`; `fs.patch` is patch-only
+- **Filesystem operations.** `fs.read/write/list/find/grep`; `fs.patch` is patch-only
   (existing UTF-8 file + fresh tag + exact expected-context hunks, atomic apply, bounded diff preview
   spilled to `artifact://` when large); `fs.move` and approval-gated `fs.remove` own whole-file
   changes. On Unix the adaptor opens each path component relative to a held descriptor with no-follow

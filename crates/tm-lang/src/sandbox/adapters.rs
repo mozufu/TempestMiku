@@ -11,29 +11,32 @@ use tm_host::{
 };
 
 #[derive(Debug, Clone)]
-pub(super) struct HttpGetFn {
+pub(super) struct HttpRequestFixtureFn {
     responses: BTreeMap<String, String>,
     docs: ToolDocs,
 }
 
-impl HttpGetFn {
+impl HttpRequestFixtureFn {
     pub(super) fn new(responses: BTreeMap<String, String>) -> Self {
         Self {
             responses,
             docs: ToolDocs {
-                name: "http.get".into(),
+                name: "http.request".into(),
                 namespace: "http".into(),
                 summary: "Fetch a deterministic allowlisted HTTP response".into(),
                 description: Some(
-                    "Default-deny deterministic fixture access. This is not ambient network egress; production egress remains owned by P9."
+                    "Default-deny deterministic fixture access. This is not ambient network egress; production egress remains owned by P9. The fixture supports GET without a body only."
                         .into(),
                 ),
-                signature: "http.get(url: String) -> String".into(),
+                signature: "http.request({ method, url }) -> String".into(),
                 args_schema: json!({
                     "type": "object",
-                    "required": ["url"],
+                    "required": ["method", "url"],
                     "additionalProperties": false,
-                    "properties": { "url": { "type": "string", "format": "uri" } }
+                    "properties": {
+                        "method": { "type": "string" },
+                        "url": { "type": "string", "format": "uri" }
+                    }
                 }),
                 result_schema: Some(json!({"type": "string"})),
                 examples: Vec::new(),
@@ -52,84 +55,56 @@ impl HttpGetFn {
 }
 
 #[async_trait]
-impl HostFn for HttpGetFn {
+impl HostFn for HttpRequestFixtureFn {
     fn docs(&self) -> &ToolDocs {
         &self.docs
     }
 
     async fn call(&self, args: Value, _ctx: &InvocationCtx) -> tm_host::Result<Value> {
+        let method = args.get("method").and_then(Value::as_str).ok_or_else(|| {
+            HostError::InvalidArgs("http.request requires a string method".into())
+        })?;
+        if !method.eq_ignore_ascii_case("GET") || args.get("body").is_some() {
+            return Err(HostError::InvalidArgs(
+                "http.request fixture supports GET without a body only".into(),
+            ));
+        }
         let url = args
             .get("url")
             .and_then(Value::as_str)
-            .ok_or_else(|| HostError::InvalidArgs("http.get requires a string url".into()))?;
+            .ok_or_else(|| HostError::InvalidArgs("http.request requires a string url".into()))?;
         self.responses
             .get(url)
             .cloned()
             .map(Value::String)
-            .ok_or_else(|| HostError::CapabilityDenied("http.get".into()))
+            .ok_or_else(|| HostError::CapabilityDenied("http.request".into()))
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum ArtifactOperation {
-    Put,
-    Get,
-    Slice,
-    List,
-}
-
 pub(super) struct ArtifactFn {
-    operation: ArtifactOperation,
     store: ArtifactStore,
     docs: ToolDocs,
 }
 
 impl ArtifactFn {
-    pub(super) fn new(operation: ArtifactOperation, store: ArtifactStore) -> Self {
-        let (name, summary, sensitive) = match operation {
-            ArtifactOperation::Put => ("artifacts.put", "Store a session artifact", true),
-            ArtifactOperation::Get => ("artifacts.get", "Read a session artifact", true),
-            ArtifactOperation::Slice => ("artifacts.slice", "Read a selected artifact slice", true),
-            ArtifactOperation::List => ("artifacts.list", "List session artifacts", true),
-        };
-        let (signature, args_schema) = match operation {
-            ArtifactOperation::List => (
-                "artifacts.list({offset?: number, limit?: number})".into(),
-                json!({
-                    "type": ["object", "null"],
-                    "properties": {
-                        "offset": { "type": "integer", "minimum": 0 },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 256 }
-                    },
-                    "additionalProperties": false
-                }),
-            ),
-            _ => (format!("{name}(args)"), json!({})),
-        };
+    pub(super) fn new(store: ArtifactStore) -> Self {
         Self {
-            operation,
             store,
             docs: ToolDocs {
-                name: name.into(),
+                name: "artifacts.put".into(),
                 namespace: "artifacts".into(),
-                summary: summary.into(),
+                summary: "Store a session artifact".into(),
                 description: None,
-                signature,
-                args_schema,
+                signature: "artifacts.put(args)".into(),
+                args_schema: json!({}),
                 result_schema: None,
                 examples: Vec::new(),
                 errors: Vec::new(),
                 grants: vec![GrantDoc {
                     kind: "artifact".into(),
-                    description: match operation {
-                        ArtifactOperation::Get
-                        | ArtifactOperation::Slice
-                        | ArtifactOperation::List => "Reads require resources.read:artifact",
-                        _ => "Session-local artifact operation",
-                    }
-                    .into(),
+                    description: "Session-local artifact operation".into(),
                 }],
-                sensitive,
+                sensitive: true,
                 approval: "none".into(),
                 since: "0.1".into(),
                 stability: "stable".into(),
@@ -144,156 +119,36 @@ impl HostFn for ArtifactFn {
         &self.docs
     }
 
-    async fn call(&self, args: Value, ctx: &InvocationCtx) -> tm_host::Result<Value> {
-        match self.operation {
-            ArtifactOperation::Put => {
-                let (data, title, mime) = match args {
-                    Value::Object(mut fields) if fields.contains_key("data") => {
-                        let data = fields.remove("data").unwrap_or(Value::Null);
-                        let title = fields
-                            .remove("title")
-                            .and_then(|value| value.as_str().map(str::to_string));
-                        let mime = fields
-                            .remove("mime")
-                            .and_then(|value| value.as_str().map(str::to_string))
-                            .unwrap_or_else(|| "text/plain".into());
-                        (data, title, mime)
-                    }
-                    data => (data, None, "text/plain".into()),
-                };
-                validate_mime(&mime)?;
-                let content = match data {
-                    Value::String(content) => content,
-                    value => serde_json::to_string_pretty(&value)
-                        .map_err(|error| HostError::InvalidArgs(error.to_string()))?,
-                };
-                let content = tm_memory::redact_dream_text(&content).text;
-                let title = title.map(|title| tm_memory::redact_dream_text(&title).text);
-                let store = self.store.clone();
-                let artifact =
-                    tokio::task::spawn_blocking(move || store.put_text(content, title, &mime))
-                        .await
-                        .map_err(|error| {
-                            HostError::HostCall(format!("artifact write task failed: {error}"))
-                        })?
-                        .map_err(|error| HostError::HostCall(error.to_string()))?;
-                serde_json::to_value(artifact)
-                    .map_err(|error| HostError::HostCall(error.to_string()))
+    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> tm_host::Result<Value> {
+        let (data, title, mime) = match args {
+            Value::Object(mut fields) if fields.contains_key("data") => {
+                let data = fields.remove("data").unwrap_or(Value::Null);
+                let title = fields
+                    .remove("title")
+                    .and_then(|value| value.as_str().map(str::to_string));
+                let mime = fields
+                    .remove("mime")
+                    .and_then(|value| value.as_str().map(str::to_string))
+                    .unwrap_or_else(|| "text/plain".into());
+                (data, title, mime)
             }
-            ArtifactOperation::Get | ArtifactOperation::Slice => {
-                if !ctx.grants.permits("resources.read:artifact") {
-                    return Err(HostError::CapabilityDenied(
-                        "resources.read:artifact".into(),
-                    ));
-                }
-                let (uri, selector) = artifact_read_args(&args, self.operation)?;
-                let store = self.store.clone();
-                let content =
-                    tokio::task::spawn_blocking(move || store.read(&uri, selector.as_deref()))
-                        .await
-                        .map_err(|error| {
-                            HostError::HostCall(format!("artifact read task failed: {error}"))
-                        })?
-                        .map_err(|error| HostError::NotFound(error.to_string()))?;
-                serde_json::to_value(content)
-                    .map_err(|error| HostError::HostCall(error.to_string()))
-            }
-            ArtifactOperation::List => {
-                if !ctx.grants.permits("resources.read:artifact") {
-                    return Err(HostError::CapabilityDenied(
-                        "resources.read:artifact".into(),
-                    ));
-                }
-                let (offset, limit) = artifact_list_args(&args)?;
-                let store = self.store.clone();
-                let (items, has_more) =
-                    tokio::task::spawn_blocking(move || store.list_page(offset, limit))
-                        .await
-                        .map_err(|error| {
-                            HostError::HostCall(format!("artifact list task failed: {error}"))
-                        })?
-                        .map_err(|error| HostError::HostCall(error.to_string()))?;
-                let next_offset = has_more.then(|| offset.saturating_add(items.len()));
-                Ok(json!({
-                    "items": items,
-                    "offset": offset,
-                    "nextOffset": next_offset,
-                    "hasMore": has_more,
-                }))
-            }
-        }
-    }
-}
-
-fn artifact_list_args(args: &Value) -> tm_host::Result<(usize, usize)> {
-    const DEFAULT_LIMIT: usize = 100;
-    const MAX_LIMIT: usize = 256;
-    if args.is_null() {
-        return Ok((0, DEFAULT_LIMIT));
-    }
-    let fields = args
-        .as_object()
-        .ok_or_else(|| HostError::InvalidArgs("artifact list requires an object or null".into()))?;
-    if fields
-        .keys()
-        .any(|key| !matches!(key.as_str(), "offset" | "limit"))
-    {
-        return Err(HostError::InvalidArgs(
-            "artifact list accepts only offset and limit".into(),
-        ));
-    }
-    let parse = |name: &str, default: usize| -> tm_host::Result<usize> {
-        let Some(value) = fields.get(name) else {
-            return Ok(default);
+            data => (data, None, "text/plain".into()),
         };
-        let value = value.as_u64().ok_or_else(|| {
-            HostError::InvalidArgs(format!(
-                "artifact list {name} must be a non-negative integer"
-            ))
-        })?;
-        usize::try_from(value)
-            .map_err(|_| HostError::InvalidArgs(format!("artifact list {name} is too large")))
-    };
-    let offset = parse("offset", 0)?;
-    let limit = parse("limit", DEFAULT_LIMIT)?;
-    if !(1..=MAX_LIMIT).contains(&limit) {
-        return Err(HostError::InvalidArgs(format!(
-            "artifact list limit must be in 1..={MAX_LIMIT}"
-        )));
+        validate_mime(&mime)?;
+        let content = match data {
+            Value::String(content) => content,
+            value => serde_json::to_string_pretty(&value)
+                .map_err(|error| HostError::InvalidArgs(error.to_string()))?,
+        };
+        let content = tm_memory::redact_dream_text(&content).text;
+        let title = title.map(|title| tm_memory::redact_dream_text(&title).text);
+        let store = self.store.clone();
+        let artifact = tokio::task::spawn_blocking(move || store.put_text(content, title, &mime))
+            .await
+            .map_err(|error| HostError::HostCall(format!("artifact write task failed: {error}")))?
+            .map_err(|error| HostError::HostCall(error.to_string()))?;
+        serde_json::to_value(artifact).map_err(|error| HostError::HostCall(error.to_string()))
     }
-    Ok((offset, limit))
-}
-
-fn artifact_read_args(
-    args: &Value,
-    operation: ArtifactOperation,
-) -> tm_host::Result<(String, Option<String>)> {
-    let direct = args.as_str().map(str::to_string);
-    let fields = args.as_object();
-    let uri = direct
-        .or_else(|| {
-            fields
-                .and_then(|fields| fields.get("ref").or_else(|| fields.get("uri")))
-                .and_then(|value| match value {
-                    Value::String(uri) => Some(uri.clone()),
-                    Value::Object(reference) => reference
-                        .get("uri")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    _ => None,
-                })
-        })
-        .ok_or_else(|| HostError::InvalidArgs("artifact read requires ref or uri".into()))?;
-    let selector = fields
-        .and_then(|fields| fields.get("selector"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    if matches!(operation, ArtifactOperation::Slice) && selector.is_none() {
-        return Err(HostError::InvalidArgs(
-            "artifacts.slice requires selector".into(),
-        ));
-    }
-    Ok((uri, selector))
 }
 
 fn validate_mime(mime: &str) -> tm_host::Result<()> {
@@ -329,7 +184,6 @@ fn validate_mime(mime: &str) -> tm_host::Result<()> {
 pub(super) enum CatalogOperation {
     Search,
     Docs,
-    Call,
 }
 
 pub(super) struct CatalogFn {
@@ -351,11 +205,6 @@ impl CatalogFn {
                 "Read one tm effect declaration and its host policy metadata",
                 "tools.docs(name)",
             ),
-            CatalogOperation::Call => (
-                "tools.call",
-                "Invoke one granted tm effect by its catalog name",
-                "tools.call({name, args})",
-            ),
         };
         Self {
             operation,
@@ -374,11 +223,7 @@ impl CatalogFn {
                     kind: "catalog".into(),
                     description: "Catalog inspection does not grant target authority".into(),
                 }],
-                // A late-bound target may carry private arguments or results even though catalog
-                // search/docs do not. Redact the generic call envelope at the runtime-event
-                // boundary; the target HostFn still performs its own exact grant and approval
-                // checks through HostRegistry::invoke.
-                sensitive: matches!(operation, CatalogOperation::Call),
+                sensitive: false,
                 approval: "none".into(),
                 since: "0.1".into(),
                 stability: "stable".into(),
@@ -450,29 +295,6 @@ impl HostFn for CatalogFn {
                     self.registry.docs(name, ctx)?
                 };
                 Self::docs_value(docs)
-            }
-            CatalogOperation::Call => {
-                let fields = args.as_object().ok_or_else(|| {
-                    HostError::InvalidArgs("tools.call requires {name: String, args: Json}".into())
-                })?;
-                if fields
-                    .keys()
-                    .any(|key| !matches!(key.as_str(), "name" | "args"))
-                {
-                    return Err(HostError::InvalidArgs(
-                        "tools.call accepts only name and args".into(),
-                    ));
-                }
-                let name = fields.get("name").and_then(Value::as_str).ok_or_else(|| {
-                    HostError::InvalidArgs("tools.call requires a string name".into())
-                })?;
-                if name == "tools.call" {
-                    return Err(HostError::InvalidArgs(
-                        "tools.call cannot recursively invoke itself".into(),
-                    ));
-                }
-                let target_args = fields.get("args").cloned().unwrap_or(Value::Null);
-                self.registry.invoke(name, target_args, ctx).await
             }
         }
     }

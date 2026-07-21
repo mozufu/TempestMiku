@@ -20,7 +20,7 @@ Precise, verifiable changes. Tests and rollback matter more than speed or clever
 
 ## Procedure
 
-1. The standard linked-repo effects are already available: use `@code.search`, `@fs.read`,
+1. The standard linked-repo effects are already available: use `@fs.grep`, `@fs.read`,
    `@fs.write`, `@fs.patch`, `@fs.move`, `@fs.remove`, and `@proc.run` directly. Search the
    capability catalog only for an effect or
    schema that these notes do not name.

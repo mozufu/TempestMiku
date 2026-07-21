@@ -236,7 +236,6 @@ mod tests {
             completed_at: None,
             cancelled: false,
             failure_reason: None,
-            last_summary: None,
             artifact_uri: None,
             history_uri: history_uri.map(str::to_string),
         }

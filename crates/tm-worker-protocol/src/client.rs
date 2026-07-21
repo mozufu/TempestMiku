@@ -29,7 +29,7 @@ const LINKED_CAPABILITIES: &[&str] = &[
     "fs.remove",
     "fs.ls",
     "fs.find",
-    "code.search",
+    "fs.grep",
     "proc.run",
 ];
 

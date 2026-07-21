@@ -68,9 +68,7 @@ async fn gated_postgres_bootstraps_drive_schema() {
             },
         )
         .unwrap();
-    let proposals = in_memory
-        .organize_with_config(tm_drive::DriveOrganizerConfig::default())
-        .unwrap();
+    let proposals = in_memory.organize().unwrap();
     assert_eq!(proposals.len(), 1);
     let applied = in_memory
         .apply_organizer_proposals(&[proposals[0].id])

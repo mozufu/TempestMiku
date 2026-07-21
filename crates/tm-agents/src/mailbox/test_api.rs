@@ -44,14 +44,13 @@ impl MailboxRegistry {
     }
 
     #[cfg(test)]
-    pub async fn mark_complete_with_digest(
+    pub async fn mark_complete_with_resources(
         &self,
         id: &ActorId,
-        summary: String,
         artifact_uri: Option<String>,
         history_uri: Option<String>,
     ) -> bool {
-        self.mark_complete_with_digest_for_session("", id, summary, artifact_uri, history_uri)
+        self.mark_complete_with_resources_for_session("", id, artifact_uri, history_uri)
             .await
     }
 

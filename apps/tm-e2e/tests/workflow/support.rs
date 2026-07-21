@@ -63,28 +63,30 @@ let filed = @drive.put {content: "# Approval Drop\nManual approval gates drive w
   sourceUri: "drop://browser/approval-drop.md",
   eventSeq: 101
 }};
-let hits = @drive.search {query: "approval", project: "tempestmiku", returnSnippets: true};
-let researchResult = @research.drive {
-  query: "approval",
-  project: "tempestmiku",
-  maxDocs: 1,
-  maxSnippets: 1,
-  maxWorkers: 0,
-  maxBytesPerDoc: 200,
-  maxDigestBytes: 120
-};
-let citation = match researchResult.citations {
-  | first :: _ -> first
-  | [] -> {sourceKind: "missing"}
-};
-{
-  filedUri: filed.uri,
-  sourceUri: filed.entry.sourceUri,
-  searchHits: length hits,
-  researchCitations: length researchResult.citations,
-  sourceKind: citation.sourceKind,
-  answerHasDriveUri: contains "drive://" researchResult.answer
-} |> display {kind: "json"}
+let hits = @drive.search {query: "approval", project: "tempestmiku", returnSnippets: true, limit: 1};
+match hits {
+  | first :: _ -> do {
+      let read = @drive.get {uri: first.uri, selector: "1-20"};
+      {
+        filedUri: filed.uri,
+        sourceUri: filed.entry.sourceUri,
+        searchHits: length hits,
+        sourceKind: "drive",
+        citationUri: first.uri,
+        answerHasDriveUri: contains "drive://" first.uri,
+        resolvedHasBody: contains "Research smoke citation body" read.content
+      } |> display {kind: "json"}
+    }
+  | [] -> {
+        filedUri: filed.uri,
+        sourceUri: filed.entry.sourceUri,
+        searchHits: 0,
+        sourceKind: "missing",
+        citationUri: "missing",
+        answerHasDriveUri: false,
+        resolvedHasBody: false
+      } |> display {kind: "json"}
+}
 "##
     .to_string()
 }

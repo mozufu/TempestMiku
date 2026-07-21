@@ -105,7 +105,7 @@ async fn p0_tool_docs_include_tm_contract_metadata() {
     assert!(docs.sensitive);
     assert_eq!(docs.stability, "experimental");
 
-    for name in ["fs.read", "fs.ls", "fs.find", "code.search"] {
+    for name in ["fs.read", "fs.ls", "fs.find", "fs.grep"] {
         let docs = host_registry.docs(name, &ctx()).unwrap();
         assert!(docs.sensitive, "{name} results must be trace-sensitive");
         assert_eq!(
@@ -119,7 +119,7 @@ async fn p0_tool_docs_include_tm_contract_metadata() {
         "fs.ls",
         "fs.find",
         "fs.move",
-        "code.search",
+        "fs.grep",
         "fs.patch",
         "fs.remove",
         "proc.run",
@@ -139,10 +139,15 @@ async fn p0_tool_docs_include_tm_contract_metadata() {
             "{name} docs should document fail-closed errors"
         );
     }
-    assert!(matches!(
-        host_registry.docs("code.edit", &ctx()),
-        Err(HostError::NotFound(_))
-    ));
+    for retired in ["code.search", "code.edit", "code.ast", "code.lsp"] {
+        assert!(
+            matches!(
+                host_registry.docs(retired, &ctx()),
+                Err(HostError::NotFound(_))
+            ),
+            "retired {retired} must fail closed as NotFound"
+        );
+    }
     let patch_docs = host_registry.docs("fs.patch", &ctx()).unwrap();
     let replace_required =
         &patch_docs.args_schema["properties"]["hunks"]["items"]["oneOf"][0]["required"];
@@ -271,7 +276,7 @@ async fn recursive_listing_and_search_do_not_follow_outward_symlinks() {
     );
 
     let hits = call_fn(
-        &CodeSearchFn::new(linked),
+        &FsGrepFn::new(linked),
         json!({"pattern":"needle","paths":["tempestmiku:"],"regex":false}),
         &ctx(),
     )

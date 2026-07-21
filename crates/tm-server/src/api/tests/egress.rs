@@ -31,7 +31,6 @@ fn enabled_egress() -> EgressConfig {
 
 fn assert_exact_egress_grants(capabilities: &[String]) {
     for expected in [
-        "http.get",
         "http.request",
         "egress.destination:research",
         "secrets.use",
@@ -43,6 +42,7 @@ fn assert_exact_egress_grants(capabilities: &[String]) {
         );
     }
     for forbidden in [
+        "http.get",
         "egress.*",
         "egress.destination:*",
         "secrets.*",
@@ -108,20 +108,20 @@ fn disabled_egress_adds_no_turn_authority_and_non_network_modes_stay_closed() {
     )
     .with_egress_config(&EgressConfig::default());
 
-    let mut network = vec!["http.get".to_string()];
+    let mut network = vec!["http.request".to_string()];
     state.extend_egress_turn_capabilities(&mut network);
-    assert_eq!(network, ["http.get"]);
+    assert_eq!(network, ["http.request"]);
 
-    let mut non_network = vec!["memory.recall".to_string()];
+    let mut non_network = vec!["drive.search".to_string()];
     let enabled = state.with_egress_config(&enabled_egress());
     enabled.extend_egress_turn_capabilities(&mut non_network);
-    assert_eq!(non_network, ["memory.recall"]);
+    assert_eq!(non_network, ["drive.search"]);
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn production_egress_denial_is_persisted_and_replayable() {
     let code = r#"
-let denied = handle (@http.get {url: "https://not-configured.example/private"}) with error {
+let denied = handle (@http.request {method: "GET", url: "https://not-configured.example/private"}) with error {
   | CapabilityDeniedError {message, ...} -> {name: "CapabilityDeniedError", message: message}
   | other -> rethrow other
 };
@@ -197,7 +197,7 @@ denied |> display {kind: "json"}
 #[tokio::test(flavor = "current_thread")]
 async fn runtime_destination_revocation_denies_before_dns_and_is_durable() {
     let code = r#"
-let denied = handle (@http.get {url: "https://api.example.com/v1/private"}) with error {
+let denied = handle (@http.request {method: "GET", url: "https://api.example.com/v1/private"}) with error {
   | CapabilityDeniedError {message, ...} -> {name: "CapabilityDeniedError", message: message}
   | other -> rethrow other
 };

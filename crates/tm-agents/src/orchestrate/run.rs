@@ -56,7 +56,7 @@ impl AgentsRunFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Run a one-shot research subtask".to_string()),
-                    code: "let d = @agents.run {role: \"researcher\", task: \"Research and summarize §23\", opts: {capabilities: [\"http.get\", \"resources.read:artifact\"]}};\nd.summary |> display {kind: \"text\"}"
+                    code: "let d = @agents.run {role: \"researcher\", task: \"Research and summarize §23\", opts: {capabilities: [\"http.request\", \"resources.read:artifact\"]}};\nd.summary |> display {kind: \"text\"}"
                         .to_string(),
                     notes: Some(
                         "The parent must hold every explicitly delegated capability. Only the digest returns to parent context; full output is at d.historyUri."
@@ -107,7 +107,6 @@ impl HostFn for AgentsRunFn {
             completed_at: None,
             cancelled: false,
             failure_reason: None,
-            last_summary: None,
             artifact_uri: None,
             history_uri: None,
         };

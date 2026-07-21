@@ -5,16 +5,16 @@ resolution time for those?"*
 
 ```
 turn 1  assistant → execute:
-        const cards = await tools.search("support tickets list");
-        display(cards.map(c => c.name));
+        let cards = @tools.search "support tickets list";
+        cards |> map (fun c -> c.name) |> display {kind: "table"}
   tool ← ["tickets.list","tickets.get"]                              # ~30 tokens, not the schemas
 
 turn 2  assistant → execute:
-        const t = await tools.call("tickets.list", { limit: 100 });   # 100 tickets, ~600 KB
-        const refunds = t.filter(x => /refund/i.test(x.subject + x.body));
-        const mins = refunds.map(x => (x.resolved_at - x.created_at) / 60000).sort((a,b)=>a-b);
-        const median = mins.length ? mins[Math.floor(mins.length/2)] : null;
-        display({ matched: refunds.length, median_minutes: median });
+        let t = @tickets.list {limit: 100};                            # 100 tickets, ~600 KB
+        let refunds = t |> filter (fun x -> contains "refund" x.subject);
+        let mins = refunds |> map (fun x -> (x.resolvedAt - x.createdAt) / 60000) |> sort;
+        let median = match mins { | [] -> null | _ -> mins |> at (length mins / 2) };
+        display {matched: length refunds, medianMinutes: median}
   tool ← { matched: 12, median_minutes: 87 }                          # ~15 tokens; 600 KB never entered context
 
 turn 3  assistant → (final answer)

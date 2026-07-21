@@ -50,4 +50,3 @@ mod host_put;
 mod links_events;
 mod local_store;
 mod organizer;
-mod scope_research;

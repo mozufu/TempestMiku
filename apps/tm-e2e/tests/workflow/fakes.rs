@@ -170,10 +170,9 @@ impl CodingBackend for ActorSmokeBackend {
             )
             .await;
         self.roster
-            .mark_complete_with_digest_for_session(
+            .mark_complete_with_resources_for_session(
                 &actor_session_id,
                 &actor_id,
-                "child smoke complete".to_string(),
                 Some("artifact://0".to_string()),
                 Some(format!("history://{actor_id_text}")),
             )
@@ -266,7 +265,6 @@ fn actor_record(
         completed_at: (status == ActorStatus::Terminated).then_some(now),
         cancelled,
         failure_reason,
-        last_summary: None,
         artifact_uri: None,
         history_uri: None,
     }

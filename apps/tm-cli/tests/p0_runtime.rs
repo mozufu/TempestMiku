@@ -344,7 +344,7 @@ impl StubOpenAiServer {
 
             let code = r##"
 let before = @fs.read {path: "repo:src/lib.rs"};
-let hits = @code.search {
+let hits = @fs.grep {
   pattern: "\"old\"",
   paths: ["repo:src/lib.rs"],
   regex: false

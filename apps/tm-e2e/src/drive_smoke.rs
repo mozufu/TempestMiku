@@ -106,7 +106,7 @@ pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
     );
     ensure!(
         has_redacted_research_trace(&final_events),
-        "native turn should prove search/research execution without leaking results; events: {final_events:#?}"
+        "native turn should prove search/get execution without leaking results; events: {final_events:#?}"
     );
 
     let preview = client.preview_resource(&session.id, &filed_uri).await?;
@@ -169,7 +169,7 @@ fn has_redacted_research_trace(events: &[E2eEvent]) -> bool {
         })
     };
     started("drive.search")
-        && started("research.drive")
+        && started("drive.get")
         && events.iter().any(|event| {
             event.event_type == "display"
                 && event.data["value"] == json!("[redacted]")

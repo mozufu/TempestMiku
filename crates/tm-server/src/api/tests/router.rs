@@ -173,7 +173,7 @@ async fn coding_actor_and_scheduler_profiles_never_receive_modes_suggest() {
     let chat = Arc::new(RecordingChatRunner::default());
     let turns = Arc::clone(&chat.turns);
     let state = AppState::new(
-        store,
+        store.clone(),
         memory,
         chat,
         ModesConfig::default(),
@@ -197,22 +197,39 @@ async fn coding_actor_and_scheduler_profiles_never_receive_modes_suggest() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    // With no native coding backend configured the request falls back to ChatRunner, but the
-    // engineering profile still must not acquire conversation-only mode-switch authority.
-    post_user_message(&app, session.id, "inspect the repository").await;
-    let turns = turns.lock();
-    assert_eq!(turns.len(), 1);
-    assert!(
-        turns[0]
-            .capabilities
-            .iter()
-            .any(|capability| capability == "backend.coding")
+    // Without a native coding backend configured the granted engineering profile fails closed:
+    // ChatRunner must never run, and the turn resolves to a durable/replayable backend error.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/sessions/{}/messages", session.id))
+                .header("content-type", "application/json")
+                .body(message_body("inspect the repository"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let turn_id = accepted_turn_id(response).await;
+    let turn = wait_for_turn(&app, session.id, turn_id).await;
+    assert_eq!(turn["status"], json!("failed"), "{turn}");
+    assert_eq!(
+        turns.lock().len(),
+        0,
+        "ChatRunner must not run without a backend"
     );
-    assert!(
-        turns[0]
-            .capabilities
-            .iter()
-            .all(|capability| capability != MODE_SUGGEST_CAPABILITY)
+    let expected = "backend error: backend.coding is granted but no coding backend is configured";
+    let latest = store.turn(turn_id).await.unwrap();
+    assert_eq!(latest.error.as_deref(), Some(expected));
+    let events = store.events_after(session.id, None).await.unwrap();
+    let error_event = events
+        .iter()
+        .find(|event| event.event_type == "error")
+        .expect("failed turn emits a replayable error event");
+    assert_eq!(
+        error_event.payload_json,
+        json!({ "message": expected, "turnId": turn_id })
     );
 
     let assets = ModesConfig::default().load_assets();

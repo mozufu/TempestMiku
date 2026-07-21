@@ -84,7 +84,7 @@ impl AgentsPipelineFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Research then summarize".to_string()),
-                    code: "let waves = @agents.pipeline {items: [\"§21\", \"§22\"], stages: [\n  {role: \"researcher\", task: \"Find the important points for this input.\"},\n  {role: \"writer\", task: \"Turn this digest into a concise summary.\"}\n], opts: {capabilities: [\"http.get\", \"resources.read:artifact\"]}};\nwaves |> display {kind: \"json\"}"
+                    code: "let waves = @agents.pipeline {items: [\"§21\", \"§22\"], stages: [\n  {role: \"researcher\", task: \"Find the important points for this input.\"},\n  {role: \"writer\", task: \"Turn this digest into a concise summary.\"}\n], opts: {capabilities: [\"http.request\", \"resources.read:artifact\"]}};\nwaves |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some(
                         "The parent must hold every explicitly delegated capability. Each stage waits for all actors in the previous stage; downstream prompts receive actor/resource references plus bounded summaries, not transcripts."
@@ -351,7 +351,6 @@ async fn run_pipeline_wave(
                             completed_at: None,
                             cancelled: false,
                             failure_reason: None,
-                            last_summary: None,
                             artifact_uri: None,
                             history_uri: None,
                         },

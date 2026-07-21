@@ -16,7 +16,7 @@ impl AgentsSpawnFn {
                 namespace: "agents".to_string(),
                 summary: "Spawn a long-running child actor and return a handle".to_string(),
                 description: Some(
-                    "Non-blocking spawn; returns a handle for later coordination via agents.msg. \
+                    "Non-blocking spawn; returns a handle for later coordination via agents.send. \
                      The actor runs in the background and is tracked through the agent:// roster. \
                      Children receive no parent capabilities unless opts.capabilities explicitly \
                      delegates a held, delegable subset. Requires agents.spawn grant."
@@ -62,7 +62,7 @@ impl AgentsSpawnFn {
                 })),
                 examples: vec![ToolExample {
                     title: Some("Spawn a background worker".to_string()),
-                    code: "let h = @agents.spawn {role: \"worker\", task: \"Process the batch and reply to parent messages\", opts: {capabilities: [\"agents.*\"]}};\nlet reply = @agents.msg {handle: h, text: \"Status?\", opts: {await: true}};\nreply |> display {kind: \"json\"}"
+                    code: "let h = @agents.spawn {role: \"worker\", task: \"Process the batch and reply to parent messages\", opts: {capabilities: [\"agents.*\"]}};\nlet reply = @agents.send {to: h, text: \"Status?\", opts: {await: true}};\nreply |> display {kind: \"json\"}"
                         .to_string(),
                     notes: Some(
                         "The parent must hold agents.* before explicitly delegating it to the child."
@@ -117,7 +117,6 @@ impl HostFn for AgentsSpawnFn {
             completed_at: None,
             cancelled: false,
             failure_reason: None,
-            last_summary: None,
             artifact_uri: None,
             history_uri: None,
         };

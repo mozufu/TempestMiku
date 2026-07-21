@@ -60,8 +60,7 @@ pub enum RegistryError {
 /// Concurrent roster of live actors, plus the injected executor for `agents.run` (P3.1).
 ///
 /// Keeps both a bounded replay/debug message log and live bounded per-actor inbox queues.
-/// Completed actors retain their last digest summary so `agents.msg` can still use the
-/// P3 compatibility seeded-continuation path when a target is no longer running.
+/// Completed actors retain their output artifact and history URIs for roster inspection.
 pub struct MailboxRegistry {
     actors: RwLock<HashMap<ActorKey, ActorRecord>>,
     inboxes: RwLock<HashMap<ActorKey, Arc<ActorInbox>>>,

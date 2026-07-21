@@ -7,7 +7,7 @@
       "description": "Planning, reminders, writing, open loops, and decision cleanup. Unlocked normal chat may request a confirmed transition through await modes.suggest(...).",
       "defaultScope": "global",
       "activeSkills": ["miku-voice", "personal-assistant-state-capture"],
-      "capabilities": ["memory.recall", "memory.propose", "drive.*", "project.*", "research.drive", "http.get", "resources.read:artifact", "resources.read:drive", "resources.read:skill"],
+      "capabilities": ["drive.*", "project.*", "http.request", "resources.read:artifact", "resources.read:drive", "resources.read:skill"],
       "capabilityClass": "conversation",
       "route": {
         "isDefault": true,
@@ -21,7 +21,7 @@
       "description": "Code, safety, production, money, external, irreversible, legal, or medical work.",
       "defaultScope": "project:tempestmiku",
       "activeSkills": ["serious-engineer-ops"],
-      "capabilities": ["fs.*", "code.*", "proc.*", "drive.*", "project.*", "research.drive", "http.get", "resources.read:artifact", "resources.read:drive", "resources.read:linked", "resources.read:skill", "backend.coding"],
+      "capabilities": ["fs.*", "code.*", "proc.*", "drive.*", "project.*", "http.request", "resources.read:artifact", "resources.read:drive", "resources.read:linked", "resources.read:skill", "backend.coding"],
       "capabilityClass": "engineering",
       "route": {
         "priority": 70,
@@ -53,7 +53,7 @@
       "description": "Delegate implementation-heavy coding work through the configured coding backend.",
       "defaultScope": "project:tempestmiku",
       "activeSkills": ["oh-my-pi-handoff"],
-      "capabilities": ["agents.*", "drive.*", "project.*", "research.drive", "http.get", "resources.read:agent", "resources.read:artifact", "resources.read:drive", "resources.read:history", "resources.read:skill", "backend.coding"],
+      "capabilities": ["agents.*", "drive.*", "project.*", "http.request", "resources.read:agent", "resources.read:artifact", "resources.read:drive", "resources.read:history", "resources.read:skill", "backend.coding"],
       "capabilityClass": "handoff",
       "route": {
         "priority": 100,

@@ -26,7 +26,7 @@ presentation limits through `CellBudget` plus tm runtime limits.
 Host access is explicit tm effect syntax:
 
 ```tm
-let hits = @code.search {pattern: "TODO", paths: ["repo:src"], regex: false};
+let hits = @fs.grep {pattern: "TODO", paths: ["repo:src"], regex: false};
 hits |> take 10 |> display {kind: "table"}
 ```
 

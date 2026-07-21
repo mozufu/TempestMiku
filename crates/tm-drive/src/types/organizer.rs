@@ -21,52 +21,6 @@ pub enum OrganizerActionKind {
     SetProject,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum DriveAutomationTier {
-    #[default]
-    Conservative,
-    Moderate,
-    Aggressive,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DriveOrganizerAutoApplyRule {
-    #[serde(default)]
-    pub actions: Vec<OrganizerActionKind>,
-    #[serde(default)]
-    pub doc_kinds: Vec<String>,
-    #[serde(default)]
-    pub projects: Vec<String>,
-    #[serde(default = "default_organizer_auto_apply_min_confidence")]
-    pub min_confidence: f32,
-}
-
-impl Default for DriveOrganizerAutoApplyRule {
-    fn default() -> Self {
-        Self {
-            actions: Vec::new(),
-            doc_kinds: Vec::new(),
-            projects: Vec::new(),
-            min_confidence: default_organizer_auto_apply_min_confidence(),
-        }
-    }
-}
-
-fn default_organizer_auto_apply_min_confidence() -> f32 {
-    0.8
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DriveOrganizerConfig {
-    #[serde(default)]
-    pub tier: DriveAutomationTier,
-    #[serde(default)]
-    pub auto_apply: Vec<DriveOrganizerAutoApplyRule>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalStatus {

@@ -115,7 +115,7 @@ pub(super) async fn native_tm_effect_approval_app(
     }])
     .unwrap();
     let code = r#"
-let hits = @code.search {pattern: "delete-me", paths: ["repo:remove-me.txt"], regex: false};
+let hits = @fs.grep {pattern: "delete-me", paths: ["repo:remove-me.txt"], regex: false};
 hits |> par map (fun hit -> @fs.remove {path: hit.path, tag: hit.tag}) |> display {kind: "table"}
 "#;
     let llm = Arc::new(ScriptedLlm::new(vec![

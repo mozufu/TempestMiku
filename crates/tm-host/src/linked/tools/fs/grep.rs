@@ -1,16 +1,16 @@
-use super::*;
+use super::super::*;
 use crate::linked::config::ResolvedPath;
 
-pub(in crate::linked) struct CodeSearchFn {
+pub(in crate::linked) struct FsGrepFn {
     linked: LinkedFolders,
     docs: ToolDocs,
 }
 
-impl CodeSearchFn {
+impl FsGrepFn {
     pub(in crate::linked) fn new(linked: LinkedFolders) -> Self {
         Self {
             linked,
-            docs: docs("code.search", "code", "Search UTF-8 linked files", true),
+            docs: docs("fs.grep", "fs", "Search UTF-8 linked files", true),
         }
     }
 }
@@ -29,7 +29,7 @@ struct SearchMatch {
 }
 
 #[async_trait]
-impl HostFn for CodeSearchFn {
+impl HostFn for FsGrepFn {
     fn docs(&self) -> &ToolDocs {
         &self.docs
     }
@@ -48,21 +48,21 @@ impl HostFn for CodeSearchFn {
         let args: Args = parse_args(args)?;
         if args.pattern.len() > MAX_SEARCH_PATTERN_BYTES {
             return Err(HostError::InvalidArgs(format!(
-                "code.search pattern must not exceed {MAX_SEARCH_PATTERN_BYTES} UTF-8 bytes"
+                "fs.grep pattern must not exceed {MAX_SEARCH_PATTERN_BYTES} UTF-8 bytes"
             )));
         }
         if args.paths.is_empty() || args.paths.len() > MAX_SEARCH_PATHS {
             return Err(HostError::InvalidArgs(format!(
-                "code.search paths must contain between 1 and {MAX_SEARCH_PATHS} entries"
+                "fs.grep paths must contain between 1 and {MAX_SEARCH_PATHS} entries"
             )));
         }
         let context_lines = args.context_lines.unwrap_or(0);
         if context_lines > MAX_SEARCH_CONTEXT_LINES {
             return Err(HostError::InvalidArgs(format!(
-                "code.search contextLines must not exceed {MAX_SEARCH_CONTEXT_LINES}"
+                "fs.grep contextLines must not exceed {MAX_SEARCH_CONTEXT_LINES}"
             )));
         }
-        let limit = validate_result_limit("code.search", args.limit)?;
+        let limit = validate_result_limit("fs.grep", args.limit)?;
         let pattern = if args.regex.unwrap_or(true) {
             args.pattern
         } else {
@@ -93,7 +93,7 @@ impl HostFn for CodeSearchFn {
             })
         })
         .await
-        .map_err(|err| HostError::HostCall(format!("code.search worker failed: {err}")))??;
+        .map_err(|err| HostError::HostCall(format!("fs.grep worker failed: {err}")))??;
         serde_json::to_value(out).map_err(|err| HostError::HostCall(err.to_string()))
     }
 }
@@ -146,24 +146,24 @@ fn search_roots(
                 let size = entry.size_bytes.unwrap_or(0);
                 if size > MAX_SEARCH_FILE_BYTES {
                     return Err(HostError::InvalidArgs(format!(
-                        "code.search file {display} exceeds {MAX_SEARCH_FILE_BYTES} bytes"
+                        "fs.grep file {display} exceeds {MAX_SEARCH_FILE_BYTES} bytes"
                     )));
                 }
                 total_bytes = total_bytes.checked_add(size).ok_or_else(|| {
-                    HostError::InvalidArgs("code.search byte budget overflow".to_string())
+                    HostError::InvalidArgs("fs.grep byte budget overflow".to_string())
                 })?;
                 if total_bytes > MAX_SEARCH_TOTAL_BYTES {
                     return Err(HostError::InvalidArgs(format!(
-                        "code.search input exceeds {MAX_SEARCH_TOTAL_BYTES} bytes"
+                        "fs.grep input exceeds {MAX_SEARCH_TOTAL_BYTES} bytes"
                     )));
                 }
                 let file = entry.file.take().ok_or_else(|| {
-                    HostError::HostCall("secure code.search file descriptor missing".to_string())
+                    HostError::HostCall("secure fs.grep file descriptor missing".to_string())
                 })?;
                 let bytes = read_bounded(file, MAX_SEARCH_FILE_BYTES as usize, &display)?;
                 let tag = file_tag(&bytes);
                 let content = String::from_utf8(bytes).map_err(|_| {
-                    HostError::InvalidArgs("code.search supports UTF-8 text only in P0".to_string())
+                    HostError::InvalidArgs("fs.grep supports UTF-8 text only in P0".to_string())
                 })?;
                 let lines: Vec<&str> = content.lines().collect();
                 for (idx, line) in lines.iter().enumerate() {
@@ -193,7 +193,7 @@ fn search_roots(
                         if !push_bounded_search_match(&mut out, candidate, &mut result_bytes)? {
                             if out.is_empty() {
                                 return Err(HostError::InvalidArgs(format!(
-                                    "a code.search match exceeds the {MAX_SEARCH_RESULT_BYTES}-byte result budget"
+                                    "a fs.grep match exceeds the {MAX_SEARCH_RESULT_BYTES}-byte result budget"
                                 )));
                             }
                             done = true;

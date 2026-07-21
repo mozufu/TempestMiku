@@ -203,7 +203,7 @@ fn serious_engineer_config_sets_prompt_and_budget() {
     assert!(grants.permits("fs.patch"));
     assert!(grants.permits("fs.move"));
     assert!(grants.permits("fs.remove"));
-    assert!(grants.permits("code.search"));
+    assert!(grants.permits("fs.grep"));
     assert!(grants.permits("proc.run"));
     assert!(grants.permits("resources.read:linked"));
     assert!(!grants.permits("agents.spawn"));

@@ -59,8 +59,8 @@ deployment location is intentionally omitted. Honcho host id `hermes`; Honcho wo
 - **Adds bounded ToM:** approved profile facts feed a redacted, no-tool every-third-turn dialectic
   outside Serious/engineering modes; a confirmed trace is replayed on retry and its output remains
   untrusted user-channel context (§22.4).
-- **Adds local-first drive/research as a post-parity expansion:** `drive.*`, `drive://`, project
-  linked-folder/memory views, drive-derived recall chunks, and `research.drive(...)` are Rust
+- **Adds local-first drive as a post-parity expansion:** `drive.*`, `drive://`, project
+  linked-folder/memory views, and drive-derived recall chunks are Rust
   surfaces layered on the existing approval/resource model. They do not weaken the inherited Hermes
   invariants: manual approval for sensitive writes, no ambient host filesystem access, and bounded
   context/proactivity.

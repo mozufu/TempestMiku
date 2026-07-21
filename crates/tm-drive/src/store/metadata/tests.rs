@@ -3,10 +3,7 @@ use tm_artifacts::ArtifactStore;
 use tm_host::FsMode;
 
 use super::*;
-use crate::{
-    DriveOperations, DriveOrganizerConfig, DrivePutOptions, DriveService, ProposalStatus,
-    drive_link_plan,
-};
+use crate::{DriveOperations, DrivePutOptions, DriveService, ProposalStatus, drive_link_plan};
 
 #[tokio::test]
 async fn snapshot_restart_preserves_mutable_metadata_and_revoked_links() {
@@ -193,16 +190,12 @@ async fn organizer_commit_is_atomic_under_conflict_and_retry() {
     .await
     .unwrap()
     .entry;
-    let proposal = DriveOperations::organize_scoped_with_config(
-        &drive,
-        Some("TempestMiku"),
-        DriveOrganizerConfig::default(),
-    )
-    .await
-    .unwrap()
-    .into_iter()
-    .find(|proposal| proposal.entry_id == entry.id)
-    .expect("move proposal");
+    let proposal = DriveOperations::organize_scoped(&drive, Some("TempestMiku"))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|proposal| proposal.entry_id == entry.id)
+        .expect("move proposal");
     let target = proposal.proposed_path.clone().expect("proposed path");
     let now = Utc::now();
     let mut replacement_entry = entry.clone();

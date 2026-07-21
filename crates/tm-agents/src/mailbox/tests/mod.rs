@@ -18,7 +18,6 @@ pub(super) fn test_record(id: &str) -> ActorRecord {
         completed_at: None,
         cancelled: false,
         failure_reason: None,
-        last_summary: None,
         artifact_uri: None,
         history_uri: None,
     }

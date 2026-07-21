@@ -71,9 +71,9 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 | OMP tool | TempestMiku SDK | Notes |
 |---|---|---|
 | read / write / patch / move / remove / ls | `fs.read/write/patch/move/remove/ls` | jail or linked folder (§24.4) |
-| search (regex) / find (glob) | `code.search` / `fs.find` | RE2-style regex + glob |
-| edit / ast-grep / ast-edit | `fs.patch` / `code.ast` | surgical + structural |
-| lsp | `code.lsp` | defs / refs / rename / diagnostics |
+| search (regex) / find (glob) | `fs.grep` / `fs.find` | RE2-style regex + glob |
+| edit / ast-grep / ast-edit | `fs.patch` / `code.ast` | surgical + structural (`code.ast` demand-triggered) |
+| lsp | `code.lsp` | defs / refs / rename / diagnostics (demand-triggered) |
 | eval (persistent kernel) | the `execute` loop itself | already the core (§05) |
 | task / job / irc | `agents.*` | §23 |
 | recall / retain / reflect | `memory.*` | §22 |
@@ -162,11 +162,11 @@ runtime namespace.
 The current serious-engineer and handoff runtime exposes the authoritative SDK surface in §7.1.
 Product-layer scope is intentionally narrower than the full translation map:
 
-- **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `code`,
-  `proc`, and the default-deny deterministic allowlisted `http.get` helper. The `resources`
+- **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`,
+  `proc`, and the default-deny deterministic allowlisted `http.request` helper. The `resources`
   namespace includes the `memory://` gateway where the server registers the handler and grants
   `resources.read:memory`; Handoff and orchestration sessions also expose grant-gated
-  `agents.run/spawn/parallel/msg/send/wait/inbox/list`.
+  `agents.run/spawn/parallel/send/wait/inbox/list`.
 - **Configured MCP imports:** trusted operator config may add exact `mcp.<server>.*` tool/prompt
   functions and `mcp://` resource routes. They are registered lazily, remain behind exact imported
   object plus destination/opaque-secret grants, and are available only to a mode that already has

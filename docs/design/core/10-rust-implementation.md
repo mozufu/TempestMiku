@@ -116,7 +116,7 @@ pub struct Capabilities {
 pub trait ResourceHandler: Send + Sync {
     fn scheme(&self) -> &str;                                       // the URI scheme it owns
     async fn read(&self, uri: &str, sel: Option<Selector>, ctx: &InvocationCtx)
-        -> Result<ResourceRead>;                                    // paged like artifacts.slice (§9.1)
+        -> Result<ResourceRead>;                                    // paged by selector (§9.1)
     async fn list(&self, _uri: Option<&str>, _ctx: &InvocationCtx)  // optional enumeration
         -> Result<Vec<ResourceEntry>> { Ok(vec![]) }
 }
@@ -182,8 +182,8 @@ pub async fn run(agent: &Agent, user: Message, sink: &dyn EventSink) -> Result<S
 
 CLI and server wire the streaming `Agent` to the sole `TmSandbox`, backed by the existing
 `Sandbox` / `Session` traits. tm-lang owns the persistent interpreter plus host setup for `print`,
-`display`, catalog/resource/artifact effects, linked-folder capabilities, drive/research, actors,
-and default-deny allowlisted `http.get`. It uses `tm-artifacts` for spill/readback and calls host
+`display`, catalog/resource/artifact effects, linked-folder capabilities, drive, actors,
+and default-deny allowlisted `http.request`. It uses `tm-artifacts` for spill/readback and calls host
 capabilities through exact `tm-host` grants, resource handlers, and approval policy.
 
 The server path now has two coding backends behind the same `CodingBackend` interface: the

@@ -22,7 +22,7 @@ async fn native_child_actor_receives_only_delegated_grants() {
     .unwrap();
 
     let parent_code = r#"
-let digest = @agents.run {role: "worker", task: "Verify only explicit read capabilities are delegated, then create a child artifact.", opts: {capabilities: ["http.get", "resources.read:artifact"]}};
+let digest = @agents.run {role: "worker", task: "Verify only explicit read capabilities are delegated, then create a child artifact.", opts: {capabilities: ["http.request", "resources.read:artifact"]}};
 digest |> display {kind: "json"}
 "#;
     let child_code = r#"
@@ -225,7 +225,7 @@ let artifact = @artifacts.put {data: "child resource open ok", title: "child out
             .expect("tm tool result should contain a JSON result"),
     )
     .unwrap();
-    for undelegated in ["fs.read", "code.search"] {
+    for undelegated in ["fs.read", "fs.grep"] {
         let entry = child_result["catalog"]
             .as_array()
             .unwrap()
@@ -234,19 +234,23 @@ let artifact = @artifacts.put {data: "child resource open ok", title: "child out
             .unwrap_or_else(|| panic!("catalog should document {undelegated}"));
         assert_eq!(entry["granted"], json!(false), "{child_result_content}");
     }
-    for delegated in [
-        "http.get",
-        "artifacts.get",
-        "artifacts.slice",
-        "artifacts.list",
-    ] {
-        let entry = child_result["catalog"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["name"] == delegated)
-            .unwrap_or_else(|| panic!("catalog should document {delegated}"));
-        assert_eq!(entry["granted"], json!(true), "{child_result_content}");
+    let delegated = "http.request";
+    let entry = child_result["catalog"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == delegated)
+        .unwrap_or_else(|| panic!("catalog should document {delegated}"));
+    assert_eq!(entry["granted"], json!(true), "{child_result_content}");
+    for retired in ["artifacts.get", "artifacts.slice", "artifacts.list"] {
+        assert!(
+            !child_result["catalog"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["name"] == retired),
+            "retired {retired} must not appear in catalog: {child_result_content}"
+        );
     }
     assert!(child_result_content.contains("artifact://0"));
 
@@ -299,7 +303,6 @@ async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
                 completed_at: None,
                 cancelled: false,
                 failure_reason: None,
-                last_summary: None,
                 artifact_uri: None,
                 history_uri: None,
             },
@@ -406,7 +409,6 @@ async fn actor_failed_event_replays_and_agent_resource_is_terminal() {
                 completed_at: None,
                 cancelled: false,
                 failure_reason: None,
-                last_summary: None,
                 artifact_uri: None,
                 history_uri: None,
             },

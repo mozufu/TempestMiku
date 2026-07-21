@@ -315,7 +315,7 @@ async fn sandbox_defaults_do_not_grant_http_or_artifact_reads() {
     .unwrap();
 
     for source in [
-        "@http.get {url: \"https://example.test/data\"}",
+        "@http.request {method: \"GET\", url: \"https://example.test/data\"}",
         "@resources.read artifact://0",
         "@artifacts.get artifact://0",
         "@artifacts.list null",
@@ -331,31 +331,11 @@ async fn sandbox_defaults_do_not_grant_http_or_artifact_reads() {
         );
     }
 
-    let mut list_only = TmSandbox::new(TmSandboxOptions {
-        artifact_root: artifacts.path().to_path_buf(),
-        session_id: "artifact-list-without-read-umbrella".into(),
-        grants: CapabilityGrants::default().allow("artifacts.list"),
-        ..TmSandboxOptions::default()
-    })
-    .open(SessionConfig::default())
-    .await
-    .unwrap();
-    let list = list_only
-        .eval("@artifacts.list null", CellBudget::default())
-        .await
-        .unwrap();
-    assert!(
-        list.error
-            .as_deref()
-            .is_some_and(|error| error.contains("resources.read:artifact")),
-        "{list:?}"
-    );
-
     let mut allowed = TmSandbox::new(TmSandboxOptions {
         artifact_root: artifacts.path().to_path_buf(),
         session_id: "exact-explicit-grants".into(),
         http_allowlist,
-        grants: CapabilityGrants::default().allow("http.get"),
+        grants: CapabilityGrants::default().allow("http.request"),
         ..TmSandboxOptions::default()
     })
     .open(SessionConfig::default())
@@ -363,7 +343,7 @@ async fn sandbox_defaults_do_not_grant_http_or_artifact_reads() {
     .unwrap();
     let output = allowed
         .eval(
-            "@http.get {url: \"https://example.test/data\"}",
+            "@http.request {method: \"GET\", url: \"https://example.test/data\"}",
             CellBudget::default(),
         )
         .await

@@ -274,7 +274,7 @@ async fn agents_run_failure_respawns_actor_from_supervision_restart_action() {
             let rec = roster.get(&actor_id).await.expect("actor record exists");
             if rec.status == ActorStatus::Terminated
                 && rec.failure_reason.is_none()
-                && rec.last_summary.as_deref() == Some("restarted attempt 1")
+                && rec.history_uri.as_deref() == Some("history://Worker0")
             {
                 break;
             }

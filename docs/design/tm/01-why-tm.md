@@ -4,7 +4,7 @@
 
 The §7 prelude is already a *castrated TypeScript*. No `Deno.*`, no `fetch`, no npm, no
 `node:*`, no `globalThis.process`. `secrets`/`memory`/`skills`/`agents` are literally
-`undefined`, and `http.get` is a default-deny allowlisted helper rather than ambient network.
+`undefined`, and `http.request` is a default-deny allowlisted helper rather than ambient network.
 The model uses maybe 30% of TS's surface; the other 70% is footguns and dead syntax that exists
 only because TS is a general-purpose language we happened to pick.
 

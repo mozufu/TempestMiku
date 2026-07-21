@@ -9,7 +9,7 @@ const ModeCatalog _scriptedModeCatalog = ModeCatalog(
       defaultScope: 'global',
       capabilityClass: 'conversation',
       activeSkills: ['miku-voice', 'personal-assistant-state-capture'],
-      capabilities: ['memory.recall', 'memory.propose'],
+      capabilities: ['drive.*', 'project.*', 'http.request', 'resources.read:artifact', 'resources.read:drive', 'resources.read:skill'],
       description: 'Planning, reminders, writing, and open loops.',
     ),
     ModeProfile(

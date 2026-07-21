@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/semantics.dart';
 
 import 'asr/local_asr_engine.dart';
 import 'asr/local_asr_model.dart';
@@ -22,6 +23,7 @@ part 'conversation_history.dart';
 part 'conversation_session_context.dart';
 part 'conversation_settings.dart';
 part 'conversation_resources.dart';
+
 part 'conversation_reviewed_changes.dart';
 part 'conversation_import_review.dart';
 part 'conversation_voice.dart';
@@ -180,6 +182,7 @@ class _ConversationScreenState extends State<ConversationScreen>
   bool _showScrollToBottom = false;
   bool _reviewedChangeInFlight = false;
   final List<_ConversationItem> _items = [];
+  _MessageItem? _streamingAssistant;
   final Map<String, bool> _activityGroupExpanded = {};
   final List<SharedContent> _pendingImports = [];
   final List<String> _recentImportEventIds = [];
@@ -264,7 +267,6 @@ class _ConversationScreenState extends State<ConversationScreen>
     if (_voiceCapture.isSupported) {
       unawaited(_voiceCapture.recoverOrphans().catchError((_) => 0));
     }
-    _composerController.addListener(_composerChanged);
     _scrollController.addListener(_updateScrollToBottomVisibility);
     if (_shareImports.isSupported) {
       _shareImportSubscription = _shareImports.imports.listen(
@@ -294,9 +296,8 @@ class _ConversationScreenState extends State<ConversationScreen>
     }
     final transcriber = _voiceTranscriber;
     if (transcriber != null) unawaited(transcriber.cancel());
-    _composerController
-      ..removeListener(_composerChanged)
-      ..dispose();
+    _voiceTranscriber = null;
+    _composerController.dispose();
     _composerFocus.dispose();
     _scrollController.removeListener(_updateScrollToBottomVisibility);
     _scrollController.dispose();
@@ -311,10 +312,6 @@ class _ConversationScreenState extends State<ConversationScreen>
         (_voiceRecording || (_voiceProcessing && !_voicePermissionPending))) {
       unawaited(_cancelVoiceCapture());
     }
-  }
-
-  void _composerChanged() {
-    if (mounted) setState(() {});
   }
 
   void _voiceSetState(VoidCallback update) => setState(update);
@@ -577,6 +574,7 @@ class _ConversationScreenState extends State<ConversationScreen>
     setState(() {
       _session = null;
       _items.clear();
+      _streamingAssistant = null;
       _presence = _PresenceState.offline;
       _serverConnection = _ServerConnectionState.offline;
       _connectionError = connectionError;
@@ -930,6 +928,7 @@ class _ConversationScreenState extends State<ConversationScreen>
             _NoticeItem(key: _nextKey('runtime-reset'), text: '執行環境已重新連線。'),
           );
         case 'error':
+          _streamingAssistant = null;
           _items.add(
             _NoticeItem(
               key: event.id ?? _nextKey('error'),
@@ -1044,28 +1043,29 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   void _appendTextDelta(String delta) {
     if (delta.isEmpty) return;
-    final last = _items.isEmpty ? null : _items.last;
-    if (last is _MessageItem && last.role == 'assistant' && last.streaming) {
-      last.text += delta;
+    final active = _streamingAssistant;
+    if (active != null && active.streaming) {
+      active.text += delta;
       return;
     }
-    _items.add(
-      _MessageItem(
-        key: _nextKey('assistant'),
-        role: 'assistant',
-        text: delta,
-        streaming: true,
-      ),
+    final item = _MessageItem(
+      key: _nextKey('assistant'),
+      role: 'assistant',
+      text: delta,
+      streaming: true,
     );
+    _streamingAssistant = item;
+    _items.add(item);
   }
 
   void _finishAssistantMessage(String text) {
-    for (final item in _items.reversed) {
-      if (item is _MessageItem && item.role == 'assistant' && item.streaming) {
-        if (text.isNotEmpty) item.text = text;
-        item.streaming = false;
-        return;
-      }
+    final active = _streamingAssistant;
+    _streamingAssistant = null;
+    if (active != null && active.streaming) {
+      if (text.isNotEmpty) active.text = text;
+      active.streaming = false;
+      _announceAssistantReply(active.text);
+      return;
     }
     if (text.isEmpty) return;
     final last = _items.isEmpty ? null : _items.last;
@@ -1074,6 +1074,20 @@ class _ConversationScreenState extends State<ConversationScreen>
     }
     _items.add(
       _MessageItem(key: _nextKey('assistant'), role: 'assistant', text: text),
+    );
+    _announceAssistantReply(text);
+  }
+
+  void _announceAssistantReply(String text) {
+    if (text.isEmpty || !mounted) return;
+    final bounded =
+        text.length > 4000 ? text.substring(text.length - 4000) : text;
+    unawaited(
+      SemanticsService.sendAnnouncement(
+        View.of(context),
+        bounded,
+        TextDirection.ltr,
+      ),
     );
   }
 
@@ -1133,6 +1147,7 @@ class _ConversationScreenState extends State<ConversationScreen>
       status: 'submitting',
     );
     setState(() {
+      _streamingAssistant = null;
       _items.addAll([item, turnItem]);
       if (!preserveComposerDraft) _composerController.clear();
       _sending = true;
@@ -1339,8 +1354,7 @@ class _ConversationScreenState extends State<ConversationScreen>
     if (session == null || item.resolving || item.resolvedStatus != null) {
       return;
     }
-    final approve =
-        option.kind.contains('allow') || option.kind.contains('approve');
+    final approve = _isApprovalApproveKind(option.kind);
     setState(() {
       item
         ..resolving = true
@@ -2110,7 +2124,7 @@ class _MessageRow extends StatelessWidget {
               data: message.text,
             );
     return Semantics(
-      liveRegion: message.streaming,
+      liveRegion: false,
       label: user ? '你說：${message.text}' : null,
       child: Align(
         alignment: user ? Alignment.centerRight : Alignment.centerLeft,
@@ -2416,8 +2430,7 @@ class _ActivityGroupRow extends StatelessWidget {
     );
     final current = activities.lastWhere(
       (a) =>
-          a.phase == _ActivityPhase.running ||
-          a.phase == _ActivityPhase.paused,
+          a.phase == _ActivityPhase.running || a.phase == _ActivityPhase.paused,
       orElse: () => activities.last,
     );
     final headerLabel =
@@ -2466,14 +2479,18 @@ class _ActivityGroupRow extends StatelessWidget {
                           headerLabel,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodySmall?.copyWith(
                             color: palette.muted,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                         Text(
                           '${activities.length} 個步驟',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodySmall?.copyWith(
                             color: palette.muted.withValues(alpha: 0.78),
                           ),
                         ),
@@ -2513,14 +2530,58 @@ class _ActivityGroupRow extends StatelessWidget {
   }
 }
 
-class _ApprovalCard extends StatelessWidget {
+class _ApprovalCard extends StatefulWidget {
   const _ApprovalCard({required this.item, required this.onSelect});
 
   final _ApprovalItem item;
   final ValueChanged<ApprovalOption> onSelect;
 
   @override
+  State<_ApprovalCard> createState() => _ApprovalCardState();
+}
+
+class _ApprovalCardState extends State<_ApprovalCard> {
+  Timer? _countdown;
+  DateTime? _deadline;
+
+  @override
+  void initState() {
+    super.initState();
+    final timeoutMs = widget.item.prompt.timeoutMs;
+    if (timeoutMs != null && widget.item.resolvedStatus == null) {
+      _deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
+      _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        if (widget.item.resolvedStatus != null || _remainingSeconds() <= 0) {
+          _stopCountdown();
+        }
+        setState(() {});
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _countdown?.cancel();
+    super.dispose();
+  }
+
+  void _stopCountdown() {
+    _countdown?.cancel();
+    _countdown = null;
+  }
+
+  int _remainingSeconds() {
+    final deadline = _deadline;
+    if (deadline == null) return 0;
+    final remaining = deadline.difference(DateTime.now()).inSeconds;
+    return remaining > 0 ? remaining : 0;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final item = widget.item;
+    final onSelect = widget.onSelect;
     final palette = _Palette.of(context);
     final resolved = item.resolvedStatus;
     final memoryProposal = MemoryWriteProposal.fromApproval(item.prompt);
@@ -2580,6 +2641,18 @@ class _ApprovalCard extends StatelessWidget {
             ] else if (rollbackProposal case final proposal?) ...[
               const SizedBox(height: 12),
               _RollbackProposalDetails(details: proposal),
+            ],
+            if (resolved == null && _deadline != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _remainingSeconds() > 0
+                    ? '還有 ${_remainingSeconds()}s 可以決定 · 逾時將視為拒絕'
+                    : '已逾時，視為拒絕',
+                key: Key('approval-timeout-${item.prompt.approvalId}'),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: palette.muted),
+              ),
             ],
             if (item.error != null) ...[
               const SizedBox(height: 8),
@@ -2743,8 +2816,7 @@ class _ApprovalButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final approve =
-        option.kind.contains('allow') || option.kind.contains('approve');
+    final approve = _isApprovalApproveKind(option.kind);
     if (approve) {
       return FilledButton(
         key: Key('approval-option-${option.optionId}'),
@@ -2878,8 +2950,7 @@ class _Composer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final voiceBusy = voiceRecording || voiceProcessing;
-    final canSend =
-        enabled && !sending && !voiceBusy && controller.text.trim().isNotEmpty;
+    final sendReady = enabled && !sending && !voiceBusy;
     final canStartVoice = enabled && !sending && voiceReady && !voiceProcessing;
     final colors = Theme.of(context).colorScheme;
     KeyEventResult handleComposerKey(FocusNode node, KeyEvent event) {
@@ -2887,7 +2958,10 @@ class _Composer extends StatelessWidget {
       final isEnter =
           event.logicalKey == LogicalKeyboardKey.enter ||
           event.logicalKey == LogicalKeyboardKey.numpadEnter;
-      if (!isEnter || HardwareKeyboard.instance.isShiftPressed || !canSend) {
+      if (!isEnter ||
+          HardwareKeyboard.instance.isShiftPressed ||
+          !sendReady ||
+          controller.text.trim().isEmpty) {
         return KeyEventResult.ignored;
       }
       onSend();
@@ -3011,31 +3085,38 @@ class _Composer extends StatelessWidget {
                               icon: const Icon(Icons.close_rounded),
                             ),
                         ],
-                        IconButton.filled(
-                          key: const Key('send-message'),
-                          tooltip: '送出',
-                          constraints: const BoxConstraints.tightFor(
-                            width: 44,
-                            height: 44,
-                          ),
-                          onPressed: canSend ? onSend : null,
-                          style: IconButton.styleFrom(
-                            backgroundColor: colors.primary,
-                            foregroundColor: colors.onPrimary,
-                            disabledBackgroundColor: colors.onSurface
-                                .withValues(alpha: 0.12),
-                            disabledForegroundColor: colors.onSurface
-                                .withValues(alpha: 0.38),
-                          ),
-                          icon:
-                              sending
-                                  ? const SizedBox.square(
-                                    dimension: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                  : const Icon(Icons.arrow_upward_rounded),
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: controller,
+                          builder: (context, value, _) {
+                            final canSend =
+                                sendReady && value.text.trim().isNotEmpty;
+                            return IconButton.filled(
+                              key: const Key('send-message'),
+                              tooltip: '送出',
+                              constraints: const BoxConstraints.tightFor(
+                                width: 44,
+                                height: 44,
+                              ),
+                              onPressed: canSend ? onSend : null,
+                              style: IconButton.styleFrom(
+                                backgroundColor: colors.primary,
+                                foregroundColor: colors.onPrimary,
+                                disabledBackgroundColor: colors.onSurface
+                                    .withValues(alpha: 0.12),
+                                disabledForegroundColor: colors.onSurface
+                                    .withValues(alpha: 0.38),
+                              ),
+                              icon:
+                                  sending
+                                      ? const SizedBox.square(
+                                        dimension: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                      : const Icon(Icons.arrow_upward_rounded),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -3119,8 +3200,13 @@ String _friendlyError(Object error) {
   return '現在連不上 Miku。$message';
 }
 
+bool _isApprovalApproveKind(String kind) => switch (kind) {
+  'allow_once' || 'allow_always' || 'allow_session' || 'approve' => true,
+  _ => false,
+};
+
 String _fallbackOptionName(String kind) {
-  if (kind.contains('allow') || kind.contains('approve')) return '允許一次';
+  if (_isApprovalApproveKind(kind)) return '允許一次';
   return '拒絕';
 }
 

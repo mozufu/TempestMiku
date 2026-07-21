@@ -1589,6 +1589,149 @@ void main() {
     expect(client.resolvedApprovals.single, contains(':approve'));
     expect(find.text('已允許'), findsOneWidget);
   });
+  testWidgets('classifies non-allow approval kinds as deny', (tester) async {
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    client.seedPendingApproval(
+      session.id,
+      approvalId: 'guard',
+      action: 'egress.request example.com',
+      options: const [
+        {'optionId': 'block', 'name': '先不要', 'kind': 'disallow'},
+      ],
+    );
+    await loadApp(tester, client);
+
+    final button = find.byKey(const Key('approval-option-block'));
+    expect(button, findsOneWidget);
+    expect(tester.widget(button), isA<OutlinedButton>());
+
+    await tester.ensureVisible(button);
+    await tester.pump();
+    await tester.tap(button);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(client.resolvedApprovals, hasLength(1));
+    expect(client.resolvedApprovals.single, contains(':deny'));
+  });
+
+  testWidgets('surfaces the approval timeout as a countdown hint', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    client.seedPendingApproval(
+      session.id,
+      approvalId: 'timed',
+      action: 'proc.run cargo test',
+    );
+    await loadApp(tester, client);
+
+    final hint = find.byKey(const Key('approval-timeout-timed'));
+    expect(hint, findsOneWidget);
+    final copy = tester.widget<Text>(hint).data!;
+    expect(copy, contains('還有'));
+    expect(copy, contains('逾時將視為拒絕'));
+
+    await tester.pump(const Duration(seconds: 2));
+    expect(
+      tester.widget<Text>(find.byKey(const Key('approval-timeout-timed'))).data,
+      contains('逾時'),
+    );
+  });
+
+  testWidgets('keeps one assistant bubble across interleaved activity events', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    final session = await client.createOrReuseSession();
+
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'text', data: {'delta': '第一段'}),
+    );
+    await tester.pump();
+    client.emitEvent(
+      session.id,
+      const MikuEvent(
+        type: 'tool_call',
+        id: 'tool-1',
+        data: {'name': 'fs.read'},
+      ),
+    );
+    await tester.pump();
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'text', data: {'delta': '，第二段'}),
+    );
+    await tester.pump();
+
+    expect(find.byType(MikuRichMessage), findsOneWidget);
+
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'final', data: {'text': '第一段，第二段'}),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.byType(MikuRichMessage), findsOneWidget);
+    expect(find.text('第一段，第二段'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget.runtimeType.toString() == '_StreamingDot',
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('streams without announcing every delta as a live region', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    final session = await client.createOrReuseSession();
+
+    client.emitEvent(
+      session.id,
+      const MikuEvent(type: 'text', data: {'delta': '慢慢來'}),
+    );
+    await tester.pump();
+
+    final ancestors = tester.widgetList<Semantics>(
+      find.ancestor(
+        of: find.byType(MikuRichMessage),
+        matching: find.byType(Semantics),
+      ),
+    );
+    expect(ancestors, isNotEmpty);
+    expect(
+      ancestors.any((semantics) => semantics.properties.liveRegion == true),
+      isFalse,
+    );
+  });
+
+  testWidgets('composer text toggles only the send affordance', (tester) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+
+    IconButton send() =>
+        tester.widget<IconButton>(find.byKey(const Key('send-message')));
+    expect(send().onPressed, isNull);
+
+    await tester.enterText(
+      find.byKey(const Key('conversation-composer')),
+      '嗨嗨',
+    );
+    await tester.pump();
+    expect(send().onPressed, isNotNull);
+
+    await tester.enterText(find.byKey(const Key('conversation-composer')), '');
+    await tester.pump();
+    expect(send().onPressed, isNull);
+  });
 
   testWidgets('fits a compact phone viewport without overflow', (tester) async {
     tester.view.physicalSize = const Size(375, 667);

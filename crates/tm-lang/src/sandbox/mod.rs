@@ -96,11 +96,6 @@ impl Sandbox for TmSandbox {
         }
         let mut resources = self.options.resource_registry.clone();
         resources.register(Arc::new(ArtifactResourceHandler::new(artifacts.clone())));
-        for connector in &self.options.host_connectors {
-            connector
-                .register(&mut registry, &mut resources, artifacts.clone())
-                .map_err(|error| tm_core::Error::Sandbox(error.to_string()))?;
-        }
         let linked_folders = self.options.linked_folders.clone().or_else(|| {
             self.options
                 .drive_store
@@ -124,6 +119,14 @@ impl Sandbox for TmSandbox {
                 drive_store,
                 linked_folders.clone(),
             );
+        }
+        // Application-provided connectors own their registered capabilities. Register them after
+        // local linked-folder and Drive adapters so a remote-only deployment is not shadowed by
+        // the empty local registry kept for durable Drive metadata.
+        for connector in &self.options.host_connectors {
+            connector
+                .register(&mut registry, &mut resources, artifacts.clone())
+                .map_err(|error| tm_core::Error::Sandbox(error.to_string()))?;
         }
         let mut invocation = InvocationCtx::with_approvals(
             self.options.grants.clone(),

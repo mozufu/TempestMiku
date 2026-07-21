@@ -15,7 +15,7 @@ use tm_core::{CancellationToken, CellBudget, Sandbox, SessionConfig};
 use tm_host::{
     ApprovalDecision, ApprovalPolicy, CapabilityGrants, FsMode, GrantDoc, HostError, HostEventSink,
     HostFn, HostRegistry, InvocationCtx, LinkedFolderConfig, LinkedFolders, ResourceHandler,
-    ResourceRegistry, ToolDocs,
+    ResourceRegistry, SessionHostConnector, ToolDocs,
 };
 use tm_lang::{RuntimeLimits, TmSandbox, TmSandboxOptions};
 
@@ -352,6 +352,60 @@ impl HostFn for ProductionHttpRequest {
     }
 }
 
+pub(super) struct RemoteFsRead {
+    docs: ToolDocs,
+}
+
+impl RemoteFsRead {
+    pub(super) fn new() -> Self {
+        Self {
+            docs: ToolDocs {
+                name: "fs.read".into(),
+                namespace: "fs".into(),
+                summary: "Remote linked-folder read fixture".into(),
+                description: None,
+                signature: "fs.read(args)".into(),
+                args_schema: json!({"type":"object"}),
+                result_schema: Some(json!({"type":"object"})),
+                examples: vec![],
+                errors: vec![],
+                grants: vec![GrantDoc {
+                    kind: "capability".into(),
+                    description: "fs.read".into(),
+                }],
+                sensitive: false,
+                approval: "none".into(),
+                since: "test".into(),
+                stability: "stable".into(),
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl HostFn for RemoteFsRead {
+    fn docs(&self) -> &ToolDocs {
+        &self.docs
+    }
+
+    async fn call(&self, args: Value, _ctx: &InvocationCtx) -> tm_host::Result<Value> {
+        Ok(json!({"source": "remote", "args": args}))
+    }
+}
+
+pub(super) struct RemoteLinkedConnector;
+
+impl SessionHostConnector for RemoteLinkedConnector {
+    fn register(
+        &self,
+        host: &mut HostRegistry,
+        _resources: &mut ResourceRegistry,
+        _artifacts: tm_artifacts::ArtifactStore,
+    ) -> tm_host::Result<()> {
+        host.register(Arc::new(RemoteFsRead::new()));
+        Ok(())
+    }
+}
 impl Patch {
     fn new(calls: Arc<AtomicUsize>) -> Self {
         Self {

@@ -146,6 +146,33 @@ async fn application_http_handler_takes_precedence_over_fixture_allowlist() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn application_linked_connector_takes_precedence_over_empty_local_registry() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut session = TmSandbox::new(TmSandboxOptions {
+        artifact_root: temp.path().to_path_buf(),
+        linked_folders: Some(LinkedFolders::default()),
+        linked_aliases: vec!["tempestmiku".into()],
+        host_connectors: vec![Arc::new(RemoteLinkedConnector)],
+        grants: CapabilityGrants::default().allow("fs.read"),
+        session_scope: Some("project:tempestmiku".into()),
+        ..TmSandboxOptions::default()
+    })
+    .open(SessionConfig::default())
+    .await
+    .unwrap();
+
+    let output = session
+        .eval(
+            "@fs.read {path: \"tempestmiku:README.md\"}",
+            CellBudget::default(),
+        )
+        .await
+        .unwrap();
+    assert!(output.error.is_none(), "{output:?}");
+    assert_eq!(output.result.as_ref().unwrap()["source"], "remote");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn artifact_adapter_redacts_and_preserves_read_authority() {
     let temp = tempfile::tempdir().unwrap();
     let events = Arc::new(Events::default());

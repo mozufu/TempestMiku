@@ -14,6 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   as-built product definition; rewrote the root and docs indexes around product, specification,
   operation, and provenance; moved the completed roadmap and task ledger to `docs/history/`; and
   removed milestone-stage narration from the active core, product, and `tm` specifications.
+- Fixed remote linked-host dispatch so the Drive-backed empty local registry no longer shadows the
+  configured worker connector; `fs.*`, `code.*`, and `proc.*` now reach remote linked aliases.
 
 ### Added
 - Closed P2 actual-output voice parity with a retained non-echo General/grounding/Serious live

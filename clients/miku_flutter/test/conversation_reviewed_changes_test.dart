@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:miku_flutter/conversation_app.dart';
 import 'package:miku_flutter/session_client_stub.dart';
@@ -197,6 +198,54 @@ void main() {
     expect(find.text(target), findsWidgets);
     await rejectPendingApproval(tester);
     expect(client.sentClientMessageIds, isEmpty);
+  });
+
+  testWidgets('rollback digest fields offer a clipboard paste affordance', (
+    tester,
+  ) async {
+    final digest = 'sha256:${List.filled(64, 'c').join()}';
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.getData') {
+          return <String, dynamic>{'text': '  $digest  '};
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await openReviewedChanges(tester);
+    await tester.tap(find.byKey(const Key('propose-version-rollback')));
+    await tester.pumpAndSettle();
+
+    final expectedPaste = find.byKey(
+      const Key('rollback-expected-digest-paste'),
+    );
+    final targetPaste = find.byKey(const Key('rollback-target-digest-paste'));
+    expect(expectedPaste, findsOneWidget);
+    expect(targetPaste, findsOneWidget);
+
+    await tester.tap(expectedPaste);
+    await tester.pump();
+    final expectedField = tester.widget<TextFormField>(
+      find.byKey(const Key('rollback-expected-digest')),
+    );
+    expect(expectedField.controller!.text, digest);
+
+    await tester.tap(targetPaste);
+    await tester.pump();
+    final targetField = tester.widget<TextFormField>(
+      find.byKey(const Key('rollback-target-digest')),
+    );
+    expect(targetField.controller!.text, digest);
   });
 }
 

@@ -762,6 +762,13 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
     return null;
   }
 
+  Future<void> _pasteInto(TextEditingController controller) async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim();
+    if (text == null || text.isEmpty) return;
+    controller.text = text;
+  }
+
   void _changeKind(_RollbackTargetKind? value) {
     if (value == null) return;
     setState(() {
@@ -911,10 +918,18 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                   enableSuggestions: false,
                   validator: _digest,
                   style: const TextStyle(fontFamily: 'monospace'),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: '目前 active digest',
-                    helperText: '必須與伺服器目前版本完全相同，否則 fail closed。',
-                    border: OutlineInputBorder(),
+                    helperText:
+                        '必須與伺服器目前版本完全相同，否則 fail closed。'
+                        '可在資源檢視器複製版本 digest 後貼上。',
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      key: const Key('rollback-expected-digest-paste'),
+                      icon: const Icon(Icons.content_paste_rounded),
+                      tooltip: '貼上',
+                      onPressed: () => _pasteInto(_expectedDigest),
+                    ),
                   ),
                 ),
                 if (_kind != _RollbackTargetKind.skill) ...[
@@ -937,9 +952,16 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                     enableSuggestions: false,
                     validator: _digest,
                     style: const TextStyle(fontFamily: 'monospace'),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: '目標版本 digest',
-                      border: OutlineInputBorder(),
+                      helperText: '可在資源檢視器複製版本 digest 後貼上。',
+                      border: const OutlineInputBorder(),
+                      suffixIcon: IconButton(
+                        key: const Key('rollback-target-digest-paste'),
+                        icon: const Icon(Icons.content_paste_rounded),
+                        tooltip: '貼上',
+                        onPressed: () => _pasteInto(_targetDigest),
+                      ),
                     ),
                   ),
                 ],

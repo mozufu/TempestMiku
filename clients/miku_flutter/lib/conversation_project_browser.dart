@@ -309,19 +309,25 @@ class _ProjectPageState extends State<_ProjectPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Project'),
-        actions: [
-          IconButton(
-            key: const Key('project-create'),
-            tooltip: '新 Project',
-            onPressed: (_busy || widget.sessionEnded) ? null : _createProject,
-            icon: const Icon(Icons.add_rounded),
-          ),
-        ],
+    return PopScope(
+      canPop: _path.isEmpty,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_goUp());
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Project'),
+          actions: [
+            IconButton(
+              key: const Key('project-create'),
+              tooltip: '新 Project',
+              onPressed: (_busy || widget.sessionEnded) ? null : _createProject,
+              icon: const Icon(Icons.add_rounded),
+            ),
+          ],
+        ),
+        body: SafeArea(child: _buildBody()),
       ),
-      body: SafeArea(child: _buildBody()),
     );
   }
 

@@ -16,6 +16,7 @@ typedef NotificationConfirmLegacyAction =
       ApprovalDetails approval,
     );
 typedef NotificationQuietNotice = void Function(String message);
+typedef ApprovalInFlightCheck = bool Function(String approvalId);
 
 enum BackgroundNotificationPermission { unknown, unsupported, granted, blocked }
 
@@ -83,11 +84,13 @@ class BackgroundNotificationCoordinator extends ChangeNotifier {
     NotificationOpenApproval? onOpenApproval,
     NotificationConfirmLegacyAction? onConfirmLegacyAction,
     NotificationQuietNotice? onQuietNotice,
+    ApprovalInFlightCheck? isApprovalInFlight,
   }) : _onOpenSession = onOpenSession ?? _ignoreSession,
        _onOpenApproval = onOpenApproval ?? _ignoreApproval,
        _onConfirmLegacyAction =
            onConfirmLegacyAction ?? _rejectUnconfirmedLegacyAction,
-       _onQuietNotice = onQuietNotice ?? _ignoreNotice;
+       _onQuietNotice = onQuietNotice ?? _ignoreNotice,
+       _isApprovalInFlight = isApprovalInFlight ?? _neverInFlight;
 
   static const preferenceKey = 'tempestmiku.backgroundNotificationsEnabled';
   static const _maximumRememberedWork = 256;
@@ -98,6 +101,7 @@ class BackgroundNotificationCoordinator extends ChangeNotifier {
   final NotificationOpenApproval _onOpenApproval;
   final NotificationConfirmLegacyAction _onConfirmLegacyAction;
   final NotificationQuietNotice _onQuietNotice;
+  final ApprovalInFlightCheck _isApprovalInFlight;
 
   final Queue<_QueuedNotificationWork> _work = Queue();
   final LinkedHashSet<String> _rememberedWork = LinkedHashSet();
@@ -760,6 +764,10 @@ class BackgroundNotificationCoordinator extends ChangeNotifier {
         !await _onConfirmLegacyAction(action, approval)) {
       return;
     }
+    if (_isApprovalInFlight(action.approvalId)) {
+      _onQuietNotice('這個核准正在處理中，請稍候。');
+      return;
+    }
     try {
       await client.resolveApproval(
         action.sessionId,
@@ -890,6 +898,8 @@ class BackgroundNotificationCoordinator extends ChangeNotifier {
   ) async => false;
 
   static void _ignoreNotice(String _) {}
+
+  static bool _neverInFlight(String _) => false;
 }
 
 /// Low-frequency settings UI. It intentionally exposes no endpoint, token, or

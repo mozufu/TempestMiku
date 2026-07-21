@@ -1,33 +1,62 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:miku_flutter/conversation_app.dart';
 import 'package:miku_flutter/pairing_scanner.dart';
 import 'package:miku_flutter/session_client_stub.dart';
 import 'package:miku_flutter/session_models.dart';
+import 'package:miku_flutter/notification_service.dart';
 import 'package:miku_flutter/share_import_service.dart';
+import 'package:miku_flutter/rich_message.dart';
 
 void main() {
   Widget appFor(
     ScriptedMikuClient client, {
     MikuShareImportService? shareImports,
+    MikuNotificationService? notifications,
   }) => TempestMikuApp(
     client: client,
     themeMode: ThemeMode.light,
     now: () => DateTime(2026, 7, 19, 20),
     shareImports: shareImports,
+    notifications: notifications,
   );
 
   Future<void> loadApp(
     WidgetTester tester,
     ScriptedMikuClient client, {
     MikuShareImportService? shareImports,
+    MikuNotificationService? notifications,
   }) async {
-    await tester.pumpWidget(appFor(client, shareImports: shareImports));
+    await tester.pumpWidget(
+      appFor(client, shareImports: shareImports, notifications: notifications),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
   }
+
+  testWidgets('reports markdown links that cannot be opened', (tester) async {
+    const launcherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(launcherChannel, (_) async => false);
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(launcherChannel, null),
+    );
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: MikuRichMessage(data: '[連結](foo://bar)')),
+      ),
+    );
+
+    await tester.tap(find.text('連結'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('無法開啟這個連結。'), findsOneWidget);
+  });
 
   testWidgets('starts as a quiet, present conversation canvas', (tester) async {
     final client = ScriptedMikuClient();
@@ -202,6 +231,35 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('notification failures are live error notices', (tester) async {
+    final client = ScriptedMikuClient();
+    final notifications = _ActionNotificationService();
+    addTearDown(notifications.close);
+    await loadApp(tester, client, notifications: notifications);
+    notifications.actionsController.add(
+      const ApprovalNotificationAction(
+        sessionId: 'missing-session',
+        approvalId: 'missing-approval',
+        decision: 'deny',
+        requiresConfirmation: false,
+        dedupeKey: 'missing-approval-notice',
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final notice = find.text('這則核准通知已無法確認。');
+    expect(notice, findsOneWidget);
+    final semantics = tester.widget<Semantics>(
+      find.ancestor(of: notice, matching: find.byType(Semantics)).first,
+    );
+    expect(semantics.properties.liveRegion, isTrue);
+    expect(
+      tester.widget<Text>(notice).style?.color,
+      Theme.of(tester.element(notice)).colorScheme.error,
+    );
+  });
+
   testWidgets('settings shows diagnostics, revokes a device, and logs out', (
     tester,
   ) async {
@@ -260,6 +318,15 @@ void main() {
     await tester.tap(find.byTooltip('撤銷 Laptop browser'));
     await tester.pumpAndSettle();
     expect(find.text('撤銷裝置？'), findsOneWidget);
+    final revokeButton = tester.widget<FilledButton>(
+      find.byKey(const Key('confirm-device-revoke')),
+    );
+    expect(
+      revokeButton.style?.backgroundColor?.resolve({}),
+      Theme.of(
+        tester.element(find.byKey(const Key('confirm-device-revoke'))),
+      ).colorScheme.error,
+    );
     await tester.tap(find.byKey(const Key('confirm-device-revoke')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
@@ -288,11 +355,44 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('logout-device')));
     await tester.pumpAndSettle();
+    final logoutButton = tester.widget<FilledButton>(
+      find.byKey(const Key('confirm-logout')),
+    );
+    expect(
+      logoutButton.style?.backgroundColor?.resolve({}),
+      Theme.of(
+        tester.element(find.byKey(const Key('confirm-logout'))),
+      ).colorScheme.error,
+    );
     await tester.tap(find.byKey(const Key('confirm-logout')));
     await tester.pumpAndSettle();
     expect(client.logoutCount, 1);
     expect(find.textContaining('已登出這台裝置'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('settings sheet accounts for the on-screen keyboard', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pairing-link-input')));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    await tester.pumpAndSettle();
+
+    final fieldBottom =
+        tester.getBottomLeft(find.byKey(const Key('pairing-link-input'))).dy;
+    final visibleBottom = tester.view.physicalSize.height - 300;
+    expect(fieldBottom, lessThan(visibleBottom));
   });
 
   testWidgets('pairs this device only after reviewing the server target', (
@@ -518,6 +618,88 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('keeps edited import text until discard is confirmed', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final imports = _FakeShareImportService();
+    addTearDown(imports.close);
+    await loadApp(tester, client, shareImports: imports);
+    imports.add(
+      const SharedContent(
+        text: 'Original shared text',
+        source: SharedContentSource.selection,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('import-review-editor')),
+      'Edited text that must survive',
+    );
+    await tester.pump();
+
+    tester
+        .widget<IconButton>(
+          find.ancestor(
+            of: find.byTooltip('取消匯入'),
+            matching: find.byType(IconButton),
+          ),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(find.text('捨棄編輯內容？'), findsOneWidget);
+    await tester.tap(find.text('繼續編輯'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('import-review-sheet')), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('import-review-editor')))
+          .controller!
+          .text,
+      'Edited text that must survive',
+    );
+  });
+
+  testWidgets('preserves edited quick-capture text during coalescing', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final imports = _FakeShareImportService();
+    addTearDown(imports.close);
+    await loadApp(tester, client, shareImports: imports);
+    imports.add(
+      const SharedContent(
+        text: 'first',
+        source: SharedContentSource.quickCapture,
+        eventId: '33333333-3333-4333-8333-333333333333',
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('import-review-editor')),
+      'my edited quick capture',
+    );
+    await tester.pump();
+
+    imports.add(
+      const SharedContent(
+        text: 'new incoming capture',
+        source: SharedContentSource.quickCapture,
+        eventId: '44444444-4444-4444-8444-444444444444',
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('import-review-editor')))
+          .controller!
+          .text,
+      'my edited quick capture',
+    );
+  });
+
   testWidgets('replaces a warm quick-capture draft and requires a new choice', (
     tester,
   ) async {
@@ -721,6 +903,8 @@ void main() {
     // Back out of the project page, then open History from the drawer.
     await tester.pageBack();
     await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-history')));
@@ -738,6 +922,36 @@ void main() {
     expect(scaffold.isDrawerOpen, isFalse);
     expect(find.text('第一段對話'), findsOneWidget);
     expect((await client.createOrReuseSession()).id, first.id);
+  });
+
+  testWidgets('history shows timestamps and supports pull refresh', (
+    tester,
+  ) async {
+    final client = _CountingSessionClient();
+    final session = await client.createSession();
+    await client.sendMessage(
+      session.id,
+      '有時間的對話',
+      clientMessageId: 'history-timestamp-message',
+    );
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-history')));
+    await tester.pumpAndSettle();
+
+    final summary = (await client.listSessions()).first;
+    expect(
+      find.textContaining(_testFriendlyTimestamp(summary.updatedAt)),
+      findsOneWidget,
+    );
+    final callsBeforeRefresh = client.listSessionCalls;
+    await tester.drag(
+      find.byKey(const Key('history-page-content')),
+      const Offset(0, 400),
+    );
+    await tester.pumpAndSettle();
+    expect(client.listSessionCalls, greaterThan(callsBeforeRefresh));
   });
 
   testWidgets('assigns only a closed history session to a project', (
@@ -885,6 +1099,28 @@ void main() {
     expect(find.byKey(const Key('project-file-truncated')), findsOneWidget);
     expect(find.textContaining('Scripted linked resource'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('system back walks up the project browser path', (tester) async {
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    await client.setSessionScope(session.id, 'project:tempestmiku');
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    const docs = 'project://tempestmiku/linked-folders/tempestmiku/docs/';
+    const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
+    await tester.tap(find.byKey(const Key('project-resource-$docs')));
+    await tester.pumpAndSettle();
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('project-page-content')), findsOneWidget);
+    expect(find.byKey(const Key('project-resource-$readme')), findsOneWidget);
+    expect(find.text('guide.md'), findsNothing);
   });
 
   testWidgets('project page shows auto-grown items without a promote action', (
@@ -1112,6 +1348,59 @@ void main() {
     expect(_contrastRatio(background, foreground), greaterThanOrEqualTo(4.5));
   });
 
+  testWidgets('offers a jump to the latest message when scrolled up', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    for (var index = 0; index < 12; index += 1) {
+      await client.sendMessage(
+        session.id,
+        '訊息 $index：這是一段足夠長的內容，讓對話清單需要捲動。',
+        clientMessageId: 'scroll-message-$index',
+      );
+    }
+    await loadApp(tester, client);
+    await tester.pumpAndSettle();
+
+    await tester.drag(
+      find.byKey(const Key('conversation-list')),
+      const Offset(0, 500),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('scroll-to-bottom')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('scroll-to-bottom')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('scroll-to-bottom')), findsNothing);
+  });
+
+  testWidgets('sends the composer with Enter on web', (tester) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await tester.enterText(
+      find.byKey(const Key('conversation-composer')),
+      '用 Enter 送出',
+    );
+    await tester.tap(find.byKey(const Key('conversation-composer')));
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(client.sentClientMessageIds, hasLength(1));
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('conversation-composer')))
+          .controller!
+          .text,
+      isEmpty,
+    );
+  }, skip: !kIsWeb);
+
   testWidgets('sends a message and renders Miku directly on the canvas', (
     tester,
   ) async {
@@ -1120,6 +1409,7 @@ void main() {
 
     await tester.enterText(
       find.byKey(const Key('conversation-composer')),
+
       '今天陪我整理一下',
     );
     await tester.pump();
@@ -1301,6 +1591,58 @@ void main() {
       isFalse,
     );
   });
+}
+
+class _CountingSessionClient extends ScriptedMikuClient {
+  int listSessionCalls = 0;
+
+  @override
+  Future<List<SessionSummary>> listSessions({int limit = 30}) {
+    listSessionCalls += 1;
+    return super.listSessions(limit: limit);
+  }
+}
+
+String _testFriendlyTimestamp(String value) {
+  final parsed = DateTime.parse(value).toLocal();
+  final month = parsed.month.toString().padLeft(2, '0');
+  final day = parsed.day.toString().padLeft(2, '0');
+  final hour = parsed.hour.toString().padLeft(2, '0');
+  final minute = parsed.minute.toString().padLeft(2, '0');
+  return '$month/$day $hour:$minute';
+}
+
+class _ActionNotificationService implements MikuNotificationService {
+  final actionsController =
+      StreamController<ApprovalNotificationAction>.broadcast();
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Stream<ApprovalNotificationAction> get actions => actionsController.stream;
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<NotificationPermissionStatus> permissionStatus() async =>
+      NotificationPermissionStatus.denied;
+
+  @override
+  Future<bool> requestPermission() async => false;
+
+  @override
+  Future<void> cancelApproval(String approvalId) async {}
+
+  @override
+  Future<void> showApproval({
+    required String sessionId,
+    required String approvalId,
+    required String action,
+    String? expiresAt,
+  }) async {}
+  Future<void> close() => actionsController.close();
 }
 
 class _FakeShareImportService implements MikuShareImportService {

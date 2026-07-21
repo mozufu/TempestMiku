@@ -128,50 +128,52 @@ class _HistoryPageState extends State<_HistoryPage> {
     }
     final palette = _Palette.of(context);
     final canAssign = (_projects?.isNotEmpty ?? false);
-    return ListView(
-      key: const Key('history-page-content'),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-      children: [
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: _DriveInlineError(message: _error!, onRetry: _load),
-          ),
-        for (final session in sessions)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: ListTile(
-              key: Key('history-session-${session.id}'),
-              minTileHeight: 56,
-              selected: session.id == widget.currentSessionId,
-              selectedTileColor: palette.miku.withValues(alpha: 0.10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              title: Text(
-                session.title.trim().isEmpty ? '新對話' : session.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Text(
-                session.preview.trim().isEmpty
-                    ? session.label
-                    : session.preview,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: _HistoryTrailing(
-                sessionId: session.id,
-                current: session.id == widget.currentSessionId,
-                assigning: _assigningSessionId == session.id,
-                assignable: session.status == 'ended',
-                canAssign: canAssign && _assigningSessionId == null,
-                onAssign: () => _assign(session),
-              ),
-              onTap: () => widget.onSelectSession(session.id),
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        key: const Key('history-page-content'),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+        children: [
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _DriveInlineError(message: _error!, onRetry: _load),
             ),
-          ),
-      ],
+          for (final session in sessions)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: ListTile(
+                key: Key('history-session-${session.id}'),
+                minTileHeight: 56,
+                selected: session.id == widget.currentSessionId,
+                selectedTileColor: palette.miku.withValues(alpha: 0.10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                title: Text(
+                  session.title.trim().isEmpty ? '新對話' : session.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  '${session.preview.trim().isEmpty ? session.label : session.preview} · '
+                  '${_friendlyTimestamp(session.updatedAt)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: _HistoryTrailing(
+                  sessionId: session.id,
+                  current: session.id == widget.currentSessionId,
+                  assigning: _assigningSessionId == session.id,
+                  assignable: session.status == 'ended',
+                  canAssign: canAssign && _assigningSessionId == null,
+                  onAssign: () => _assign(session),
+                ),
+                onTap: () => widget.onSelectSession(session.id),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

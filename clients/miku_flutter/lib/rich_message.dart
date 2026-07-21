@@ -5,6 +5,7 @@ import 'package:flutter_markdown_plus_latex/flutter_markdown_plus_latex.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_mermaid/flutter_mermaid.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:url_launcher/url_launcher.dart';
 
 const mikuRichResponseShowcase = r'''
 ### 我可以這樣陪你想
@@ -81,9 +82,24 @@ class MikuRichMessage extends StatelessWidget {
     final codeHeaderBackground =
         dark ? const Color(0xff10191e) : const Color(0xffe3e9e6);
 
+    Future<void> handleLinkTap(String text, String? href, String title) async {
+      final uri = href == null ? null : Uri.tryParse(href);
+      if (uri == null) return;
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched && context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('無法開啟這個連結。')));
+      }
+    }
+
     return MarkdownBody(
       key: const Key('miku-rich-message'),
       data: data,
+      onTapLink: handleLinkTap,
       selectable: true,
       extensionSet: _mikuMarkdownExtensions,
       builders: <String, MarkdownElementBuilder>{

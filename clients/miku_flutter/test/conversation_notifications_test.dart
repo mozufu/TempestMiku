@@ -334,6 +334,39 @@ void main() {
     await notifications.close();
   });
 
+  test('in-flight approval action is not resolved twice', () async {
+    SharedPreferences.setMockInitialValues({
+      BackgroundNotificationCoordinator.preferenceKey: false,
+    });
+    final notices = <String>[];
+    final client = _NotificationClient()..approval = _pendingApproval();
+    final notifications = _FakeNotificationService();
+    final coordinator = BackgroundNotificationCoordinator(
+      client: client,
+      notifications: notifications,
+      onQuietNotice: notices.add,
+      isApprovalInFlight: (approvalId) => approvalId == 'approval-1',
+    );
+    await coordinator.initialize();
+    coordinator.setInitialConnectionComplete();
+
+    notifications.actionsController.add(
+      const ApprovalNotificationAction(
+        sessionId: 'session-1',
+        approvalId: 'approval-1',
+        decision: 'approve',
+        requiresConfirmation: false,
+        dedupeKey: 'in-flight-approval-1',
+      ),
+    );
+    await _flushAsync();
+
+    expect(client.callOrder, ['get:session-1:approval-1']);
+    expect(notices, ['這個核准正在處理中，請稍候。']);
+    coordinator.dispose();
+    await notifications.close();
+  });
+
   test(
     'resolve failure GETs again and surfaces only when still pending',
     () async {

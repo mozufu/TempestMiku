@@ -99,6 +99,26 @@ void main() {
     },
   );
 
+  testWidgets('inactive lifecycle explains why voice capture cannot start', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final capture = _FakeVoiceCapture();
+    final workers = _FakeWorkerFactory('不應出現');
+    await loadApp(tester, client: client, capture: capture, workers: workers);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+
+    tester
+        .widget<IconButton>(find.byKey(const Key('voice-capture-action')))
+        .onPressed!();
+    await tester.pump();
+
+    expect(find.byKey(const Key('voice-composer-status')), findsOneWidget);
+    expect(capture.permissionCalls, 0);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
   testWidgets('lifecycle exit cancels capture and never transcribes or sends', (
     tester,
   ) async {

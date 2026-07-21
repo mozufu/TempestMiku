@@ -154,6 +154,8 @@ class _ConversationScreenState extends State<ConversationScreen>
   final _composerController = TextEditingController();
   final _composerFocus = FocusNode();
   final _scrollController = ScrollController();
+  bool _showScrollToBottom = false;
+  bool _reviewedChangeInFlight = false;
   final List<_ConversationItem> _items = [];
   final List<SharedContent> _pendingImports = [];
   final List<String> _recentImportEventIds = [];
@@ -210,6 +212,7 @@ class _ConversationScreenState extends State<ConversationScreen>
       onOpenApproval: _openNotificationApproval,
       onConfirmLegacyAction: _confirmLegacyNotificationAction,
       onQuietNotice: _showNotificationNotice,
+      isApprovalInFlight: _isApprovalItemInFlight,
     );
     unawaited(_notificationCoordinator.initialize());
     _shareImports = widget.shareImports ?? createShareImportService();
@@ -238,6 +241,7 @@ class _ConversationScreenState extends State<ConversationScreen>
       unawaited(_voiceCapture.recoverOrphans().catchError((_) => 0));
     }
     _composerController.addListener(_composerChanged);
+    _scrollController.addListener(_updateScrollToBottomVisibility);
     if (_shareImports.isSupported) {
       _shareImportSubscription = _shareImports.imports.listen(
         _enqueueImport,
@@ -270,6 +274,7 @@ class _ConversationScreenState extends State<ConversationScreen>
       ..removeListener(_composerChanged)
       ..dispose();
     _composerFocus.dispose();
+    _scrollController.removeListener(_updateScrollToBottomVisibility);
     _scrollController.dispose();
     super.dispose();
   }
@@ -448,6 +453,15 @@ class _ConversationScreenState extends State<ConversationScreen>
                   ),
                   FilledButton(
                     key: const Key('confirm-legacy-notification-action'),
+                    style:
+                        approving
+                            ? null
+                            : FilledButton.styleFrom(
+                              backgroundColor:
+                                  Theme.of(context).colorScheme.error,
+                              foregroundColor:
+                                  Theme.of(context).colorScheme.onError,
+                            ),
                     onPressed: () => Navigator.of(context).pop(true),
                     child: Text(approving ? '確認允許' : '確認拒絕'),
                   ),
@@ -461,7 +475,11 @@ class _ConversationScreenState extends State<ConversationScreen>
     if (!mounted || message.trim().isEmpty) return;
     setState(() {
       _items.add(
-        _NoticeItem(key: _nextKey('notification-notice'), text: message),
+        _NoticeItem(
+          key: _nextKey('notification-notice'),
+          text: message,
+          isError: true,
+        ),
       );
     });
     _scheduleScroll();
@@ -1304,6 +1322,15 @@ class _ConversationScreenState extends State<ConversationScreen>
     }
   }
 
+  bool _isApprovalItemInFlight(String approvalId) {
+    for (final item in _items.whereType<_ApprovalItem>()) {
+      if (item.prompt.approvalId == approvalId) {
+        return item.resolving || item.resolvedStatus != null;
+      }
+    }
+    return false;
+  }
+
   ApprovalPrompt? _approvalFromEvent(MikuEvent event) {
     final approvalId = _string(event.data['approvalId']);
     if (approvalId.isEmpty) return null;
@@ -1356,6 +1383,16 @@ class _ConversationScreenState extends State<ConversationScreen>
               : options,
       timeoutMs: event.data['timeoutMs'] as int?,
     );
+  }
+
+  void _updateScrollToBottomVisibility() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    final nearBottom = position.maxScrollExtent - position.pixels < 160;
+    final show = !nearBottom && position.maxScrollExtent > 0;
+    if (show != _showScrollToBottom) {
+      setState(() => _showScrollToBottom = show);
+    }
   }
 
   void _scheduleScroll({bool force = false}) {
@@ -1425,7 +1462,26 @@ class _ConversationScreenState extends State<ConversationScreen>
                         onOpenContext: _openSessionContext,
                       ),
                       Divider(height: 1, color: palette.outline),
-                      Expanded(child: _buildConversation(palette)),
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            _buildConversation(palette),
+                            if (_showScrollToBottom)
+                              Positioned(
+                                right: 12,
+                                bottom: 12,
+                                child: FloatingActionButton.small(
+                                  key: const Key('scroll-to-bottom'),
+                                  tooltip: '捲到最新訊息',
+                                  onPressed: () => _scheduleScroll(force: true),
+                                  child: const Icon(
+                                    Icons.arrow_downward_rounded,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                       if (_connectionError != null)
                         _ConnectionNotice(
                           text: _connectionError!,
@@ -2617,6 +2673,18 @@ class _Composer extends StatelessWidget {
         enabled && !sending && !voiceBusy && controller.text.trim().isNotEmpty;
     final canStartVoice = enabled && !sending && voiceReady && !voiceProcessing;
     final colors = Theme.of(context).colorScheme;
+    KeyEventResult handleComposerKey(FocusNode node, KeyEvent event) {
+      if (!kIsWeb || event is! KeyDownEvent) return KeyEventResult.ignored;
+      final isEnter =
+          event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.numpadEnter;
+      if (!isEnter || HardwareKeyboard.instance.isShiftPressed || !canSend) {
+        return KeyEventResult.ignored;
+      }
+      onSend();
+      return KeyEventResult.handled;
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 10, 0, 12),
       child: Column(
@@ -2667,100 +2735,101 @@ class _Composer extends StatelessWidget {
           Semantics(
             textField: true,
             label: '告訴 Miku',
-            child: TextField(
-              key: const Key('conversation-composer'),
-              controller: controller,
-              focusNode: focusNode,
-              enabled: enabled,
-              minLines: 1,
-              maxLines: 6,
-              textCapitalization: TextCapitalization.sentences,
-              keyboardType: TextInputType.multiline,
-              textInputAction: TextInputAction.newline,
-              decoration: InputDecoration(
-                hintText: enabled ? '告訴 Miku…' : disabledHint,
-                suffixIconConstraints: const BoxConstraints(minHeight: 54),
-                suffixIcon: Padding(
-                  padding: const EdgeInsetsDirectional.only(end: 5),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (voiceVisible) ...[
-                        IconButton(
-                          key: const Key('voice-capture-action'),
-                          tooltip:
-                              voiceRecording
-                                  ? '停止錄音並轉寫'
-                                  : voiceProcessing
-                                  ? '語音正在清理或轉寫'
-                                  : voiceReady
-                                  ? '開始語音輸入 · $voiceSummary'
-                                  : '語音模型尚未就緒，請到設定檢查',
+            child: Focus(
+              onKeyEvent: handleComposerKey,
+              child: TextField(
+                key: const Key('conversation-composer'),
+                controller: controller,
+                focusNode: focusNode,
+                enabled: enabled,
+                minLines: 1,
+                maxLines: 6,
+                textCapitalization: TextCapitalization.sentences,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
+                decoration: InputDecoration(
+                  hintText: enabled ? '告訴 Miku…' : disabledHint,
+                  suffixIconConstraints: const BoxConstraints(minHeight: 54),
+                  suffixIcon: Padding(
+                    padding: const EdgeInsetsDirectional.only(end: 5),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (voiceVisible) ...[
+                          IconButton(
+                            key: const Key('voice-capture-action'),
+                            tooltip:
+                                voiceRecording
+                                    ? '停止錄音並轉寫'
+                                    : voiceProcessing
+                                    ? '語音正在清理或轉寫'
+                                    : voiceReady
+                                    ? '開始語音輸入 · $voiceSummary'
+                                    : '語音模型尚未就緒，請到設定檢查',
+                            constraints: const BoxConstraints.tightFor(
+                              width: 44,
+                              height: 44,
+                            ),
+                            onPressed:
+                                voiceRecording
+                                    ? onVoiceAction
+                                    : canStartVoice
+                                    ? onVoiceAction
+                                    : null,
+                            icon:
+                                voiceProcessing && !voiceRecording
+                                    ? const SizedBox.square(
+                                      dimension: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                    : Icon(
+                                      voiceRecording
+                                          ? Icons.stop_rounded
+                                          : Icons.mic_none_rounded,
+                                    ),
+                          ),
+                          if (voiceBusy)
+                            IconButton(
+                              key: const Key('voice-capture-cancel'),
+                              tooltip: '取消語音輸入並清除錄音',
+                              constraints: const BoxConstraints.tightFor(
+                                width: 44,
+                                height: 44,
+                              ),
+                              onPressed: onVoiceCancel,
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                        ],
+                        IconButton.filled(
+                          key: const Key('send-message'),
+                          tooltip: '送出',
                           constraints: const BoxConstraints.tightFor(
                             width: 44,
                             height: 44,
                           ),
-                          onPressed:
-                              voiceRecording
-                                  ? onVoiceAction
-                                  : canStartVoice
-                                  ? onVoiceAction
-                                  : null,
+                          onPressed: canSend ? onSend : null,
+                          style: IconButton.styleFrom(
+                            backgroundColor: colors.primary,
+                            foregroundColor: colors.onPrimary,
+                            disabledBackgroundColor: colors.onSurface
+                                .withValues(alpha: 0.12),
+                            disabledForegroundColor: colors.onSurface
+                                .withValues(alpha: 0.38),
+                          ),
                           icon:
-                              voiceProcessing && !voiceRecording
+                              sending
                                   ? const SizedBox.square(
                                     dimension: 18,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
                                     ),
                                   )
-                                  : Icon(
-                                    voiceRecording
-                                        ? Icons.stop_rounded
-                                        : Icons.mic_none_rounded,
-                                  ),
+                                  : const Icon(Icons.arrow_upward_rounded),
                         ),
-                        if (voiceBusy)
-                          IconButton(
-                            key: const Key('voice-capture-cancel'),
-                            tooltip: '取消語音輸入並清除錄音',
-                            constraints: const BoxConstraints.tightFor(
-                              width: 44,
-                              height: 44,
-                            ),
-                            onPressed: onVoiceCancel,
-                            icon: const Icon(Icons.close_rounded),
-                          ),
                       ],
-                      IconButton.filled(
-                        key: const Key('send-message'),
-                        tooltip: '送出',
-                        constraints: const BoxConstraints.tightFor(
-                          width: 44,
-                          height: 44,
-                        ),
-                        onPressed: canSend ? onSend : null,
-                        style: IconButton.styleFrom(
-                          backgroundColor: colors.primary,
-                          foregroundColor: colors.onPrimary,
-                          disabledBackgroundColor: colors.onSurface.withValues(
-                            alpha: 0.12,
-                          ),
-                          disabledForegroundColor: colors.onSurface.withValues(
-                            alpha: 0.38,
-                          ),
-                        ),
-                        icon:
-                            sending
-                                ? const SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                                : const Icon(Icons.arrow_upward_rounded),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),

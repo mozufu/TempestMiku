@@ -47,6 +47,18 @@ extension _ConversationReviewedChanges on _ConversationScreenState {
   Future<void> _openReviewedChanges() async {
     final session = _session;
     if (session == null || session.status == 'ended') return;
+    if (_reviewedChangeInFlight) {
+      _voiceSetState(() {
+        _items.add(
+          _NoticeItem(
+            key: _nextKey('reviewed-change-busy'),
+            text: '上一個變更提案仍在處理中，請稍候再試一次。',
+          ),
+        );
+      });
+      _scheduleScroll(force: true);
+      return;
+    }
     final request = await showModalBottomSheet<_ReviewedChangeRequest>(
       context: context,
       useSafeArea: true,
@@ -67,6 +79,7 @@ extension _ConversationReviewedChanges on _ConversationScreenState {
     _ReviewedChangeRequest request,
   ) async {
     if (!mounted || _session?.id != sessionId) return;
+    _reviewedChangeInFlight = true;
     _voiceSetState(() {
       _items.add(
         _NoticeItem(
@@ -137,6 +150,8 @@ extension _ConversationReviewedChanges on _ConversationScreenState {
         );
       });
       _scheduleScroll(force: true);
+    } finally {
+      _reviewedChangeInFlight = false;
     }
   }
 

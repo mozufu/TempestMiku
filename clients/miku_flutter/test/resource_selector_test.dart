@@ -73,4 +73,30 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets('system back walks up the resource inspector path', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await tester.pumpWidget(
+      TempestMikuApp(client: client, themeMode: ThemeMode.light),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-resources')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('resource-entry-artifact://')));
+    await tester.pumpAndSettle();
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('resource-inspector')), findsOneWidget);
+    expect(find.byKey(const Key('resource-entry-artifact://')), findsOneWidget);
+    expect(
+      find.byKey(const Key('resource-entry-artifact://scripted-report')),
+      findsNothing,
+    );
+  });
 }

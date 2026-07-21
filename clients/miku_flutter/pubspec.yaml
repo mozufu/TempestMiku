@@ -41,6 +41,7 @@ dependencies:
   sherpa_onnx: 1.13.4
   shared_preferences: ^2.5.3
   web: ^1.1.1
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

@@ -200,105 +200,110 @@ class _ResourceInspectorSheetState extends State<_ResourceInspectorSheet> {
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
-    return FractionallySizedBox(
-      key: const Key('resource-inspector'),
-      heightFactor: 0.9,
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    if (_path.length > 1 || _preview != null)
-                      IconButton(
-                        key: const Key('resource-back'),
-                        tooltip: '返回上一層',
-                        onPressed: _busy ? null : _back,
-                        icon: const Icon(Icons.arrow_back_rounded),
-                      ),
-                    Expanded(
-                      child: Text(
-                        _preview?.title?.trim().isNotEmpty == true
-                            ? _preview!.title!
-                            : _preview != null
-                            ? _preview!.uri
-                            : _path.last.label,
-                        key: const Key('resource-inspector-title'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
+    return PopScope(
+      canPop: _preview == null && _path.length <= 1,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_back());
+      },
+      child: FractionallySizedBox(
+        key: const Key('resource-inspector'),
+        heightFactor: 0.9,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      if (_path.length > 1 || _preview != null)
+                        IconButton(
+                          key: const Key('resource-back'),
+                          tooltip: '返回上一層',
+                          onPressed: _busy ? null : _back,
+                          icon: const Icon(Icons.arrow_back_rounded),
+                        ),
+                      Expanded(
+                        child: Text(
+                          _preview?.title?.trim().isNotEmpty == true
+                              ? _preview!.title!
+                              : _preview != null
+                              ? _preview!.uri
+                              : _path.last.label,
+                          key: const Key('resource-inspector-title'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                       ),
-                    ),
-                    if (_preview == null && _path.last.uri.isNotEmpty)
+                      if (_preview == null && _path.last.uri.isNotEmpty)
+                        IconButton(
+                          key: const Key('preview-resource-location'),
+                          tooltip: '預覽目前資源',
+                          onPressed:
+                              _busy ? null : () => _previewUri(_path.last.uri),
+                          icon: const Icon(Icons.visibility_outlined),
+                        ),
                       IconButton(
-                        key: const Key('preview-resource-location'),
-                        tooltip: '預覽目前資源',
-                        onPressed:
-                            _busy ? null : () => _previewUri(_path.last.uri),
-                        icon: const Icon(Icons.visibility_outlined),
+                        key: const Key('open-exact-resource-uri'),
+                        tooltip: '開啟資源 URI',
+                        onPressed: _busy ? null : _openExactUri,
+                        icon: const Icon(Icons.link_rounded),
                       ),
-                    IconButton(
-                      key: const Key('open-exact-resource-uri'),
-                      tooltip: '開啟資源 URI',
-                      onPressed: _busy ? null : _openExactUri,
-                      icon: const Icon(Icons.link_rounded),
+                      IconButton(
+                        tooltip: '關閉資源檢視器',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    _preview?.uri ??
+                        (_path.last.uri.isEmpty ? '已授權的資源類型' : _path.last.uri),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: palette.muted,
+                      fontFamily: 'monospace',
                     ),
-                    IconButton(
-                      tooltip: '關閉資源檢視器',
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_loading) const LinearProgressIndicator(minHeight: 2),
+                  if (_error != null) ...[
+                    const SizedBox(height: 8),
+                    _DriveInlineError(
+                      message: _error!,
+                      onRetry:
+                          () => _load(
+                            _failedLocation ?? _path.last,
+                            push: _failedLocation != null,
+                          ),
                     ),
                   ],
-                ),
-                Text(
-                  _preview?.uri ??
-                      (_path.last.uri.isEmpty ? '已授權的資源類型' : _path.last.uri),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: palette.muted,
-                    fontFamily: 'monospace',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (_loading) const LinearProgressIndicator(minHeight: 2),
-                if (_error != null) ...[
                   const SizedBox(height: 8),
-                  _DriveInlineError(
-                    message: _error!,
-                    onRetry:
-                        () => _load(
-                          _failedLocation ?? _path.last,
-                          push: _failedLocation != null,
-                        ),
+                  Expanded(
+                    child:
+                        _preview != null
+                            ? _ResourcePreviewBody(
+                              preview: _preview!,
+                              loadingMore: _loadingResourcePage,
+                              loadMoreError: _resourcePageError,
+                              onLoadMore:
+                                  _canLoadMoreResource(_preview!)
+                                      ? _loadMoreResource
+                                      : null,
+                            )
+                            : _ResourceEntryList(
+                              entries: _entries,
+                              loading: _loading,
+                              onOpen: _open,
+                            ),
                   ),
                 ],
-                const SizedBox(height: 8),
-                Expanded(
-                  child:
-                      _preview != null
-                          ? _ResourcePreviewBody(
-                            preview: _preview!,
-                            loadingMore: _loadingResourcePage,
-                            loadMoreError: _resourcePageError,
-                            onLoadMore:
-                                _canLoadMoreResource(_preview!)
-                                    ? _loadMoreResource
-                                    : null,
-                          )
-                          : _ResourceEntryList(
-                            entries: _entries,
-                            loading: _loading,
-                            onOpen: _open,
-                          ),
-                ),
-              ],
+              ),
             ),
           ),
         ),

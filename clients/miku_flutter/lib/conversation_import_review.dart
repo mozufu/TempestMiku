@@ -56,6 +56,8 @@ extension _ConversationImports on _ConversationScreenState {
         useSafeArea: true,
         isScrollControlled: true,
         showDragHandle: true,
+        isDismissible: false,
+        enableDrag: false,
         builder:
             (context) => _ImportReviewSheet(
               contentListenable: contentListenable,
@@ -93,6 +95,10 @@ class _ImportReviewSheetState extends State<_ImportReviewSheet> {
   late final TextEditingController _controller;
   late SharedContent _content;
   _ImportDestination? _destination;
+  bool _discardConfirmed = false;
+  bool _confirmingDiscard = false;
+
+  bool get _hasUnsavedEdits => _controller.text.trim() != _content.text.trim();
 
   @override
   void initState() {
@@ -103,12 +109,60 @@ class _ImportReviewSheetState extends State<_ImportReviewSheet> {
   }
 
   void _contentChanged() {
-    _content = widget.contentListenable.value;
-    _controller.value = TextEditingValue(
-      text: _content.text,
-      selection: TextSelection.collapsed(offset: _content.text.length),
+    final previous = _content;
+    final incoming = widget.contentListenable.value;
+    final pristine = _controller.text.trim() == previous.text.trim();
+    setState(() {
+      _content = incoming;
+      if (pristine) {
+        _controller.value = TextEditingValue(
+          text: incoming.text,
+          selection: TextSelection.collapsed(offset: incoming.text.length),
+        );
+        _destination = null;
+      }
+    });
+  }
+
+  void _requestClose() {
+    if (_hasUnsavedEdits) {
+      unawaited(_confirmDiscard());
+      return;
+    }
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _confirmDiscard() async {
+    if (_confirmingDiscard) return;
+    _confirmingDiscard = true;
+    final discard = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('捨棄編輯內容？'),
+            content: const Text('關閉這個畫面會遺失你目前的編輯，且無法復原。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('繼續編輯'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('捨棄'),
+              ),
+            ],
+          ),
     );
-    setState(() => _destination = null);
+    if (!mounted) return;
+    _confirmingDiscard = false;
+    if (discard == true) {
+      setState(() => _discardConfirmed = true);
+      Navigator.of(context).pop();
+    }
   }
 
   @override
@@ -124,154 +178,159 @@ class _ImportReviewSheetState extends State<_ImportReviewSheet> {
     final source = _content.source;
     final isVoice = source == SharedContentSource.voice;
     final canSend = _controller.text.trim().isNotEmpty && _destination != null;
-    return FractionallySizedBox(
-      key: const Key('import-review-sheet'),
-      heightFactor: 0.88,
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 680),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              20,
-              4,
-              20,
-              20 + MediaQuery.viewInsetsOf(context).bottom,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Icon(_importIcon(source), color: palette.miku),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _importTitle(source),
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
+    return PopScope(
+      canPop: !_hasUnsavedEdits || _discardConfirmed,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_confirmDiscard());
+      },
+      child: FractionallySizedBox(
+        key: const Key('import-review-sheet'),
+        heightFactor: 0.88,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 680),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                4,
+                20,
+                20 + MediaQuery.viewInsetsOf(context).bottom,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(_importIcon(source), color: palette.miku),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _importTitle(source),
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                       ),
-                    ),
-                    IconButton(
-                      tooltip: '取消匯入',
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded),
+                      IconButton(
+                        tooltip: '取消匯入',
+                        onPressed: _requestClose,
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    '先檢查、編輯並選擇目的地；TempestMiku 不會自動送出。',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: palette.muted),
+                  ),
+                  if (_content.truncated) ...[
+                    const SizedBox(height: 10),
+                    const _ImportWarning(
+                      key: Key('import-truncated-warning'),
+                      text: '來源內容超過安全上限，以下只保留可送出的部分。',
                     ),
                   ],
-                ),
-                Text(
-                  '先檢查、編輯並選擇目的地；TempestMiku 不會自動送出。',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: palette.muted),
-                ),
-                if (_content.truncated) ...[
-                  const SizedBox(height: 10),
-                  const _ImportWarning(
-                    key: Key('import-truncated-warning'),
-                    text: '來源內容超過安全上限，以下只保留可送出的部分。',
-                  ),
-                ],
-                if (isVoice && _content.voiceQualityIssue != null) ...[
-                  const SizedBox(height: 10),
-                  _ImportWarning(
-                    key: const Key('voice-quality-warning'),
-                    text: _voiceQualityLabel(_content.voiceQualityIssue!),
-                  ),
-                ],
-                if (isVoice && _content.voiceDiagnostics != null) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    _voiceDiagnosticsLabel(_content.voiceDiagnostics!),
-                    key: const Key('voice-diagnostics'),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: palette.muted),
-                  ),
-                ],
-                if (isVoice) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _voiceProvenanceLabel(
-                      _content.voiceTranscriptProvenance ??
-                          VoiceTranscriptProvenance.local,
+                  if (isVoice && _content.voiceQualityIssue != null) ...[
+                    const SizedBox(height: 10),
+                    _ImportWarning(
+                      key: const Key('voice-quality-warning'),
+                      text: _voiceQualityLabel(_content.voiceQualityIssue!),
                     ),
-                    key: const Key('voice-transcript-provenance'),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: palette.muted),
-                  ),
-                  if (_content.voiceBuildFingerprint case final build?) ...[
-                    const SizedBox(height: 4),
+                  ],
+                  if (isVoice && _content.voiceDiagnostics != null) ...[
+                    const SizedBox(height: 10),
                     Text(
-                      'App ${build.versionName}+${build.versionCode} · '
-                      '${build.buildType} · APK ${build.apkSha256.substring(0, 16)}…',
-                      key: const Key('voice-build-fingerprint'),
+                      _voiceDiagnosticsLabel(_content.voiceDiagnostics!),
+                      key: const Key('voice-diagnostics'),
                       style: Theme.of(
                         context,
                       ).textTheme.bodySmall?.copyWith(color: palette.muted),
                     ),
                   ],
-                ],
-                const SizedBox(height: 14),
-                Expanded(
-                  child: TextField(
-                    key: const Key('import-review-editor'),
-                    controller: _controller,
-                    minLines: null,
-                    maxLines: null,
-                    expands: true,
-                    maxLength: maxSharedTextLength,
-                    textAlignVertical: TextAlignVertical.top,
-                    decoration: const InputDecoration(
-                      labelText: '送出前編輯',
-                      alignLabelWithHint: true,
-                      border: OutlineInputBorder(),
+                  if (isVoice) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _voiceProvenanceLabel(
+                        _content.voiceTranscriptProvenance ??
+                            VoiceTranscriptProvenance.local,
+                      ),
+                      key: const Key('voice-transcript-provenance'),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: palette.muted),
                     ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text('送到', style: Theme.of(context).textTheme.labelLarge),
-                const SizedBox(height: 8),
-                SegmentedButton<_ImportDestination>(
-                  key: const Key('import-destination'),
-                  segments: [
-                    ButtonSegment(
-                      value: _ImportDestination.currentSession,
-                      enabled: widget.currentSessionAvailable,
-                      icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                      label: const Text('目前對話'),
-                    ),
-                    const ButtonSegment(
-                      value: _ImportDestination.newSession,
-                      icon: Icon(Icons.add_comment_outlined, size: 18),
-                      label: Text('新對話'),
-                    ),
+                    if (_content.voiceBuildFingerprint case final build?) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'App ${build.versionName}+${build.versionCode} · '
+                        '${build.buildType} · APK ${build.apkSha256.substring(0, 16)}…',
+                        key: const Key('voice-build-fingerprint'),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: palette.muted),
+                      ),
+                    ],
                   ],
-                  selected: {if (_destination != null) _destination!},
-                  emptySelectionAllowed: true,
-                  showSelectedIcon: false,
-                  onSelectionChanged:
-                      (selection) =>
-                          setState(() => _destination = selection.first),
-                ),
-                const SizedBox(height: 14),
-                FilledButton.icon(
-                  key: const Key('send-import'),
-                  onPressed:
-                      canSend
-                          ? () => Navigator.of(context).pop(
-                            _ImportDecision(
-                              text: _controller.text.trim(),
-                              destination: _destination!,
-                            ),
-                          )
-                          : null,
-                  icon: const Icon(Icons.send_rounded),
-                  label: const Text('確認並送給 Miku'),
-                ),
-              ],
+                  const SizedBox(height: 14),
+                  Expanded(
+                    child: TextField(
+                      key: const Key('import-review-editor'),
+                      controller: _controller,
+                      minLines: null,
+                      maxLines: null,
+                      expands: true,
+                      maxLength: maxSharedTextLength,
+                      textAlignVertical: TextAlignVertical.top,
+                      decoration: const InputDecoration(
+                        labelText: '送出前編輯',
+                        alignLabelWithHint: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('送到', style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  SegmentedButton<_ImportDestination>(
+                    key: const Key('import-destination'),
+                    segments: [
+                      ButtonSegment(
+                        value: _ImportDestination.currentSession,
+                        enabled: widget.currentSessionAvailable,
+                        icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                        label: const Text('目前對話'),
+                      ),
+                      const ButtonSegment(
+                        value: _ImportDestination.newSession,
+                        icon: Icon(Icons.add_comment_outlined, size: 18),
+                        label: Text('新對話'),
+                      ),
+                    ],
+                    selected: {if (_destination != null) _destination!},
+                    emptySelectionAllowed: true,
+                    showSelectedIcon: false,
+                    onSelectionChanged:
+                        (selection) =>
+                            setState(() => _destination = selection.first),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    key: const Key('send-import'),
+                    onPressed:
+                        canSend
+                            ? () => Navigator.of(context).pop(
+                              _ImportDecision(
+                                text: _controller.text.trim(),
+                                destination: _destination!,
+                              ),
+                            )
+                            : null,
+                    icon: const Icon(Icons.send_rounded),
+                    label: const Text('確認並送給 Miku'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

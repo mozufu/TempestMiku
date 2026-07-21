@@ -151,11 +151,11 @@ extension _ConversationVoice on _ConversationScreenState {
       _showVoiceError('語音辨識尚未就緒，請先到設定檢查辨識方式與模型。');
       return;
     }
-    if (_voiceRecording ||
-        _voiceProcessing ||
-        _sending ||
-        !_canCompose ||
-        _appLifecycle != AppLifecycleState.resumed) {
+    if (_voiceRecording || _voiceProcessing || _sending || !_canCompose) {
+      return;
+    }
+    if (_appLifecycle != AppLifecycleState.resumed) {
+      _showVoiceError('App 不在前景，暫時無法開始錄音；請回到 App 後再試一次。');
       return;
     }
     final epoch = ++_voiceOperationEpoch;

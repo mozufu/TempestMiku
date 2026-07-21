@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:miku_flutter/conversation_app.dart';
 import 'package:miku_flutter/session_client_stub.dart';
+import 'package:miku_flutter/session_models.dart';
 
 void main() {
   Widget appFor(ScriptedMikuClient client) => TempestMikuApp(
@@ -106,6 +109,49 @@ void main() {
     expect(client.sentClientMessageIds, isEmpty);
   });
 
+  testWidgets('blocks a second reviewed change while one is pending', (
+    tester,
+  ) async {
+    final client = _DelayedEvolutionClient();
+    await loadApp(tester, client);
+    await openReviewedChanges(tester);
+    await tester.tap(find.byKey(const Key('propose-guidance-change')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('evolution-change-label')),
+      '仍在處理的變更',
+    );
+    await tester.enterText(
+      find.byKey(const Key('evolution-change-summary')),
+      '等待伺服器回覆。',
+    );
+    await tester.tap(find.byKey(const Key('submit-evolution-proposal')));
+    await tester.pump();
+    expect(client.proposalCalls, 1);
+
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    final destination = find.byKey(const Key('drawer-reviewed-changes'));
+    await tester.scrollUntilVisible(
+      destination,
+      120,
+      scrollable:
+          find
+              .descendant(
+                of: find.byKey(const Key('left-conversation-drawer')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+    );
+    await tester.tap(destination);
+    await tester.pump();
+
+    expect(find.textContaining('上一個變更提案仍在處理中'), findsOneWidget);
+    expect(client.proposalCalls, 1);
+    client.completeProposal();
+    await tester.pump();
+  });
+
   testWidgets('rollback validates and confirms both exact digests', (
     tester,
   ) async {
@@ -152,4 +198,31 @@ void main() {
     await rejectPendingApproval(tester);
     expect(client.sentClientMessageIds, isEmpty);
   });
+}
+
+class _DelayedEvolutionClient extends ScriptedMikuClient {
+  final Completer<EvolutionReviewProposalResult> _proposal = Completer();
+  int proposalCalls = 0;
+
+  @override
+  Future<EvolutionReviewProposalResult> proposeEvolutionReview(
+    String sessionId,
+    EvolutionReviewProposalRequest request,
+  ) {
+    proposalCalls += 1;
+    return _proposal.future;
+  }
+
+  void completeProposal() {
+    if (_proposal.isCompleted) return;
+    _proposal.complete(
+      const EvolutionReviewProposalResult(
+        proposalId: 'proposal-delayed',
+        approvalId: 'approval-delayed',
+        status: 'pending',
+        resourceUri: 'memory://review-proposals/proposal-delayed',
+        applyEnabled: true,
+      ),
+    );
+  }
 }

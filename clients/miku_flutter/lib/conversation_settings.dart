@@ -298,6 +298,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
               FilledButton(
                 key: const Key('confirm-device-revoke'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
                 onPressed: () => Navigator.of(context).pop(true),
                 child: const Text('撤銷權限'),
               ),
@@ -411,6 +415,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
               FilledButton(
                 key: const Key('confirm-logout'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  foregroundColor: Theme.of(context).colorScheme.onError,
+                ),
                 onPressed: () => Navigator.of(context).pop(true),
                 child: const Text('登出'),
               ),
@@ -463,7 +471,12 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 680),
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                    padding: EdgeInsets.fromLTRB(
+                      20,
+                      4,
+                      20,
+                      20 + MediaQuery.viewInsetsOf(context).bottom,
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [

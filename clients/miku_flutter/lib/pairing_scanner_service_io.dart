@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'pairing_scanner_service_platform.dart';
@@ -16,6 +17,9 @@ class _MobilePairingScannerService implements PairingScannerService {
       );
 
   final MobileScannerController _controller;
+  static const MethodChannel _settingsChannel = MethodChannel(
+    'org.mozufu.tempestmiku/pairing-scanner',
+  );
   final StreamController<PairingScannerEvent> _events =
       StreamController<PairingScannerEvent>.broadcast();
   bool _running = false;
@@ -82,6 +86,15 @@ class _MobilePairingScannerService implements PairingScannerService {
           error.errorCode != MobileScannerErrorCode.controllerDisposed) {
         _emitProblem(_problemFor(error));
       }
+    }
+  }
+
+  @override
+  Future<void> openAppSettings() async {
+    try {
+      await _settingsChannel.invokeMethod<void>('openAppSettings');
+    } on PlatformException {
+      // Best-effort: the problem card keeps its retry affordance.
     }
   }
 

@@ -34,6 +34,9 @@ class _UnsupportedPairingScannerService implements PairingScannerService {
   Future<void> stop() async {}
 
   @override
+  Future<void> openAppSettings() async {}
+
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

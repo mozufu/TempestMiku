@@ -73,6 +73,45 @@ void main() {
     expect(await result, isNull);
   });
 
+  testWidgets('permission denial offers a system-settings deep link', (
+    tester,
+  ) async {
+    final service = _FakePairingScannerService(
+      starts: const [PairingScannerProblem.permissionDenied],
+    );
+    final result = await _openScanner(tester, service);
+
+    final openSettings = find.byKey(const Key('pairing-scanner-open-settings'));
+    expect(openSettings, findsOneWidget);
+    expect(tester.getSize(openSettings).height, greaterThanOrEqualTo(48));
+    await tester.tap(openSettings);
+    await tester.pump();
+    expect(service.openAppSettingsCalls, 1);
+
+    await tester.tap(find.byKey(const Key('pairing-scanner-cancel')));
+    await tester.pumpAndSettle();
+    expect(await result, isNull);
+  });
+
+  testWidgets('camera errors never offer the system-settings deep link', (
+    tester,
+  ) async {
+    final service = _FakePairingScannerService(
+      starts: const [PairingScannerProblem.cameraError],
+    );
+    final result = await _openScanner(tester, service);
+
+    expect(
+      find.byKey(const Key('pairing-scanner-open-settings')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('pairing-scanner-retry')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('pairing-scanner-close')));
+    await tester.pumpAndSettle();
+    expect(await result, isNull);
+  });
+
   testWidgets('shows camera errors with a retry and preserves cancel/back', (
     tester,
   ) async {
@@ -225,6 +264,7 @@ class _FakePairingScannerService implements PairingScannerService {
 
   int startCalls = 0;
   int stopCalls = 0;
+  int openAppSettingsCalls = 0;
 
   @override
   bool get isSupported => supported;
@@ -254,6 +294,11 @@ class _FakePairingScannerService implements PairingScannerService {
   @override
   Future<void> stop() async {
     stopCalls += 1;
+  }
+
+  @override
+  Future<void> openAppSettings() async {
+    openAppSettingsCalls += 1;
   }
 
   @override

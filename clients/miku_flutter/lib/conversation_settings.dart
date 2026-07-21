@@ -52,6 +52,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   ServerDiagnostics? _diagnostics;
   List<AuthDevice>? _devices;
   String? _currentDeviceId;
+  bool _deviceIdentityKnown = false;
   String? _readinessError;
   String? _diagnosticsError;
   String? _devicesError;
@@ -273,9 +274,15 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       }
       final devices = await devicesFuture;
       if (!mounted) return;
+      final identityKnown =
+          currentDeviceClient != null && currentDeviceId != null;
       setState(() {
         _devices = devices;
         _currentDeviceId = currentDeviceId;
+        _deviceIdentityKnown = identityKnown;
+        if (!identityKnown) {
+          _devicesError = '暫時無法確認目前這台裝置，為了安全先停用撤銷。';
+        }
       });
     } catch (_) {
       if (!mounted) return;
@@ -286,6 +293,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   Future<void> _revokeDevice(AuthDevice device) async {
     if (_revokingDeviceId != null ||
         !device.isActive ||
+        !_deviceIdentityKnown ||
         device.id == _currentDeviceId) {
       return;
     }
@@ -766,6 +774,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                                               for (final device in _devices!)
                                                 _DeviceTile(
                                                   device: device,
+                                                  identityKnown:
+                                                      _deviceIdentityKnown,
                                                   isCurrent:
                                                       device.id ==
                                                       _currentDeviceId,
@@ -1145,12 +1155,14 @@ class _MetricChip extends StatelessWidget {
 class _DeviceTile extends StatelessWidget {
   const _DeviceTile({
     required this.device,
+    required this.identityKnown,
     required this.isCurrent,
     required this.revoking,
     required this.onRevoke,
   });
 
   final AuthDevice device;
+  final bool identityKnown;
   final bool isCurrent;
   final bool revoking;
   final VoidCallback onRevoke;
@@ -1184,6 +1196,14 @@ class _DeviceTile extends StatelessWidget {
                 child: const Chip(
                   key: Key('current-auth-device'),
                   label: Text('這台裝置'),
+                  visualDensity: VisualDensity.compact,
+                ),
+              )
+              : !identityKnown
+              ? Semantics(
+                label: '目前無法確認這是不是這台裝置，暫不提供撤銷',
+                child: const Chip(
+                  label: Text('暫不可撤銷'),
                   visualDensity: VisualDensity.compact,
                 ),
               )

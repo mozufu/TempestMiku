@@ -8,8 +8,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.icu.text.Transliterator
 import android.util.Log
 import java.io.File
@@ -46,6 +48,8 @@ class MainActivity : FlutterActivity() {
             "org.mozufu.tempestmiku/voice-model"
         private const val VOICE_MODEL_PROGRESS_CHANNEL =
             "org.mozufu.tempestmiku/voice-model-progress"
+        private const val PAIRING_SCANNER_CHANNEL =
+            "org.mozufu.tempestmiku/pairing-scanner"
         private const val REQUEST_NOTIFICATIONS = 701
         private const val REQUEST_RECORD_AUDIO = 702
         private val VOICE_CAPTURE_PROCESS_LOCK = Any()
@@ -268,6 +272,25 @@ class MainActivity : FlutterActivity() {
                     }
                 },
             )
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PAIRING_SCANNER_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "openAppSettings" -> {
+                        try {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", packageName, null),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                            result.success(null)
+                        } catch (error: Exception) {
+                            result.error("open_settings_failed", error.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         try {
             voiceCapture.recoverOrphans()
         } catch (error: Exception) {

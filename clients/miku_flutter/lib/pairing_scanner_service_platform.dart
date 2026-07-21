@@ -40,5 +40,9 @@ abstract class PairingScannerService {
 
   Future<void> stop();
 
+  /// Best-effort deep link into the OS app-settings page so the owner can
+  /// re-grant camera permission after a denial. No-op where unsupported.
+  Future<void> openAppSettings();
+
   Future<void> dispose();
 }

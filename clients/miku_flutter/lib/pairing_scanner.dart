@@ -239,6 +239,7 @@ class _PairingScannerPageState extends State<PairingScannerPage>
                     problem == PairingScannerProblem.unsupported
                         ? null
                         : _startCamera,
+                onOpenSettings: () => unawaited(_service.openAppSettings()),
                 onClose: _cancel,
               ),
             if (problem == null)
@@ -294,11 +295,13 @@ class _PairingScannerProblemCard extends StatelessWidget {
   const _PairingScannerProblemCard({
     required this.problem,
     required this.onRetry,
+    required this.onOpenSettings,
     required this.onClose,
   });
 
   final PairingScannerProblem problem;
   final VoidCallback? onRetry;
+  final VoidCallback onOpenSettings;
   final VoidCallback onClose;
 
   @override
@@ -349,16 +352,26 @@ class _PairingScannerProblemCard extends StatelessWidget {
                       OutlinedButton(
                         key: const Key('pairing-scanner-close'),
                         style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(44, 44),
+                          minimumSize: const Size(48, 48),
                         ),
                         onPressed: onClose,
                         child: const Text('返回'),
                       ),
+                      if (problem == PairingScannerProblem.permissionDenied)
+                        FilledButton.icon(
+                          key: const Key('pairing-scanner-open-settings'),
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size(48, 48),
+                          ),
+                          onPressed: onOpenSettings,
+                          icon: const Icon(Icons.settings_outlined),
+                          label: const Text('開啟系統設定'),
+                        ),
                       if (onRetry != null)
                         FilledButton.icon(
                           key: const Key('pairing-scanner-retry'),
                           style: FilledButton.styleFrom(
-                            minimumSize: const Size(44, 44),
+                            minimumSize: const Size(48, 48),
                           ),
                           onPressed: onRetry,
                           icon: const Icon(Icons.refresh_rounded),

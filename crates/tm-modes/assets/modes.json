@@ -18,10 +18,10 @@
     {
       "mode": "serious_engineer",
       "label": "Serious Engineer",
-      "description": "Code, safety, production, money, external, irreversible, legal, or medical work.",
+      "description": "Code, repository inspection, orchestration, production, safety, money, external, irreversible, legal, or medical work.",
       "defaultScope": "project:tempestmiku",
       "activeSkills": ["serious-engineer-ops"],
-      "capabilities": ["fs.*", "code.*", "proc.*", "drive.*", "project.*", "http.request", "resources.read:artifact", "resources.read:drive", "resources.read:linked", "resources.read:skill", "backend.coding"],
+      "capabilities": ["fs.*", "code.*", "git.clone", "git.init", "git.add", "git.mv", "git.restore", "git.rm", "git.bisect", "git.grep", "git.show", "git.status", "git.diff", "git.log", "git.commit", "git.push", "git.pull", "proc.*", "agents.*", "drive.*", "project.*", "http.request", "resources.read:agent", "resources.read:artifact", "resources.read:drive", "resources.read:history", "resources.read:linked", "resources.read:skill", "backend.coding"],
       "capabilityClass": "engineering",
       "route": {
         "priority": 70,
@@ -36,6 +36,15 @@
           "repo",
           "patch",
           "proc",
+          "git",
+          "status",
+          "diff",
+          "log",
+          "commit",
+          "push",
+          "pull",
+          "delegate",
+          "actor",
           "crates/",
           "apps/",
           "src/",
@@ -45,19 +54,6 @@
           "migration",
           "production"
         ]
-      }
-    },
-    {
-      "mode": "handoff",
-      "label": "Handoff",
-      "description": "Delegate implementation-heavy coding work through the configured coding backend.",
-      "defaultScope": "project:tempestmiku",
-      "activeSkills": ["oh-my-pi-handoff"],
-      "capabilities": ["agents.*", "drive.*", "project.*", "http.request", "resources.read:agent", "resources.read:artifact", "resources.read:drive", "resources.read:history", "resources.read:skill", "backend.coding"],
-      "capabilityClass": "handoff",
-      "route": {
-        "priority": 100,
-        "triggers": ["handoff", "delegate"]
       }
     }
   ],

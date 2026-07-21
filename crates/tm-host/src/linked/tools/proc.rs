@@ -7,9 +7,9 @@ use std::fs::File;
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd};
 
-mod bounded_io;
-mod environment;
-mod process_group;
+pub(in crate::linked::tools) mod bounded_io;
+pub(in crate::linked::tools) mod environment;
+pub(in crate::linked::tools) mod process_group;
 
 use super::super::isolation::{PreparedProcIsolation, ProcIsolationCommand, ProcIsolationConfig};
 use bounded_io::{

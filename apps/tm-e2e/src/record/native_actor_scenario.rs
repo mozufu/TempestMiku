@@ -98,7 +98,7 @@ async fn run_native_actor_coordination_scenario(
 ) -> Result<()> {
     let started_at = timestamp();
     let result = async {
-        let session = client.create_session(Some("handoff")).await?;
+        let session = client.create_session(Some("serious_engineer")).await?;
         let (_, mode_event) = client
             .wait_for_event(&session.id, Some(0), |event| event.event_type == "mode")
             .await?;

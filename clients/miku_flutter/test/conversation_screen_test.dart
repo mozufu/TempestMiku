@@ -112,6 +112,62 @@ void main() {
     expect(await client.listSessions(), hasLength(2));
   });
 
+  test('scripted catalog folds orchestration into Serious Engineer', () async {
+    final catalog = await ScriptedMikuClient().modeCatalog();
+
+    expect(catalog.modes.map((mode) => mode.id), isNot(contains('handoff')));
+    final serious = catalog.modes.singleWhere(
+      (mode) => mode.id == 'serious_engineer',
+    );
+    expect(
+      serious.capabilities,
+      containsAll([
+        'git.clone',
+        'git.init',
+        'git.add',
+        'git.mv',
+        'git.restore',
+        'git.rm',
+        'git.bisect',
+        'git.grep',
+        'git.show',
+        'git.status',
+        'git.diff',
+        'git.log',
+        'git.commit',
+        'git.push',
+        'git.pull',
+        'agents.*',
+        'resources.read:agent',
+        'resources.read:history',
+        'backend.coding',
+      ]),
+    );
+    expect(serious.capabilities, isNot(contains('git.run')));
+    final general = catalog.modes.singleWhere(
+      (mode) => mode.id == catalog.defaultMode,
+    );
+    expect(
+      general.capabilities.where((capability) => capability.startsWith('git.')),
+      isEmpty,
+    );
+  });
+
+  test('scripted client treats removed handoff mode as unknown', () async {
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+
+    await expectLater(
+      client.overrideMode(session.id, 'handoff'),
+      throwsArgumentError,
+    );
+    expect(client.overriddenModes, isEmpty);
+    expect(
+      (await client.loadSession(session.id)).session.mode,
+      'personal_assistant',
+    );
+  });
+
   testWidgets('opens session context and changes then locks Mode', (
     tester,
   ) async {
@@ -149,6 +205,8 @@ void main() {
               )
               .first,
     );
+    await tester.ensureVisible(find.byKey(const Key('mode-lock-toggle')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('mode-lock-toggle')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
@@ -1472,6 +1530,9 @@ void main() {
     await tester.tap(find.byKey(const Key('send-message')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
+    final actorSession = await client.createOrReuseSession();
+    expect(actorSession.mode, 'serious_engineer');
+    expect(actorSession.label, 'Serious Engineer');
 
     expect(find.text('需要你的確認'), findsOneWidget);
     expect(find.text('proc.run cargo clean'), findsOneWidget);

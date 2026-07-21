@@ -20,10 +20,27 @@ Precise, verifiable changes. Tests and rollback matter more than speed or clever
 
 ## Procedure
 
-1. The standard linked-repo effects are already available: use `@fs.grep`, `@fs.read`,
-   `@fs.write`, `@fs.patch`, `@fs.move`, `@fs.remove`, and `@proc.run` directly. Search the
-   capability catalog only for an effect or
-   schema that these notes do not name.
+1. The standard linked-repo effects are exact calls, not free-form Git. Use `@git.status`,
+   `@git.diff`, and `@git.grep {cwd, pattern, caseSensitive?}` without approval. `git.grep` is a
+   bounded literal-pattern repository search; it is not shell grep or an arbitrary pathspec.
+   `@git.log {cwd}` and `@git.show {cwd, revision?}` always require approval. Log returns the latest
+   20 commits; show accepts only a full object ID, or snapshots HEAD when `revision` is omitted.
+   Every mutation or network call also always requires approval:
+   - `@git.clone {cwd, url}` clones a credential-free HTTPS URL into the pinned, existing, empty
+     linked `cwd` root (`.`); it cannot select a destination name, credentials, refs, or options.
+   - `@git.init {cwd}` initializes exactly the linked directory.
+   - `@git.add {cwd, paths}`, `@git.restore {cwd, paths}`, and `@git.rm {cwd, paths}` accept 1–64
+     strict literal normalized paths only: no pathspec magic, options, or traversal.
+   - `@git.mv {cwd, path, dest}` moves one top-level literal entry to another top-level literal name.
+   - `@git.bisect {cwd, action, bad?, good?, revision?}` permits only bounded no-checkout states.
+     `start` requires one bad and 1–32 good full object IDs. `good`/`bad`/`skip` accept an optional
+     full object ID (omission snapshots BISECT_HEAD); `reset` accepts no revision. Never use or imply
+     bisect run/replay, checkout, scripts, or caller-selected argv.
+   - `@git.commit {cwd, message}` accepts only a bounded message and commits the existing staged
+     index; it never stages. `@git.push {cwd}` and `@git.pull {cwd}` use only the current
+     credential-free HTTPS upstream; pull is fast-forward-only.
+   Git never exposes `git.run`, caller-controlled argv, arbitrary refs/remotes, pathspec magic, or
+   force. All arguments and outputs are bounded and every approval is fail-closed.
 2. Start with the exact failing surface. Search narrowly, page large files, and inspect adjacent
    code only when the current evidence requires it. Do not inventory the whole repository first.
 3. Make the smallest coherent edit early. Prefer `@fs.patch` patch hunks over temporary scripts

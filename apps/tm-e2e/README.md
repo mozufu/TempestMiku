@@ -133,7 +133,7 @@ Each evidence bundle includes:
 ## Actor Smoke
 
 `tm_e2e::run_actor_smoke` is a narrow public-API smoke used by tests for the
-P3+ actor surface. It creates a Handoff session, watches actor lifecycle events
+P3+ actor surface. It creates a Serious Engineer session, watches actor lifecycle events
 over SSE, resolves a child `native-tm` approval through
 `POST /sessions/:id/approvals/:approval_id`, opens child `artifact://`,
 `history://`, and `agent://` resources through the session resource gateway,
@@ -156,7 +156,7 @@ preview/resolve, the compact drive feed, `drive.search`, `drive.get`, and
 `native_tm_actor_coordination_public_api_covers_p3_plus_route` is the
 network-free public-API E2E for the native tm actor path. It starts an
 in-process `tm-server` with `NativeTmBackend`, injects a scripted streaming
-LLM, opens a Handoff session through HTTP, and runs real sandbox SDK calls:
+LLM, opens a Serious Engineer session through HTTP, and runs real sandbox SDK calls:
 `agents.spawn`, `agents.send`, `agents.broadcast`, `agents.wait`, and
 `agents.list`. The test verifies live SSE plus `Last-Event-ID` replay for
 `actor_spawned`, `actor_message`, `actor_completed`, `actor_resources_linked`,

@@ -13,15 +13,15 @@ extension _ScriptedMessageScenarios on ScriptedMikuClient {
     _appendMessage(sessionId, 'user', content);
     final lower = content.toLowerCase();
     if (lower.contains('actor') || lower.contains('handoff')) {
-      _sessions[sessionId] = _sessionForMode(sessionId, 'handoff');
+      _sessions[sessionId] = _sessionForMode(sessionId, 'serious_engineer');
       controller.add(
         MikuEvent(
           type: 'mode',
           id: _eventId(),
           data: const {
-            'mode': 'handoff',
-            'label': 'Handoff',
-            'activeSkills': ['oh-my-pi-handoff'],
+            'mode': 'serious_engineer',
+            'label': 'Serious Engineer',
+            'activeSkills': <String>[],
           },
         ),
       );

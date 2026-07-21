@@ -41,7 +41,7 @@ pub(super) fn inherited_environment() -> Result<Vec<(String, OsString)>> {
     Ok(inherited)
 }
 
-fn sanitize_path(raw_path: &OsStr) -> Result<OsString> {
+pub(in crate::linked::tools) fn sanitize_path(raw_path: &OsStr) -> Result<OsString> {
     let mut seen = std::collections::BTreeSet::new();
     let path_entries = env::split_paths(raw_path)
         .filter(|path| path.is_absolute())
@@ -58,7 +58,7 @@ fn sanitize_path(raw_path: &OsStr) -> Result<OsString> {
         .map_err(|err| HostError::HostCall(format!("failed to sanitize proc.run PATH: {err}")))
 }
 
-pub(super) fn resolve_executable(
+pub(in crate::linked::tools) fn resolve_executable(
     command: &str,
     sanitized_path: &OsStr,
 ) -> Result<(PathBuf, PathBuf, (u64, u64))> {

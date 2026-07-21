@@ -311,8 +311,8 @@ impl CodingBackend for RecordingBackend {
 
 /// Coding-mode analogue of `EchoChatRunner`: completes any coding turn with a
 /// deterministic non-empty response and a replayable `final` event. Used by the
-/// shared `test_app` so serious_engineer/handoff turns dispatch and complete
-/// under the fail-closed backend contract without asserting on a specific backend.
+/// shared `test_app` so serious-engineer turns dispatch and complete under the fail-closed backend
+/// contract without asserting on a specific backend.
 struct EchoCodingBackend;
 
 #[async_trait]

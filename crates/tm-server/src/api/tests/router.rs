@@ -233,21 +233,19 @@ async fn coding_actor_and_scheduler_profiles_never_receive_modes_suggest() {
     );
 
     let assets = ModesConfig::default().load_assets();
-    for mode in ["serious_engineer", "handoff"] {
-        let profile = assets
-            .modes
-            .modes
+    let profile = assets
+        .modes
+        .modes
+        .iter()
+        .find(|profile| profile.mode == ModeId::from("serious_engineer"))
+        .unwrap();
+    assert!(
+        profile
+            .capabilities
             .iter()
-            .find(|profile| profile.mode == ModeId::from(mode))
-            .unwrap();
-        assert!(
-            profile
-                .capabilities
-                .iter()
-                .all(|capability| capability != MODE_SUGGEST_CAPABILITY),
-            "actor and scheduler turns inherit static profile capabilities, so {mode} must not contain modes.suggest"
-        );
-    }
+            .all(|capability| capability != MODE_SUGGEST_CAPABILITY),
+        "actor and scheduler turns inherit static profile capabilities, so serious_engineer must not contain modes.suggest"
+    );
 }
 
 #[tokio::test]

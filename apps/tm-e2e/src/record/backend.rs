@@ -13,8 +13,10 @@ impl CodingBackend for RecordingBackend {
         turn: CodingTurn,
         sink: Arc<dyn CodingEventSink>,
     ) -> tm_server::Result<CodingTurnResult> {
-        if turn.mode == ModeId::from("handoff") {
-            self.run_handoff_turn(turn, sink).await
+        if turn.user_prompt.contains("actor smoke")
+            || turn.user_prompt.contains("actor coordination")
+        {
+            self.run_actor_turn(turn, sink).await
         } else {
             self.run_serious_turn(turn, sink).await
         }
@@ -64,11 +66,12 @@ impl RecordingBackend {
         })
     }
 
-    async fn run_handoff_turn(
+    async fn run_actor_turn(
         &self,
         turn: CodingTurn,
         sink: Arc<dyn CodingEventSink>,
     ) -> tm_server::Result<CodingTurnResult> {
+        assert_eq!(turn.mode, ModeId::from("serious_engineer"));
         let actor_id =
             ActorId::new("Worker0").map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
         let actor_id_text = actor_id.to_string();

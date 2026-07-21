@@ -3,7 +3,7 @@
 > Agents are **message-passing actors**. This section takes Alan Kay's original OOP literally:
 > *"The big idea is messaging"* — design how the modules **communicate**, not their internals.
 
-Powers the **Handoff** mode (§21) and heavier delegation inside **Serious Engineer**.
+This is the orchestration and actor-resource surface of **Serious Engineer** (§21).
 Design choice (B2): **orchestration is code, not a framework** — and the things the code orchestrates
 are **actors** that affect each other only by messages. The bet (§01) already has the model writing code
 in a REPL, so spawning, wiring, and messaging sub-agents is just more code against an SDK.
@@ -202,6 +202,9 @@ the **mode router** (§21) + the actor's **capability grant** decide *how* to re
 message type baked into the protocol. This is Kay's *"extreme late-binding of all things."*
 
 ## 23.7 `agents.*` capability + `agent://` resources
+
+This complete namespace and both actor resource schemes belong to the **Serious Engineer** mode.
+General receives none of them; there is no separate orchestration or delegation mode.
 
 - **Orchestration calls:** `agents.run`, `agents.spawn`, `agents.parallel`, and `agents.pipeline`.
 - **Mailbox calls:** lower-level primitives `agents.send`, `agents.broadcast`, `agents.wait`,

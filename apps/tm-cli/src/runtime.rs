@@ -45,13 +45,14 @@ pub(super) fn serious_engineer_prompt(
 ) -> String {
     let mut capability_notes = String::from(
         "Active mode: Serious Engineer. It is already selected and locked for this CLI run. \
-Do not call modes.suggest or ask the user to switch modes; the listed fs.*, code.*, and proc.* \
-grants are active now.\n",
+Do not call modes.suggest or ask the user to switch modes; the listed fs.*, code.*, git.*, proc.*, \
+and agents.* grants are active now.\n",
     );
     let policies = linked_folders.policies();
     if policies.is_empty() {
-        capability_notes
-            .push_str("No linked folders configured; fs.*, code.*, and proc.* will fail closed.");
+        capability_notes.push_str(
+            "No linked folders configured; fs.*, code.*, git.*, and proc.* will fail closed.",
+        );
     } else {
         for policy in &policies {
             let mode = match policy.mode {
@@ -74,11 +75,37 @@ Known linked-repo schemas; call these directly without tools.search/help:
 - Insert relative to a line: @fs.patch {{path: hit.path, tag: hit.tag, hunks: [{{op: \"insertAfter\", line: hit.line, expectedLine: hit.text, lines: [\"new line\"]}}]}}
 - Create a new text file: @fs.write {{path: \"{alias}:test/new_test.ts\", data: \"test content\\n\", createParents: true}}
 - Remove a file only with approval: @fs.remove {{path: hit.path, tag: hit.tag}}
-- Run argv only: @proc.run {{cmd: \"git\", args: [\"status\", \"--short\"], cwd: \"{alias}:\"}}
+- Clone credential-free HTTPS into an existing empty linked root with approval: @git.clone {{cwd: \"{alias}:\", url: \"https://example.com/owner/repo.git\"}}
+- Initialize the linked directory with approval: @git.init {{cwd: \"{alias}:\"}}
+- Stage literal normalized paths with approval: @git.add {{cwd: \"{alias}:\", paths: [\"src/lib.rs\"]}}
+- Move one top-level literal entry with approval: @git.mv {{cwd: \"{alias}:\", path: \"old\", dest: \"new\"}}
+- Restore literal normalized paths with approval: @git.restore {{cwd: \"{alias}:\", paths: [\"src/lib.rs\"]}}
+- Remove literal normalized paths with approval: @git.rm {{cwd: \"{alias}:\", paths: [\"src/obsolete.rs\"]}}
+- Start no-checkout bisect with approval: @git.bisect {{cwd: \"{alias}:\", action: \"start\", bad: \"0123456789abcdef0123456789abcdef01234567\", good: [\"89abcdef0123456789abcdef0123456789abcdef\"]}}
+- Mark snapshotted BISECT_HEAD with approval: @git.bisect {{cwd: \"{alias}:\", action: \"good\"}}
+- Reset active no-checkout bisect with approval: @git.bisect {{cwd: \"{alias}:\", action: \"reset\"}}
+- Search tracked content without approval: @git.grep {{cwd: \"{alias}:\", pattern: \"needle\", caseSensitive: true}}
+- Show snapshotted HEAD with approval: @git.show {{cwd: \"{alias}:\"}}
+- Show a full object ID with approval: @git.show {{cwd: \"{alias}:\", revision: \"0123456789abcdef0123456789abcdef01234567\"}}
+- Inspect status without approval: @git.status {{cwd: \"{alias}:\"}}
+- Inspect unstaged diff without approval: @git.diff {{cwd: \"{alias}:\"}}
+- Inspect recent commits with approval: @git.log {{cwd: \"{alias}:\"}}
+- Commit the staged index with approval: @git.commit {{cwd: \"{alias}:\", message: \"type(scope): subject\"}}
+- Push HEAD to the current HTTPS upstream with approval: @git.push {{cwd: \"{alias}:\"}}
+- Fast-forward from the current HTTPS upstream with approval: @git.pull {{cwd: \"{alias}:\"}}
+- Run approved build/test argv: @proc.run {{cmd: \"cargo\", args: [\"test\"], cwd: \"{alias}:\"}}
 Never pass a bare alias such as \"{alias}\" where a linked path is required. Deduplicate search-hit
 paths before reading; never map full-file fs.read over many hits. Large files must use selector
-ranges around relevant lines. Prefer bounded fs.read or `git grep` through proc.run; `sed` and
-`grep` are not granted commands in the default CLI profile. `fs.remove` deletes an entire file and
+ranges around relevant lines. Git is 15 exact calls only and never accepts arbitrary argv, refs,
+remotes, pathspec magic, or force. Status/diff/grep need no approval; log/show and every mutation or
+network operation always require approval. Clone accepts only credential-free HTTPS into the pinned,
+existing, empty linked cwd root. Add/restore/rm accept 1–64 literal normalized paths; mv accepts only
+top-level literal entries. Show accepts a full object ID or snapshots HEAD by default. Bisect accepts
+`start` with one bad and 1–32 good full object IDs; `good`/`bad`/`skip` with an optional full object ID
+(omission snapshots BISECT_HEAD); and `reset`. It always uses no-checkout and never run/replay. Log returns 20
+commits; commit only records the existing staged index; push/pull use only the current credential-free
+HTTPS upstream, and pull is fast-forward-only. `sed` and shell `grep` are not granted commands in the
+default CLI profile. `fs.remove` deletes an entire file and
 requires approval; it is separate from patch operations. Replace/delete hunks must repeat the exact
 current range in expectedLines, and relative inserts must repeat their anchor in expectedLine. If a
 tag is stale or expected context mismatches, read/search again and retry with fresh evidence. After

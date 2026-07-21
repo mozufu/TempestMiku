@@ -147,7 +147,7 @@ let artifact = @artifacts.put {data: "child resource open ok", title: "child out
     state = state.with_coding_backend(Arc::new(backend));
     state.wire_lifecycle_sink();
     let app = app(state);
-    let session = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
+    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
     let session_id = session.id;
 
     post_user_message(&app, session_id, "handoff child grant check").await;
@@ -287,7 +287,7 @@ async fn actor_cancelled_event_replays_and_agent_resource_is_terminal() {
     .with_actor_roster(Arc::clone(&roster));
     state.wire_lifecycle_sink();
     let app = app(state);
-    let session = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
+    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
 
     let actor_id = tm_agents::ActorId::new("Worker").unwrap();
     roster
@@ -393,7 +393,7 @@ async fn actor_failed_event_replays_and_agent_resource_is_terminal() {
     .with_actor_roster(Arc::clone(&roster));
     state.wire_lifecycle_sink();
     let app = app(state);
-    let session = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
+    let session = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
 
     let actor_id = tm_agents::ActorId::new("ResearchWorker").unwrap();
     roster

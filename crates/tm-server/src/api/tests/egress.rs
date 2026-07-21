@@ -76,11 +76,8 @@ async fn configured_egress_extends_only_existing_network_mode_envelopes() {
 
     let general = create_with_body(&router, Body::from(r#"{"mode":"general"}"#)).await;
     post_user_message(&router, general.id, "research from the assistant").await;
-    for mode in ["serious_engineer", "handoff"] {
-        let session =
-            create_with_body(&router, Body::from(json!({"mode": mode}).to_string())).await;
-        post_user_message(&router, session.id, "research from this mode").await;
-    }
+    let serious = create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    post_user_message(&router, serious.id, "research from engineering mode").await;
 
     let chat_turns = chat.turns.lock();
     assert_eq!(chat_turns.len(), 1);
@@ -88,10 +85,8 @@ async fn configured_egress_extends_only_existing_network_mode_envelopes() {
     drop(chat_turns);
 
     let coding_turns = backend.turns.lock();
-    assert_eq!(coding_turns.len(), 2);
-    for turn in coding_turns.iter() {
-        assert_exact_egress_grants(&turn.capabilities);
-    }
+    assert_eq!(coding_turns.len(), 1);
+    assert_exact_egress_grants(&coding_turns[0].capabilities);
 }
 
 #[test]

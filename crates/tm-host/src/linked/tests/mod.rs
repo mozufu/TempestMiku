@@ -21,7 +21,8 @@ use super::{
     docs::docs,
     secure_fs::MAX_SECURE_WALK_DEPTH,
     tools::{
-        FsFindFn, FsGrepFn, FsLsFn, FsMoveFn, FsPatchFn, FsReadFn, FsRemoveFn, FsWriteFn, ProcRunFn,
+        FsFindFn, FsGrepFn, FsLsFn, FsMoveFn, FsPatchFn, FsReadFn, FsRemoveFn, FsWriteFn,
+        GitReadFn, ProcRunFn,
     },
     util::{
         MAX_FS_RESULT_BYTES, MAX_GLOB_PATTERN_BYTES, MAX_GLOB_PATTERNS, MAX_GLOB_TOTAL_BYTES,
@@ -31,6 +32,7 @@ use super::{
 
 mod foundation;
 mod fs_policy;
+mod git;
 mod linux_isolation;
 mod mutations;
 mod proc_approval;

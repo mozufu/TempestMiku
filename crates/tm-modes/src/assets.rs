@@ -35,10 +35,6 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
         include_str!("../assets/skills/negative-state-grounding/SKILL.md"),
     ),
     (
-        "oh-my-pi-handoff",
-        include_str!("../assets/skills/oh-my-pi-handoff/SKILL.md"),
-    ),
-    (
         "personal-assistant-state-capture",
         include_str!("../assets/skills/personal-assistant-state-capture/SKILL.md"),
     ),

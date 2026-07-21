@@ -94,6 +94,29 @@ impl ApprovalPolicy for RewriteThenApprove {
     }
 }
 
+#[derive(Debug)]
+pub(super) struct RunGitThenApprove {
+    pub(super) cwd: PathBuf,
+    pub(super) args: Vec<String>,
+}
+
+#[async_trait]
+impl ApprovalPolicy for RunGitThenApprove {
+    async fn request(&self, _action: &str, _timeout: Duration) -> Result<ApprovalDecision> {
+        let status = std::process::Command::new("git")
+            .args(&self.args)
+            .current_dir(&self.cwd)
+            .status()
+            .map_err(|error| HostError::HostCall(error.to_string()))?;
+        if !status.success() {
+            return Err(HostError::HostCall(
+                "approval fixture git mutation failed".to_string(),
+            ));
+        }
+        Ok(ApprovalDecision::Approved)
+    }
+}
+
 pub(super) fn temp_linked(root: &Path, mode: FsMode) -> LinkedFolders {
     temp_linked_with_commands(
         root,
@@ -129,6 +152,21 @@ pub(super) fn ctx() -> InvocationCtx {
         "fs.grep",
         "fs.patch",
         "fs.remove",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.commit",
+        "git.push",
+        "git.pull",
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.grep",
+        "git.show",
         "proc.run",
         "resources.read:artifact",
         "resources.read:linked",

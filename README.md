@@ -1,8 +1,8 @@
 # Tempest Miku
 
 TempestMiku is a self-hosted, single-user personal AI companion in Rust: one persistent character
-with General, Serious Engineer, and Handoff capability modes, durable memory, project continuity,
-manual approvals, and a streaming code-execution runtime.
+with General and Serious Engineer capability modes, durable memory, project continuity, manual
+approvals, and a streaming code-execution runtime.
 
 The defining bet is one model-visible tool — `execute(code)`. The model writes persistent `tm` code;
 that code discovers and calls capability-scoped SDK namespaces for resources, files, processes,

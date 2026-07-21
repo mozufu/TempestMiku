@@ -67,7 +67,10 @@ async fn native_tm_actor_coordination_public_api_covers_p3_plus_route() {
     })
     .unwrap();
 
-    let session = client.create_session(Some("handoff")).await.unwrap();
+    let session = client
+        .create_session(Some("serious_engineer"))
+        .await
+        .unwrap();
     let (_, mode_event) = client
         .wait_for_event(&session.id, Some(0), |event| event.event_type == "mode")
         .await

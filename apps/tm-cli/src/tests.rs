@@ -196,7 +196,31 @@ fn serious_engineer_config_sets_prompt_and_budget() {
     assert!(linked_prompt.contains("never map full-file fs.read over many hits"));
     assert!(linked_prompt.contains("`fs.remove` deletes an entire file"));
     assert!(linked_prompt.contains("confirm nonzero collection"));
-    assert!(linked_prompt.contains("git diff"));
+    for capability in [
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.grep",
+        "git.show",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.commit",
+        "git.push",
+        "git.pull",
+    ] {
+        assert!(
+            linked_prompt.contains(&format!("@{capability}")),
+            "prompt missing @{capability}"
+        );
+    }
+    assert!(linked_prompt.contains("Status/diff/grep need no approval"));
+    assert!(linked_prompt.contains("network operation always require approval"));
+    assert!(linked_prompt.contains("never run/replay"));
 
     let grants = serious_engineer_grants();
     assert!(grants.permits("fs.read"));
@@ -204,9 +228,29 @@ fn serious_engineer_config_sets_prompt_and_budget() {
     assert!(grants.permits("fs.move"));
     assert!(grants.permits("fs.remove"));
     assert!(grants.permits("fs.grep"));
+    for capability in [
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.grep",
+        "git.show",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.commit",
+        "git.push",
+        "git.pull",
+    ] {
+        assert!(grants.permits(capability), "grant missing {capability}");
+    }
+    assert!(!grants.permits("git.run"));
     assert!(grants.permits("proc.run"));
     assert!(grants.permits("resources.read:linked"));
-    assert!(!grants.permits("agents.spawn"));
+    assert!(grants.permits("agents.spawn"));
 }
 
 #[tokio::test]

@@ -9,8 +9,9 @@ onto any mode.** Runtime mode ids are strings loaded from the catalog, not Rust 
 **Modes and skills are two different things, deliberately kept apart:**
 
 - A **mode** is a *capability envelope* — the small set of things the runtime will let the model do
-  right now (`fs.*`, `code.*`, `proc.*`, `agents.*`, or none of the above). There are exactly three:
-  General, Serious Engineer, Handoff (§21.2). Switching mode changes what's technically possible.
+  right now (`fs.*`, `proc.*`, the exact 15-call curated `git.*` namespace in §25.2.2, `agents.*`,
+  or none of the above). There are exactly two: General and Serious Engineer (§21.2). Switching mode
+  changes what's technically possible.
 - A **skill** is a *procedural payload* — prompt markdown that shapes how Miku behaves, layered onto
   whichever mode is currently active. Skills never change what's possible, only how it's approached.
   Some skills are declared by a specific mode (`serious-engineer-ops` only makes sense inside Serious
@@ -90,14 +91,16 @@ Pick the smallest sufficient mode — and expect it to stick until you leave it.
 | # | Bundled runtime mode | Declared capabilities | Mode-declared skills |
 |---|---|---|---|
 | 1 | **General** (default) | conversation + light `memory.recall` / `memory.propose` | `miku-voice`, `personal-assistant-state-capture` |
-| 2 | **Serious Engineer** | native `fs.*` / `code.*` / `proc.*` and `resources.read:linked` (§25), with an OMP ACP bridge available as a replaceable backend | `serious-engineer-ops` |
-| 3 | **Handoff** | `agents.*` (§23) + brief generation | `oh-my-pi-handoff` |
+| 2 | **Serious Engineer** | `backend.coding`; native `fs.*` / `code.*` / `proc.*`; the exact `git.clone` / `git.init` / `git.add` / `git.mv` / `git.restore` / `git.rm` / `git.bisect` / `git.status` / `git.diff` / `git.grep` / `git.log` / `git.show` / `git.commit` / `git.push` / `git.pull` grants (§25.2.2); `agents.*`; `resources.read:linked` / `resources.read:agent` / `resources.read:history` (§23, §25). Only status/diff/grep are approval-free; log/show and every Git mutation/network call are always approved. The OMP ACP bridge is a replaceable coding backend. | `serious-engineer-ops` |
 
-All three modes run under the **one** character. Capabilities are config, not code (§10.4): a mode =
+Both modes run under the **one** character. Capabilities are config, not code (§10.4): a mode =
 runtime id + profile + route triggers (routing hints; see §21.4) + declared capabilities + its own
 declared skills + default scope. The optional `capabilityClass` is only grouping/display metadata;
-dispatch decisions use declared capabilities such as `backend.coding`, `fs.*`, `code.*`, `proc.*`,
-or `agents.*`. Voice remains prompt-level agreement rather than mode metadata.
+dispatch decisions use declared capabilities such as `backend.coding`, `fs.*`, `proc.*`, each exact
+`git.<operation>` grant from the 15-call namespace in §25.2.2, or `agents.*`; there is no wildcard
+`git.*` grant, `git.run`, raw argv, or shell-shaped Git capability.
+Voice remains prompt-level agreement rather than mode metadata. The catalog contains only these two
+mode ids: `handoff` is rejected as unknown, with no compatibility alias.
 
 What used to be modes 2 and 3 here (Ambiguity Grill, Negative-State Grounding) granted no
 capabilities and are now layered skills instead — see §21.3. They still shape the conversation the
@@ -115,7 +118,7 @@ The catalog's top-level `skills[]` array declares layered skills, each with an `
 | **weekly-ship-ledger** | triggered (shipping/productivity self-assessment language) | Count small-but-real shipped things; also reachable via cron (§27). |
 
 Layered skills compose on top of *whatever mode is active* — most often General, but nothing stops
-them from layering onto Serious Engineer or Handoff too if the trigger words show up there. This is
+them from layering onto Serious Engineer too if the trigger words show up there. This is
 the fix for the two skills that used to be dead code: earlier revisions of `modes.json` bundled
 `scope-guard` and `weekly-ship-ledger` as skill assets but never attached them to any mode's
 `activeSkills`, so despite this doc describing them as "always on, any mode," the composer had no
@@ -138,10 +141,10 @@ Standing behavior from SOUL.md that isn't a skill file but is still cross-cuttin
 
 ## 21.4 Routing: model-proposed, user-confirmed, sticky, observable
 
-- **Capability modes are sticky.** Once a session is in Serious Engineer or Handoff, it stays there
-  across turns regardless of what later messages say — there is no per-turn keyword revert. Getting
-  back to General is a deliberate action: the user's mode picker, an explicit `override`/`apply`
-  call, or a confirmed `await modes.suggest(...)` (below). A locked mode suppresses all of these
+- **Capability modes are sticky.** Once a session is in Serious Engineer, it stays there across turns
+  regardless of what later messages say — there is no per-turn keyword revert. Getting back to
+  General is a deliberate action: the user's mode picker, an explicit `override`/`apply` call, or a
+  confirmed `await modes.suggest(...)` (below). A locked mode suppresses all of these
   except unlock.
 - **Switching a mode is model-proposed, user-confirmed — not silently auto-applied.** The model
   calls `await modes.suggest(targetMode, reason)` from inside `execute` when it judges the
@@ -162,8 +165,8 @@ Standing behavior from SOUL.md that isn't a skill file but is still cross-cuttin
 - **Scoped authority:** `modes.suggest` authority exists only on unlocked normal `ChatRunner` turns.
   The server registers the host handler independently, then grants the exact capability only to that
   path. Native coding backends (§25), actors, scheduler runs, and locked turns never receive it.
-  Therefore General can propose entering Serious Engineer or Handoff; after a turn is dispatched to
-  a coding backend, leaving that mode is a picker/override action. Widening that authority remains
+  Therefore General can propose entering Serious Engineer; after a turn is dispatched to a coding
+  backend, leaving that mode is a picker/override action. Widening that authority remains
   demand-triggered.
 - **Observable, not primary UI.** Each switch emits `ModeChanged` (§10.2) for replay, audit, and
   optional debug/advanced controls. Clients read `GET /modes` to render runtime mode controls;

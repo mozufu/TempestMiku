@@ -650,15 +650,16 @@ class ScriptedMikuClient
 
   @override
   Future<void> lockMode(String sessionId, String mode) async {
+    final session = _sessionForMode(sessionId, mode, locked: true);
     lockedModes.add(mode);
-    _sessions[sessionId] = _sessionForMode(sessionId, mode, locked: true);
+    _sessions[sessionId] = session;
     _controllers[sessionId]?.add(
       MikuEvent(
         type: 'mode',
         data: {
           'mode': mode,
-          'label': _label(mode),
-          'activeSkills': _activeSkills(mode),
+          'label': session.label,
+          'activeSkills': session.activeSkills,
           'lock_source': 'user',
         },
       ),
@@ -695,15 +696,16 @@ class ScriptedMikuClient
 
   @override
   Future<void> overrideMode(String sessionId, String mode) async {
+    final session = _sessionForMode(sessionId, mode);
     overriddenModes.add(mode);
-    _sessions[sessionId] = _sessionForMode(sessionId, mode);
+    _sessions[sessionId] = session;
     _controllers[sessionId]?.add(
       MikuEvent(
         type: 'mode',
         data: {
           'mode': mode,
-          'label': _label(mode),
-          'activeSkills': _activeSkills(mode),
+          'label': session.label,
+          'activeSkills': session.activeSkills,
           'override_source': 'user',
         },
       ),
@@ -991,24 +993,27 @@ class ScriptedMikuClient
 
   String _label(String mode) {
     return switch (mode) {
+      'personal_assistant' => 'Personal Assistant',
       'serious_engineer' => 'Serious Engineer',
-      'handoff' => 'Handoff',
       'ambiguity_grill' => 'Ambiguity Grill',
       'negative_state_grounding' => 'Negative-State Grounding',
-      _ => 'Personal Assistant',
+      _ => throw ArgumentError.value(mode, 'mode', 'unknown mode'),
     };
   }
 
   List<String> _activeSkills(String mode) {
     return switch (mode) {
+      'personal_assistant' => const [
+        'miku-voice',
+        'personal-assistant-state-capture',
+      ],
       'ambiguity_grill' => const ['miku-voice', 'ambiguity-grill'],
       'negative_state_grounding' => const [
         'miku-voice',
         'negative-state-grounding',
       ],
       'serious_engineer' => const [],
-      'handoff' => const ['oh-my-pi-handoff'],
-      _ => const ['miku-voice', 'personal-assistant-state-capture'],
+      _ => throw ArgumentError.value(mode, 'mode', 'unknown mode'),
     };
   }
 
@@ -1019,9 +1024,7 @@ class ScriptedMikuClient
       mode: mode,
       label: _label(mode),
       defaultScope:
-          mode == 'serious_engineer' || mode == 'handoff'
-              ? 'project:tempestmiku'
-              : 'global',
+          mode == 'serious_engineer' ? 'project:tempestmiku' : 'global',
       activeSkills: _activeSkills(mode),
       locked: locked,
       lastEventId: lastEventId,

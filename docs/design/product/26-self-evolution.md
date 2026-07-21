@@ -64,8 +64,8 @@ auditable and replayable (principle #6).
 
 The conservative tier writes to exactly what exists today (§29):
 
-- the **7 hand-authored skills** — `miku-voice`, `ambiguity-grill`, `negative-state-grounding`,
-  `oh-my-pi-handoff`, `personal-assistant-state-capture`, `scope-guard`, `weekly-ship-ledger`;
+- the **6 hand-authored skills** — `miku-voice`, `ambiguity-grill`, `negative-state-grounding`,
+  `personal-assistant-state-capture`, `scope-guard`, `weekly-ship-ledger`;
 - the **user-profile / facts store** (§22).
 
 Dreaming *adds to* these substrates; it doesn't invent a new one. Skill / memory writes honor

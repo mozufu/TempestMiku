@@ -384,9 +384,13 @@ mod tests {
     #[test]
     fn validate_mode_accepts_known_modes() {
         let persona = ModesConfig::default();
-        for id in ["general", "serious_engineer", "handoff"] {
+        for id in ["general", "serious_engineer"] {
             assert!(validate_mode(&persona, ModeId::from(id)).is_ok(), "{id}");
         }
+        assert!(matches!(
+            validate_mode(&persona, ModeId::from("handoff")),
+            Err(ServerError::InvalidRequest(_))
+        ));
     }
 
     #[test]

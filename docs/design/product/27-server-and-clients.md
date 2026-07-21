@@ -485,9 +485,9 @@ Project archive revokes active/new access while preserving exact history; projec
 scope (§30), while folder unlink revokes only that filesystem grant.
 
 Coding execution is a backend choice behind the same API. `TM_OMP_ACP_ENABLED=1` dispatches Serious
-Engineer / Handoff turns to the optional OMP ACP bridge; otherwise, when a real LLM is configured,
-`tm-server` uses the native tm coding backend. The client API does not change: ACP and native tm
-events normalize into the same durable `session_event` envelope.
+Engineer turns to the optional OMP ACP bridge; otherwise, when a real LLM is configured, `tm-server`
+uses the native tm coding backend. The client API does not change: ACP and native tm events normalize
+into the same durable `session_event` envelope.
 
 Session assignment (§30) replaces the retired `POST /sessions/:id/promote`. Declaring a session's
 project is a metadata transition, not a copy: active sessions use `POST /sessions/:id/scope`;

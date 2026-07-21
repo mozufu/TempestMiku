@@ -21,8 +21,8 @@ Brian is low).
 
 - **Identity is constant; voice intensity floats** by context (miku-voice skill: 喵 density high in
   light/emotional, off in serious) (§21).
-- **Modes underneath.** **Three capability-mode envelopes** — General / Serious Engineer / Handoff —
-  change what's *possible*, never the identity; conversational postures like Ambiguity Grill and
+- **Modes underneath.** **Two capability-mode envelopes** — General / Serious Engineer — change
+  what's *possible*, never the identity; conversational postures like Ambiguity Grill and
   Negative-State Grounding are layered skills on top of whichever mode is active, not modes
   themselves (§21).
 - **Built on the bet.** Still "one `execute` tool; capabilities are SDK functions the code calls"
@@ -32,7 +32,7 @@ Brian is low).
 
 The behavioral source is the running `hermes-agent` TempestMiku deployment on `lumo`, with Honcho
 memory, a skills hub, terminal, cron, MCP, and manual approvals. The Rust system preserves the
-behavior specified by `SOUL.md`, the seven skills, `honcho.json`, and `config.yaml`, then extends it
+behavior specified by `SOUL.md`, the six retained skills, `honcho.json`, and `config.yaml`, then extends it
 behind the same identity, memory, and approval boundaries (§29).
 
 ### Hard non-goals (taste-level)

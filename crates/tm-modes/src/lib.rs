@@ -43,7 +43,6 @@ pub const KNOWN_SKILLS: &[&str] = &[
     "miku-voice",
     "ambiguity-grill",
     "negative-state-grounding",
-    "oh-my-pi-handoff",
     "personal-assistant-state-capture",
     "scope-guard",
     "weekly-ship-ledger",

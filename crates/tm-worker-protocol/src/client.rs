@@ -30,6 +30,21 @@ const LINKED_CAPABILITIES: &[&str] = &[
     "fs.ls",
     "fs.find",
     "fs.grep",
+    "git.status",
+    "git.diff",
+    "git.log",
+    "git.commit",
+    "git.push",
+    "git.pull",
+    "git.clone",
+    "git.init",
+    "git.add",
+    "git.mv",
+    "git.restore",
+    "git.rm",
+    "git.bisect",
+    "git.grep",
+    "git.show",
     "proc.run",
 ];
 
@@ -544,6 +559,16 @@ mod tests {
             endpoint: endpoint.to_string(),
             signing_key_file: PathBuf::from("/not/read-during-validation"),
             linked_aliases: vec!["repo".to_string()],
+        }
+    }
+
+    #[test]
+    fn every_remote_linked_capability_has_docs() {
+        for name in LINKED_CAPABILITIES {
+            assert!(
+                linked_tool_docs(name).is_some(),
+                "remote linked capability {name} must resolve exact docs"
+            );
         }
     }
 

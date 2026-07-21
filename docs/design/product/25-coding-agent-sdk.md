@@ -1,11 +1,11 @@
 # 25. Coding-agent SDK & artifacts (OMP translation)
 
-> The engineer modes call capabilities **as code** through one `execute` tool, not N chat-native
+> **Serious Engineer** calls capabilities **as code** through one `execute` tool, not N chat-native
 > tools. Grounded in Anthropic's *code execution with MCP* (a single execute tool + code that calls
 > capabilities = massive token savings); real-repo reach is a curated, allowlisted `proc.run` (never
 > raw shell); big outputs live in a two-tier, content-addressed store.
 
-Engaged by **Serious Engineer** and **Handoff** modes (§21). Reference: **Oh My Pi** (OMP).
+Engaged by **Serious Engineer** (§21). Reference: **Oh My Pi** (OMP).
 
 ## 25.0 Design stance
 
@@ -22,12 +22,15 @@ Engaged by **Serious Engineer** and **Handoff** modes (§21). Reference: **Oh My
   (jail) and §08 (approval / budgets) provide.
 - **Translating *from* MCP** (Anthropic Model Context Protocol, Nov 2024 — JSON-RPC; hosts / clients /
   servers; **resources / prompts / tools**; LSP-inspired). MCP/OMP-style multi-tool is the *source*;
-  our SDK namespaces (`fs.*` / `code.*` / `proc.*` / `agents.*` / selected
-  `mcp.<server>.*` / `artifacts.*`) and resource routes are the *target* — same capabilities, made
-  code-callable and **progressively disclosed** (`tools.search` / `docs`, §07) rather than
-  all-loaded. MCP import brings in only an operator allowlist through the egress boundary; it does
+  our SDK namespaces (`fs.*` / `code.*` / `proc.*` / the exact curated `git.clone` / `git.init` /
+  `git.add` / `git.mv` / `git.restore` / `git.rm` / `git.bisect` / `git.status` / `git.diff` /
+  `git.grep` / `git.log` / `git.show` / `git.commit` / `git.push` / `git.pull` calls / `agents.*` /
+  selected `mcp.<server>.*` / `artifacts.*`) and
+  resource routes are the *target* — the same capabilities, made code-callable and **progressively
+  disclosed** (`tools.search` / `docs`, §07) rather than all-loaded. MCP import brings in only an
+  operator allowlist through the egress boundary; it does
   not expose an MCP multi-tool surface to the model.
-- This is the core bet (§01) realized at the product layer; the engineer modes are its heaviest users.
+- This is the core bet (§01) realized at the product layer; Serious Engineer is its heaviest user.
 
 ## 25.0.1 Transitional OMP ACP backend
 
@@ -38,8 +41,7 @@ execution behind the adapter when that backend is explicitly enabled.
 
 The bridge shape is deliberately small:
 
-- `tm-server` launches or connects to a pinned `omp acp` subprocess for a Serious Engineer / Handoff
-  session.
+- `tm-server` launches or connects to a pinned `omp acp` subprocess for a Serious Engineer session.
 - After `POST /sessions/:id/messages` queues a durable turn, the worker's `CodingBackend` adapter maps
   that turn into ACP session messages and maps ACP progress, diffs, tool events, and final output back
   into durable `session_events` associated with its `turn_id`.
@@ -75,13 +77,14 @@ the code calls these namespaces, and unknown capabilities are discovered on dema
 | edit / ast-grep / ast-edit | `fs.patch` / `code.ast` | surgical + structural (`code.ast` demand-triggered) |
 | lsp | `code.lsp` | defs / refs / rename / diagnostics (demand-triggered) |
 | eval (persistent kernel) | the `execute` loop itself | already the core (§05) |
-| task / job / irc | `agents.*` | §23 |
+| task / job / irc | `agents.*` plus `agent://` / `history://` actor resources | §23 |
 | recall / retain / reflect | `memory.*` | §22 |
 | skills | `skills.*` remains reserved; approved managed versions are read-only through capability-gated `skill://...` resources | §07, §26 |
 | `artifact://` | session artifacts via `tm-artifacts` | §25.3 |
 | `agent://` / `history://` | actor resources via `tm-agents`, with large payloads stored out of context | §23 / §25.3 |
 | selected MCP tools / prompts | lazy `mcp.<server>.*` SDK functions discovered through `tools.search` / `docs` | selected imports through the egress boundary |
 | selected MCP resources | hashed `mcp://<server>/resources/<source-uri-digest>` routes through the shared resource registry | §09 / selected MCP imports |
+| git clone / init / add / mv / restore / rm / bisect / status / diff / grep / log / show / commit / push / pull | host-owned exact `git.*` calls with closed schemas and fixed argv; only status/diff/grep are approval-free | §25.2.2 |
 
 ## 25.2 Engineer reach: raw terminal → curated `proc.run` (a deliberate tightening)
 
@@ -157,16 +160,91 @@ New files use `fs.write`; moves and destructive removal use `fs.move` and `fs.re
 and `code.ast` remain in the translation map but are demand-triggered and absent from the current
 runtime namespace.
 
-### 25.2.2 Current runtime contract
+### 25.2.2 Curated Git host namespace
 
-The current serious-engineer and handoff runtime exposes the authoritative SDK surface in §7.1.
-Product-layer scope is intentionally narrower than the full translation map:
+Serious Engineer receives exactly 15 Git HostFns bound to the linked folder selected by the session
+grant: `git.clone`, `git.init`, `git.add`, `git.mv`, `git.restore`, `git.rm`, `git.bisect`,
+`git.status`, `git.diff`, `git.grep`, `git.log`, `git.show`, `git.commit`, `git.push`, and
+`git.pull`. Every call requires its exact capability and linked-alias authority. Status, diff, and
+grep alone are approval-free. Log and show are read-only but always approval-backed; every mutation
+or network operation is always approval-backed. Status/diff/grep/log/show work with `ro`; the other
+ten calls require `rw`. There is no wildcard Git grant, `git.run`, raw argv, or shell-shaped call.
 
-- **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`,
-  `proc`, and the default-deny deterministic allowlisted `http.request` helper. The `resources`
-  namespace includes the `memory://` gateway where the server registers the handler and grants
-  `resources.read:memory`; Handoff and orchestration sessions also expose grant-gated
-  `agents.run/spawn/parallel/send/wait/inbox/list`.
+Every invocation starts with host-owned `git --no-pager` and fixed config
+`core.hooksPath=/dev/null`, `core.fsmonitor=false`, `diff.external=`, `credential.helper=`,
+`core.askPass=`, `commit.gpgSign=false`, `tag.gpgSign=false`, `push.gpgSign=false`,
+`protocol.allow=never`, `protocol.https.allow=always`, `http.followRedirects=false`,
+`submodule.recurse=false`, `fetch.recurseSubmodules=false`, `pull.rebase=false`, and
+`merge.autoStash=false`. Read-only calls and push use `--no-optional-locks`; local mutations omit it.
+The closed schemas and operation tails are:
+
+- `git.clone({cwd,url})` accepts a bounded credential-free HTTPS URL with a host and no userinfo,
+  query, or fragment. The pinned `rw` linked cwd must already exist, be empty, and have no Git
+  metadata. Its tail is `clone --no-tags --no-recurse-submodules --template= --origin=origin --
+  <url> .`; the destination is always `.`, and success is postvalidated as a contained repository
+  with that exact origin.
+- `git.init({cwd})` initializes exactly the pinned non-repository `rw` linked cwd with
+  `init --quiet --initial-branch=main --template=`.
+- `git.add({cwd,paths})`, `git.restore({cwd,paths})`, and `git.rm({cwd,paths})` accept 1–64
+  non-empty normalized literal repository-relative paths of at most 4 KiB each. Absolute, current/parent,
+  option-like, NUL-bearing, and pathspec-magic paths are rejected. Their fixed tails are respectively
+  `--literal-pathspecs add -- <paths...>`, `--literal-pathspecs restore --worktree -- <paths...>`,
+  and `--literal-pathspecs rm -- <paths...>`. Add rejects repository-local clean/process filters;
+  restore rejects smudge/process filters. Restore is index-to-worktree only; rm exposes no force,
+  cached, or recursive option.
+- `git.mv({cwd,path,dest})` accepts two distinct bounded literal top-level single-component entries
+  only and uses `--literal-pathspecs mv -- <path> <dest>`; nested names, traversal, magic, flags,
+  and overwrites are rejected.
+- `git.bisect({cwd,action,bad?,good?,revision?})` is a closed `start|good|bad|skip|reset` state
+  machine. Start requires one bad and 1–32 good full 40- or 64-hex object IDs and uses `bisect start
+  --no-checkout <bad> <good...> --`. Good/bad/skip accept an optional full object ID; omission
+  materializes the pinned `BISECT_HEAD` before approval, then uses `bisect <mark> <full-oid>`. Reset
+  uses `bisect reset` only for a proven active no-checkout session. Checkout transitions, run,
+  replay, terms, scripts, revision expressions, and caller flags are never exposed.
+- `git.status({cwd})` uses `-c pager.status=false status --short --branch --untracked-files=all
+  --ignore-submodules=all`. `git.diff({cwd})` uses `-c pager.diff=false diff --no-ext-diff
+  --no-textconv --ignore-submodules=all --src-prefix=a/ --dst-prefix=b/`.
+- `git.grep({cwd,pattern,caseSensitive?})` accepts a non-empty literal pattern of at most 4 KiB,
+  defaults to case-sensitive, and uses `--literal-pathspecs grep --no-ext-grep --line-number
+  --column --full-name -F` plus optional `-i` and `-e <pattern>`. It accepts no regex mode,
+  revision, or pathspec.
+- `git.log({cwd})` uses `-c pager.log=false log -n 20 --no-decorate --date=iso-strict
+  --format=%H%x09%aI%x09%an%x09%ae%x09%s`; the latest twenty commits are the only log shape.
+- `git.show({cwd,revision?})` accepts only a full 40- or 64-hex object ID. Omission materializes and
+  approval-snapshots the current full `HEAD` object ID. It uses `--literal-pathspecs show
+  --no-ext-diff --no-textconv --no-decorate --date=iso-strict
+  --format=%H%x09%aI%x09%an%x09%ae%x09%s --no-renames <full-oid> --`; no revision expression or
+  path is accepted.
+- `git.commit({cwd,message})` accepts one non-whitespace UTF-8 message of at most 4 KiB, rejects NUL
+  and controls other than newline/tab, and uses `commit --no-verify --no-gpg-sign
+  --cleanup=verbatim -m <message>`. It commits only the already-staged index: no pathspec, `-a`,
+  hook, editor, or signing path.
+- `git.push({cwd})` and `git.pull({cwd})` resolve only the current local branch's repository-local
+  configured upstream. The URL must be credential-free HTTPS with no userinfo, query, or fragment;
+  local remotes, separate push URLs, URL rewrites, and caller-selected remotes/refs are rejected.
+  Their tails are `push --porcelain <resolved-url> HEAD:<resolved-refs/heads/...>` and
+  `pull --ff-only --no-rebase --no-edit <resolved-url> <resolved-branch>`.
+
+The host clears the environment, retains only a sanitized absolute `PATH`, disables system/global
+config, prompts, askpass, redirects, helpers, hooks, signing, editors, external diff/textconv,
+submodule recursion, and parent-repository discovery, and gives Git null stdin. It pins and rechecks
+the linked-policy revision, cwd and Git-executable identity, contained repository/worktree and Git
+directory, plus each operation's relevant HEAD/index/path/bisect/upstream snapshot. Approval metadata
+records the fixed argv, with commit text replaced by a digest/preview; denial, timeout, cancellation,
+revocation, or stale state fails closed before execution. Local calls are bounded to the host's short
+timeout and clone/push/pull to its network timeout; retained and inline stdout/stderr are bounded,
+secret-redacted, and spill only to a capped `artifact://` result.
+
+### 25.2.3 Current runtime contract
+
+The current Serious Engineer runtime exposes the authoritative SDK surface in §7.1. Product-layer
+scope is intentionally narrower than the full translation map:
+
+- **Available:** `print`, synchronous `display`, `tools`, `resources`, `artifacts`, `fs`, `proc`, all
+  15 exact Git calls from §25.2.2 (approval-free only `git.status` / `git.diff` / `git.grep`),
+  grant-gated `agents.*`, and the default-deny deterministic allowlisted `http.request` helper. The
+  `resources` namespace includes the `memory://` gateway plus grant-gated linked and actor routes:
+  `linked://`, `agent://`, and `history://`.
 - **Configured MCP imports:** trusted operator config may add exact `mcp.<server>.*` tool/prompt
   functions and `mcp://` resource routes. They are registered lazily, remain behind exact imported
   object plus destination/opaque-secret grants, and are available only to a mode that already has
@@ -198,11 +276,12 @@ Product-layer scope is intentionally narrower than the full translation map:
   that residual.
   The host config owns a bounded default/maximum timeout (180 seconds by default, at most 900
   seconds); benchmark profiles may opt into a larger value without changing production defaults.
-- **Approval shape:** in the native server Serious Engineer backend, `fs.write` overwrites,
-  `fs.move` overwrites, `fs.remove`, and unsafe `proc.run` actions suspend through the same
-  `approval` SSE event and
-  `POST /sessions/:id/approvals/:approval_id` route as ACP permissions. `manual` mode waits for that
-  route; `deny` and timeouts fail closed.
+- **Approval shape:** in the native server Serious Engineer backend, `git.status`, `git.diff`, and
+  `git.grep` alone are approval-free. `git.log`, `git.show`, every Git mutation/network call,
+  `fs.write` overwrites, `fs.move` overwrites, `fs.remove`, and unsafe `proc.run` actions suspend
+  through the same `approval` SSE event and `POST /sessions/:id/approvals/:approval_id` route as ACP
+  permissions. `manual` waits for that route; `deny`, timeout, cancellation, and stale-state checks
+  fail closed.
 - **Mutation commit shape:** host mutations serialize per linked registry, bound file reads, and
   recheck policy revision, content tag, and device/inode identity through held parent descriptors.
   A shared policy gate holds the final policy re-resolution and commit syscall; linked reads and
@@ -262,9 +341,12 @@ model above. This section owns the **storage tiers** only; the **read / routing*
 
 - `tm-host` SDK namespaces — `fs` (read / write / ls / find; jail-or-linked §24.4), `code` (patch
   `edit` first; `ast` / `lsp` later), `proc` (run: **allowlist + argv + linked-cwd + yolo within
-  configured grants, approval for destructive/external/out-of-grant actions**), plus the `linked://`
-  resource handler for read/list/preview over granted local or remote folders; wired to the capability
-  registry (§07) + `ApprovalPolicy` (§08).
+  configured grants, approval for destructive/external/out-of-grant actions**), and the exact curated
+  15-call `git` namespace from §25.2.2 (status/diff/grep approval-free; log/show and every
+  mutation/network call approval-backed; `ro` for inspections and `rw` for mutations/network; fixed
+  schemas/argv with no `git.run`, raw argv, or shell), plus the `linked://` resource handler for
+  read/list/preview over granted local or remote folders; wired to the capability registry (§07) +
+  `ApprovalPolicy` (§08).
 - `tm-artifacts` (§10.1) — `blob` (content-addressed store: sha256, dedup, MIME sidecar), `artifact`
   (session-local ids + `OutputSink` spill), and `blob:` rehydration at load; it registers the
   `artifact://` handler into the §9.2 registry.

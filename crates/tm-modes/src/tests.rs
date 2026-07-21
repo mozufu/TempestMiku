@@ -13,29 +13,69 @@ use super::{
 static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
-fn bundled_mode_catalog_has_default_and_handoff_profile() {
+fn bundled_mode_catalog_has_default_and_serious_engineer_profile() {
     let assets = ModesConfig::default().load_assets();
     assert_eq!(assets.modes.default_mode().as_str(), "general");
-    let handoff = assets
+    let serious = assets
         .modes
-        .profile(&ModeId::from("handoff"))
-        .expect("handoff profile");
-    assert_eq!(handoff.label, "Handoff");
-    assert_eq!(handoff.default_scope, "project:tempestmiku");
-    assert_eq!(handoff.active_skills, ["oh-my-pi-handoff"]);
-    assert!(handoff.has_capability("backend.coding"));
-    assert!(
-        handoff.has_capability("agents.run"),
-        "agents.* glob must match agents.run"
-    );
-    assert!(
-        handoff.has_capability("agents.spawn"),
-        "agents.* glob must match agents.spawn"
+        .profile(&ModeId::from("serious_engineer"))
+        .expect("serious engineer profile");
+    assert_eq!(serious.label, "Serious Engineer");
+    assert_eq!(serious.default_scope, "project:tempestmiku");
+    assert_eq!(serious.active_skills, ["serious-engineer-ops"]);
+    assert!(serious.has_capability("backend.coding"));
+    assert!(serious.has_capability("agents.run"));
+    assert!(serious.has_capability("agents.spawn"));
+    for capability in [
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.grep",
+        "git.show",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.commit",
+        "git.push",
+        "git.pull",
+    ] {
+        assert!(serious.has_capability(capability));
+    }
+    assert!(!serious.has_capability("git.run"));
+    let granted_git: Vec<&str> = serious
+        .capabilities
+        .iter()
+        .map(String::as_str)
+        .filter(|capability| capability.starts_with("git."))
+        .collect();
+    assert_eq!(
+        granted_git,
+        [
+            "git.clone",
+            "git.init",
+            "git.add",
+            "git.mv",
+            "git.restore",
+            "git.rm",
+            "git.bisect",
+            "git.grep",
+            "git.show",
+            "git.status",
+            "git.diff",
+            "git.log",
+            "git.commit",
+            "git.push",
+            "git.pull",
+        ]
     );
 }
 
 #[test]
-fn bundled_catalog_has_exactly_three_capability_modes() {
+fn bundled_catalog_has_exactly_two_capability_modes() {
     let assets = ModesConfig::default().load_assets();
     let mut ids: Vec<&str> = assets
         .modes
@@ -44,7 +84,8 @@ fn bundled_catalog_has_exactly_three_capability_modes() {
         .map(|profile| profile.mode.as_str())
         .collect();
     ids.sort_unstable();
-    assert_eq!(ids, ["general", "handoff", "serious_engineer"]);
+    assert_eq!(ids, ["general", "serious_engineer"]);
+    assert!(assets.modes.profile(&ModeId::from("handoff")).is_none());
 }
 
 #[test]
@@ -335,25 +376,60 @@ fn mode_profiles_map_expected_skills_and_scope() {
     assert!(serious.has_capability("fs.patch"));
     assert!(serious.has_capability("fs.move"));
     assert!(serious.has_capability("fs.remove"));
+    for capability in [
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.grep",
+        "git.show",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.commit",
+        "git.push",
+        "git.pull",
+    ] {
+        assert!(serious.has_capability(capability));
+    }
+    assert!(!serious.has_capability("git.run"));
     assert!(serious.has_capability("proc.run"));
+    assert!(serious.has_capability("agents.run"));
     assert!(serious.has_capability("http.request"));
+    assert!(serious.has_capability("resources.read:agent"));
     assert!(serious.has_capability("resources.read:artifact"));
+    assert!(serious.has_capability("resources.read:history"));
     assert!(serious.has_capability("resources.read:linked"));
     assert!(serious.has_capability("backend.coding"));
     assert_eq!(serious.capability_class, "engineering");
     assert_eq!(serious.default_scope, "project:tempestmiku");
 
-    let handoff = assets
-        .modes
-        .profile(&ModeId::from("handoff"))
-        .expect("handoff profile");
-    assert!(handoff.has_capability("http.request"));
-    assert!(handoff.has_capability("resources.read:agent"));
-    assert!(handoff.has_capability("resources.read:artifact"));
-    assert!(handoff.has_capability("resources.read:history"));
-    for capability in ["fs.read", "fs.grep", "proc.run", "resources.read:linked"] {
+    for capability in [
+        "fs.read",
+        "fs.grep",
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.grep",
+        "git.show",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.commit",
+        "git.push",
+        "git.pull",
+        "proc.run",
+        "agents.run",
+        "resources.read:linked",
+    ] {
         assert!(!assistant.has_capability(capability));
-        assert!(!handoff.has_capability(capability));
     }
 }
 

@@ -190,7 +190,15 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
             "general turn unexpectedly received retired {retired}"
         );
     }
-    for denied in ["fs.*", "code.*", "proc.*", "resources.read:linked"] {
+    for denied in [
+        "fs.*",
+        "code.*",
+        "proc.*",
+        "resources.read:linked",
+        "agents.*",
+        "resources.read:agent",
+        "resources.read:history",
+    ] {
         assert!(
             !turns[0].capabilities.iter().any(|cap| cap == denied),
             "general turn unexpectedly received {denied}"
@@ -262,17 +270,10 @@ async fn coding_turn_prompt_uses_active_mode_bundle() {
     .with_coding_backend(backend);
     let app = app(state);
     let serious = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-    let handoff = create_with_body(&app, Body::from(r#"{"mode":"handoff"}"#)).await;
-
-    for (session_id, content) in [
-        (serious.id, "fix the Rust code"),
-        (handoff.id, "delegate this implementation handoff"),
-    ] {
-        post_user_message(&app, session_id, content).await;
-    }
+    post_user_message(&app, serious.id, "delegate this implementation handoff").await;
 
     let turns = turns.lock();
-    assert_eq!(turns.len(), 2);
+    assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].mode, ModeId::from("serious_engineer"));
     assert!(turns[0].system_prompt.contains("Fixture SOUL"));
     assert!(
@@ -281,29 +282,19 @@ async fn coding_turn_prompt_uses_active_mode_bundle() {
             .contains("serious-engineer-ops fixture body")
     );
     assert!(!turns[0].system_prompt.contains("miku-voice fixture body"));
-    for capability in ["fs.*", "code.*", "proc.*", "resources.read:linked"] {
-        assert!(turns[0].capabilities.iter().any(|cap| cap == capability));
-    }
-
-    assert_eq!(turns[1].mode, ModeId::from("handoff"));
-    assert!(
-        turns[1]
-            .system_prompt
-            .contains("oh-my-pi-handoff fixture body")
-    );
-    assert!(
-        !turns[1].system_prompt.contains("miku-voice fixture body"),
-        "handoff mode must not inject miku-voice skill"
-    );
-    assert_eq!(turns[1].scope, "global");
-    assert!(
-        turns[1].capabilities.iter().any(|c| c == "agents.*"),
-        "handoff mode must declare agents.* capability"
-    );
-    for denied in ["fs.*", "code.*", "proc.*", "resources.read:linked"] {
+    for capability in [
+        "fs.*",
+        "code.*",
+        "proc.*",
+        "resources.read:linked",
+        "agents.*",
+        "resources.read:agent",
+        "resources.read:history",
+        "backend.coding",
+    ] {
         assert!(
-            !turns[1].capabilities.iter().any(|cap| cap == denied),
-            "handoff turn unexpectedly received {denied}"
+            turns[0].capabilities.iter().any(|cap| cap == capability),
+            "serious engineer turn must declare {capability}"
         );
     }
 }

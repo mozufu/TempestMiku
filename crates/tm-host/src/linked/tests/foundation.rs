@@ -105,7 +105,40 @@ async fn p0_tool_docs_include_tm_contract_metadata() {
     assert!(docs.sensitive);
     assert_eq!(docs.stability, "experimental");
 
-    for name in ["fs.read", "fs.ls", "fs.find", "fs.grep"] {
+    let git_tools = host_registry.search("", Some("git"), 64, &ctx());
+    assert_eq!(git_tools.len(), 15);
+    for name in [
+        "git.status",
+        "git.diff",
+        "git.grep",
+        "git.log",
+        "git.show",
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.commit",
+        "git.push",
+        "git.pull",
+    ] {
+        assert!(
+            git_tools.iter().any(|tool| tool.name == name),
+            "Git discovery must expose {name}"
+        );
+    }
+
+    for name in [
+        "fs.read",
+        "fs.ls",
+        "fs.find",
+        "fs.grep",
+        "git.status",
+        "git.diff",
+        "git.grep",
+    ] {
         let docs = host_registry.docs(name, &ctx()).unwrap();
         assert!(docs.sensitive, "{name} results must be trace-sensitive");
         assert_eq!(
@@ -113,6 +146,54 @@ async fn p0_tool_docs_include_tm_contract_metadata() {
             "{name} sensitivity must not add mutation approval"
         );
     }
+    for name in [
+        "git.log",
+        "git.show",
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.commit",
+        "git.push",
+        "git.pull",
+    ] {
+        let docs = host_registry.docs(name, &ctx()).unwrap();
+        assert!(docs.sensitive, "{name} results must be trace-sensitive");
+        assert_eq!(docs.approval, "always", "{name} must require approval");
+        assert!(
+            docs.errors
+                .iter()
+                .any(|error| error.name == "ApprovalDeniedError"),
+            "{name} must document approval denial"
+        );
+    }
+    let grep_docs = host_registry.docs("git.grep", &ctx()).unwrap();
+    assert_eq!(grep_docs.args_schema["required"], json!(["pattern"]));
+    assert_eq!(grep_docs.args_schema["additionalProperties"], json!(false));
+    assert!(
+        !grep_docs
+            .errors
+            .iter()
+            .any(|error| error.name == "ApprovalDeniedError")
+    );
+    let show_docs = host_registry.docs("git.show", &ctx()).unwrap();
+    assert!(show_docs.args_schema["properties"]["revision"]["pattern"].is_string());
+    let paths_docs = host_registry.docs("git.add", &ctx()).unwrap();
+    assert_eq!(paths_docs.args_schema["required"], json!(["paths"]));
+    assert_eq!(
+        paths_docs.args_schema["properties"]["paths"]["maxItems"],
+        json!(64)
+    );
+    let mv_docs = host_registry.docs("git.mv", &ctx()).unwrap();
+    assert_eq!(mv_docs.args_schema["required"], json!(["path", "dest"]));
+    let bisect_docs = host_registry.docs("git.bisect", &ctx()).unwrap();
+    assert_eq!(
+        bisect_docs.args_schema["oneOf"].as_array().unwrap().len(),
+        3
+    );
 
     for name in [
         "fs.write",
@@ -122,6 +203,21 @@ async fn p0_tool_docs_include_tm_contract_metadata() {
         "fs.grep",
         "fs.patch",
         "fs.remove",
+        "git.status",
+        "git.diff",
+        "git.log",
+        "git.commit",
+        "git.push",
+        "git.pull",
+        "git.clone",
+        "git.init",
+        "git.add",
+        "git.mv",
+        "git.restore",
+        "git.rm",
+        "git.bisect",
+        "git.grep",
+        "git.show",
         "proc.run",
     ] {
         let docs = host_registry.docs(name, &ctx()).unwrap();

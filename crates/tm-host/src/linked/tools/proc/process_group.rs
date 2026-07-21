@@ -1,10 +1,10 @@
-pub(super) struct ProcessGroupGuard {
+pub(in crate::linked::tools) struct ProcessGroupGuard {
     #[cfg(unix)]
     process_group: Option<i32>,
 }
 
 impl ProcessGroupGuard {
-    pub(super) fn new(child_id: Option<u32>) -> Self {
+    pub(in crate::linked::tools) fn new(child_id: Option<u32>) -> Self {
         #[cfg(not(unix))]
         let _ = child_id;
         Self {
@@ -13,7 +13,7 @@ impl ProcessGroupGuard {
         }
     }
 
-    pub(super) fn disarm(&mut self) {
+    pub(in crate::linked::tools) fn disarm(&mut self) {
         #[cfg(unix)]
         {
             self.process_group = None;
@@ -47,7 +47,7 @@ impl Drop for ProcessGroupGuard {
     }
 }
 
-pub(super) async fn stop_process_tree(
+pub(in crate::linked::tools) async fn stop_process_tree(
     child: &mut tokio::process::Child,
     process_group: &mut ProcessGroupGuard,
 ) -> std::io::Result<()> {

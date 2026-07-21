@@ -11,9 +11,14 @@ use crate::{HostError, Result};
 const MAX_STDIN_BYTES: usize = 1024 * 1024;
 const MAX_STDIN_APPROVAL_PREVIEW_BYTES: usize = 256;
 const MAX_PROCESS_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
-pub(super) const MAX_RETAINED_PROCESS_OUTPUT_BYTES: usize = MAX_PROCESS_ARTIFACT_BYTES - 256;
+pub(in crate::linked::tools) const MAX_RETAINED_PROCESS_OUTPUT_BYTES: usize =
+    MAX_PROCESS_ARTIFACT_BYTES - 256;
 
-pub(super) fn bounded_inline_output(stdout: &str, stderr: &str, limit: usize) -> (String, String) {
+pub(in crate::linked::tools) fn bounded_inline_output(
+    stdout: &str,
+    stderr: &str,
+    limit: usize,
+) -> (String, String) {
     let stdout_end = utf8_prefix_len(stdout, limit);
     let stdout = stdout[..stdout_end].to_string();
     let remaining = limit.saturating_sub(stdout.len());
@@ -86,12 +91,12 @@ where
     }
 }
 
-pub(super) struct BoundedOutput {
-    pub(super) bytes: Vec<u8>,
-    pub(super) truncated: bool,
+pub(in crate::linked::tools) struct BoundedOutput {
+    pub(in crate::linked::tools) bytes: Vec<u8>,
+    pub(in crate::linked::tools) truncated: bool,
 }
 
-pub(super) async fn read_bounded_output<R>(
+pub(in crate::linked::tools) async fn read_bounded_output<R>(
     mut reader: R,
     retained: Arc<AtomicUsize>,
     limit: usize,

@@ -111,22 +111,21 @@ Three orthogonal layers keep engineering useful without erasing the character:
 - **Voice** (`miku-voice`) — how she talks. Intensity **floats by context**: `high` (light / stuck /
   emotional) → `medium` (planning) → `off` (serious / money / legal / irreversible / external). The
   more serious, the fewer 喵.
-- **Capability modes** — what is *possible* right now. Exactly three envelopes:
+- **Capability modes** — what is *possible* right now. Exactly two envelopes:
 
   | Mode | Capabilities | Voice | Declared skills |
   |---|---|---|---|
   | **General** (default) | conversation + light `memory` recall/propose | `medium` | `miku-voice`, `personal-assistant-state-capture` |
-  | **Serious Engineer** | `fs.*` / `code.*` / `proc.*` + `resources.read:linked` (§25) | `off` | `serious-engineer-ops` |
-  | **Handoff** | `agents.*` (§23) + brief generation | `off` | `oh-my-pi-handoff` |
+  | **Serious Engineer** | `backend.coding`; `fs.*` / `code.*` / `proc.*`; exact `git.clone` / `git.init` / `git.add` / `git.mv` / `git.restore` / `git.rm` / `git.bisect` / `git.status` / `git.diff` / `git.grep` / `git.log` / `git.show` / `git.commit` / `git.push` / `git.pull` grants; `agents.*`; `resources.read:linked` / `resources.read:agent` / `resources.read:history` (§23, §25) | `off` | `serious-engineer-ops` |
 
 - **Layered skills** — procedural markdown composed on top of whichever mode is active: always-on
   (`scope-guard`), or keyword-triggered (`ambiguity-grill`, `negative-state-grounding`,
   `weekly-ship-ledger`). Skills shape *how* Miku behaves; they never change what is possible.
 
 Modes are **config, not code**: `modes.json` defines the catalog, so adding or removing a mode or
-skill is not a Rust change. Capability modes are **sticky** — once a session enters Serious Engineer
-or Handoff, it stays there until the user picks another mode or confirms an `await modes.suggest(...)`
-proposal; there is no per-turn keyword revert. Mode switching is **model-proposed, user-confirmed**
+skill is not a Rust change. Capability modes are **sticky** — once a session enters Serious Engineer,
+it stays there until the user picks General or confirms an `await modes.suggest(...)` proposal; there
+is no per-turn keyword revert. Mode switching is **model-proposed, user-confirmed**
 through the approval broker, and the user can always lock, override, or decline. Every switch emits a
 `ModeChanged` event for replay; mode is a capability envelope behind the interaction, not a primary UI
 label.
@@ -229,11 +228,12 @@ stay private simply never enters.
 
 ## 8. The coding SDK & artifacts
 
-Serious Engineer and Handoff modes call capabilities **as code** through the one `execute` tool, not
-N chat-native tools — Oh My Pi's coverage re-expressed as SDK namespaces (§25). The current native
-runtime exposes `print`, `display`, `tools`, `resources`, `artifacts`, `fs`, `proc`, and the
-default-deny allowlisted `http.request`; `agents.*` is present when a Handoff/orchestration turn holds the
-grant; `secrets` / `memory` / `skills` stay `undefined` until a turn is granted them.
+Serious Engineer calls capabilities **as code** through the one `execute` tool, not N chat-native
+tools — Oh My Pi's coverage re-expressed as SDK namespaces (§25). Its envelope owns native or OMP
+`backend.coding`, `fs.*`, `proc.*`, the exact 15-call curated `git.*` surface, `agents.*`, and
+linked/actor resources. The current native runtime exposes `print`, `display`, `tools`, `resources`,
+`artifacts`, `fs`, `proc`, and the default-deny allowlisted `http.request`; grant-gated namespaces
+are installed only when their Serious Engineer turn holds the corresponding exact capability.
 
 - **Curated real-repo reach.** The raw terminal of the source deployment is deliberately dropped for
   `proc.run(cmd, args)` — an **argv-vector** invocation (no `sh -c`, structurally immune to shell
@@ -246,10 +246,38 @@ grant; `secrets` / `memory` / `skills` stay `undefined` until a turn is granted 
   semantics and fails closed on traversal, symlink substitution, missing grants, or unknown
   capabilities. Model-visible paths prefer linked aliases (`tempestmiku:crates/...`); a folder keeps
   its `linked://` URI whether local or behind a remote connector.
-- **Approvals & commit safety.** Overwrites, removals, and unsafe `proc.run` suspend through the same
-  `approval` SSE event / resolve route; `manual` mode waits, `deny` and timeout fail closed. Host
-  mutations serialize per linked registry and recheck policy revision, content tag, and device/inode
-  identity through held descriptors.
+- **Curated Git operations.** The exact namespace is `git.clone`, `git.init`, `git.add`, `git.mv`,
+  `git.restore`, `git.rm`, `git.bisect`, `git.status`, `git.diff`, `git.grep`, `git.log`, `git.show`,
+  `git.commit`, `git.push`, and `git.pull`. Only status, diff, and literal fixed-string grep are
+  approval-free. Log and show are read-only but always approved; every mutation or network operation
+  is always approved. Status/diff/grep/log/show work with an `ro` linked-folder grant; the other ten
+  calls require `rw`. Each call also requires its own exact `git.<name>` capability (§21, §25.2.2).
+- **Closed schemas and path/object safety.** Clone is `{cwd,url}` and writes a credential-free HTTPS
+  URL into the pinned, already-empty linked cwd at the fixed destination `.`; init is `{cwd}`. All
+  other calls also carry their linked `cwd`. Add, restore, and rm take `{cwd,paths}` with 1–64
+  bounded, normalized, literal repository-relative paths; mv takes `{cwd,path,dest}` and permits
+  distinct top-level literal entries only. Add rejects clean/process filters and restore rejects
+  smudge/process filters. Bisect takes `{cwd,action,bad?,good?,revision?}` as a closed
+  `start|good|bad|skip|reset` no-checkout state machine using full 40- or 64-hex object IDs; omitted
+  mark revisions materialize the pinned `BISECT_HEAD`, and run/replay/terms/scripts are absent. Grep
+  takes `{cwd,pattern,caseSensitive?}` with a bounded literal pattern. Show is
+  `{cwd,revision?}` and accepts only a full object ID when supplied; omission materializes and
+  approval-snapshots `HEAD`, never a revision expression or path. Commit is `{cwd,message}`, accepts
+  only a non-empty message of at most 4 KiB, and commits the already-staged index: no pathspec or
+  `-a`, with hooks and signing disabled.
+- **Fixed Git argv and network boundary.** Every call uses host-owned `git --no-pager`, hardened
+  fixed config/environment, a pinned linked cwd and Git executable, a fixed operation tail, bounded
+  time and output, and secret-redacted artifact spill when needed. Literal-path calls use
+  `--literal-pathspecs` plus `--`; callers cannot provide an executable, raw argv, shell, flags,
+  config, environment, arbitrary refs/pathspecs/remotes, or alternate work tree, and there is no
+  `git.run`. Push/pull resolve only the current branch's exact configured upstream, require a
+  credential-free HTTPS URL, reject separate push URLs and URL rewrites, and remain fixed to
+  non-force `HEAD:<upstream>` push and `--ff-only --no-rebase --no-edit` pull.
+- **Approvals and stale-state safety.** All approval-backed calls suspend through the same
+  `approval` SSE event / resolve route. `manual` waits; denial, timeout, cancellation, changed grants,
+  or a stale pinned repository/cwd/object/index/upstream snapshot fails closed before execution.
+  Host mutations serialize per linked registry and recheck policy revision plus relevant
+  device/inode and Git-state identities before the fixed command runs.
 - **Artifacts — two tiers.** Global content-addressed blobs (`blob:sha256:` — images/binaries,
   deduplicated, integrity-verified, outliving sessions) and session-scoped `artifact://` (monotonic
   ids, spill-on-truncation), plus actor `agent://` / `history://`. Hard quotas: 4 MiB per text

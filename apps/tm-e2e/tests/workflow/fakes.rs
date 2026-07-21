@@ -95,7 +95,7 @@ impl CodingBackend for ActorSmokeBackend {
         turn: CodingTurn,
         sink: Arc<dyn CodingEventSink>,
     ) -> tm_server::Result<CodingTurnResult> {
-        assert_eq!(turn.mode, ModeId::from("handoff"));
+        assert_eq!(turn.mode, ModeId::from("serious_engineer"));
         let actor_id =
             ActorId::new("Worker0").map_err(|err| ServerError::InvalidRequest(err.to_string()))?;
         let actor_id_text = actor_id.to_string();

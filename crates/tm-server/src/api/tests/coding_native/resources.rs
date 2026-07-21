@@ -60,7 +60,7 @@ async fn artifact_resource_route_reads_session_artifact() {
 
 #[serial_test::serial]
 #[tokio::test(flavor = "current_thread")]
-async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
+async fn general_turn_denies_undeclared_linked_and_agent_capabilities() {
     let temp = tempfile::tempdir().unwrap();
     let artifact_root = temp.path().join("artifacts");
     let linked_root = temp.path().join("repo");
@@ -79,14 +79,11 @@ async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
     }])
     .unwrap();
 
-    let code = r#"
-@fs.read {path: "repo:Cargo.toml"}
-"#;
-    let tool_turn = || {
+    let tool_turn = |id: &str, code: &str| {
         vec![
             StreamEvent::ToolCall {
                 index: 0,
-                id: Some("call_denied_linked".to_string()),
+                id: Some(id.to_string()),
                 name: Some("execute".to_string()),
                 arguments: Some(json!({ "code": code }).to_string()),
             },
@@ -104,9 +101,14 @@ async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
         ]
     };
     let llm = Arc::new(ScriptedLlm::new(vec![
-        tool_turn(),
-        final_turn(),
-        tool_turn(),
+        tool_turn(
+            "call_denied_linked",
+            r#"@fs.read {path: "repo:Cargo.toml"}"#,
+        ),
+        tool_turn(
+            "call_denied_agent",
+            r#"@agents.run {task: "inspect repository"}"#,
+        ),
         final_turn(),
     ]));
     let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
@@ -148,21 +150,21 @@ async fn general_and_handoff_turns_deny_undeclared_linked_repo_capabilities() {
     state = state.with_coding_backend(Arc::new(backend));
     let router = app(state);
 
-    for mode in ["general", "handoff"] {
-        let session =
-            create_with_body(&router, Body::from(json!({ "mode": mode }).to_string())).await;
-        post_user_message(&router, session.id, "inspect the linked project").await;
-    }
+    let session = create_with_body(&router, Body::from(r#"{"mode":"general"}"#)).await;
+    post_user_message(&router, session.id, "inspect the linked project").await;
 
     let requests = llm.requests.lock();
-    assert_eq!(requests.len(), 4);
-    for request_index in [1, 3] {
+    assert_eq!(requests.len(), 3);
+    for (request_index, capability) in [(1, "fs.read"), (2, "agents.run")] {
         let tool_result = requests[request_index]
             .iter()
+            .rev()
             .find(|message| message.role == Role::Tool)
-            .expect("tool result is fed back before final turn");
+            .expect("tool result is fed back before the next turn");
         assert!(
-            tool_result.content.contains("unknown capability fs.read"),
+            tool_result
+                .content
+                .contains(&format!("unknown capability {capability}")),
             "tool result: {}",
             tool_result.content
         );

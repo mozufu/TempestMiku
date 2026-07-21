@@ -20,10 +20,10 @@ pub struct ActorSmokeReport {
 }
 
 pub async fn run_actor_smoke(client: &MikuClient) -> Result<ActorSmokeReport> {
-    let session = client.create_session(Some("handoff")).await?;
+    let session = client.create_session(Some("serious_engineer")).await?;
     ensure!(
-        session.mode == "handoff",
-        "actor smoke should start in handoff mode, got {}",
+        session.mode == "serious_engineer",
+        "actor smoke should start in serious engineer mode, got {}",
         session.mode
     );
 

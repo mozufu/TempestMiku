@@ -154,9 +154,7 @@ extension _ScriptedDriveScenarios on ScriptedMikuClient {
       MikuEvent(
         type: 'drive_organizer_started',
         id: _eventId(),
-        data: const {
-          'apply': false,
-        },
+        data: const {'apply': false},
       ),
     );
     controller.add(

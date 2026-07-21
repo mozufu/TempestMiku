@@ -27,6 +27,7 @@ class _ResourceInspectorSheetState extends State<_ResourceInspectorSheet> {
   List<MikuResourceEntry>? _entries;
   ResourcePreview? _preview;
   _ResourceLocation? _failedLocation;
+  String? _failedPreviewUri;
   final Set<String> _registeredSchemes = {};
   bool _loading = false;
   bool _loadingResourcePage = false;
@@ -51,6 +52,7 @@ class _ResourceInspectorSheetState extends State<_ResourceInspectorSheet> {
       _resourcePageError = null;
       _nextResourceLine = 1;
       _failedLocation = null;
+      _failedPreviewUri = null;
     });
     try {
       final entries = await widget.client.listResources(
@@ -104,6 +106,7 @@ class _ResourceInspectorSheetState extends State<_ResourceInspectorSheet> {
       _error = null;
       _resourcePageError = null;
       _nextResourceLine = 1;
+      _failedPreviewUri = null;
     });
     try {
       final preview = await widget.client.previewResource(
@@ -117,18 +120,23 @@ class _ResourceInspectorSheetState extends State<_ResourceInspectorSheet> {
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = '這個資源目前無法預覽。');
+      setState(() {
+        _error = '這個資源目前無法預覽。';
+        _failedPreviewUri = uri;
+      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _back() async {
-    if (_preview != null) {
+    if (_preview != null || _failedPreviewUri != null) {
       setState(() {
         _preview = null;
         _resourcePageError = null;
         _nextResourceLine = 1;
+        _failedPreviewUri = null;
+        _error = null;
       });
       return;
     }
@@ -276,11 +284,19 @@ class _ResourceInspectorSheetState extends State<_ResourceInspectorSheet> {
                     const SizedBox(height: 8),
                     _DriveInlineError(
                       message: _error!,
-                      onRetry:
-                          () => _load(
+                      onRetry: () {
+                        final failedUri = _failedPreviewUri;
+                        if (failedUri != null) {
+                          unawaited(_previewUri(failedUri));
+                          return;
+                        }
+                        unawaited(
+                          _load(
                             _failedLocation ?? _path.last,
                             push: _failedLocation != null,
                           ),
+                        );
+                      },
                     ),
                   ],
                   const SizedBox(height: 8),

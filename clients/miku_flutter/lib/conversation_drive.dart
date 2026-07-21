@@ -77,6 +77,40 @@ class _DrivePageState extends State<_DrivePage> {
     }
   }
 
+  Future<void> _openVirtualDir(DriveVirtualDir directory) async {
+    if (_previewingUri != null) return;
+    setState(() {
+      _previewingUri = directory.uri;
+      _error = null;
+    });
+    try {
+      final resource = await widget.client.previewResource(
+        widget.session.id,
+        directory.uri,
+      );
+      if (!mounted) return;
+      setState(() => _previewingUri = null);
+      final item = DriveFeedItem(
+        uri: directory.uri,
+        path: directory.uri,
+        title: directory.title,
+      );
+      await showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder:
+            (context) => _DriveDocumentSheet(item: item, resource: resource),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = '這份 Drive 文件暫時無法預覽。');
+    } finally {
+      if (mounted) setState(() => _previewingUri = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
@@ -189,10 +223,12 @@ class _DrivePageState extends State<_DrivePage> {
                 for (final directory in feed.virtualDirs)
                   Tooltip(
                     message: directory.title,
-                    child: Chip(
+                    child: ActionChip(
+                      key: Key('drive-virtual-dir-${directory.uri}'),
                       avatar: const Icon(Icons.filter_alt_outlined, size: 16),
                       label: Text(_driveDirectoryLabel(directory)),
                       visualDensity: VisualDensity.compact,
+                      onPressed: () => _openVirtualDir(directory),
                     ),
                   ),
               ],

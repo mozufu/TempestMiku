@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'asr/local_asr_engine.dart';
 import 'asr/local_asr_model.dart';
@@ -72,6 +73,13 @@ class _TempestMikuAppState extends State<TempestMikuApp> {
             title: 'TempestMiku',
             debugShowCheckedModeBanner: false,
             themeMode: themeMode,
+            localizationsDelegates: GlobalMaterialLocalizations.delegates,
+            supportedLocales: const [
+              Locale('zh', 'TW'),
+              Locale('zh'),
+              Locale('en'),
+            ],
+            locale: const Locale('zh', 'TW'),
             theme: _theme(Brightness.light),
             darkTheme: _theme(Brightness.dark),
             home: ConversationScreen(

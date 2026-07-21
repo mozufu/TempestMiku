@@ -20,6 +20,10 @@ final class AndroidLocalAsrModelManager implements LocalAsrModelManager {
     'org.mozufu.tempestmiku/voice-model',
   );
 
+  static const EventChannel _installProgressChannel = EventChannel(
+    'org.mozufu.tempestmiku/voice-model-progress',
+  );
+
   @override
   bool get isSupported => Platform.isAndroid;
 
@@ -27,7 +31,52 @@ final class AndroidLocalAsrModelManager implements LocalAsrModelManager {
   Future<LocalAsrModelStatus> inspect() => _status('inspect');
 
   @override
-  Future<LocalAsrModelStatus> install() => _status('install');
+  Future<LocalAsrModelStatus> install({
+    void Function(LocalAsrModelInstallProgress)? onProgress,
+    LocalAsrCancellationToken? cancellation,
+  }) async {
+    cancellation?.throwIfCancelled();
+    final progressEvents = _installProgressChannel
+        .receiveBroadcastStream()
+        .listen(
+          (event) {
+            if (onProgress == null || event is! Map) return;
+            final received = event['receivedBytes'];
+            final total = event['totalBytes'];
+            if (received is! int || total is! int) return;
+            onProgress(
+              LocalAsrModelInstallProgress(
+                receivedBytes: received,
+                totalBytes: total,
+              ),
+            );
+          },
+          onError: (Object _) {
+            // Progress is best-effort; the install result stays authoritative.
+          },
+        );
+    var cancelForwarded = false;
+    Future<void>? cancelForwarder;
+    cancelForwarder = cancellation?.whenCancelled.then((_) async {
+      cancelForwarded = true;
+      try {
+        await _channel.invokeMethod<void>('cancelInstall');
+      } on PlatformException {
+        // Best-effort: the native installer may already have finished.
+      }
+    });
+    try {
+      return await _status('install');
+    } catch (error) {
+      if (cancellation?.isCancelled ?? false) {
+        throw const LocalAsrCancelledException();
+      }
+      rethrow;
+    } finally {
+      await progressEvents.cancel();
+      if (cancelForwarded) await cancelForwarder;
+    }
+  }
 
   @override
   Future<LocalAsrModelStatus> delete() => _status('delete');

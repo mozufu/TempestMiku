@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -240,6 +241,57 @@ void main() {
             .onPressed,
         isNotNull,
       );
+    },
+  );
+
+  testWidgets(
+    'pending install shows byte progress and cancel surfaces the cancelled copy',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final models = _DeferredModelManager();
+      await loadApp(
+        tester,
+        client: ScriptedMikuClient(),
+        capture: _FakeVoiceCapture(),
+        models: models,
+      );
+      await _openSettings(tester);
+      await _scrollSettingsTo(
+        tester,
+        find.byKey(const Key('install-voice-model')),
+      );
+
+      await tester.tap(find.byKey(const Key('install-voice-model')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('confirm-install-voice-model')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(models.installCalls, 1);
+      final progress = tester.widget<LinearProgressIndicator>(
+        find.byKey(const Key('voice-model-install-progress')),
+      );
+      expect(
+        progress.value,
+        closeTo(_deferredReceivedBytes / productionVoiceModelBytes, 0.001),
+      );
+      expect(find.textContaining('下載中'), findsOneWidget);
+      expect(
+        find.byKey(const Key('cancel-voice-model-install')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('cancel-voice-model-install')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(models.lastCancellation?.isCancelled, isTrue);
+      expect(find.text('已取消下載，模型仍保持停用。'), findsOneWidget);
+      expect(find.byKey(const Key('cancel-voice-model-install')), findsNothing);
+      expect(find.text('尚未安裝'), findsOneWidget);
     },
   );
 
@@ -522,8 +574,17 @@ final class _FakeModelManager implements LocalAsrModelManager {
   Future<LocalAsrModelStatus> inspect() async => status;
 
   @override
-  Future<LocalAsrModelStatus> install() async {
+  Future<LocalAsrModelStatus> install({
+    void Function(LocalAsrModelInstallProgress)? onProgress,
+    LocalAsrCancellationToken? cancellation,
+  }) async {
     installCalls += 1;
+    onProgress?.call(
+      const LocalAsrModelInstallProgress(
+        receivedBytes: productionVoiceModelBytes,
+        totalBytes: productionVoiceModelBytes,
+      ),
+    );
     installed = true;
     return status;
   }
@@ -541,5 +602,66 @@ final class _FakeModelManager implements LocalAsrModelManager {
   }) async {
     cancellation?.throwIfCancelled();
     return _FakeWorker('已驗證模型草稿');
+  }
+}
+
+const int _deferredReceivedBytes = 60 * 1024 * 1024;
+
+final class _DeferredModelManager implements LocalAsrModelManager {
+  int installCalls = 0;
+  LocalAsrCancellationToken? lastCancellation;
+  final Completer<LocalAsrModelStatus> result =
+      Completer<LocalAsrModelStatus>();
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<LocalAsrModelStatus> inspect() async => const LocalAsrModelStatus(
+    state: LocalAsrModelState.missing,
+    reason: 'not installed',
+  );
+
+  @override
+  Future<LocalAsrModelStatus> install({
+    void Function(LocalAsrModelInstallProgress)? onProgress,
+    LocalAsrCancellationToken? cancellation,
+  }) {
+    installCalls += 1;
+    lastCancellation = cancellation;
+    onProgress?.call(
+      const LocalAsrModelInstallProgress(
+        receivedBytes: _deferredReceivedBytes,
+        totalBytes: productionVoiceModelBytes,
+      ),
+    );
+    final done = Completer<LocalAsrModelStatus>();
+    cancellation?.whenCancelled.then((_) {
+      if (!done.isCompleted) {
+        done.completeError(const LocalAsrCancelledException());
+      }
+    });
+    unawaited(
+      result.future.then(
+        (status) {
+          if (!done.isCompleted) done.complete(status);
+        },
+        onError: (Object error) {
+          if (!done.isCompleted) done.completeError(error);
+        },
+      ),
+    );
+    return done.future;
+  }
+
+  @override
+  Future<LocalAsrModelStatus> delete() async => inspect();
+
+  @override
+  Future<LocalAsrWorker> spawn({
+    LocalAsrCancellationToken? cancellation,
+  }) async {
+    cancellation?.throwIfCancelled();
+    return _FakeWorker('不應使用');
   }
 }

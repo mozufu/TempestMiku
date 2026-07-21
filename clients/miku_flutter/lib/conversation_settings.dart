@@ -32,7 +32,11 @@ class _SettingsSheet extends StatefulWidget {
   final Future<void> Function() onAuthorityChangeCommitted;
   final Future<void> Function() onAuthorityChangeAborted;
   final Future<LocalAsrModelStatus?> Function() onRefreshVoiceModel;
-  final Future<LocalAsrModelStatus> Function() onInstallVoiceModel;
+  final Future<LocalAsrModelStatus> Function({
+    void Function(LocalAsrModelInstallProgress)? onProgress,
+    LocalAsrCancellationToken? cancellation,
+  })
+  onInstallVoiceModel;
   final Future<LocalAsrModelStatus> Function() onDeleteVoiceModel;
   final Future<VoiceAsrEngineCatalog> Function() onRefreshVoiceCatalog;
   final Future<bool> Function(VoiceAsrEngineKind) onSelectVoiceEngine;
@@ -62,6 +66,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   late VoiceAsrEngineKind _voiceSelection = widget.initialVoiceSelection;
   bool _voiceSettingsLoading = false;
   bool _voiceModelOperation = false;
+  LocalAsrModelInstallProgress? _installProgress;
+  LocalAsrCancellationToken? _installCancellation;
   String? _voiceSettingsError;
   bool _savingThemeMode = false;
   String? _themeModeError;
@@ -641,11 +647,15 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                                     selection: _voiceSelection,
                                     loading: _voiceSettingsLoading,
                                     modelOperation: _voiceModelOperation,
+                                    installing: _installCancellation != null,
+                                    installProgress: _installProgress,
                                     error: _voiceSettingsError,
                                     onSelectLocal: _selectLocalVoiceEngine,
                                     onSelectRemote: _selectRemoteVoiceEngine,
                                     onInstallModel: _confirmInstallVoiceModel,
                                     onDeleteModel: _confirmDeleteVoiceModel,
+                                    onCancelInstall:
+                                        () => _installCancellation?.cancel(),
                                   ),
                                 ),
                                 const SizedBox(height: 20),

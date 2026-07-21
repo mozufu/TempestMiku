@@ -18,7 +18,10 @@ final class UnsupportedLocalAsrModelManager implements LocalAsrModelManager {
   );
 
   @override
-  Future<LocalAsrModelStatus> install() => inspect();
+  Future<LocalAsrModelStatus> install({
+    void Function(LocalAsrModelInstallProgress)? onProgress,
+    LocalAsrCancellationToken? cancellation,
+  }) => inspect();
 
   @override
   Future<LocalAsrModelStatus> delete() => inspect();

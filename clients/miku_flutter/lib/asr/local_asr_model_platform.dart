@@ -59,13 +59,36 @@ final class LocalAsrModelStatus {
   }
 }
 
+/// Byte-level progress for an in-flight voice model download (H7).
+final class LocalAsrModelInstallProgress {
+  const LocalAsrModelInstallProgress({
+    required this.receivedBytes,
+    required this.totalBytes,
+  });
+
+  final int receivedBytes;
+
+  /// [productionVoiceModelBytes] when known, else 0.
+  final int totalBytes;
+
+  double? get fraction =>
+      totalBytes > 0 ? (receivedBytes / totalBytes).clamp(0.0, 1.0) : null;
+}
+
 abstract interface class LocalAsrModelManager implements LocalAsrWorkerFactory {
   bool get isSupported;
 
   Future<LocalAsrModelStatus> inspect();
 
   /// Downloads only after an owner confirms the in-app installation dialog.
-  Future<LocalAsrModelStatus> install();
+  ///
+  /// [onProgress] receives byte-level download progress when the platform can
+  /// report it. Completing [cancellation] aborts the download; the install
+  /// future then fails with [LocalAsrCancelledException].
+  Future<LocalAsrModelStatus> install({
+    void Function(LocalAsrModelInstallProgress)? onProgress,
+    LocalAsrCancellationToken? cancellation,
+  });
 
   Future<LocalAsrModelStatus> delete();
 }

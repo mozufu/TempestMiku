@@ -126,7 +126,7 @@ final class LocalAsrCancellationToken {
     if (isCancelled) throw const LocalAsrCancelledException();
   }
 
-  void _cancel() {
+  void cancel() {
     if (!_signal.isCompleted) _signal.complete();
   }
 }
@@ -194,7 +194,7 @@ final class LocalAsrTranscriber {
       })().timeout(
         timeout,
         onTimeout: () async {
-          operation.cancellation._cancel();
+          operation.cancellation.cancel();
           final worker = operation.worker;
           if (worker != null) await worker.kill();
           throw TimeoutException(
@@ -204,7 +204,7 @@ final class LocalAsrTranscriber {
         },
       );
     } finally {
-      operation.cancellation._cancel();
+      operation.cancellation.cancel();
       final worker = operation.worker;
       if (worker != null) await worker.close();
       if (identical(_activeOperation, operation)) _activeOperation = null;
@@ -215,7 +215,7 @@ final class LocalAsrTranscriber {
   Future<void> cancel() async {
     final operation = _activeOperation;
     if (operation == null) return;
-    operation.cancellation._cancel();
+    operation.cancellation.cancel();
     final worker = operation.worker;
     if (worker != null) await worker.kill();
     await operation.settled.future;

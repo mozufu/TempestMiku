@@ -44,6 +44,8 @@ class MainActivity : FlutterActivity() {
             "org.mozufu.tempestmiku/voice-capture"
         private const val VOICE_MODEL_CHANNEL =
             "org.mozufu.tempestmiku/voice-model"
+        private const val VOICE_MODEL_PROGRESS_CHANNEL =
+            "org.mozufu.tempestmiku/voice-model-progress"
         private const val REQUEST_NOTIFICATIONS = 701
         private const val REQUEST_RECORD_AUDIO = 702
         private val VOICE_CAPTURE_PROCESS_LOCK = Any()
@@ -55,7 +57,9 @@ class MainActivity : FlutterActivity() {
     private var voicePermissionResult: MethodChannel.Result? = null
     private var isActivityForeground = false
     @Volatile private var voiceModelOperationActive = false
+    @Volatile private var voiceInstallCancelled = false
     private var actionSink: EventChannel.EventSink? = null
+    private var voiceModelProgressSink: EventChannel.EventSink? = null
     private var shareImportSink: EventChannel.EventSink? = null
     private val pendingShareImports = SinglePendingEventBuffer<Map<String, Any>>()
     private val pendingActions = mutableListOf<Map<String, Any>>()
@@ -223,12 +227,47 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "inspect" -> runVoiceModelOperation(result) { voiceModels.inspect().toChannelValue() }
-                    "install" -> runVoiceModelOperation(result) { voiceModels.install().toChannelValue() }
+                    "install" -> {
+                        voiceInstallCancelled = false
+                        runVoiceModelOperation(result) {
+                            voiceModels
+                                .install(
+                                    progress = { received, total ->
+                                        runOnUiThread {
+                                            voiceModelProgressSink?.success(
+                                                mapOf(
+                                                    "receivedBytes" to received,
+                                                    "totalBytes" to total,
+                                                ),
+                                            )
+                                        }
+                                    },
+                                    cancelled = { voiceInstallCancelled },
+                                )
+                                .toChannelValue()
+                        }
+                    }
+                    "cancelInstall" -> {
+                        voiceInstallCancelled = true
+                        result.success(null)
+                    }
                     "delete" -> runVoiceModelOperation(result) { voiceModels.delete().toChannelValue() }
                     "toTraditional" -> toTraditional(call.argument<String>("text"), result)
                     else -> result.notImplemented()
                 }
             }
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, VOICE_MODEL_PROGRESS_CHANNEL)
+            .setStreamHandler(
+                object : EventChannel.StreamHandler {
+                    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                        voiceModelProgressSink = events
+                    }
+
+                    override fun onCancel(arguments: Any?) {
+                        voiceModelProgressSink = null
+                    }
+                },
+            )
         try {
             voiceCapture.recoverOrphans()
         } catch (error: Exception) {

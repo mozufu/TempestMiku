@@ -77,11 +77,17 @@ extension _ConversationVoice on _ConversationScreenState {
     return status;
   }
 
-  Future<LocalAsrModelStatus> _installVoiceModel() async {
+  Future<LocalAsrModelStatus> _installVoiceModel({
+    void Function(LocalAsrModelInstallProgress)? onProgress,
+    LocalAsrCancellationToken? cancellation,
+  }) async {
     if (!_localAsrModels.isSupported || widget.localAsrWorkers != null) {
       throw UnsupportedError('本機語音模型無法在這台裝置上管理。');
     }
-    final status = await _localAsrModels.install();
+    final status = await _localAsrModels.install(
+      onProgress: onProgress,
+      cancellation: cancellation,
+    );
     await _applyVoiceModelStatus(status);
     return status;
   }
@@ -549,19 +555,37 @@ extension _VoiceSettingsActions on _SettingsSheetState {
           ),
     );
     if (confirmed != true || !mounted) return;
+    final cancellation = LocalAsrCancellationToken();
     _voiceSetState(() {
       _voiceModelOperation = true;
       _voiceSettingsError = null;
+      _installProgress = null;
+      _installCancellation = cancellation;
     });
     try {
-      final status = await widget.onInstallVoiceModel();
+      final status = await widget.onInstallVoiceModel(
+        onProgress: (progress) {
+          if (!mounted) return;
+          _voiceSetState(() => _installProgress = progress);
+        },
+        cancellation: cancellation,
+      );
       if (!mounted) return;
       _voiceSetState(() => _voiceModelStatus = status);
+    } on LocalAsrCancelledException {
+      if (!mounted) return;
+      _voiceSetState(() => _voiceSettingsError = '已取消下載，模型仍保持停用。');
     } catch (_) {
       if (!mounted) return;
       _voiceSetState(() => _voiceSettingsError = '模型沒有安裝完成或驗證失敗，仍保持停用。');
     } finally {
-      if (mounted) _voiceSetState(() => _voiceModelOperation = false);
+      if (mounted) {
+        _voiceSetState(() {
+          _voiceModelOperation = false;
+          _installProgress = null;
+          _installCancellation = null;
+        });
+      }
     }
   }
 
@@ -615,11 +639,14 @@ class _VoiceSettingsPanel extends StatelessWidget {
     required this.selection,
     required this.loading,
     required this.modelOperation,
+    required this.installing,
+    required this.installProgress,
     required this.error,
     required this.onSelectLocal,
     required this.onSelectRemote,
     required this.onInstallModel,
     required this.onDeleteModel,
+    required this.onCancelInstall,
   });
 
   final LocalAsrModelStatus? modelStatus;
@@ -627,11 +654,14 @@ class _VoiceSettingsPanel extends StatelessWidget {
   final VoiceAsrEngineKind selection;
   final bool loading;
   final bool modelOperation;
+  final bool installing;
+  final LocalAsrModelInstallProgress? installProgress;
   final String? error;
   final VoidCallback onSelectLocal;
   final VoidCallback onSelectRemote;
   final VoidCallback onInstallModel;
   final VoidCallback onDeleteModel;
+  final VoidCallback? onCancelInstall;
 
   @override
   Widget build(BuildContext context) {
@@ -694,7 +724,13 @@ class _VoiceSettingsPanel extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (modelOperation)
+                  if (modelOperation && installing)
+                    TextButton(
+                      key: const Key('cancel-voice-model-install'),
+                      onPressed: onCancelInstall,
+                      child: const Text('取消'),
+                    )
+                  else if (modelOperation)
                     const Padding(
                       padding: EdgeInsets.all(12),
                       child: SizedBox.square(
@@ -718,6 +754,25 @@ class _VoiceSettingsPanel extends StatelessWidget {
                     ),
                 ],
               ),
+              if (modelOperation && installing) ...[
+                const SizedBox(height: 8),
+                LinearProgressIndicator(
+                  key: const Key('voice-model-install-progress'),
+                  value: installProgress?.fraction,
+                ),
+                if (installProgress != null &&
+                    installProgress!.totalBytes > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '下載中 ${(installProgress!.receivedBytes / (1024 * 1024)).round()}'
+                    ' / ${(installProgress!.totalBytes / (1024 * 1024)).round()} MiB',
+                    key: const Key('voice-model-install-progress-label'),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: palette.muted),
+                  ),
+                ],
+              ],
               if (status?.reason.trim().isNotEmpty == true) ...[
                 const SizedBox(height: 6),
                 Text(

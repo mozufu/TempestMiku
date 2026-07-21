@@ -209,6 +209,8 @@ internal class VoiceModelInstaller(
 
     fun install(
         client: VoiceModelHttpClient = UrlConnectionVoiceModelClient(),
+        progress: ((Long, Long) -> Unit)? = null,
+        cancelled: () -> Boolean = { false },
     ): VoiceModelStatus = synchronized(processOperationLock) {
         val existing = inspect()
         if (existing.state == "unsupported" || existing.ready) return@synchronized existing
@@ -221,7 +223,7 @@ internal class VoiceModelInstaller(
         try {
             var total = 0L
             spec.files.forEach { expected ->
-                total += download(expected, staging, client)
+                total += download(expected, staging, client, total, progress, cancelled)
                 check(total <= VOICE_MODEL_MAX_BYTES) { "voice model total exceeded the safety cap" }
             }
             check(total == spec.totalBytes) { "voice model total size did not match" }
@@ -250,10 +252,14 @@ internal class VoiceModelInstaller(
         expected: VoiceModelFile,
         staging: File,
         client: VoiceModelHttpClient,
+        previouslyReceived: Long = 0L,
+        progress: ((Long, Long) -> Unit)? = null,
+        cancelled: () -> Boolean = { false },
     ): Long {
         validateInitialSource(expected)
         var uri = expected.source
         var redirects = 0
+        var lastReported = previouslyReceived
         while (true) {
             client.open(uri).use { response ->
                 if (response.statusCode in setOf(301, 302, 303, 307, 308)) {
@@ -277,6 +283,9 @@ internal class VoiceModelInstaller(
                     BufferedInputStream(response.body).use { input ->
                         val buffer = ByteArray(64 * 1024)
                         while (true) {
+                            if (cancelled()) {
+                                throw InterruptedException("voice model install cancelled")
+                            }
                             val read = input.read(buffer)
                             if (read < 0) break
                             count += read
@@ -285,6 +294,11 @@ internal class VoiceModelInstaller(
                             }
                             digest.update(buffer, 0, read)
                             output.write(buffer, 0, read)
+                            val cumulative = previouslyReceived + count
+                            if (cumulative - lastReported >= 512L * 1024L) {
+                                lastReported = cumulative
+                                progress?.invoke(cumulative, spec.totalBytes)
+                            }
                         }
                     }
                     output.fd.sync()
@@ -293,6 +307,7 @@ internal class VoiceModelInstaller(
                 check(digest.digest().toHex() == expected.sha256) {
                     "${expected.name} SHA-256 did not match the manifest"
                 }
+                progress?.invoke(previouslyReceived + count, spec.totalBytes)
                 return count
             }
         }

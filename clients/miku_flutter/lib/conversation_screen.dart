@@ -148,6 +148,29 @@ class _NoticeItem extends _ConversationItem {
   final bool isError;
 }
 
+sealed class _RenderNode {
+  const _RenderNode();
+}
+
+class _ItemNode extends _RenderNode {
+  const _ItemNode(this.item);
+
+  final _ConversationItem item;
+}
+
+class _ActivityGroupNode extends _RenderNode {
+  _ActivityGroupNode(this.activities);
+
+  final List<_ActivityItem> activities;
+
+  String get key => activities.first.correlationKey ?? activities.first.key;
+
+  bool get hasActive => activities.any(
+    (a) =>
+        a.phase == _ActivityPhase.running || a.phase == _ActivityPhase.paused,
+  );
+}
+
 class _ConversationScreenState extends State<ConversationScreen>
     with WidgetsBindingObserver {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -157,6 +180,7 @@ class _ConversationScreenState extends State<ConversationScreen>
   bool _showScrollToBottom = false;
   bool _reviewedChangeInFlight = false;
   final List<_ConversationItem> _items = [];
+  final Map<String, bool> _activityGroupExpanded = {};
   final List<SharedContent> _pendingImports = [];
   final List<String> _recentImportEventIds = [];
   final Map<String, Set<String>> _trackedTurnIdsBySession = {};
@@ -1547,44 +1571,89 @@ class _ConversationScreenState extends State<ConversationScreen>
         ),
       );
     }
+    final nodes = _renderNodes();
     return ListView.builder(
       key: const Key('conversation-list'),
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(vertical: 24),
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      itemCount: _items.length,
+      itemCount: nodes.length,
       itemBuilder: (context, index) {
-        final item = _items[index];
+        final node = nodes[index];
+        final next = index + 1 < nodes.length ? nodes[index + 1] : null;
         final followedByTurn =
-            item is _MessageItem &&
-            index + 1 < _items.length &&
-            _items[index + 1] is _TurnItem;
+            node is _ItemNode &&
+            node.item is _MessageItem &&
+            next is _ItemNode &&
+            next.item is _TurnItem;
         return Padding(
           padding: EdgeInsets.only(
             bottom:
                 followedByTurn
                     ? 6
-                    : item is _TurnItem
+                    : node is _ItemNode && node.item is _TurnItem
                     ? 14
                     : 18,
           ),
-          child: switch (item) {
-            _MessageItem message => _MessageRow(message: message),
-            _TurnItem turn => _TurnStatusRow(turn: turn),
-            _ActivityItem activity => _ActivityRow(
-              activity: activity,
+          child: switch (node) {
+            _ActivityGroupNode group => _ActivityGroupRow(
+              group: group,
+              expanded: _isActivityGroupExpanded(group),
+              onToggle: () => _toggleActivityGroup(group),
               onOpenResource: _openEventResource,
             ),
-            _ProposalItem proposal => _ProposalRow(proposal: proposal),
-            _ApprovalItem approval => _ApprovalCard(
-              item: approval,
-              onSelect: (option) => _resolveApproval(approval, option),
-            ),
-            _NoticeItem notice => _InlineNotice(notice: notice),
+            _ItemNode itemNode => switch (itemNode.item) {
+              _MessageItem message => _MessageRow(message: message),
+              _TurnItem turn => _TurnStatusRow(turn: turn),
+              _ActivityItem activity => _ActivityRow(
+                activity: activity,
+                onOpenResource: _openEventResource,
+              ),
+              _ProposalItem proposal => _ProposalRow(proposal: proposal),
+              _ApprovalItem approval => _ApprovalCard(
+                item: approval,
+                onSelect: (option) => _resolveApproval(approval, option),
+              ),
+              _NoticeItem notice => _InlineNotice(notice: notice),
+            },
           },
         );
       },
     );
+  }
+
+  List<_RenderNode> _renderNodes() {
+    final nodes = <_RenderNode>[];
+    final run = <_ActivityItem>[];
+    void flush() {
+      if (run.isEmpty) return;
+      if (run.length == 1) {
+        nodes.add(_ItemNode(run.first));
+      } else {
+        nodes.add(_ActivityGroupNode(List.of(run)));
+      }
+      run.clear();
+    }
+
+    for (final item in _items) {
+      if (item is _ActivityItem) {
+        run.add(item);
+      } else {
+        flush();
+        nodes.add(_ItemNode(item));
+      }
+    }
+    flush();
+    return nodes;
+  }
+
+  bool _isActivityGroupExpanded(_ActivityGroupNode group) =>
+      _activityGroupExpanded[group.key] ?? group.hasActive;
+
+  void _toggleActivityGroup(_ActivityGroupNode group) {
+    setState(() {
+      _activityGroupExpanded[group.key] = !_isActivityGroupExpanded(group);
+    });
   }
 
   bool get _canCompose =>
@@ -2299,6 +2368,128 @@ class _ActivityRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ActivityGroupRow extends StatelessWidget {
+  const _ActivityGroupRow({
+    required this.group,
+    required this.expanded,
+    required this.onToggle,
+    required this.onOpenResource,
+  });
+
+  final _ActivityGroupNode group;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final ValueChanged<String> onOpenResource;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+    final activities = group.activities;
+    final active = group.hasActive;
+    final anyFailed = activities.any(
+      (a) =>
+          a.phase == _ActivityPhase.failed ||
+          a.phase == _ActivityPhase.cancelled,
+    );
+    final current = activities.lastWhere(
+      (a) =>
+          a.phase == _ActivityPhase.running ||
+          a.phase == _ActivityPhase.paused,
+      orElse: () => activities.last,
+    );
+    final headerLabel =
+        active
+            ? current.label
+            : anyFailed
+            ? '想一想過程（部分未完成）'
+            : '想一想過程';
+    final Widget mark;
+    if (active) {
+      mark = CircularProgressIndicator(strokeWidth: 1.6, color: palette.miku);
+    } else if (anyFailed) {
+      mark = Icon(
+        Icons.error_outline_rounded,
+        size: 13,
+        color: Theme.of(context).colorScheme.error,
+      );
+    } else {
+      mark = Icon(Icons.check_rounded, size: 13, color: palette.miku);
+    }
+    return Semantics(
+      key: Key('activity-group-${group.key}'),
+      button: true,
+      liveRegion: active,
+      label:
+          '$headerLabel，${activities.length} 個步驟，${expanded ? '已展開' : '已收合'}',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            key: Key('activity-group-toggle-${group.key}'),
+            onTap: onToggle,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 3),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(width: 12, height: 12, child: mark),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          headerLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: palette.muted,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          '${activities.length} 個步驟',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: palette.muted.withValues(alpha: 0.78),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 18,
+                    color: palette.muted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded)
+            Padding(
+              padding: const EdgeInsets.only(left: 12, top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < activities.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 12),
+                    _ActivityRow(
+                      activity: activities[i],
+                      onOpenResource: onOpenResource,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }

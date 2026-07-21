@@ -84,6 +84,57 @@ void main() {
     );
   });
 
+  testWidgets('completed activity runs fold into a collapsible group', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    final session = await loadApp(tester, client);
+
+    for (final node in const ['effect-a', 'effect-b']) {
+      await emit(
+        tester,
+        client,
+        session.id,
+        MikuEvent(
+          type: 'effect_start',
+          id: '$node-start',
+          data: {'nodeId': node},
+        ),
+      );
+    }
+    for (final node in const ['effect-a', 'effect-b']) {
+      await emit(
+        tester,
+        client,
+        session.id,
+        MikuEvent(
+          type: 'effect_result',
+          id: '$node-result',
+          data: {'nodeId': node, 'summary': '$node done'},
+        ),
+      );
+    }
+
+    final header = find.byKey(const Key('activity-group-node:effect-a'));
+    final toggle = find.byKey(const Key('activity-group-toggle-node:effect-a'));
+    expect(header, findsOneWidget);
+    expect(find.text('2 個步驟'), findsOneWidget);
+    // Collapsed by default once every step is terminal.
+    expect(find.byKey(const Key('activity-node:effect-a')), findsNothing);
+    expect(find.byKey(const Key('activity-node:effect-b')), findsNothing);
+
+    await tester.tap(toggle);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.byKey(const Key('activity-node:effect-a')), findsOneWidget);
+    expect(find.byKey(const Key('activity-node:effect-b')), findsOneWidget);
+
+    await tester.tap(toggle);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.byKey(const Key('activity-node:effect-a')), findsNothing);
+  });
+
   testWidgets('keyed effect pause and resume leave sibling activity running', (
     tester,
   ) async {
@@ -207,6 +258,13 @@ void main() {
         data: {...mcpBase, 'status': 'denied'},
       ),
     );
+    // The terminal cell + MCP steps fold into a collapsed group; expand it to
+    // inspect the denied MCP row.
+    await tester.tap(
+      find.byKey(const Key('activity-group-toggle-cell:cell-failed')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
     final deniedMcp = find.byKey(
       const Key(
         'activity-mcp:docs:resource:lookup:sha256:target:sha256:request',

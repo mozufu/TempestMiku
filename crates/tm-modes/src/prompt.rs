@@ -34,6 +34,7 @@ impl ModesConfig {
         let mut prompt = String::new();
 
         push_section(&mut prompt, "Core runtime", base_system_prompt);
+        push_section(&mut prompt, "Current mode", &current_mode_section(&profile));
         push_raw(
             &mut prompt,
             strip_frontmatter(BUNDLED_TM_LANG_FLUENCY_SKILL),
@@ -113,6 +114,22 @@ impl ModesConfig {
             warnings,
         }
     }
+}
+
+/// Names the active mode so the model always knows which capability envelope and posture it is
+/// operating under. Modes otherwise only shape the prompt implicitly (which skills/addenda load);
+/// this states it explicitly.
+fn current_mode_section(profile: &ModeProfile) -> String {
+    let mut section = format!(
+        "You are operating in **{}** mode (`{}`, {} class).",
+        profile.label, profile.mode, profile.capability_class
+    );
+    let description = profile.description.trim();
+    if !description.is_empty() {
+        section.push(' ');
+        section.push_str(description);
+    }
+    section
 }
 
 fn push_section(target: &mut String, title: &str, content: &str) {

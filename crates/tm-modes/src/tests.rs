@@ -145,6 +145,32 @@ fn runtime_fluency_skill_is_pinned_before_identity_for_every_mode() {
 }
 
 #[test]
+fn composed_prompt_states_the_active_mode() {
+    let config = ModesConfig::default();
+
+    let general = config.build_system_prompt(&ModeId::from("general"), "base", "", "");
+    assert!(general.system_prompt.contains("## Current mode"));
+    assert!(
+        general
+            .system_prompt
+            .contains("operating in **General** mode (`general`, conversation class)")
+    );
+
+    let serious = config.build_system_prompt(&ModeId::from("serious_engineer"), "base", "", "");
+    assert!(serious.system_prompt.contains(
+        "operating in **Serious Engineer** mode (`serious_engineer`, engineering class)"
+    ));
+
+    // Unknown modes still announce which id is active so the model is never left guessing.
+    let unknown = config.build_system_prompt(&ModeId::from("mystery_mode"), "base", "", "");
+    assert!(
+        unknown
+            .system_prompt
+            .contains("operating in **mystery_mode** mode (`mystery_mode`, conversation class)")
+    );
+}
+
+#[test]
 fn configured_assets_cannot_replace_runtime_fluency_skill() {
     let root = temp_modes_root();
     write_fixture(

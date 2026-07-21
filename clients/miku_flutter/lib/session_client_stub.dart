@@ -250,10 +250,21 @@ class ScriptedMikuClient
   }
 
   @override
-  Future<MikuSession> createSession() async {
+  Future<MikuSession> createSession({String scope = 'global'}) async {
+    final normalizedScope = scope.trim().isEmpty ? 'global' : scope.trim();
     final id = 'scripted-${_nextId++}';
     final now = DateTime.now();
-    final session = _sessionForMode(id, 'personal_assistant');
+    final base = _sessionForMode(id, 'personal_assistant');
+    final session = MikuSession(
+      id: base.id,
+      status: base.status,
+      mode: base.mode,
+      label: base.label,
+      defaultScope: normalizedScope,
+      activeSkills: base.activeSkills,
+      lastEventId: base.lastEventId,
+      locked: base.locked,
+    );
     _sessions[id] = session;
     _updatedAt[id] = now;
     _messages[id] = [];

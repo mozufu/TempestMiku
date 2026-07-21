@@ -959,9 +959,9 @@ void main() {
     );
 
     // Back out of the project page, then open History from the drawer.
-    await tester.pageBack();
+    await tester.tap(find.byType(BackButton).first);
     await tester.pumpAndSettle();
-    await tester.pageBack();
+    await tester.tap(find.byType(BackButton).first);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
@@ -1095,7 +1095,7 @@ void main() {
         isFalse,
       );
 
-      await tester.pageBack();
+      await tester.tap(find.byType(BackButton).first);
       await tester.pumpAndSettle();
       expect(find.text('保留這段訊息'), findsOneWidget);
       expect(find.text('Miku heard: 保留這段訊息'), findsOneWidget);
@@ -1203,10 +1203,49 @@ void main() {
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
 
-    // §30: items grow from the session's turns; there is no promote affordance.
-    expect(find.text('Open loops'), findsOneWidget);
-    expect(find.text('Decisions'), findsOneWidget);
+    // §30: the next action is primary; accumulated context stays available on demand.
+    expect(find.text('接下來'), findsOneWidget);
+    expect(find.text('Continue from latest session result'), findsOneWidget);
+    expect(find.text('Verify the next UI slice'), findsNothing);
+    expect(find.text('Keep chat as the primary surface'), findsNothing);
+    await tester.tap(find.byKey(const Key('project-context-details')));
+    await tester.pumpAndSettle();
+    expect(find.text('待處理'), findsOneWidget);
+    expect(find.text('Verify the next UI slice'), findsOneWidget);
+    expect(find.text('已決定'), findsOneWidget);
+    expect(find.text('Keep chat as the primary surface'), findsOneWidget);
     expect(find.byKey(const Key('promote-session')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('starts a new conversation inside the selected project', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    final previous = await client.createSession();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('project-tempestmiku')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('在這個 Project 新增對話'), findsOneWidget);
+    expect(find.text('回到目前對話'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('project-new-conversation')));
+    await tester.pumpAndSettle();
+
+    final current = await client.createOrReuseSession();
+    expect(current.id, isNot(previous.id));
+    expect(current.defaultScope, 'project:tempestmiku');
+    expect(find.byKey(const Key('project-page-content')), findsNothing);
+    expect(find.byKey(const Key('conversation-composer')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -1259,6 +1298,8 @@ void main() {
 
     await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('封存 Project'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, '封存'));
     await tester.pumpAndSettle();
 
@@ -1275,7 +1316,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
-    expect(find.text('尚未建立任何 Project。用右上角的「＋」新增一個。'), findsOneWidget);
+    expect(find.text('還沒有 Project。按右上角的「＋」建立第一個。'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();

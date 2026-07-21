@@ -60,6 +60,43 @@ void main() {
     },
   );
 
+  test('native session creation sends the selected project scope', () async {
+    SharedPreferences.setMockInitialValues({});
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+
+    final requestFuture = server.first;
+    final client = NativeMikuSessionClient(
+      tokenStore: MemoryDeviceTokenStore(),
+    );
+    await client.setServerBaseUrl(
+      'http://${server.address.address}:${server.port}',
+    );
+    final creation = client.createSession(scope: 'project:tempestmiku');
+    final request = await requestFuture;
+    final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
+    request.response
+      ..statusCode = HttpStatus.ok
+      ..headers.contentType = ContentType.json
+      ..write(
+        jsonEncode({
+          'id': 'session-project',
+          'status': 'active',
+          'mode': 'personal_assistant',
+          'label': 'Personal Assistant',
+          'defaultScope': 'project:tempestmiku',
+          'activeSkills': const [],
+        }),
+      );
+    await request.response.close();
+
+    final session = await creation;
+    expect(request.method, 'POST');
+    expect(request.uri.path, '/sessions');
+    expect(body, {'scope': 'project:tempestmiku'});
+    expect(session.defaultScope, 'project:tempestmiku');
+  });
+
   test('scripted client deduplicates a repeated caller-owned id', () async {
     final client = ScriptedMikuClient();
     final session = await client.createSession();

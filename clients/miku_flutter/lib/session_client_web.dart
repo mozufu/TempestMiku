@@ -266,8 +266,13 @@ class WebMikuSessionClient
   }
 
   @override
-  Future<MikuSession> createSession() async {
-    final json = await _request('POST', '/sessions');
+  Future<MikuSession> createSession({String scope = 'global'}) async {
+    final normalizedScope = scope.trim().isEmpty ? 'global' : scope.trim();
+    final json = await _request(
+      'POST',
+      '/sessions',
+      body: {'scope': normalizedScope},
+    );
     final session = _sessionFromJson(json);
     _rememberSession(session);
     return session;

@@ -137,7 +137,8 @@ class NativeMikuSessionClient
   Future<MikuSession> createOrReuseSession() => _createOrReuseSessionImpl();
 
   @override
-  Future<MikuSession> createSession() => _createSessionImpl();
+  Future<MikuSession> createSession({String scope = 'global'}) =>
+      _createSessionImpl(scope: scope);
 
   @override
   Future<void> endSession(String sessionId) => _endSessionImpl(sessionId);

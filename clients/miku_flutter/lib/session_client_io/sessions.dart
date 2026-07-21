@@ -26,8 +26,13 @@ extension _NativeSessionsClient on NativeMikuSessionClient {
     return createSession();
   }
 
-  Future<MikuSession> _createSessionImpl() async {
-    final json = await _request('POST', '/sessions');
+  Future<MikuSession> _createSessionImpl({String scope = 'global'}) async {
+    final normalizedScope = scope.trim().isEmpty ? 'global' : scope.trim();
+    final json = await _request(
+      'POST',
+      '/sessions',
+      body: {'scope': normalizedScope},
+    );
     final session = _sessionFromJson(json);
     await _rememberSession(session);
     return session;

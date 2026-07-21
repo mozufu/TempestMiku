@@ -11,6 +11,7 @@ class _ProjectPage extends StatefulWidget {
     required this.session,
     required this.sessionEnded,
     required this.onScopeChanged,
+    required this.onNewConversation,
   });
 
   final MikuSessionClient client;
@@ -20,6 +21,8 @@ class _ProjectPage extends StatefulWidget {
   /// Reports a committed memory-scope change back to the conversation so the composer and Drive
   /// reflect the session's new project (or Global).
   final ValueChanged<String> onScopeChanged;
+
+  final Future<bool> Function(ProjectCatalogEntry project) onNewConversation;
 
   @override
   State<_ProjectPage> createState() => _ProjectPageState();
@@ -36,7 +39,9 @@ class _ProjectPageState extends State<_ProjectPage> {
   String? _switchingProjectId;
   bool _switchingToGlobal = false;
   String? _previewingUri;
+  MikuResourceEntry? _failedPreviewEntry;
   String? _error;
+  bool _startingConversation = false;
   bool _busy = false;
 
   String? get _activeProjectId => _projectIdFromScope(_scope);
@@ -254,6 +259,7 @@ class _ProjectPageState extends State<_ProjectPage> {
       setState(() {
         _entries = entries;
         if (push) _path.add(location);
+        _failedPreviewEntry = null;
       });
     } catch (error) {
       if (!mounted) return;
@@ -270,12 +276,38 @@ class _ProjectPageState extends State<_ProjectPage> {
         _entries = null;
         _path.clear();
         _error = null;
+        _failedPreviewEntry = null;
       });
       return;
     }
     final parent = _path[_path.length - 2];
-    setState(() => _path.removeLast());
+    setState(() {
+      _path.removeLast();
+      _failedPreviewEntry = null;
+    });
     await _loadLocation(parent, push: false);
+  }
+
+  void _continueConversation() {
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _startConversation(ProjectCatalogEntry project) async {
+    if (_startingConversation) return;
+    setState(() {
+      _startingConversation = true;
+      _error = null;
+    });
+    final created = await widget.onNewConversation(project);
+    if (!mounted) return;
+    if (created) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _startingConversation = false;
+      _error = '無法在這個 Project 建立對話，請再試一次。';
+    });
   }
 
   Future<void> _openFile(MikuResourceEntry entry) async {
@@ -283,6 +315,7 @@ class _ProjectPageState extends State<_ProjectPage> {
     setState(() {
       _previewingUri = entry.uri;
       _error = null;
+      _failedPreviewEntry = null;
     });
     try {
       final resource = await widget.client.resolveResource(
@@ -301,7 +334,10 @@ class _ProjectPageState extends State<_ProjectPage> {
       );
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = _friendlyProjectError(error));
+      setState(() {
+        _error = _friendlyProjectError(error);
+        _failedPreviewEntry = entry;
+      });
     } finally {
       if (mounted) setState(() => _previewingUri = null);
     }
@@ -316,14 +352,23 @@ class _ProjectPageState extends State<_ProjectPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Project'),
+          leading:
+              _path.isEmpty
+                  ? const BackButton()
+                  : BackButton(
+                    key: const Key('project-browser-up'),
+                    onPressed: _browserLoading ? null : _goUp,
+                  ),
+          title: Text(_path.isEmpty ? 'Projects' : _path.last.label),
           actions: [
-            IconButton(
-              key: const Key('project-create'),
-              tooltip: '新 Project',
-              onPressed: (_busy || widget.sessionEnded) ? null : _createProject,
-              icon: const Icon(Icons.add_rounded),
-            ),
+            if (_path.isEmpty)
+              IconButton(
+                key: const Key('project-create'),
+                tooltip: '新 Project',
+                onPressed:
+                    (_busy || widget.sessionEnded) ? null : _createProject,
+                icon: const Icon(Icons.add_rounded),
+              ),
           ],
         ),
         body: SafeArea(child: _buildBody()),
@@ -355,16 +400,31 @@ class _ProjectPageState extends State<_ProjectPage> {
         onArchive: _archiveProject,
       );
     }
+    final activeProject =
+        projects.where((project) => project.id == _activeProjectId).firstOrNull;
+    if (activeProject == null) {
+      return _DrawerErrorState(error: '找不到這個 Project。', onRetry: _loadCatalog);
+    }
     return _ProjectDirectoryView(
+      project: activeProject,
       path: _path,
       entries: _entries,
       overview: _overview,
       browserLoading: _browserLoading,
       previewingResourceUri: _previewingUri,
       error: _error,
-      onRetry: () => _loadLocation(_path.last, push: false),
+      onRetry: () {
+        final failed = _failedPreviewEntry;
+        if (failed != null) {
+          unawaited(_openFile(failed));
+          return;
+        }
+        unawaited(_loadLocation(_path.last, push: false));
+      },
       onOpenEntry: _openEntry,
-      onUp: _goUp,
+      startingConversation: _startingConversation,
+      onNewConversation: () => _startConversation(activeProject),
+      onContinueConversation: _continueConversation,
     );
   }
 }
@@ -513,121 +573,244 @@ class _ProjectCatalogList extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
     final busySwitch = switchingProjectId != null || switchingToGlobal || busy;
-    return ListView(
-      key: const Key('project-page-content'),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-      children: [
-        if (error != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: _DrawerErrorState(error: error!, onRetry: onRetry),
-          ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: Semantics(
-            button: true,
-            selected: activeProjectId == null,
-            label:
-                'Global 範圍${activeProjectId == null ? '，目前使用中' : '，不綁定 Project'}',
-            child: ListTile(
-              key: const Key('project-global-scope'),
-              minTileHeight: 52,
-              selected: activeProjectId == null,
-              selectedTileColor: palette.miku.withValues(alpha: 0.10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              leading: const Icon(Icons.public_rounded, size: 21),
-              title: const Text('Global'),
-              subtitle: Text(
-                activeProjectId == null ? '目前對話' : '不綁定 Project 記憶',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing:
-                  switchingToGlobal
-                      ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final horizontal = constraints.maxWidth < 600 ? 16.0 : 28.0;
+        return ListView(
+          key: const Key('project-page-content'),
+          padding: EdgeInsets.fromLTRB(horizontal, 12, horizontal, 28),
+          children: [
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '把對話放回它正在前進的事情裡。',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '選一個 Project，Miku 會沿用它的記憶、下一步與連結資料。',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(color: palette.muted),
+                    ),
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
+                      _DrawerErrorState(error: error!, onRetry: onRetry),
+                    ],
+                    const SizedBox(height: 20),
+                    Text(
+                      '你的 Projects',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelLarge?.copyWith(color: palette.muted),
+                    ),
+                    const SizedBox(height: 8),
+                    if (projects.isEmpty)
+                      const _DrawerEmptyState(
+                        text: '還沒有 Project。按右上角的「＋」建立第一個。',
                       )
-                      : activeProjectId == null
-                      ? Icon(Icons.check_rounded, size: 18, color: palette.miku)
-                      : const Icon(Icons.chevron_right_rounded, size: 20),
-              enabled:
-                  !busySwitch && (!sessionEnded || activeProjectId == null),
-              onTap: onSelectGlobalScope,
-            ),
-          ),
-        ),
-        if (projects.isEmpty)
-          const _DrawerEmptyState(text: '尚未建立任何 Project。用右上角的「＋」新增一個。'),
-        for (final project in projects)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Semantics(
-              button: true,
-              selected: project.id == activeProjectId,
-              label:
-                  '${project.title} Project${project.id == activeProjectId ? '，目前使用中' : ''}',
-              child: ListTile(
-                key: Key('project-${project.id}'),
-                minTileHeight: 52,
-                selected: project.id == activeProjectId,
-                selectedTileColor: palette.miku.withValues(alpha: 0.10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                leading: Icon(
-                  project.hasLinkedFolder
-                      ? Icons.folder_copy_outlined
-                      : Icons.workspaces_outline,
-                  size: 21,
-                ),
-                title: Text(
-                  project.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  project.id == activeProjectId
-                      ? '目前對話'
-                      : sessionEnded
-                      ? '請先開新對話'
-                      : project.hasLinkedFolder
-                      ? '已連結資料夾'
-                      : '規劃用（無連結資料夾）',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing:
-                    switchingProjectId == project.id
-                        ? const SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                        : _ProjectTrailing(
-                          projectId: project.id,
+                    else
+                      for (final project in projects) ...[
+                        _ProjectCatalogCard(
+                          project: project,
                           active: project.id == activeProjectId,
+                          loading: switchingProjectId == project.id,
+                          enabled:
+                              !busySwitch &&
+                              (!sessionEnded || project.id == activeProjectId),
+                          sessionEnded: sessionEnded,
+                          onTap: () => onSelect(project),
                           onArchive:
                               busySwitch ? null : () => onArchive(project),
                         ),
-                enabled:
-                    !busySwitch &&
-                    (!sessionEnded || project.id == activeProjectId),
-                onTap: () => onSelect(project),
+                        const SizedBox(height: 10),
+                      ],
+                    const SizedBox(height: 10),
+                    Text(
+                      '其他對話',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelLarge?.copyWith(color: palette.muted),
+                    ),
+                    const SizedBox(height: 8),
+                    Semantics(
+                      button: true,
+                      selected: activeProjectId == null,
+                      label:
+                          'Global 範圍${activeProjectId == null ? '，目前使用中' : '，不綁定 Project'}',
+                      child: ListTile(
+                        key: const Key('project-global-scope'),
+                        minTileHeight: 58,
+                        selected: activeProjectId == null,
+                        selectedTileColor: palette.miku.withValues(alpha: 0.09),
+                        tileColor: Theme.of(context).colorScheme.surface,
+                        shape: RoundedRectangleBorder(
+                          side: BorderSide(
+                            color:
+                                activeProjectId == null
+                                    ? palette.miku.withValues(alpha: 0.45)
+                                    : palette.outline,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        leading: const Icon(Icons.public_rounded, size: 21),
+                        title: const Text('不使用 Project'),
+                        subtitle: Text(
+                          activeProjectId == null ? '目前對話' : '使用全域記憶',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing:
+                            switchingToGlobal
+                                ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                                : activeProjectId == null
+                                ? Icon(
+                                  Icons.check_circle_rounded,
+                                  size: 20,
+                                  color: palette.miku,
+                                )
+                                : const Icon(
+                                  Icons.chevron_right_rounded,
+                                  size: 20,
+                                ),
+                        enabled:
+                            !busySwitch &&
+                            (!sessionEnded || activeProjectId == null),
+                        onTap: onSelectGlobalScope,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.link_rounded,
+                          size: 17,
+                          color: palette.muted,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            '要加入資料夾，直接在對話中告訴 Miku 路徑；執行前仍會請你核准。',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: palette.muted),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ProjectCatalogCard extends StatelessWidget {
+  const _ProjectCatalogCard({
+    required this.project,
+    required this.active,
+    required this.loading,
+    required this.enabled,
+    required this.sessionEnded,
+    required this.onTap,
+    required this.onArchive,
+  });
+
+  final ProjectCatalogEntry project;
+  final bool active;
+  final bool loading;
+  final bool enabled;
+  final bool sessionEnded;
+  final VoidCallback onTap;
+  final VoidCallback? onArchive;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+    final folderCount = project.linkedFolderUris.length;
+    final subtitle =
+        active
+            ? '目前對話正在這裡'
+            : sessionEnded
+            ? '請先開新對話'
+            : folderCount == 0
+            ? '可直接開始，不需要資料夾'
+            : '$folderCount 個連結資料夾';
+    return Semantics(
+      button: true,
+      selected: active,
+      label: '${project.title} Project${active ? '，目前使用中' : ''}',
+      child: ListTile(
+        key: Key('project-${project.id}'),
+        minTileHeight: 76,
+        contentPadding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+        selected: active,
+        selectedTileColor: palette.miku.withValues(alpha: 0.09),
+        tileColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(
+          side: BorderSide(
+            color:
+                active ? palette.miku.withValues(alpha: 0.48) : palette.outline,
           ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-          child: Text(
-            '要把資料夾連結進 Project，直接在對話中告訴 Miku 路徑；連結需要你核准。',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: palette.muted),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        leading: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: palette.miku.withValues(alpha: active ? 0.16 : 0.08),
+            borderRadius: BorderRadius.circular(13),
+          ),
+          child: Icon(
+            project.hasLinkedFolder
+                ? Icons.folder_copy_outlined
+                : Icons.workspaces_outline,
+            size: 21,
+            color: active ? palette.miku : null,
           ),
         ),
-      ],
+        title: Text(
+          project.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 3),
+          child: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        trailing:
+            loading
+                ? const Padding(
+                  padding: EdgeInsets.only(right: 12),
+                  child: SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+                : _ProjectTrailing(
+                  projectId: project.id,
+                  active: active,
+                  onArchive: onArchive,
+                ),
+        enabled: enabled,
+        onTap: onTap,
+      ),
     );
   }
 }
@@ -650,23 +833,41 @@ class _ProjectTrailing extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (active)
-          Icon(Icons.check_rounded, size: 18, color: palette.miku)
+          Icon(Icons.check_circle_rounded, size: 20, color: palette.miku)
         else
           const Icon(Icons.chevron_right_rounded, size: 20),
-        IconButton(
+        PopupMenuButton<_ProjectMenuAction>(
           key: Key('project-archive-$projectId'),
-          tooltip: '封存 Project',
-          visualDensity: VisualDensity.compact,
-          onPressed: onArchive,
-          icon: const Icon(Icons.archive_outlined, size: 18),
+          tooltip: 'Project 選項',
+          enabled: onArchive != null,
+          onSelected: (action) {
+            if (action == _ProjectMenuAction.archive) onArchive?.call();
+          },
+          itemBuilder:
+              (context) => const [
+                PopupMenuItem(
+                  value: _ProjectMenuAction.archive,
+                  child: Row(
+                    children: [
+                      Icon(Icons.archive_outlined, size: 19),
+                      SizedBox(width: 10),
+                      Text('封存 Project'),
+                    ],
+                  ),
+                ),
+              ],
+          icon: const Icon(Icons.more_horiz_rounded, size: 21),
         ),
       ],
     );
   }
 }
 
+enum _ProjectMenuAction { archive }
+
 class _ProjectDirectoryView extends StatelessWidget {
   const _ProjectDirectoryView({
+    required this.project,
     required this.path,
     required this.entries,
     required this.overview,
@@ -675,9 +876,12 @@ class _ProjectDirectoryView extends StatelessWidget {
     required this.error,
     required this.onRetry,
     required this.onOpenEntry,
-    required this.onUp,
+    required this.onContinueConversation,
+    required this.startingConversation,
+    required this.onNewConversation,
   });
 
+  final ProjectCatalogEntry project;
   final List<_ProjectBrowserLocation> path;
   final List<MikuResourceEntry>? entries;
   final ProjectOverview? overview;
@@ -686,70 +890,126 @@ class _ProjectDirectoryView extends StatelessWidget {
   final String? error;
   final VoidCallback onRetry;
   final ValueChanged<MikuResourceEntry> onOpenEntry;
-  final VoidCallback onUp;
+  final VoidCallback onContinueConversation;
+  final bool startingConversation;
+  final VoidCallback onNewConversation;
 
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
-    final location = path.last;
     final values = entries;
+    final atRoot = path.length == 1;
     return Column(
       key: const Key('project-page-content'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            IconButton(
-              key: const Key('project-browser-up'),
-              tooltip: path.length == 1 ? '返回 Project 清單' : '上一層',
-              onPressed: browserLoading ? null : onUp,
-              icon: const Icon(Icons.arrow_back_rounded, size: 20),
-            ),
-            Expanded(
-              child: Text(
-                location.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            if (browserLoading)
-              const Padding(
-                padding: EdgeInsets.only(right: 12),
-                child: SizedBox.square(
-                  dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 1.8),
-                ),
-              ),
-          ],
-        ),
-        Divider(height: 1, color: palette.outline),
+        if (browserLoading) const LinearProgressIndicator(minHeight: 2),
         Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(8, 6, 8, 20),
-            children: [
-              if (path.length == 1 && overview != null)
-                _ProjectOverviewSummary(overview: overview!),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(6, 6, 6, 2),
-                  child: _DrawerErrorState(error: error!, onRetry: onRetry),
-                ),
-              if (browserLoading && values == null)
-                const _DrawerLoadingState(label: '讀取資料夾…')
-              else if (values == null)
-                const SizedBox.shrink()
-              else if (values.isEmpty)
-                const _DrawerEmptyState(text: '這個資料夾是空的。')
-              else
-                for (final entry in values)
-                  _ProjectResourceTile(
-                    entry: entry,
-                    loading: previewingResourceUri == entry.uri,
-                    enabled: !browserLoading && previewingResourceUri == null,
-                    onTap: () => onOpenEntry(entry),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final horizontal = constraints.maxWidth < 600 ? 16.0 : 28.0;
+              return ListView(
+                padding: EdgeInsets.fromLTRB(horizontal, 16, horizontal, 28),
+                children: [
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (atRoot && overview != null)
+                            _ProjectOverviewSummary(
+                              project: project,
+                              overview: overview!,
+                              onContinueConversation: onContinueConversation,
+                              startingConversation: startingConversation,
+                              onNewConversation: onNewConversation,
+                            ),
+                          if (error != null) ...[
+                            const SizedBox(height: 12),
+                            _DrawerErrorState(error: error!, onRetry: onRetry),
+                          ],
+                          if (atRoot) ...[
+                            const SizedBox(height: 22),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '連結資料',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                                Text(
+                                  project.hasLinkedFolder
+                                      ? '${project.linkedFolderUris.length} 個資料夾'
+                                      : '尚未連結',
+                                  style: Theme.of(context).textTheme.labelMedium
+                                      ?.copyWith(color: palette.muted),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              project.hasLinkedFolder
+                                  ? '只顯示你明確授權給這個 Project 的檔案。'
+                                  : '這個 Project 可以先用來規劃；需要檔案時再請 Miku 連結。',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: palette.muted),
+                            ),
+                            const SizedBox(height: 10),
+                          ],
+                          if (browserLoading && values == null)
+                            const _DrawerLoadingState(label: '讀取資料…')
+                          else if (values == null)
+                            const SizedBox.shrink()
+                          else if (values.isEmpty)
+                            _ProjectFilesEmptyState(
+                              folderless: atRoot && !project.hasLinkedFolder,
+                            )
+                          else
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.surface,
+                                border: Border.all(color: palette.outline),
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              child: Column(
+                                children: [
+                                  for (
+                                    var index = 0;
+                                    index < values.length;
+                                    index++
+                                  ) ...[
+                                    _ProjectResourceTile(
+                                      entry: values[index],
+                                      loading:
+                                          previewingResourceUri ==
+                                          values[index].uri,
+                                      enabled:
+                                          !browserLoading &&
+                                          previewingResourceUri == null,
+                                      onTap: () => onOpenEntry(values[index]),
+                                    ),
+                                    if (index != values.length - 1)
+                                      Divider(
+                                        height: 1,
+                                        indent: 56,
+                                        color: palette.outline,
+                                      ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-            ],
+                ],
+              );
+            },
           ),
         ),
       ],
@@ -757,58 +1017,230 @@ class _ProjectDirectoryView extends StatelessWidget {
   }
 }
 
-class _ProjectOverviewSummary extends StatelessWidget {
-  const _ProjectOverviewSummary({required this.overview});
+class _ProjectFilesEmptyState extends StatelessWidget {
+  const _ProjectFilesEmptyState({required this.folderless});
 
-  final ProjectOverview overview;
+  final bool folderless;
 
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-      child: Column(
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border.all(color: palette.outline),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(overview.status, style: Theme.of(context).textTheme.bodySmall),
-          if (overview.nextActions.isNotEmpty) ...[
-            const SizedBox(height: 7),
-            Text(
-              '下一步',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: palette.muted,
-                fontWeight: FontWeight.w600,
-              ),
+          Icon(
+            folderless ? Icons.link_off_rounded : Icons.folder_open_rounded,
+            color: palette.muted,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              folderless ? '還沒有連結資料。直接在對話裡告訴 Miku 要使用哪個資料夾。' : '這裡目前沒有檔案。',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: palette.muted),
             ),
-            for (final action in overview.nextActions.take(3))
-              Padding(
-                padding: const EdgeInsets.only(top: 3),
-                child: Text(
-                  '• $action',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-          ],
-          if (overview.openLoops.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            _ProjectItemGroup(
-              label: 'Open loops',
-              icon: Icons.pending_actions_outlined,
-              items: overview.openLoops,
-            ),
-          ],
-          if (overview.decisions.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            _ProjectItemGroup(
-              label: 'Decisions',
-              icon: Icons.rule_rounded,
-              items: overview.decisions,
-            ),
-          ],
+          ),
         ],
       ),
+    );
+  }
+}
+
+class _ProjectOverviewSummary extends StatelessWidget {
+  const _ProjectOverviewSummary({
+    required this.project,
+    required this.overview,
+    required this.onContinueConversation,
+    required this.startingConversation,
+    required this.onNewConversation,
+  });
+
+  final ProjectCatalogEntry project;
+  final ProjectOverview overview;
+  final VoidCallback onContinueConversation;
+  final bool startingConversation;
+  final VoidCallback onNewConversation;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _Palette.of(context);
+    final actions =
+        overview.nextActions
+            .where((action) => action.trim().isNotEmpty)
+            .take(3)
+            .toList();
+    final hasContext =
+        overview.openLoops.isNotEmpty || overview.decisions.isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: palette.miku.withValues(alpha: 0.09),
+            border: Border.all(color: palette.miku.withValues(alpha: 0.30)),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: palette.miku.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    child: Icon(
+                      Icons.auto_awesome_mosaic_outlined,
+                      color: palette.miku,
+                      size: 21,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          project.title,
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        if (overview.status.trim().isNotEmpty)
+                          Text(
+                            overview.status,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: palette.muted),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Text(
+                actions.isEmpty ? '下一步還沒整理好' : '接下來',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: palette.miku,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 7),
+              if (actions.isEmpty)
+                Text(
+                  '回到對話，和 Miku 決定一個最小的下一步。',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                )
+              else
+                for (final action in actions)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: palette.miku,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            action,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                key: const Key('project-new-conversation'),
+                onPressed: startingConversation ? null : onNewConversation,
+                icon:
+                    startingConversation
+                        ? const SizedBox.square(
+                          dimension: 17,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : const Icon(Icons.add_comment_outlined, size: 18),
+                label: Text(startingConversation ? '建立中…' : '在這個 Project 新增對話'),
+              ),
+              const SizedBox(height: 4),
+              TextButton.icon(
+                key: const Key('project-continue-conversation'),
+                onPressed: startingConversation ? null : onContinueConversation,
+                icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                label: const Text('回到目前對話'),
+              ),
+            ],
+          ),
+        ),
+        if (hasContext) ...[
+          const SizedBox(height: 12),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              border: Border.all(color: palette.outline),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: ExpansionTile(
+              key: const Key('project-context-details'),
+              tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              leading: Icon(
+                Icons.layers_outlined,
+                size: 21,
+                color: palette.muted,
+              ),
+              title: const Text('Project 脈絡'),
+              subtitle: Text(
+                '${overview.openLoops.length} 個待處理 · ${overview.decisions.length} 個決定',
+                style: TextStyle(color: palette.muted),
+              ),
+              children: [
+                if (overview.openLoops.isNotEmpty)
+                  _ProjectItemGroup(
+                    label: '待處理',
+                    icon: Icons.pending_actions_outlined,
+                    items: overview.openLoops,
+                  ),
+                if (overview.openLoops.isNotEmpty &&
+                    overview.decisions.isNotEmpty)
+                  const SizedBox(height: 14),
+                if (overview.decisions.isNotEmpty)
+                  _ProjectItemGroup(
+                    label: '已決定',
+                    icon: Icons.rule_rounded,
+                    items: overview.decisions,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -828,29 +1260,29 @@ class _ProjectItemGroup extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
-            Icon(icon, size: 16, color: palette.muted),
-            const SizedBox(width: 6),
+            Icon(icon, size: 17, color: palette.muted),
+            const SizedBox(width: 7),
             Text(
               label,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: palette.muted,
-                fontWeight: FontWeight.w600,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: palette.muted),
             ),
           ],
         ),
-        for (final item in items.take(3))
+        const SizedBox(height: 7),
+        for (final item in items.take(5))
           Padding(
-            padding: const EdgeInsets.only(top: 3, left: 22),
+            padding: const EdgeInsets.only(bottom: 6, left: 24),
             child: Text(
               item.text,
-              maxLines: 2,
+              maxLines: 3,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall,
+              style: Theme.of(context).textTheme.bodyMedium,
             ),
           ),
       ],

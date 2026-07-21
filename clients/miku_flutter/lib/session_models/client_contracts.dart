@@ -60,7 +60,7 @@ abstract class MikuSessionClient {
 
   Future<MikuSession> createOrReuseSession();
 
-  Future<MikuSession> createSession();
+  Future<MikuSession> createSession({String scope = 'global'});
 
   Future<void> endSession(String sessionId);
 

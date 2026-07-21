@@ -327,7 +327,11 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   String _nextKey(String prefix) => '$prefix-${_localSequence++}';
 
-  Future<void> _connect({bool createNew = false, String? sessionId}) async {
+  Future<void> _connect({
+    bool createNew = false,
+    String? sessionId,
+    String newSessionScope = 'global',
+  }) async {
     assert(!createNew || sessionId == null);
     final generation = ++_connectionGeneration;
     if (mounted) {
@@ -341,7 +345,9 @@ class _ConversationScreenState extends State<ConversationScreen>
     try {
       late final LoadedSession loaded;
       if (createNew) {
-        final session = await widget.client.createSession();
+        final session = await widget.client.createSession(
+          scope: newSessionScope,
+        );
         _cancelEventStream();
         loaded = await widget.client.loadSession(session.id);
       } else if (sessionId != null) {
@@ -406,6 +412,17 @@ class _ConversationScreenState extends State<ConversationScreen>
   void _startNewConversation() {
     _composerController.clear();
     unawaited(_connect(createNew: true));
+  }
+
+  Future<bool> _startProjectConversation(ProjectCatalogEntry project) async {
+    final previousSessionId = _session?.id;
+    _composerController.clear();
+    await _connect(createNew: true, newSessionScope: project.memoryScope);
+    final session = _session;
+    return session != null &&
+        session.id != previousSessionId &&
+        session.defaultScope == project.memoryScope &&
+        _presence != _PresenceState.offline;
   }
 
   Future<bool> _prepareDeviceAuthorityMutation(
@@ -729,6 +746,7 @@ class _ConversationScreenState extends State<ConversationScreen>
               session: session,
               sessionEnded: _presence == _PresenceState.ended,
               onScopeChanged: _applyScope,
+              onNewConversation: _startProjectConversation,
             ),
       ),
     );

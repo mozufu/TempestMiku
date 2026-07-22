@@ -145,6 +145,59 @@ pub(crate) fn sanitize_memory_summary_persistence(
     Ok(summary)
 }
 
+pub(crate) fn sanitize_evolution_episode_persistence(
+    mut episode: tm_memory::NewEvolutionEpisodeRecord,
+) -> Result<tm_memory::NewEvolutionEpisodeRecord> {
+    reject_sensitive_persistence_fields([
+        (
+            "evolution episode owner subject",
+            episode.owner_subject.as_str(),
+        ),
+        (
+            "evolution episode memory scope",
+            episode.memory_scope.as_str(),
+        ),
+    ])?;
+    episode.owner_subject = redact_persisted_text(&episode.owner_subject);
+    episode.memory_scope = redact_persisted_text(&episode.memory_scope);
+    Ok(episode)
+}
+
+pub(crate) fn sanitize_experience_trace_persistence(
+    mut trace: tm_memory::NewExperienceTraceRecord,
+) -> Result<tm_memory::NewExperienceTraceRecord> {
+    if let Some(capability) = trace.capability.as_deref() {
+        reject_sensitive_persistence_fields([("experience trace capability", capability)])?;
+    }
+    trace.action_summary = redact_persisted_text(&trace.action_summary);
+    trace.observation_summary = redact_persisted_text(&trace.observation_summary);
+    trace.error_signature = trace
+        .error_signature
+        .map(|signature| redact_persisted_text(&signature));
+    Ok(trace)
+}
+pub(crate) fn validate_experience_trace_replacement(
+    episode_id: Uuid,
+    traces: &[tm_memory::NewExperienceTraceRecord],
+) -> Result<()> {
+    if traces.iter().any(|trace| trace.episode_id != episode_id) {
+        return Err(ServerError::InvalidRequest(
+            "experience trace episode does not match replacement target".to_string(),
+        ));
+    }
+    let mut ordinals = std::collections::BTreeSet::new();
+    if traces.iter().any(|trace| !ordinals.insert(trace.ordinal)) {
+        return Err(ServerError::InvalidRequest(
+            "experience trace ordinals must be unique".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn sanitize_turn_feedback_comment(comment: Option<&str>) -> Option<String> {
+    comment.map(redact_persisted_text)
+}
+
 pub(crate) fn sanitize_skill_proposal_persistence(
     mut proposal: NewSkillProposalRecord,
 ) -> Result<NewSkillProposalRecord> {

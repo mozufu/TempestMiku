@@ -372,6 +372,77 @@ impl Store for ClaimFailureStore {
         panic!("unused store method memory_summaries")
     }
 
+    async fn upsert_evolution_episode(
+        &self,
+        _new: tm_memory::NewEvolutionEpisodeRecord,
+    ) -> Result<(tm_memory::EvolutionEpisodeRecord, bool)> {
+        panic!("unused store method upsert_evolution_episode")
+    }
+
+    async fn evolution_episode_for_turn(
+        &self,
+        _turn_id: Uuid,
+    ) -> Result<Option<tm_memory::EvolutionEpisodeRecord>> {
+        panic!("unused store method evolution_episode_for_turn")
+    }
+
+    async fn evolution_episodes(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+        _limit: usize,
+    ) -> Result<Vec<tm_memory::EvolutionEpisodeRecord>> {
+        panic!("unused store method evolution_episodes")
+    }
+
+    async fn evolution_episode(&self, _id: Uuid) -> Result<tm_memory::EvolutionEpisodeRecord> {
+        panic!("unused store method evolution_episode")
+    }
+
+    async fn replace_experience_traces(
+        &self,
+        _episode_id: Uuid,
+        _traces: Vec<tm_memory::NewExperienceTraceRecord>,
+    ) -> Result<Vec<tm_memory::ExperienceTraceRecord>> {
+        panic!("unused store method replace_experience_traces")
+    }
+
+    async fn experience_traces(
+        &self,
+        _episode_id: Uuid,
+    ) -> Result<Vec<tm_memory::ExperienceTraceRecord>> {
+        panic!("unused store method experience_traces")
+    }
+
+    async fn set_episode_valuation(
+        &self,
+        _episode_id: Uuid,
+        _terminal_reward: f32,
+        _reward_source: tm_memory::RewardSource,
+        _feedback_outcome: Option<tm_memory::FeedbackOutcome>,
+        _trace_values: &[(Uuid, f32)],
+        _status: tm_memory::EpisodeStatus,
+    ) -> Result<tm_memory::EvolutionEpisodeRecord> {
+        panic!("unused store method set_episode_valuation")
+    }
+
+    async fn record_turn_feedback(
+        &self,
+        _session_id: Uuid,
+        _turn_id: Uuid,
+        _outcome: tm_memory::FeedbackOutcome,
+        _comment: Option<&str>,
+    ) -> Result<bool> {
+        panic!("unused store method record_turn_feedback")
+    }
+
+    async fn turn_feedback(
+        &self,
+        _turn_id: Uuid,
+    ) -> Result<Option<(tm_memory::FeedbackOutcome, Option<String>)>> {
+        panic!("unused store method turn_feedback")
+    }
+
     async fn upsert_skill_proposal(
         &self,
         _proposal: NewSkillProposalRecord,

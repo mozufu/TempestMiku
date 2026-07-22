@@ -6,10 +6,11 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus,
-    MemoryRecordKind, MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord,
-    NewMemoryEmbeddingJob, NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord,
-    SkillProposalStatus, StoredMemoryRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, ExperienceTraceRecord,
+    FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus, MemoryRecordKind,
+    MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord, NewEvolutionEpisodeRecord,
+    NewExperienceTraceRecord, NewMemoryEmbeddingJob, NewMemorySummaryRecord,
+    NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus, StoredMemoryRecord,
 };
 use tm_modes::ReviewProposalStatus;
 use uuid::Uuid;
@@ -19,9 +20,11 @@ use crate::{Result, ServerError};
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_approval_request_persistence,
     sanitize_cron_job_persistence, sanitize_cron_run_persistence, sanitize_durable_memory_record,
-    sanitize_evolution_review_proposal_persistence, sanitize_memory_summary_persistence,
+    sanitize_evolution_episode_persistence, sanitize_evolution_review_proposal_persistence,
+    sanitize_experience_trace_persistence, sanitize_memory_summary_persistence,
     sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
-    sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
+    sanitize_skill_proposal_persistence, sanitize_turn_feedback_comment, turn_content_hash,
+    validate_experience_trace_replacement, validate_persistence_identifier,
     validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
 
@@ -75,6 +78,9 @@ struct Inner {
     projects: BTreeMap<String, ProjectRecord>,
     dream_queue: Vec<DreamQueueRecord>,
     memory_summaries: Vec<MemorySummaryRecord>,
+    evolution_episodes: Vec<EvolutionEpisodeRecord>,
+    experience_traces: Vec<ExperienceTraceRecord>,
+    turn_feedback: BTreeMap<Uuid, (Uuid, FeedbackOutcome, Option<String>)>,
     skill_proposals: Vec<SkillProposalRecord>,
     cron_jobs: Vec<CronJobRecord>,
     cron_runs: Vec<CronRunRecord>,
@@ -2978,6 +2984,227 @@ impl Store for InMemoryStore {
         summaries.sort_by_key(|summary| std::cmp::Reverse(summary.updated_at));
         summaries.truncate(limit);
         Ok(summaries)
+    }
+    async fn upsert_evolution_episode(
+        &self,
+        new: NewEvolutionEpisodeRecord,
+    ) -> Result<(EvolutionEpisodeRecord, bool)> {
+        let new = sanitize_evolution_episode_persistence(new)?;
+        self.get_session(new.session_id).await?;
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .evolution_episodes
+            .iter()
+            .find(|episode| episode.turn_id == new.turn_id)
+        {
+            return Ok((existing.clone(), false));
+        }
+        let now = Utc::now();
+        let record = EvolutionEpisodeRecord {
+            id: Uuid::new_v4(),
+            session_id: new.session_id,
+            turn_id: new.turn_id,
+            owner_subject: new.owner_subject,
+            memory_scope: new.memory_scope,
+            status: tm_memory::EpisodeStatus::Captured,
+            terminal_reward: None,
+            reward_source: None,
+            feedback_outcome: None,
+            trace_count: 0,
+            created_at: now,
+            updated_at: now,
+        };
+        inner.evolution_episodes.push(record.clone());
+        Ok((record, true))
+    }
+
+    async fn evolution_episode_for_turn(
+        &self,
+        turn_id: Uuid,
+    ) -> Result<Option<EvolutionEpisodeRecord>> {
+        Ok(self
+            .inner
+            .lock()
+            .evolution_episodes
+            .iter()
+            .find(|episode| episode.turn_id == turn_id)
+            .cloned())
+    }
+
+    async fn evolution_episodes(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        limit: usize,
+    ) -> Result<Vec<EvolutionEpisodeRecord>> {
+        let mut episodes = self
+            .inner
+            .lock()
+            .evolution_episodes
+            .iter()
+            .filter(|episode| {
+                episode.owner_subject == owner_subject && episode.memory_scope == memory_scope
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        episodes.sort_by_key(|episode| std::cmp::Reverse(episode.updated_at));
+        episodes.truncate(limit);
+        Ok(episodes)
+    }
+
+    async fn evolution_episode(&self, id: Uuid) -> Result<EvolutionEpisodeRecord> {
+        self.inner
+            .lock()
+            .evolution_episodes
+            .iter()
+            .find(|episode| episode.id == id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {id}")))
+    }
+
+    async fn replace_experience_traces(
+        &self,
+        episode_id: Uuid,
+        traces: Vec<NewExperienceTraceRecord>,
+    ) -> Result<Vec<ExperienceTraceRecord>> {
+        let traces = traces
+            .into_iter()
+            .map(sanitize_experience_trace_persistence)
+            .collect::<Result<Vec<_>>>()?;
+        validate_experience_trace_replacement(episode_id, &traces)?;
+        let mut inner = self.inner.lock();
+        let episode_index = inner
+            .evolution_episodes
+            .iter()
+            .position(|episode| episode.id == episode_id)
+            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
+        let trace_count = u32::try_from(traces.len())
+            .map_err(|_| ServerError::InvalidRequest("too many experience traces".to_string()))?;
+        let now = Utc::now();
+        let records = traces
+            .into_iter()
+            .map(|trace| ExperienceTraceRecord {
+                id: Uuid::new_v4(),
+                episode_id: trace.episode_id,
+                ordinal: trace.ordinal,
+                kind: trace.kind,
+                capability: trace.capability,
+                action_summary: trace.action_summary,
+                observation_summary: trace.observation_summary,
+                error_signature: trace.error_signature,
+                value: None,
+                event_seq: trace.event_seq,
+                result_event_seq: trace.result_event_seq,
+                created_at: now,
+            })
+            .collect::<Vec<_>>();
+        inner
+            .experience_traces
+            .retain(|trace| trace.episode_id != episode_id);
+        inner.experience_traces.extend(records.iter().cloned());
+        inner.evolution_episodes[episode_index].trace_count = trace_count;
+        inner.evolution_episodes[episode_index].updated_at = now;
+        Ok(records)
+    }
+
+    async fn experience_traces(&self, episode_id: Uuid) -> Result<Vec<ExperienceTraceRecord>> {
+        let mut traces = self
+            .inner
+            .lock()
+            .experience_traces
+            .iter()
+            .filter(|trace| trace.episode_id == episode_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        traces.sort_by_key(|trace| trace.ordinal);
+        Ok(traces)
+    }
+
+    async fn set_episode_valuation(
+        &self,
+        episode_id: Uuid,
+        terminal_reward: f32,
+        reward_source: tm_memory::RewardSource,
+        feedback_outcome: Option<FeedbackOutcome>,
+        trace_values: &[(Uuid, f32)],
+        status: tm_memory::EpisodeStatus,
+    ) -> Result<EvolutionEpisodeRecord> {
+        if !terminal_reward.is_finite() || trace_values.iter().any(|(_, value)| !value.is_finite())
+        {
+            return Err(ServerError::InvalidRequest(
+                "evolution values must be finite".to_string(),
+            ));
+        }
+        let mut inner = self.inner.lock();
+        let episode_index = inner
+            .evolution_episodes
+            .iter()
+            .position(|episode| episode.id == episode_id)
+            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
+        for (trace_id, _) in trace_values {
+            if !inner
+                .experience_traces
+                .iter()
+                .any(|trace| trace.id == *trace_id && trace.episode_id == episode_id)
+            {
+                return Err(ServerError::NotFound(format!(
+                    "experience trace {trace_id} in episode {episode_id}"
+                )));
+            }
+        }
+        for (trace_id, value) in trace_values {
+            if let Some(trace) = inner
+                .experience_traces
+                .iter_mut()
+                .find(|trace| trace.id == *trace_id)
+            {
+                trace.value = Some(*value);
+            }
+        }
+        let episode = &mut inner.evolution_episodes[episode_index];
+        episode.terminal_reward = Some(terminal_reward);
+        episode.reward_source = Some(reward_source);
+        episode.feedback_outcome = feedback_outcome;
+        episode.status = status;
+        episode.updated_at = Utc::now();
+        Ok(episode.clone())
+    }
+
+    async fn record_turn_feedback(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        outcome: FeedbackOutcome,
+        comment: Option<&str>,
+    ) -> Result<bool> {
+        self.get_session(session_id).await?;
+        let comment = sanitize_turn_feedback_comment(comment);
+        let mut inner = self.inner.lock();
+        if let Some((existing_session_id, existing_outcome, _)) = inner.turn_feedback.get(&turn_id)
+        {
+            if *existing_session_id == session_id && *existing_outcome == outcome {
+                return Ok(false);
+            }
+            return Err(ServerError::Conflict(
+                "turn feedback already recorded".to_string(),
+            ));
+        }
+        inner
+            .turn_feedback
+            .insert(turn_id, (session_id, outcome, comment));
+        Ok(true)
+    }
+
+    async fn turn_feedback(
+        &self,
+        turn_id: Uuid,
+    ) -> Result<Option<(FeedbackOutcome, Option<String>)>> {
+        Ok(self
+            .inner
+            .lock()
+            .turn_feedback
+            .get(&turn_id)
+            .map(|(_, outcome, comment)| (*outcome, comment.clone())))
     }
 
     async fn upsert_skill_proposal(

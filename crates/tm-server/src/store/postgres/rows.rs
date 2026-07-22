@@ -2,10 +2,11 @@ use serde_json::Value;
 use tm_host::EvolutionAuditRecord;
 use tm_memory::{
     DreamQueueRecord, DreamReason, DreamStatus, EmbeddingNormalization, EmbeddingProvenance,
-    EmbeddingProvider, EpisodicMemoryRecord, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus,
-    MemoryRecordKind, MemoryRecordLinks, MemoryRecordResource, MemoryRecordStatus,
-    MemorySummaryKind, MemorySummaryRecord, ReembeddingState, SemanticMemoryRecord,
-    SkillProposalRecord, SkillProposalStatus, SkillVerification, StoredMemoryRecord,
+    EmbeddingProvider, EpisodicMemoryRecord, EvolutionEpisodeRecord, ExperienceTraceRecord,
+    MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus, MemoryRecordKind, MemoryRecordLinks,
+    MemoryRecordResource, MemoryRecordStatus, MemorySummaryKind, MemorySummaryRecord,
+    ReembeddingState, SemanticMemoryRecord, SkillProposalRecord, SkillProposalStatus,
+    SkillVerification, StoredMemoryRecord,
 };
 
 use crate::{Result, ServerError};
@@ -104,6 +105,64 @@ pub(super) fn row_to_cron_run(row: tokio_postgres::Row) -> CronRunRecord {
         last_error: row.get("last_error"),
         result_json: row.get("result_json"),
     }
+}
+
+pub(super) fn row_to_evolution_episode(row: tokio_postgres::Row) -> Result<EvolutionEpisodeRecord> {
+    let status = row
+        .get::<_, String>("status")
+        .parse()
+        .map_err(|error: tm_memory::UnknownEpisodeStatus| ServerError::Store(error.to_string()))?;
+    let reward_source = row
+        .get::<_, Option<String>>("reward_source")
+        .map(|source| source.parse())
+        .transpose()
+        .map_err(|error: tm_memory::UnknownRewardSource| ServerError::Store(error.to_string()))?;
+    let feedback_outcome = row
+        .get::<_, Option<String>>("feedback_outcome")
+        .map(|outcome| outcome.parse())
+        .transpose()
+        .map_err(|error: tm_memory::UnknownFeedbackOutcome| {
+            ServerError::Store(error.to_string())
+        })?;
+    let trace_count = u32::try_from(row.get::<_, i32>("trace_count"))
+        .map_err(|_| ServerError::Store("negative evolution trace count".to_string()))?;
+    Ok(EvolutionEpisodeRecord {
+        id: row.get("id"),
+        session_id: row.get("session_id"),
+        turn_id: row.get("turn_id"),
+        owner_subject: row.get("owner_subject"),
+        memory_scope: row.get("memory_scope"),
+        status,
+        terminal_reward: row.get("terminal_reward"),
+        reward_source,
+        feedback_outcome,
+        trace_count,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub(super) fn row_to_experience_trace(row: tokio_postgres::Row) -> Result<ExperienceTraceRecord> {
+    let kind = row
+        .get::<_, String>("kind")
+        .parse()
+        .map_err(|error: tm_memory::UnknownTraceKind| ServerError::Store(error.to_string()))?;
+    let ordinal = u32::try_from(row.get::<_, i32>("ordinal"))
+        .map_err(|_| ServerError::Store("negative experience trace ordinal".to_string()))?;
+    Ok(ExperienceTraceRecord {
+        id: row.get("id"),
+        episode_id: row.get("episode_id"),
+        ordinal,
+        kind,
+        capability: row.get("capability"),
+        action_summary: row.get("action_summary"),
+        observation_summary: row.get("observation_summary"),
+        error_signature: row.get("error_signature"),
+        value: row.get("value"),
+        event_seq: row.get("event_seq"),
+        result_event_seq: row.get("result_event_seq"),
+        created_at: row.get("created_at"),
+    })
 }
 
 pub(super) fn row_to_memory_summary(row: tokio_postgres::Row) -> Result<MemorySummaryRecord> {

@@ -616,6 +616,50 @@ pub trait Store: Send + Sync + 'static {
     async fn memory_summary(&self, id: Uuid) -> Result<MemorySummaryRecord>;
     async fn memory_summaries(&self, scope: &str, limit: usize)
     -> Result<Vec<MemorySummaryRecord>>;
+    async fn upsert_evolution_episode(
+        &self,
+        new: tm_memory::NewEvolutionEpisodeRecord,
+    ) -> Result<(tm_memory::EvolutionEpisodeRecord, bool)>;
+    async fn evolution_episode_for_turn(
+        &self,
+        turn_id: Uuid,
+    ) -> Result<Option<tm_memory::EvolutionEpisodeRecord>>;
+    async fn evolution_episodes(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        limit: usize,
+    ) -> Result<Vec<tm_memory::EvolutionEpisodeRecord>>;
+    async fn evolution_episode(&self, id: Uuid) -> Result<tm_memory::EvolutionEpisodeRecord>;
+    async fn replace_experience_traces(
+        &self,
+        episode_id: Uuid,
+        traces: Vec<tm_memory::NewExperienceTraceRecord>,
+    ) -> Result<Vec<tm_memory::ExperienceTraceRecord>>;
+    async fn experience_traces(
+        &self,
+        episode_id: Uuid,
+    ) -> Result<Vec<tm_memory::ExperienceTraceRecord>>;
+    async fn set_episode_valuation(
+        &self,
+        episode_id: Uuid,
+        terminal_reward: f32,
+        reward_source: tm_memory::RewardSource,
+        feedback_outcome: Option<tm_memory::FeedbackOutcome>,
+        trace_values: &[(Uuid, f32)],
+        status: tm_memory::EpisodeStatus,
+    ) -> Result<tm_memory::EvolutionEpisodeRecord>;
+    async fn record_turn_feedback(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        outcome: tm_memory::FeedbackOutcome,
+        comment: Option<&str>,
+    ) -> Result<bool>;
+    async fn turn_feedback(
+        &self,
+        turn_id: Uuid,
+    ) -> Result<Option<(tm_memory::FeedbackOutcome, Option<String>)>>;
     async fn upsert_skill_proposal(
         &self,
         proposal: NewSkillProposalRecord,

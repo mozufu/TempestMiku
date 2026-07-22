@@ -126,6 +126,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "session_project_memory_policy",
         sql: include_str!("../../../migrations/0023_session_project_memory_policy.sql"),
     },
+    Migration {
+        version: 24,
+        name: "evolution_episodes",
+        sql: include_str!("../../../migrations/0024_evolution_episodes.sql"),
+    },
 ];
 
 impl PostgresStore {

@@ -10,18 +10,19 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use rows::{
     row_to_approval_effect, row_to_approval_request, row_to_cron_job, row_to_cron_run,
-    row_to_dream_record, row_to_evolution_audit, row_to_evolution_review_proposal,
-    row_to_memory_embedding_job, row_to_memory_summary, row_to_message_record, row_to_project,
-    row_to_project_item, row_to_session_record, row_to_session_turn, row_to_skill_proposal,
-    row_to_stored_memory_record,
+    row_to_dream_record, row_to_evolution_audit, row_to_evolution_episode,
+    row_to_evolution_review_proposal, row_to_experience_trace, row_to_memory_embedding_job,
+    row_to_memory_summary, row_to_message_record, row_to_project, row_to_project_item,
+    row_to_session_record, row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
 };
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus, EvolutionPolicyReason};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, MemoryEmbeddingJobRecord, MemoryRecordKind,
-    MemoryRecordResource, MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord,
-    NewMemoryEmbeddingJob, NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord,
-    SkillProposalStatus, StoredMemoryRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, ExperienceTraceRecord,
+    FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryRecordKind, MemoryRecordResource,
+    MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord, NewEvolutionEpisodeRecord,
+    NewExperienceTraceRecord, NewMemoryEmbeddingJob, NewMemorySummaryRecord,
+    NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus, StoredMemoryRecord,
 };
 use tm_modes::{ReviewProposalStatus, ReviewProposalTarget};
 use tokio_postgres::{Config as PostgresConfig, NoTls, error::SqlState};
@@ -34,9 +35,11 @@ use memory_write::upsert_typed_memory_record;
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_approval_request_persistence,
     sanitize_cron_job_persistence, sanitize_cron_run_persistence, sanitize_durable_memory_record,
-    sanitize_evolution_review_proposal_persistence, sanitize_memory_summary_persistence,
+    sanitize_evolution_episode_persistence, sanitize_evolution_review_proposal_persistence,
+    sanitize_experience_trace_persistence, sanitize_memory_summary_persistence,
     sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
-    sanitize_skill_proposal_persistence, turn_content_hash, validate_persistence_identifier,
+    sanitize_skill_proposal_persistence, sanitize_turn_feedback_comment, turn_content_hash,
+    validate_experience_trace_replacement, validate_persistence_identifier,
     validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
 
@@ -88,6 +91,7 @@ fn evolution_audit_params(
 }
 
 pub struct PostgresStore {
+    evolution_mutation_client: tokio::sync::Mutex<tokio_postgres::Client>,
     client: tokio_postgres::Client,
     memory_mutation_client: tokio::sync::Mutex<tokio_postgres::Client>,
     egress_state_client: tokio::sync::Mutex<tokio_postgres::Client>,
@@ -249,6 +253,17 @@ impl PostgresStore {
                 tracing::error!(%err, "postgres memory mutation connection failed");
             }
         });
+        let (evolution_mutation_client, evolution_mutation_connection) = config
+            .clone()
+            .connect(NoTls)
+            .await
+            .map_err(|err| ServerError::Store(err.to_string()))?;
+        tokio::spawn(async move {
+            if let Err(err) = evolution_mutation_connection.await {
+                let err = tm_memory::redact_dream_text(&err.to_string()).text;
+                tracing::error!(%err, "postgres evolution mutation connection failed");
+            }
+        });
         let (egress_state_client, egress_state_connection) = config
             .connect(NoTls)
             .await
@@ -261,6 +276,7 @@ impl PostgresStore {
         });
         let mut store = Self {
             client,
+            evolution_mutation_client: tokio::sync::Mutex::new(evolution_mutation_client),
             memory_mutation_client: tokio::sync::Mutex::new(memory_mutation_client),
             egress_state_client: tokio::sync::Mutex::new(egress_state_client),
         };
@@ -4613,6 +4629,328 @@ impl Store for PostgresStore {
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
         rows.into_iter().map(row_to_memory_summary).collect()
+    }
+    async fn upsert_evolution_episode(
+        &self,
+        new: NewEvolutionEpisodeRecord,
+    ) -> Result<(EvolutionEpisodeRecord, bool)> {
+        let new = sanitize_evolution_episode_persistence(new)?;
+        self.get_session(new.session_id).await?;
+        let id = Uuid::new_v4();
+        let inserted = self
+            .client
+            .query_opt(
+                "insert into evolution_episodes (
+                    id, session_id, turn_id, owner_subject, memory_scope, status,
+                    created_at, updated_at
+                 ) values ($1, $2, $3, $4, $5, 'captured', now(), now())
+                 on conflict (turn_id) do nothing
+                 returning id, session_id, turn_id, owner_subject, memory_scope, status,
+                           terminal_reward, reward_source, feedback_outcome, trace_count,
+                           created_at, updated_at",
+                &[
+                    &id,
+                    &new.session_id,
+                    &new.turn_id,
+                    &new.owner_subject,
+                    &new.memory_scope,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let Some(row) = inserted {
+            return Ok((row_to_evolution_episode(row)?, true));
+        }
+        self.evolution_episode_for_turn(new.turn_id)
+            .await?
+            .map(|episode| (episode, false))
+            .ok_or_else(|| ServerError::Store("evolution episode upsert lost its row".to_string()))
+    }
+
+    async fn evolution_episode_for_turn(
+        &self,
+        turn_id: Uuid,
+    ) -> Result<Option<EvolutionEpisodeRecord>> {
+        self.client
+            .query_opt(
+                "select id, session_id, turn_id, owner_subject, memory_scope, status,
+                        terminal_reward, reward_source, feedback_outcome, trace_count,
+                        created_at, updated_at
+                   from evolution_episodes where turn_id = $1",
+                &[&turn_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .map(row_to_evolution_episode)
+            .transpose()
+    }
+
+    async fn evolution_episodes(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        limit: usize,
+    ) -> Result<Vec<EvolutionEpisodeRecord>> {
+        let limit = i64::try_from(limit).map_err(|_| {
+            ServerError::InvalidRequest("evolution episode limit is too large".to_string())
+        })?;
+        self.client
+            .query(
+                "select id, session_id, turn_id, owner_subject, memory_scope, status,
+                        terminal_reward, reward_source, feedback_outcome, trace_count,
+                        created_at, updated_at
+                   from evolution_episodes
+                  where owner_subject = $1 and memory_scope = $2
+                  order by updated_at desc
+                  limit $3",
+                &[&owner_subject, &memory_scope, &limit],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .into_iter()
+            .map(row_to_evolution_episode)
+            .collect()
+    }
+
+    async fn evolution_episode(&self, id: Uuid) -> Result<EvolutionEpisodeRecord> {
+        let row = self
+            .client
+            .query_opt(
+                "select id, session_id, turn_id, owner_subject, memory_scope, status,
+                        terminal_reward, reward_source, feedback_outcome, trace_count,
+                        created_at, updated_at
+                   from evolution_episodes where id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {id}")))?;
+        row_to_evolution_episode(row)
+    }
+
+    async fn replace_experience_traces(
+        &self,
+        episode_id: Uuid,
+        traces: Vec<NewExperienceTraceRecord>,
+    ) -> Result<Vec<ExperienceTraceRecord>> {
+        let traces = traces
+            .into_iter()
+            .map(sanitize_experience_trace_persistence)
+            .collect::<Result<Vec<_>>>()?;
+        validate_experience_trace_replacement(episode_id, &traces)?;
+        let trace_count = i32::try_from(traces.len())
+            .map_err(|_| ServerError::InvalidRequest("too many experience traces".to_string()))?;
+        let mut client = self.evolution_mutation_client.lock().await;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let updated = transaction
+            .execute(
+                "update evolution_episodes set trace_count = $2, updated_at = now() where id = $1",
+                &[&episode_id, &trace_count],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if updated == 0 {
+            return Err(ServerError::NotFound(format!(
+                "evolution episode {episode_id}"
+            )));
+        }
+        transaction
+            .execute(
+                "delete from experience_traces where episode_id = $1",
+                &[&episode_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        for trace in traces {
+            let ordinal = i32::try_from(trace.ordinal).map_err(|_| {
+                ServerError::InvalidRequest(
+                    "experience trace ordinal exceeds Postgres range".to_string(),
+                )
+            })?;
+            transaction
+                .execute(
+                    "insert into experience_traces (
+                        id, episode_id, ordinal, kind, capability, action_summary,
+                        observation_summary, error_signature, value, event_seq,
+                        result_event_seq, created_at
+                     ) values ($1, $2, $3, $4, $5, $6, $7, $8, null, $9, $10, now())",
+                    &[
+                        &Uuid::new_v4(),
+                        &episode_id,
+                        &ordinal,
+                        &trace.kind.as_str(),
+                        &trace.capability,
+                        &trace.action_summary,
+                        &trace.observation_summary,
+                        &trace.error_signature,
+                        &trace.event_seq,
+                        &trace.result_event_seq,
+                    ],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+        }
+        let rows = transaction
+            .query(
+                "select id, episode_id, ordinal, kind, capability, action_summary,
+                        observation_summary, error_signature, value, event_seq,
+                        result_event_seq, created_at
+                   from experience_traces where episode_id = $1 order by ordinal",
+                &[&episode_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        rows.into_iter().map(row_to_experience_trace).collect()
+    }
+
+    async fn experience_traces(&self, episode_id: Uuid) -> Result<Vec<ExperienceTraceRecord>> {
+        self.client
+            .query(
+                "select id, episode_id, ordinal, kind, capability, action_summary,
+                        observation_summary, error_signature, value, event_seq,
+                        result_event_seq, created_at
+                   from experience_traces where episode_id = $1 order by ordinal",
+                &[&episode_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .into_iter()
+            .map(row_to_experience_trace)
+            .collect()
+    }
+
+    async fn set_episode_valuation(
+        &self,
+        episode_id: Uuid,
+        terminal_reward: f32,
+        reward_source: tm_memory::RewardSource,
+        feedback_outcome: Option<FeedbackOutcome>,
+        trace_values: &[(Uuid, f32)],
+        status: tm_memory::EpisodeStatus,
+    ) -> Result<EvolutionEpisodeRecord> {
+        if !terminal_reward.is_finite() || trace_values.iter().any(|(_, value)| !value.is_finite())
+        {
+            return Err(ServerError::InvalidRequest(
+                "evolution values must be finite".to_string(),
+            ));
+        }
+        let mut client = self.evolution_mutation_client.lock().await;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        for (trace_id, value) in trace_values {
+            let updated = transaction
+                .execute(
+                    "update experience_traces set value = $3 where id = $1 and episode_id = $2",
+                    &[trace_id, &episode_id, value],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            if updated == 0 {
+                return Err(ServerError::NotFound(format!(
+                    "experience trace {trace_id} in episode {episode_id}"
+                )));
+            }
+        }
+        let reward_source = reward_source.as_str();
+        let feedback_outcome = feedback_outcome.map(tm_memory::FeedbackOutcome::as_str);
+        let status = status.as_str();
+        let row = transaction
+            .query_opt(
+                "update evolution_episodes
+                    set terminal_reward = $2, reward_source = $3, feedback_outcome = $4,
+                        status = $5, updated_at = now()
+                  where id = $1
+                  returning id, session_id, turn_id, owner_subject, memory_scope, status,
+                            terminal_reward, reward_source, feedback_outcome, trace_count,
+                            created_at, updated_at",
+                &[
+                    &episode_id,
+                    &terminal_reward,
+                    &reward_source,
+                    &feedback_outcome,
+                    &status,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        row_to_evolution_episode(row)
+    }
+
+    async fn record_turn_feedback(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        outcome: FeedbackOutcome,
+        comment: Option<&str>,
+    ) -> Result<bool> {
+        self.get_session(session_id).await?;
+        let comment = sanitize_turn_feedback_comment(comment);
+        let inserted = self
+            .client
+            .execute(
+                "insert into turn_feedback (turn_id, session_id, outcome, comment, created_at)
+                 values ($1, $2, $3, $4, now()) on conflict (turn_id) do nothing",
+                &[&turn_id, &session_id, &outcome.as_str(), &comment],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if inserted == 1 {
+            return Ok(true);
+        }
+        let row = self
+            .client
+            .query_one(
+                "select session_id, outcome from turn_feedback where turn_id = $1",
+                &[&turn_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let existing_session_id: Uuid = row.get("session_id");
+        let existing_outcome: FeedbackOutcome = row.get::<_, String>("outcome").parse().map_err(
+            |error: tm_memory::UnknownFeedbackOutcome| ServerError::Store(error.to_string()),
+        )?;
+        if existing_session_id == session_id && existing_outcome == outcome {
+            Ok(false)
+        } else {
+            Err(ServerError::Conflict(
+                "turn feedback already recorded".to_string(),
+            ))
+        }
+    }
+
+    async fn turn_feedback(
+        &self,
+        turn_id: Uuid,
+    ) -> Result<Option<(FeedbackOutcome, Option<String>)>> {
+        let row = self
+            .client
+            .query_opt(
+                "select outcome, comment from turn_feedback where turn_id = $1",
+                &[&turn_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        row.map(|row| {
+            let outcome = row.get::<_, String>("outcome").parse().map_err(
+                |error: tm_memory::UnknownFeedbackOutcome| ServerError::Store(error.to_string()),
+            )?;
+            Ok((outcome, row.get("comment")))
+        })
+        .transpose()
     }
 
     async fn upsert_skill_proposal(

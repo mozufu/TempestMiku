@@ -144,6 +144,14 @@ approval-gated skill proposal when the session contains reusable-workflow signal
 messages, omitted/truncated messages, chunk count, redaction count, and input chars so clients can
 inspect bounded dream context without raw transcript dumps. The daemon loops by poll interval, honors
 configured concurrency, and exits on shutdown without leaving completed work locked.
+The same deterministic worker captures one evolution episode per committed terminal turn, normalizes
+bounded cell/effect/terminal traces, assigns explicit or runtime terminal reward, and performs
+reflection-weighted value backfilling. Repeated positive evidence in distinct episodes induces
+scope-bound procedural policies; counter-evidence recomputes their gain and can archive them. For a
+`project:<id>` scope with at least two active policies, the worker maintains one versioned declarative
+environment cognition containing capability families, recurring failure families, and the active
+policy triggers. Persistence failures enqueue successor dreams with unique dedupe identities, so a
+transient failure does not strand the derived cognition.
 When extracted candidates cross the configured cumulative importance threshold, the worker writes a
 derived `reflection` summary that cites source evidence instead of storing a raw assertion. Each dream
 also updates an idempotent `topic_project` rollup for the scope by folding recent session/reflection

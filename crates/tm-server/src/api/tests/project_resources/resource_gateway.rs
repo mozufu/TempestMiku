@@ -114,3 +114,135 @@ async fn resource_gateway_reads_supported_schemes_and_fails_closed() {
         .unwrap();
     assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn project_environment_gateway_is_scoped_and_fails_closed_after_archive() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create_project_session(&app).await;
+    let environment_uri = "project://tempestmiku/environment";
+
+    let empty = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={environment_uri}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty.status(), StatusCode::OK);
+    let empty = response_json(empty).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(empty["content"].as_str().unwrap()).unwrap(),
+        json!({"status": "empty"})
+    );
+
+    let now = Utc::now();
+    let cognition = store
+        .upsert_environment_cognition(EnvironmentCognitionRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "project:tempestmiku".to_string(),
+            title: "Environment cognition for project:tempestmiku".to_string(),
+            body:
+                "Capability families in active use: fs.\nRecurring failure families: none observed."
+                    .to_string(),
+            source_policy_ids: vec![Uuid::new_v4()],
+            confidence: 0.4,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+
+    let populated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={environment_uri}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(populated.status(), StatusCode::OK);
+    let populated = response_json(populated).await;
+    let content: Value = serde_json::from_str(populated["content"].as_str().unwrap()).unwrap();
+    assert_eq!(content["id"], json!(cognition.id));
+    assert_eq!(content["memoryScope"], json!("project:tempestmiku"));
+    assert_eq!(content["version"], json!(1));
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=project://tempestmiku",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert!(
+        response_json(listed)
+            .await
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["uri"] == json!(environment_uri))
+    );
+
+    let other = create_with_body(
+        &app,
+        Body::from(r#"{"mode":"serious_engineer","projectId":"other","memoryPolicy":"project"}"#),
+    )
+    .await;
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={environment_uri}",
+                    other.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+
+    store
+        .archive_project("brian", "tempestmiku", "completed")
+        .await
+        .unwrap();
+    let archived = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={environment_uri}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(archived.status(), StatusCode::NOT_FOUND);
+}

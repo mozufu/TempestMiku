@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tm_core::{EventSink, Message};
-use tm_host::HostFn;
+use tm_host::{HostFn, ResourceHandler};
 use tm_memory::{DialecticRequest, DialecticTrace};
 use tm_modes::ModeId;
 use uuid::Uuid;
@@ -31,6 +31,9 @@ pub struct ChatTurn {
     /// Server-owned SDK handlers installed for this turn. Registration does not grant
     /// authority; `capabilities` remains the exact grant set enforced by the sandbox.
     pub host_functions: Vec<Arc<dyn HostFn>>,
+    /// Server-owned resource handlers installed for this turn. Registration does not grant
+    /// authority; `capabilities` remains the exact grant set enforced by the sandbox.
+    pub resource_handlers: Vec<Arc<dyn ResourceHandler>>,
 }
 
 impl std::fmt::Debug for ChatTurn {
@@ -55,6 +58,14 @@ impl std::fmt::Debug for ChatTurn {
                     .host_functions
                     .iter()
                     .map(|function| function.name())
+                    .collect::<Vec<_>>(),
+            )
+            .field(
+                "resource_handlers",
+                &self
+                    .resource_handlers
+                    .iter()
+                    .map(|handler| handler.scheme())
                     .collect::<Vec<_>>(),
             )
             .finish()

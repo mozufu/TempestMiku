@@ -57,6 +57,10 @@ auditable and replayable (principle #6).
   **self-verified** (Self-Refine critique + a dry-run / consistency check) **before** it is committed.
 - **User model** — the facts / profile store of Brian (§22) sharpens with each dream (Reflexion:
   reflections about his preferences and patterns are stored and recalled).
+- **Environment cognition** — project-scoped dreaming abstracts active procedural policies into one
+  declarative, versioned environment record. It is read-only derived state, not an identity or
+  capability change, and Serious Engineer pulls it explicitly through
+  `project://<id>/environment` with `resources.read:project`.
 - **Explicitly NOT, by default** — SOUL identity, persona presets, mode definitions, capability config.
   This is the Gödel-machine territory we bound off; it is reachable **only** by raising the tier.
 

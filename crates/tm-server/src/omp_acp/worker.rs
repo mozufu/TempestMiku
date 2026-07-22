@@ -882,6 +882,7 @@ mod transcript_tests {
                 tm_core::Message::user("earlier request"),
                 tm_core::Message::assistant("earlier result"),
             ],
+            resource_handlers: Vec::new(),
         }
     }
 

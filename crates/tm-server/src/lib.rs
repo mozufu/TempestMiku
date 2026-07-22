@@ -55,6 +55,7 @@ pub use memory::{
 };
 pub use native_tm::{
     HttpApprovalPolicy, NativeApprovalMode, NativeTmBackend, NativeTmBackendOptions,
+    ProjectEnvironmentResourceHandler,
 };
 pub use omp_acp::{OmpAcpBackend, OmpAcpConfig};
 pub use push::{

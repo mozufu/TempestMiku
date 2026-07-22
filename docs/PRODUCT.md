@@ -148,10 +148,12 @@ Zep/Graphiti bi-temporal facts.
 - **Pull-only long-term context.** The active transcript remains the automatic working context. In General mode, long-term profile facts, summaries, episodic/semantic records, and Drive-derived chunks stay out of the prompt until the model calls bounded `memory.search(query)`. The first search result in a durable turn is persisted for exact retry reuse; a turn that does not search creates no recall trace. Serious Engineer stays on explicit repo/Drive resources and receives no implicit memory search authority.
 - **Write path & dreaming.** Turns append to episodic storage and enqueue without blocking.
   Background **dreaming** (idle / session end / scheduler) redacts and budgets source material,
-  creates deterministic session/reflection/rollup summaries, and emits evidence-backed memory and
-  skill proposals through the durable approval outbox. Unsupported inference cannot silently become
-  an owner fact; general LLM-backed relation extraction remains demand-triggered. A durable fenced
-  worker leases work by owner/epoch and emits replayable lifecycle events.
+  creates deterministic session/reflection/rollup summaries, captures valued experience traces,
+  evolves evidence-linked procedural policies, and emits evidence-backed memory and skill proposals
+  through the durable approval outbox. Project-scoped dreams with enough active policies also maintain
+  declarative environment cognition. Unsupported inference cannot silently become an owner fact;
+  general LLM-backed relation extraction remains demand-triggered. A durable fenced worker leases
+  work by owner/epoch and emits replayable lifecycle events.
 - **Hybrid retrieval, self-hosted.** A local, loopback-only embedding provider and pgvector
   generations back deterministic FTS+dense RRF; every hybrid or lexical-fallback context is persisted
   as a turn-linked recall event so a retry reuses the exact context. Missing pgvector, provider loss,
@@ -209,7 +211,9 @@ stay private simply never enters.
   assigned sessions, drive entries, and grown items (summaries / open loops / decisions / next
   actions). A project may exist with no folder; a folder may move path without the project noticing.
   `GET /projects` lists entities; `project://<id>/<view>` composes memory, items, sessions, artifacts,
-  agents, and attached links. **Archive** hides the project and tombstones its memory scope.
+  agents, declarative environment cognition, and attached links. Serious Engineer can pull the
+  environment view through capability-gated `resources.read`; it is never implicit prompt context.
+  **Archive** hides the project and tombstones its memory scope.
 - **Drive** — a Miku-facing document space with model-driven filing (Semantic File Systems
   transducers + virtual directories + the user model): `drive.put/get/ls/move/search/tag/organize`.
   Attributes are the index, not the folder; `drive://by-project/<project>` and `drive://by-type/<kind>`

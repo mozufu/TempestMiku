@@ -310,6 +310,7 @@ where
             },
             deny_approvals: true,
             host_functions: Vec::new(),
+            resource_handlers: Vec::new(),
         },
         sink.clone(),
     );

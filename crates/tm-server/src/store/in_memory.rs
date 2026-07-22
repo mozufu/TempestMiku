@@ -6,12 +6,12 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, EvolutionPolicyRecord,
-    ExperienceTraceRecord, FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus,
-    MemoryRecordKind, MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord,
-    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, NewMemoryEmbeddingJob,
-    NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus, SkillProposalRecord,
-    SkillProposalStatus, StoredMemoryRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, EnvironmentCognitionRecord, EvolutionEpisodeRecord,
+    EvolutionPolicyRecord, ExperienceTraceRecord, FeedbackOutcome, MemoryEmbeddingJobRecord,
+    MemoryEmbeddingJobStatus, MemoryRecordKind, MemoryScopeTombstone, MemorySummaryRecord,
+    NewDreamQueueRecord, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
+    NewMemoryEmbeddingJob, NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus,
+    SkillProposalRecord, SkillProposalStatus, StoredMemoryRecord,
 };
 use tm_modes::ReviewProposalStatus;
 use uuid::Uuid;
@@ -21,13 +21,13 @@ use crate::{Result, ServerError};
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_approval_request_persistence,
     sanitize_cron_job_persistence, sanitize_cron_run_persistence, sanitize_durable_memory_record,
-    sanitize_evolution_episode_persistence, sanitize_evolution_review_proposal_persistence,
-    sanitize_experience_trace_persistence, sanitize_memory_summary_persistence,
-    sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
-    sanitize_skill_proposal_persistence, sanitize_turn_feedback_comment, turn_content_hash,
-    validate_evolution_policy, validate_experience_trace_replacement,
-    validate_persistence_identifier, validate_profile_fact_persistence,
-    validate_recall_chunk_persistence,
+    sanitize_environment_cognition_persistence, sanitize_evolution_episode_persistence,
+    sanitize_evolution_review_proposal_persistence, sanitize_experience_trace_persistence,
+    sanitize_memory_summary_persistence, sanitize_new_memory_embedding_job,
+    sanitize_project_item_persistence, sanitize_skill_proposal_persistence,
+    sanitize_turn_feedback_comment, turn_content_hash, validate_evolution_policy,
+    validate_experience_trace_replacement, validate_persistence_identifier,
+    validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
 
 use super::{
@@ -85,6 +85,7 @@ struct Inner {
     turn_feedback: BTreeMap<Uuid, (Uuid, FeedbackOutcome, Option<String>)>,
     evolution_policies: Vec<EvolutionPolicyRecord>,
     policy_trace_links: Vec<(Uuid, Uuid, Uuid, f32, bool)>,
+    environment_cognitions: Vec<EnvironmentCognitionRecord>,
     skill_proposals: Vec<SkillProposalRecord>,
     cron_jobs: Vec<CronJobRecord>,
     cron_runs: Vec<CronRunRecord>,
@@ -95,6 +96,8 @@ struct Inner {
     fail_complete_approval_effect_with_event_once: bool,
     #[cfg(test)]
     fail_set_episode_valuation_once: bool,
+    #[cfg(test)]
+    fail_upsert_environment_cognition_once: bool,
 }
 
 #[cfg(test)]
@@ -113,6 +116,10 @@ impl InMemoryStore {
 
     pub(crate) fn fail_next_set_episode_valuation(&self) {
         self.inner.lock().fail_set_episode_valuation_once = true;
+    }
+
+    pub(crate) fn fail_next_upsert_environment_cognition(&self) {
+        self.inner.lock().fail_upsert_environment_cognition_once = true;
     }
 }
 
@@ -3300,6 +3307,57 @@ impl Store for InMemoryStore {
             }
         }
         Ok(())
+    }
+
+    async fn upsert_environment_cognition(
+        &self,
+        cognition: EnvironmentCognitionRecord,
+    ) -> Result<EnvironmentCognitionRecord> {
+        let mut cognition = sanitize_environment_cognition_persistence(cognition)?;
+        let mut inner = self.inner.lock();
+        #[cfg(test)]
+        if std::mem::take(&mut inner.fail_upsert_environment_cognition_once) {
+            return Err(ServerError::Store(
+                "simulated environment cognition persistence failure /tmp/private/123".to_string(),
+            ));
+        }
+        if let Some(existing) = inner.environment_cognitions.iter_mut().find(|existing| {
+            existing.owner_subject == cognition.owner_subject
+                && existing.memory_scope == cognition.memory_scope
+        }) {
+            let body_changed = existing.body != cognition.body;
+            cognition.id = existing.id;
+            cognition.created_at = existing.created_at;
+            cognition.version = if body_changed {
+                existing.version.saturating_add(1)
+            } else {
+                existing.version
+            };
+            cognition.updated_at = Utc::now();
+            *existing = cognition.clone();
+            return Ok(cognition);
+        }
+        if cognition.version == 0 {
+            cognition.version = 1;
+        }
+        inner.environment_cognitions.push(cognition.clone());
+        Ok(cognition)
+    }
+
+    async fn environment_cognition(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Option<EnvironmentCognitionRecord>> {
+        Ok(self
+            .inner
+            .lock()
+            .environment_cognitions
+            .iter()
+            .find(|cognition| {
+                cognition.owner_subject == owner_subject && cognition.memory_scope == memory_scope
+            })
+            .cloned())
     }
 
     async fn policy_trace_values(&self, policy_id: Uuid) -> Result<Vec<(Uuid, Uuid, f32, bool)>> {

@@ -53,8 +53,10 @@ Server-owned durable record:
   to it, drive entries referencing it, and project items (summaries / open loops / decisions / next
   actions) grown by the per-turn observation pipeline (§27).
 - **Surfaces:** `GET /projects` lists **entities** (never aliases) without host or connector details;
-  `project://<id>/<view>` composes memory, items, sessions, artifacts, agents, and attached links;
-  the memory scope `project:<slug>` is opened at entity creation.
+  `project://<id>/<view>` composes memory, items, sessions, artifacts, agents, declarative environment
+  cognition, and attached links; the memory scope `project:<slug>` is opened at entity creation.
+  The environment view is capability-gated, project/session scoped, and rechecks active project
+  status on every native read; global, wrong-project, and archived-project reads fail closed.
 
 A project may exist with no folder (planning-only, docs-only). A folder may move path without the
 project noticing: detach the old grant, attach the new one — memory and items are untouched because

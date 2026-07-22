@@ -19,7 +19,7 @@
       "label": "Serious Engineer",
       "description": "Code, repository inspection, orchestration, production, safety, money, external, irreversible, legal, or medical work.",
       "activeSkills": ["serious-engineer-ops"],
-      "capabilities": ["fs.*", "code.*", "git.clone", "git.init", "git.add", "git.mv", "git.restore", "git.rm", "git.bisect", "git.grep", "git.show", "git.status", "git.diff", "git.log", "git.commit", "git.push", "git.pull", "proc.*", "agents.*", "drive.*", "project.*", "http.request", "resources.read:agent", "resources.read:artifact", "resources.read:drive", "resources.read:history", "resources.read:linked", "resources.read:skill", "backend.coding"],
+      "capabilities": ["fs.*", "code.*", "git.clone", "git.init", "git.add", "git.mv", "git.restore", "git.rm", "git.bisect", "git.grep", "git.show", "git.status", "git.diff", "git.log", "git.commit", "git.push", "git.pull", "proc.*", "agents.*", "drive.*", "project.*", "http.request", "resources.read:agent", "resources.read:artifact", "resources.read:drive", "resources.read:history", "resources.read:linked", "resources.read:project", "resources.read:skill", "backend.coding"],
       "capabilityClass": "engineering",
       "route": {
         "priority": 70,

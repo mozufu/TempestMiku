@@ -459,6 +459,21 @@ impl Store for ClaimFailureStore {
         panic!("unused store method policy_trace_values")
     }
 
+    async fn upsert_environment_cognition(
+        &self,
+        _cognition: tm_memory::EnvironmentCognitionRecord,
+    ) -> Result<tm_memory::EnvironmentCognitionRecord> {
+        panic!("unused store method upsert_environment_cognition")
+    }
+
+    async fn environment_cognition(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+    ) -> Result<Option<tm_memory::EnvironmentCognitionRecord>> {
+        panic!("unused store method environment_cognition")
+    }
+
     async fn record_turn_feedback(
         &self,
         _session_id: Uuid,

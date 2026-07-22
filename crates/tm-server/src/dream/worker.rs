@@ -20,7 +20,7 @@ use tm_memory::{
 use crate::{CodingEventSink, Result, ServerError, SessionEvent, Store, StoreCodingEventSink};
 
 use super::config::DreamWorkerConfig;
-use super::evolution::{capture_episodes, update_policies, value_episodes};
+use super::evolution::{capture_episodes, update_environment, update_policies, value_episodes};
 use super::proposals::{
     DreamSkillProposal, MemoryProposalContext, dream_skill_proposal, spawn_memory_write_proposal,
     spawn_skill_write_proposal,
@@ -294,7 +294,7 @@ where
                         })
                         .cloned(),
                 );
-                if let Err(error) = update_policies(
+                match update_policies(
                     &self.store,
                     &self.config.evolution,
                     dream,
@@ -303,28 +303,69 @@ where
                 )
                 .await
                 {
-                    let reason = redact_dream_text(&error.to_string()).text;
-                    tracing::warn!(%reason, "dream evolution policy update skipped");
-                    self.store
-                        .enqueue_dream(NewDreamQueueRecord {
-                            session_id: dream.session_id,
-                            subject: dream.subject.clone(),
-                            scope: dream.scope.clone(),
-                            reason: dream.reason,
-                            dedupe_key: format!("dream:evolution-policies:{}", dream.session_id),
-                            source_event_seq: dream.source_event_seq,
-                            available_at: Utc::now() + self.config.retry_backoff,
-                        })
+                    Ok(_) => {
+                        if let Err(error) = update_environment(
+                            &self.store,
+                            &self.config.evolution,
+                            dream,
+                            sink.as_ref(),
+                        )
+                        .await
+                        {
+                            let reason = redact_dream_text(&error.to_string()).text;
+                            tracing::warn!(%reason, "dream environment cognition update skipped");
+                            self.store
+                                .enqueue_dream(NewDreamQueueRecord {
+                                    session_id: dream.session_id,
+                                    subject: dream.subject.clone(),
+                                    scope: dream.scope.clone(),
+                                    reason: dream.reason,
+                                    dedupe_key: format!(
+                                        "dream:evolution-environment:{}:{}",
+                                        dream.session_id, dream.id
+                                    ),
+                                    source_event_seq: dream.source_event_seq,
+                                    available_at: Utc::now() + self.config.retry_backoff,
+                                })
+                                .await?;
+                            sink.emit(
+                                "dream_progress",
+                                json!({
+                                    "dreamId": dream.id,
+                                    "phase": "evolution_skipped",
+                                    "reason": reason,
+                                }),
+                            )
+                            .await?;
+                        }
+                    }
+                    Err(error) => {
+                        let reason = redact_dream_text(&error.to_string()).text;
+                        tracing::warn!(%reason, "dream evolution policy update skipped");
+                        self.store
+                            .enqueue_dream(NewDreamQueueRecord {
+                                session_id: dream.session_id,
+                                subject: dream.subject.clone(),
+                                scope: dream.scope.clone(),
+                                reason: dream.reason,
+                                dedupe_key: format!(
+                                    "dream:evolution-policies:{}",
+                                    dream.session_id
+                                ),
+                                source_event_seq: dream.source_event_seq,
+                                available_at: Utc::now() + self.config.retry_backoff,
+                            })
+                            .await?;
+                        sink.emit(
+                            "dream_progress",
+                            json!({
+                                "dreamId": dream.id,
+                                "phase": "evolution_skipped",
+                                "reason": reason,
+                            }),
+                        )
                         .await?;
-                    sink.emit(
-                        "dream_progress",
-                        json!({
-                            "dreamId": dream.id,
-                            "phase": "evolution_skipped",
-                            "reason": reason,
-                        }),
-                    )
-                    .await?;
+                    }
                 }
             }
             Err(error) => {

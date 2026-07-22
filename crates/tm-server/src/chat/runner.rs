@@ -79,6 +79,7 @@ struct SandboxProfile {
     capabilities: Vec<String>,
     deny_approvals: bool,
     host_functions: Vec<String>,
+    resource_handlers: Vec<String>,
 }
 
 impl From<&ChatTurn> for SandboxProfile {
@@ -93,6 +94,11 @@ impl From<&ChatTurn> for SandboxProfile {
                 .host_functions
                 .iter()
                 .map(|function| function.name().to_string())
+                .collect(),
+            resource_handlers: turn
+                .resource_handlers
+                .iter()
+                .map(|handler| handler.scheme().to_string())
                 .collect(),
         }
     }
@@ -182,6 +188,9 @@ impl AgentChatRunner {
                     CapabilityGrants::default().allow_many(turn.capabilities.iter().cloned());
                 for function in &turn.host_functions {
                     options.host_registry.register(Arc::clone(function));
+                }
+                for handler in &turn.resource_handlers {
+                    options.resource_registry.register(Arc::clone(handler));
                 }
                 if turn.deny_approvals {
                     options.approval_policy = Arc::new(DefaultDenyApprovalPolicy);

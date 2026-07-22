@@ -10,20 +10,21 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use rows::{
     row_to_approval_effect, row_to_approval_request, row_to_cron_job, row_to_cron_run,
-    row_to_dream_record, row_to_evolution_audit, row_to_evolution_episode, row_to_evolution_policy,
-    row_to_evolution_review_proposal, row_to_experience_trace, row_to_memory_embedding_job,
-    row_to_memory_summary, row_to_message_record, row_to_project, row_to_project_item,
-    row_to_session_record, row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
+    row_to_dream_record, row_to_environment_cognition, row_to_evolution_audit,
+    row_to_evolution_episode, row_to_evolution_policy, row_to_evolution_review_proposal,
+    row_to_experience_trace, row_to_memory_embedding_job, row_to_memory_summary,
+    row_to_message_record, row_to_project, row_to_project_item, row_to_session_record,
+    row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
 };
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus, EvolutionPolicyReason};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, EvolutionPolicyRecord,
-    ExperienceTraceRecord, FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryRecordKind,
-    MemoryRecordResource, MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord,
-    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, NewMemoryEmbeddingJob,
-    NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus, SkillProposalRecord,
-    SkillProposalStatus, StoredMemoryRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, EnvironmentCognitionRecord, EvolutionEpisodeRecord,
+    EvolutionPolicyRecord, ExperienceTraceRecord, FeedbackOutcome, MemoryEmbeddingJobRecord,
+    MemoryRecordKind, MemoryRecordResource, MemoryScopeTombstone, MemorySummaryRecord,
+    NewDreamQueueRecord, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
+    NewMemoryEmbeddingJob, NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus,
+    SkillProposalRecord, SkillProposalStatus, StoredMemoryRecord,
 };
 use tm_modes::{ReviewProposalStatus, ReviewProposalTarget};
 use tokio_postgres::{Config as PostgresConfig, NoTls, error::SqlState};
@@ -36,13 +37,13 @@ use memory_write::upsert_typed_memory_record;
 use super::models::{
     redact_persisted_json, redact_persisted_text, sanitize_approval_request_persistence,
     sanitize_cron_job_persistence, sanitize_cron_run_persistence, sanitize_durable_memory_record,
-    sanitize_evolution_episode_persistence, sanitize_evolution_review_proposal_persistence,
-    sanitize_experience_trace_persistence, sanitize_memory_summary_persistence,
-    sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
-    sanitize_skill_proposal_persistence, sanitize_turn_feedback_comment, turn_content_hash,
-    validate_evolution_policy, validate_experience_trace_replacement,
-    validate_persistence_identifier, validate_profile_fact_persistence,
-    validate_recall_chunk_persistence,
+    sanitize_environment_cognition_persistence, sanitize_evolution_episode_persistence,
+    sanitize_evolution_review_proposal_persistence, sanitize_experience_trace_persistence,
+    sanitize_memory_summary_persistence, sanitize_new_memory_embedding_job,
+    sanitize_project_item_persistence, sanitize_skill_proposal_persistence,
+    sanitize_turn_feedback_comment, turn_content_hash, validate_evolution_policy,
+    validate_experience_trace_replacement, validate_persistence_identifier,
+    validate_profile_fact_persistence, validate_recall_chunk_persistence,
 };
 
 use super::{
@@ -5098,6 +5099,75 @@ impl Store for PostgresStore {
                 )
             })
             .collect())
+    }
+
+    async fn upsert_environment_cognition(
+        &self,
+        cognition: EnvironmentCognitionRecord,
+    ) -> Result<EnvironmentCognitionRecord> {
+        let cognition = sanitize_environment_cognition_persistence(cognition)?;
+        let source_policy_ids = serde_json::to_value(&cognition.source_policy_ids)
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let version = i32::try_from(cognition.version).map_err(|_| {
+            ServerError::InvalidRequest(
+                "environment cognition version exceeds Postgres range".to_string(),
+            )
+        })?;
+        let row = self
+            .client
+            .query_one(
+                "insert into environment_cognitions (
+                    id, owner_subject, memory_scope, title, body, source_policy_ids,
+                    confidence, version, created_at, updated_at
+                 ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 on conflict (owner_subject, memory_scope) do update set
+                    title = excluded.title,
+                    body = excluded.body,
+                    source_policy_ids = excluded.source_policy_ids,
+                    confidence = excluded.confidence,
+                    version = case
+                        when environment_cognitions.body is distinct from excluded.body
+                        then environment_cognitions.version + 1
+                        else environment_cognitions.version
+                    end,
+                    updated_at = now()
+                 returning id, owner_subject, memory_scope, title, body, source_policy_ids,
+                           confidence, version, created_at, updated_at",
+                &[
+                    &cognition.id,
+                    &cognition.owner_subject,
+                    &cognition.memory_scope,
+                    &cognition.title,
+                    &cognition.body,
+                    &source_policy_ids,
+                    &cognition.confidence,
+                    &version,
+                    &cognition.created_at,
+                    &cognition.updated_at,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        row_to_environment_cognition(row)
+    }
+
+    async fn environment_cognition(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Option<EnvironmentCognitionRecord>> {
+        self.client
+            .query_opt(
+                "select id, owner_subject, memory_scope, title, body, source_policy_ids,
+                        confidence, version, created_at, updated_at
+                   from environment_cognitions
+                  where owner_subject = $1 and memory_scope = $2",
+                &[&owner_subject, &memory_scope],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .map(row_to_environment_cognition)
+            .transpose()
     }
 
     async fn record_turn_feedback(

@@ -83,6 +83,7 @@ struct NativeSessionProfile {
     project_id: Option<String>,
     memory_scope: String,
     capabilities: Vec<String>,
+    resource_handlers: Vec<String>,
 }
 
 impl From<&CodingTurn> for NativeSessionProfile {
@@ -92,6 +93,11 @@ impl From<&CodingTurn> for NativeSessionProfile {
             project_id: turn.project_id.clone(),
             memory_scope: turn.memory_scope.clone(),
             capabilities: turn.capabilities.clone(),
+            resource_handlers: turn
+                .resource_handlers
+                .iter()
+                .map(|handler| handler.scheme().to_string())
+                .collect(),
         }
     }
 }
@@ -355,6 +361,9 @@ async fn run_cached_native_turn(
         });
         options.grants =
             CapabilityGrants::default().allow_many(request.turn.capabilities.iter().cloned());
+        for handler in &request.turn.resource_handlers {
+            options.resource_registry.register(Arc::clone(handler));
+        }
         options.approval_policy = match approval_mode {
             NativeApprovalMode::Deny => Arc::new(DefaultDenyApprovalPolicy),
             NativeApprovalMode::Manual => Arc::new(HttpApprovalPolicy::new(

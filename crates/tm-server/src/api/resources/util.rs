@@ -192,6 +192,14 @@ where
             let overview = build_project_overview(state, session_id, project_id.clone()).await?;
             serde_json::to_value(overview.resources)?
         }
+        Some("environment") => match state
+            .store
+            .environment_cognition(&session.owner_subject, &format!("project:{project_id}"))
+            .await?
+        {
+            Some(cognition) => serde_json::to_value(cognition)?,
+            None => json!({ "status": "empty" }),
+        },
         Some("memory") => {
             let policy = active_project_link_policy(&project_id, &state.linked_folders);
             project_memory_view(&project_id, policy.as_ref())
@@ -283,15 +291,15 @@ where
             })
             .collect());
     }
-    let mut views = vec![
+    let views = vec![
         "open-loops",
         "decisions",
         "next-actions",
         "resources",
+        "environment",
+        "memory",
         "linked-folders",
     ];
-    // §30: project memory exists on the entity, not the folder, so the memory view is always listed.
-    views.insert(4, "memory");
     Ok(views
         .into_iter()
         .map(|view| ResourceEntry {

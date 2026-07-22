@@ -492,3 +492,136 @@ let driveHit = match driveHits {{ | first :: _ -> first | [] -> null }};
         "{tool_result}"
     );
 }
+
+#[serial_test::serial]
+#[tokio::test(flavor = "current_thread")]
+async fn serious_engineer_native_tm_pulls_project_environment_and_global_session_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let artifact_root = temp.path().join("artifacts");
+    let tool_turn = |id: &str| {
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some(id.to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(
+                    json!({
+                        "code": r#"@resources.read project://tempestmiku/environment |> display {kind: "json"}"#
+                    })
+                    .to_string(),
+                ),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ]
+    };
+    let final_turn = |text: &str| {
+        vec![
+            StreamEvent::Text(text.to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ]
+    };
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        tool_turn("call_project_environment"),
+        final_turn("environment read"),
+        tool_turn("call_global_environment"),
+        final_turn("environment denied"),
+    ]));
+    let llm_for_backend: Arc<dyn LlmClient> = llm.clone();
+    let store = Arc::new(InMemoryStore::default());
+    let now = Utc::now();
+    let cognition = store
+        .upsert_environment_cognition(tm_memory::EnvironmentCognitionRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "project:tempestmiku".to_string(),
+            title: "Environment cognition for project:tempestmiku".to_string(),
+            body:
+                "Capability families in active use: fs.\nRecurring failure families: none observed."
+                    .to_string(),
+            source_policy_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+            confidence: 0.4,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let mut state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_artifact_root(artifact_root.clone());
+    let backend = NativeTmBackend::new(
+        llm_for_backend,
+        AgentConfig {
+            model: "fake".to_string(),
+            max_turns: 3,
+            ..AgentConfig::default()
+        },
+        TmSandboxOptions {
+            artifact_root,
+            ..TmSandboxOptions::default()
+        },
+        NativeApprovalMode::Deny,
+        Arc::clone(&state.approval_broker),
+    );
+    state = state.with_coding_backend(Arc::new(backend));
+    let router = app(state);
+    let project_session = create_with_body(
+        &router,
+        Body::from(
+            r#"{"mode":"serious_engineer","projectId":"tempestmiku","memoryPolicy":"project"}"#,
+        ),
+    )
+    .await;
+
+    post_user_message(
+        &router,
+        project_session.id,
+        "read the environment cognition",
+    )
+    .await;
+    let project_tool_result = {
+        let requests = llm.requests.lock();
+        requests[1]
+            .iter()
+            .find(|message| message.role == Role::Tool)
+            .expect("project resource result is fed back")
+            .content
+            .clone()
+    };
+    assert!(
+        project_tool_result.contains(&cognition.id.to_string()),
+        "{project_tool_result}"
+    );
+    assert!(
+        project_tool_result.contains("Capability families in active use: fs."),
+        "{project_tool_result}"
+    );
+
+    let global_session =
+        create_with_body(&router, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
+    post_user_message(&router, global_session.id, "read the project environment").await;
+    let global_tool_result = {
+        let requests = llm.requests.lock();
+        requests[3]
+            .iter()
+            .find(|message| message.role == Role::Tool)
+            .expect("global resource denial is fed back")
+            .content
+            .clone()
+    };
+    assert!(
+        global_tool_result.contains("unknown resource scheme project"),
+        "{global_tool_result}"
+    );
+}

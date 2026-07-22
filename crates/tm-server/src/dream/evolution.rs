@@ -5,9 +5,10 @@ use std::{
 
 use serde_json::{Value, json};
 use tm_memory::{
-    DreamQueueRecord, EpisodeStatus, EvolutionEpisodeRecord, EvolutionPolicyRecord,
-    ExperienceTraceRecord, FeedbackOutcome, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
-    PolicyStatus, RewardSource, TraceKind, backfill_trace_values, error_signature, policy_gain,
+    DreamQueueRecord, EnvironmentCognitionRecord, EpisodeStatus, EvolutionEpisodeRecord,
+    EvolutionPolicyRecord, ExperienceTraceRecord, FeedbackOutcome, NewEvolutionEpisodeRecord,
+    NewExperienceTraceRecord, PolicyStatus, RewardSource, TraceKind, backfill_trace_values,
+    error_signature, policy_gain,
 };
 use uuid::Uuid;
 
@@ -340,6 +341,101 @@ pub(super) async fn update_policies<S: Store>(
     )
     .await?;
     Ok(updated)
+}
+
+pub(super) async fn update_environment<S: Store>(
+    store: &Arc<S>,
+    config: &EvolutionDreamConfig,
+    dream: &DreamQueueRecord,
+    sink: &dyn CodingEventSink,
+) -> Result<Option<EnvironmentCognitionRecord>> {
+    if !config.enabled || !dream.scope.starts_with("project:") {
+        return Ok(None);
+    }
+
+    let mut policies = store
+        .evolution_policies(
+            &dream.subject,
+            &dream.scope,
+            Some(PolicyStatus::Active),
+            usize::MAX,
+        )
+        .await?;
+    if policies.len() < config.l3_min_policies {
+        return Ok(None);
+    }
+    policies.sort_by(|left, right| {
+        left.trigger
+            .cmp(&right.trigger)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let capability_families = policies
+        .iter()
+        .filter_map(|policy| policy.signature.split_once('|').map(|(family, _)| family))
+        .filter(|family| !family.is_empty())
+        .collect::<BTreeSet<_>>();
+    let failure_families = policies
+        .iter()
+        .filter_map(|policy| policy.signature.split_once('|').map(|(_, family)| family))
+        .filter(|family| !family.is_empty() && *family != "ok")
+        .collect::<BTreeSet<_>>();
+    let capability_families = capability_families
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let failure_families = if failure_families.is_empty() {
+        "none observed".to_string()
+    } else {
+        failure_families.into_iter().collect::<Vec<_>>().join(", ")
+    };
+    let mut lines = vec![
+        format!("Capability families in active use: {capability_families}."),
+        format!("Recurring failure families: {failure_families}."),
+    ];
+    lines.extend(
+        policies
+            .iter()
+            .take(10)
+            .map(|policy| format!("Established procedures exist for: {}.", policy.trigger)),
+    );
+    let now = chrono::Utc::now();
+    let cognition = EnvironmentCognitionRecord {
+        id: deterministic_cognition_id(&dream.subject, &dream.scope),
+        owner_subject: dream.subject.clone(),
+        memory_scope: dream.scope.clone(),
+        title: format!("Environment cognition for {}", dream.scope),
+        body: lines.join("\n"),
+        source_policy_ids: policies.iter().map(|policy| policy.id).collect(),
+        confidence: (policies.len() as f32 / 5.0).min(1.0),
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let cognition = store.upsert_environment_cognition(cognition).await?;
+    sink.emit(
+        "dream_progress",
+        json!({
+            "dreamId": dream.id,
+            "phase": "evolution_environment_updated",
+            "policies": policies.len(),
+        }),
+    )
+    .await?;
+    Ok(Some(cognition))
+}
+
+fn deterministic_cognition_id(owner_subject: &str, memory_scope: &str) -> Uuid {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(format!(
+        "tempestmiku:environment-cognition:{owner_subject}:{memory_scope}"
+    ));
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
 }
 
 fn trace_signature(trace: &ExperienceTraceRecord) -> Option<(String, String)> {

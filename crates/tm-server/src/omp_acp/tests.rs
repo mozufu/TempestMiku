@@ -92,6 +92,7 @@ async fn permission_request_round_trips_selected_and_cancelled() {
             memory_scope: "project:tempestmiku".to_string(),
             capabilities: vec![],
             prior_messages: Vec::new(),
+            resource_handlers: Vec::new(),
         },
         sink: sink.clone(),
     })));
@@ -200,6 +201,7 @@ async fn durable_permission_returns_the_selected_acp_wire_option() {
             memory_scope: "project:tempestmiku".to_string(),
             capabilities: vec![],
             prior_messages: vec![],
+            resource_handlers: Vec::new(),
         },
         sink,
     })));

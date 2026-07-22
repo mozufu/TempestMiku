@@ -667,6 +667,15 @@ pub trait Store: Send + Sync + 'static {
         links: &[(Uuid, Uuid, f32, bool)],
     ) -> Result<()>;
     async fn policy_trace_values(&self, policy_id: Uuid) -> Result<Vec<(Uuid, Uuid, f32, bool)>>;
+    async fn upsert_environment_cognition(
+        &self,
+        cognition: tm_memory::EnvironmentCognitionRecord,
+    ) -> Result<tm_memory::EnvironmentCognitionRecord>;
+    async fn environment_cognition(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+    ) -> Result<Option<tm_memory::EnvironmentCognitionRecord>>;
     async fn record_turn_feedback(
         &self,
         session_id: Uuid,

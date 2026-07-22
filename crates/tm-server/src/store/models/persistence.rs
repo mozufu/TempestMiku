@@ -233,6 +233,44 @@ pub(crate) fn validate_evolution_policy(policy: &tm_memory::EvolutionPolicyRecor
     Ok(())
 }
 
+pub(crate) fn sanitize_environment_cognition_persistence(
+    mut cognition: tm_memory::EnvironmentCognitionRecord,
+) -> Result<tm_memory::EnvironmentCognitionRecord> {
+    reject_sensitive_persistence_fields([
+        (
+            "environment cognition owner subject",
+            cognition.owner_subject.as_str(),
+        ),
+        (
+            "environment cognition memory scope",
+            cognition.memory_scope.as_str(),
+        ),
+    ])?;
+    if !cognition.memory_scope.starts_with("project:") {
+        return Err(ServerError::InvalidRequest(
+            "environment cognition requires a project memory scope".to_string(),
+        ));
+    }
+    if cognition.version == 0 {
+        return Err(ServerError::InvalidRequest(
+            "environment cognition version must be positive".to_string(),
+        ));
+    }
+    if !cognition.confidence.is_finite() || !(0.0..=1.0).contains(&cognition.confidence) {
+        return Err(ServerError::InvalidRequest(
+            "environment cognition confidence must be between zero and one".to_string(),
+        ));
+    }
+    cognition.title = redact_persisted_text(&cognition.title);
+    cognition.body = redact_persisted_text(&cognition.body);
+    if cognition.title.trim().is_empty() || cognition.body.trim().is_empty() {
+        return Err(ServerError::InvalidRequest(
+            "environment cognition title and body must not be empty".to_string(),
+        ));
+    }
+    Ok(cognition)
+}
+
 pub(crate) fn sanitize_turn_feedback_comment(comment: Option<&str>) -> Option<String> {
     comment.map(redact_persisted_text)
 }

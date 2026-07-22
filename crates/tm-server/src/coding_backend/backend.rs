@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tm_host::ResourceHandler;
 use uuid::Uuid;
 
 use crate::{Result, SessionEvent};
@@ -29,7 +30,7 @@ pub trait CodingBackend: Send + Sync + 'static {
     fn cancel_turn(&self, _session_id: Uuid, _turn_id: Uuid) {}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodingTurn {
     pub session_id: Uuid,
     /// Durable queue identity. Native tm keeps successful runtime state quarantined until this
@@ -49,6 +50,34 @@ pub struct CodingTurn {
     pub capabilities: Vec<String>,
     /// Caller-bounded persisted conversation history, ordered oldest to newest.
     pub prior_messages: Vec<tm_core::Message>,
+    /// Server-owned resource handlers installed for this turn. Registration does not grant
+    /// authority; `capabilities` remains the exact grant set enforced by the sandbox.
+    pub resource_handlers: Vec<Arc<dyn ResourceHandler>>,
+}
+
+impl std::fmt::Debug for CodingTurn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodingTurn")
+            .field("session_id", &self.session_id)
+            .field("durable_turn_id", &self.durable_turn_id)
+            .field("user_prompt", &self.user_prompt)
+            .field("system_prompt", &self.system_prompt)
+            .field("mode", &self.mode)
+            .field("owner_subject", &self.owner_subject)
+            .field("project_id", &self.project_id)
+            .field("memory_scope", &self.memory_scope)
+            .field("capabilities", &self.capabilities)
+            .field("prior_messages", &self.prior_messages)
+            .field(
+                "resource_handlers",
+                &self
+                    .resource_handlers
+                    .iter()
+                    .map(|handler| handler.scheme())
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

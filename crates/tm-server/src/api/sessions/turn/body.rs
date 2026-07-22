@@ -4,7 +4,7 @@ use super::{
     drive_recall::persist_drive_recall_chunks,
 };
 use tm_core::Message;
-use tm_host::HostFn;
+use tm_host::{HostFn, ResourceHandler};
 
 pub(super) async fn execute_turn_body<S, M, C>(
     state: &AppState<S, M, C>,
@@ -55,6 +55,16 @@ where
     // Handler registration is independent from authority. Cached chat sessions keep both stable
     // services, while the exact per-turn capability set remains the enforcement boundary.
     let chat_host_functions = vec![memory_search_host, mode_suggest_host];
+    let project_resource_handlers = project_id
+        .as_ref()
+        .map(|project_id| {
+            vec![Arc::new(crate::ProjectEnvironmentResourceHandler::new(
+                Arc::clone(&state.store),
+                subject.clone(),
+                project_id.clone(),
+            )) as Arc<dyn ResourceHandler>]
+        })
+        .unwrap_or_default();
 
     let (response, runtime) = if turn_profile.has_capability("backend.coding") {
         let backend = state.coding_backend.as_ref().ok_or_else(|| {
@@ -81,6 +91,7 @@ where
                     memory_scope: memory_scope.clone(),
                     capabilities: chat_capabilities.clone(),
                     prior_messages: prior_messages.clone(),
+                    resource_handlers: project_resource_handlers.clone(),
                 },
                 sink,
             )
@@ -112,6 +123,7 @@ where
                     limits: crate::ChatRunLimits::default(),
                     deny_approvals: false,
                     host_functions: chat_host_functions,
+                    resource_handlers: project_resource_handlers,
                 },
                 sink.clone(),
             )

@@ -228,6 +228,7 @@ pub(super) fn coding_turn(session_id: Uuid) -> CodingTurn {
         memory_scope: "project:tempestmiku".to_string(),
         capabilities: Vec::new(),
         prior_messages: Vec::new(),
+        resource_handlers: Vec::new(),
     }
 }
 

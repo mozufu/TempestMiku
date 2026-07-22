@@ -2,11 +2,12 @@ use serde_json::Value;
 use tm_host::EvolutionAuditRecord;
 use tm_memory::{
     DreamQueueRecord, DreamReason, DreamStatus, EmbeddingNormalization, EmbeddingProvenance,
-    EmbeddingProvider, EpisodicMemoryRecord, EvolutionEpisodeRecord, EvolutionPolicyRecord,
-    ExperienceTraceRecord, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus, MemoryRecordKind,
-    MemoryRecordLinks, MemoryRecordResource, MemoryRecordStatus, MemorySummaryKind,
-    MemorySummaryRecord, ReembeddingState, SemanticMemoryRecord, SkillProposalRecord,
-    SkillProposalStatus, SkillVerification, StoredMemoryRecord,
+    EmbeddingProvider, EnvironmentCognitionRecord, EpisodicMemoryRecord, EvolutionEpisodeRecord,
+    EvolutionPolicyRecord, ExperienceTraceRecord, MemoryEmbeddingJobRecord,
+    MemoryEmbeddingJobStatus, MemoryRecordKind, MemoryRecordLinks, MemoryRecordResource,
+    MemoryRecordStatus, MemorySummaryKind, MemorySummaryRecord, ReembeddingState,
+    SemanticMemoryRecord, SkillProposalRecord, SkillProposalStatus, SkillVerification,
+    StoredMemoryRecord,
 };
 
 use crate::{Result, ServerError};
@@ -187,6 +188,27 @@ pub(super) fn row_to_evolution_policy(row: tokio_postgres::Row) -> Result<Evolut
         status,
         version: u32::try_from(version)
             .map_err(|_| ServerError::Store("invalid evolution policy version".to_string()))?,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+pub(super) fn row_to_environment_cognition(
+    row: tokio_postgres::Row,
+) -> Result<EnvironmentCognitionRecord> {
+    let source_policy_ids = serde_json::from_value(row.get("source_policy_ids"))
+        .map_err(|error| ServerError::Store(error.to_string()))?;
+    let version: i32 = row.get("version");
+    Ok(EnvironmentCognitionRecord {
+        id: row.get("id"),
+        owner_subject: row.get("owner_subject"),
+        memory_scope: row.get("memory_scope"),
+        title: row.get("title"),
+        body: row.get("body"),
+        source_policy_ids,
+        confidence: row.get("confidence"),
+        version: u32::try_from(version)
+            .map_err(|_| ServerError::Store("invalid environment cognition version".to_string()))?,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })

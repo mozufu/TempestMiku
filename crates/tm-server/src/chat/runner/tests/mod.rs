@@ -392,6 +392,7 @@ fn chat_turn(session_id: Uuid) -> ChatTurn {
         limits: ChatRunLimits::default(),
         deny_approvals: false,
         host_functions: Vec::new(),
+        resource_handlers: Vec::new(),
     }
 }
 

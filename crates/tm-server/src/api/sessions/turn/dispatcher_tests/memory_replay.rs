@@ -1,3 +1,21 @@
+#[derive(Default)]
+struct PromptRecordingRunner {
+    turns: Arc<Mutex<Vec<ChatTurn>>>,
+}
+
+#[async_trait]
+impl ChatRunner for PromptRecordingRunner {
+    async fn run_turn(
+        &self,
+        turn: ChatTurn,
+        sink: Arc<dyn EventSink + Send + Sync>,
+    ) -> Result<String> {
+        self.turns.lock().unwrap().push(turn);
+        sink.on_final("recorded retry");
+        Ok("recorded retry".to_string())
+    }
+}
+
 use super::*;
 
 #[tokio::test]
@@ -64,6 +82,76 @@ async fn durable_memory_search_event_is_not_automatically_injected_on_retry() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn persisted_skill_selection_overrides_new_reliability_suppression() {
+    use sha2::{Digest, Sha256};
+
+    let root = tempfile::tempdir().unwrap();
+    let body = "# Release workflow\n\nPERSISTED_SKILL_BODY\n".to_string();
+    let digest = format!("sha256:{:x}", Sha256::digest(body.as_bytes()));
+    let persona = tm_modes::ModesConfig::default().with_managed_skills_path(root.path());
+    let active = persona
+        .install_managed_skill(tm_modes::ManagedSkillInstall {
+            name: "release-workflow".to_string(),
+            content_digest: digest,
+            body,
+            source_proposal_id: Uuid::new_v4().to_string(),
+            description: "release workflow".to_string(),
+            triggers: vec!["release notes".to_string()],
+            use_criteria: "Use for release notes.".to_string(),
+        })
+        .unwrap()
+        .active;
+    let store = Arc::new(InMemoryStore::default());
+    store.configure_owner_subject("owner").await.unwrap();
+    let assets = persona.load_assets();
+    let session = store
+        .create_session(NewSession {
+            mode: assets.modes.default_mode(),
+            persona_status: assets.status.clone(),
+        })
+        .await
+        .unwrap();
+    let turn = store
+        .enqueue_turn(session.id, "skill-retry", "draft release notes")
+        .await
+        .unwrap();
+    store
+        .record_skill_exposures_for_turn(
+            session.id,
+            turn.id,
+            &[(active.name.clone(), active.content_digest.clone())],
+        )
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        store
+            .record_skill_outcome(&active.name, &active.content_digest, false)
+            .await
+            .unwrap();
+    }
+    let chat = Arc::new(PromptRecordingRunner::default());
+    let turns = Arc::clone(&chat.turns);
+    let state = AppState::new(
+        Arc::clone(&store),
+        Arc::new(StoreMemoryProvider::new(Arc::clone(&store))),
+        chat,
+        persona,
+        AuthConfig::NoAuth,
+    )
+    .with_evolution_config(crate::EvolutionDreamConfig {
+        reliability_archive: 0.3,
+        min_trials_archive: 3,
+        ..crate::EvolutionDreamConfig::default()
+    })
+    .with_auto_turn_dispatcher(false);
+
+    execute_turn_body(&state, &turn).await.unwrap();
+    let turns = turns.lock().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert!(turns[0].system_prompt.contains("PERSISTED_SKILL_BODY"));
 }
 
 #[tokio::test]

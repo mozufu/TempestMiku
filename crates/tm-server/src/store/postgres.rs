@@ -53,9 +53,9 @@ use super::{
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MemoryPolicy,
     MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
     NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
-    NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind, ProjectItemRecord,
-    ProjectRecord, RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord,
-    SessionTurnRecord, Store, StoreRuntimeMetrics,
+    NewProjectItem, NewSession, NewSkillApprovalBundle, ProfileFactRecord, ProjectItemKind,
+    ProjectItemRecord, ProjectRecord, RecallChunkRecord, SessionEvent, SessionRecord,
+    SessionSummaryRecord, SessionTurnRecord, SkillApprovalBundleResult, Store, StoreRuntimeMetrics,
 };
 
 fn evolution_audit_entry(
@@ -1848,6 +1848,283 @@ impl Store for PostgresStore {
             .map_err(|err| ServerError::Store(err.to_string()))?
             .ok_or_else(|| ServerError::NotFound(format!("approval {approval_id}")))?;
         Ok(row_to_approval_request(row))
+    }
+    async fn approval_request_for_skill_proposal(
+        &self,
+        session_id: Uuid,
+        proposal_id: Uuid,
+    ) -> Result<Option<ApprovalRequestRecord>> {
+        let row = self
+            .client
+            .query_opt(
+                "select request.id, request.session_id, request.turn_id, request.requester_id,
+                        request.origin, request.action, request.scope_json, request.options_json,
+                        request.status, request.resumable, request.created_at, request.expires_at,
+                        request.heartbeat_at, request.resolved_at, request.selected_option_id,
+                        request.resolution_json, request.request_event_seq,
+                        request.resolution_event_seq, request.resolution_version
+                   from approval_requests request
+                   join approval_effects effect on effect.approval_id = request.id
+                  where request.session_id = $1 and effect.effect_type = 'skill_write'
+                    and effect.payload_json ->> 'proposalId' = $2
+                  order by request.created_at asc, request.id asc
+                  limit 1",
+                &[&session_id, &proposal_id.to_string()],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        Ok(row.map(row_to_approval_request))
+    }
+    async fn create_skill_approval_bundle(
+        &self,
+        bundle: NewSkillApprovalBundle,
+    ) -> Result<SkillApprovalBundleResult> {
+        let proposal = bundle.proposal;
+        let approval = sanitize_approval_request_persistence(bundle.approval)?;
+        let proposal_payload_json = redact_persisted_json(bundle.proposal_payload_json);
+        let approval_payload_json = redact_persisted_json(bundle.approval_payload_json);
+        let proposal_id = proposal.id.to_string();
+        let approval_id = approval.id.to_string();
+        if approval.session_id != proposal.source_session_id
+            || approval.turn_id.is_some()
+            || approval.effect_type != "skill_write"
+            || approval
+                .effect_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || proposal_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || approval_payload_json
+                .get("approvalId")
+                .and_then(Value::as_str)
+                != Some(approval_id.as_str())
+        {
+            return Err(ServerError::InvalidRequest(
+                "skill approval bundle has inconsistent proposal, approval, or event references"
+                    .to_string(),
+            ));
+        }
+        self.get_session(approval.session_id).await?;
+        let (audit_json, audit_key) = evolution_audit_params(evolution_audit_entry(
+            &approval.effect_payload_json,
+            approval.id,
+            approval.id,
+            EvolutionAuditStatus::AwaitingApproval,
+            approval.created_at,
+            None,
+            format!("approval:{}:attempt", approval.id),
+        )?)?;
+        let mut client = self.memory_mutation_client.lock().await;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .query_one(
+                "select pg_advisory_xact_lock(hashtextextended($1, 9071))",
+                &[&proposal_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let Some(row) = transaction
+            .query_opt(
+                "select request.id, request.session_id, request.turn_id, request.requester_id,
+                        request.origin, request.action, request.scope_json, request.options_json,
+                        request.status, request.resumable, request.created_at, request.expires_at,
+                        request.heartbeat_at, request.resolved_at, request.selected_option_id,
+                        request.resolution_json, request.request_event_seq,
+                        request.resolution_event_seq, request.resolution_version
+                   from approval_requests request
+                   join approval_effects effect on effect.approval_id = request.id
+                  where request.session_id = $1 and effect.effect_type = 'skill_write'
+                    and effect.payload_json ->> 'proposalId' = $2
+                  order by request.created_at asc, request.id asc
+                  limit 1",
+                &[&approval.session_id, &proposal_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+        {
+            let existing = row_to_approval_request(row);
+            transaction
+                .commit()
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            return Ok(SkillApprovalBundleResult {
+                approval: existing,
+                events: Vec::new(),
+            });
+        }
+        let stored_proposal = transaction
+            .query_opt(
+                "select id, name, description, body, trigger, use_criteria, evidence_json,
+                        self_critique, verification_json, status, dedupe_key, source_dream_id,
+                        source_session_id, source_policy_id, estimated_gain, support_episodes,
+                        created_at, updated_at
+                   from skill_proposals where id = $1 for update",
+                &[&proposal.id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("skill proposal {}", proposal.id)))?;
+        if row_to_skill_proposal(stored_proposal)? != proposal {
+            return Err(ServerError::Conflict(format!(
+                "skill proposal {} changed before approval persistence",
+                proposal.id
+            )));
+        }
+        transaction
+            .query_one(
+                "insert into approval_requests
+                    (id, session_id, turn_id, requester_id, origin, action, scope_json,
+                     options_json, status, resumable, created_at, expires_at, heartbeat_at,
+                     resolved_at, selected_option_id, resolution_json, request_event_seq,
+                     resolution_event_seq, resolution_version)
+                 values ($1, $2, null, $3, $4, $5, $6, $7, 'pending', $8, $9, $10, $9,
+                         null, null, null, null, null, 0)
+                 returning id, session_id, turn_id, requester_id, origin, action, scope_json,
+                           options_json, status, resumable, created_at, expires_at, heartbeat_at,
+                           resolved_at, selected_option_id, resolution_json, request_event_seq,
+                           resolution_event_seq, resolution_version",
+                &[
+                    &approval.id,
+                    &approval.session_id,
+                    &approval.requester_id,
+                    &approval.origin,
+                    &approval.action,
+                    &approval.scope_json,
+                    &approval.options_json,
+                    &approval.resumable,
+                    &approval.created_at,
+                    &approval.expires_at,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .execute(
+                "insert into approval_effects
+                    (id, approval_id, session_id, effect_type, payload_json, status, attempts,
+                     available_at, locked_at, lease_owner, lease_epoch, applied_at, error_at,
+                     last_error, created_at, updated_at)
+                 values ($1, $1, $2, $3, $4, 'blocked', 0, $5, null, null, 0, null, null, null,
+                         $6, $6)",
+                &[
+                    &approval.id,
+                    &approval.session_id,
+                    &approval.effect_type,
+                    &approval.effect_payload_json,
+                    &approval.expires_at,
+                    &approval.created_at,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if let (Some(audit_json), Some(audit_key)) = (&audit_json, &audit_key) {
+            transaction
+                .execute(
+                    "insert into evolution_audits(
+                        id, idempotency_key, session_id, dream_id, actor_id, proposal_id,
+                        target_class, target_id, content_digest, configured_tier, decision_json,
+                        approval_id, effect_id, status, error_code, record_json, created_at
+                     ) values (
+                        ($1::jsonb ->> 'id')::uuid, $2,
+                        ($1::jsonb #>> '{origin,sessionId}')::uuid,
+                        nullif($1::jsonb #>> '{origin,dreamId}', '')::uuid,
+                        $1::jsonb #>> '{origin,actorId}',
+                        ($1::jsonb ->> 'proposalId')::uuid,
+                        $1::jsonb #>> '{target,class}', $1::jsonb #>> '{target,id}',
+                        $1::jsonb ->> 'contentDigest', $1::jsonb ->> 'configuredTier',
+                        $1::jsonb -> 'decision', nullif($1::jsonb ->> 'approvalId', '')::uuid,
+                        nullif($1::jsonb ->> 'effectId', '')::uuid,
+                        $1::jsonb ->> 'status', $1::jsonb ->> 'errorCode', $1,
+                        ($1::jsonb ->> 'createdAt')::timestamptz)
+                     on conflict (idempotency_key) do nothing",
+                    &[audit_json, audit_key],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+        }
+        let session_key = approval.session_id.to_string();
+        transaction
+            .query_one(
+                "select pg_advisory_xact_lock(hashtext($1))",
+                &[&session_key],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let first_seq: i64 = transaction
+            .query_one(
+                "select coalesce(max(seq) + 1, 1)::bigint as seq
+                   from session_events where session_id = $1",
+                &[&approval.session_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .get("seq");
+        transaction
+            .execute(
+                "insert into session_events(
+                    session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                    history_uri, turn_id, created_at)
+                 values ($1, $2, 'write_proposal', $3, null, null, null, null, $4),
+                        ($1, $5, 'approval', $6, null, null, null, null, $4)",
+                &[
+                    &approval.session_id,
+                    &first_seq,
+                    &proposal_payload_json,
+                    &approval.created_at,
+                    &(first_seq + 1),
+                    &approval_payload_json,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let approval_row = transaction
+            .query_one(
+                "update approval_requests set request_event_seq = $2
+                   where id = $1
+                   returning id, session_id, turn_id, requester_id, origin, action, scope_json,
+                             options_json, status, resumable, created_at, expires_at, heartbeat_at,
+                             resolved_at, selected_option_id, resolution_json, request_event_seq,
+                             resolution_event_seq, resolution_version",
+                &[&approval.id, &(first_seq + 1)],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let approval_record = row_to_approval_request(approval_row);
+        transaction
+            .execute(
+                "update sessions set updated_at = $2 where id = $1",
+                &[&approval.session_id, &approval.created_at],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let proposal_event = SessionEvent::new(
+            approval.session_id,
+            first_seq,
+            "write_proposal",
+            proposal_payload_json,
+            approval.created_at,
+        );
+        let approval_event = SessionEvent::new(
+            approval.session_id,
+            first_seq + 1,
+            "approval",
+            approval_payload_json,
+            approval.created_at,
+        );
+        Ok(SkillApprovalBundleResult {
+            approval: approval_record,
+            events: vec![proposal_event, approval_event],
+        })
     }
 
     async fn heartbeat_approval_request(
@@ -4836,6 +5113,7 @@ impl Store for PostgresStore {
         reward_source: tm_memory::RewardSource,
         feedback_outcome: Option<FeedbackOutcome>,
         trace_values: &[(Uuid, f32)],
+        skill_outcomes: &[(String, String, bool)],
         status: tm_memory::EpisodeStatus,
     ) -> Result<EvolutionEpisodeRecord> {
         if !terminal_reward.is_finite() || trace_values.iter().any(|(_, value)| !value.is_finite())
@@ -4849,6 +5127,69 @@ impl Store for PostgresStore {
             .transaction()
             .await
             .map_err(|error| ServerError::Store(error.to_string()))?;
+        let current_row = transaction
+            .query_opt(
+                "select id, session_id, turn_id, owner_subject, memory_scope, status,
+                        terminal_reward, reward_source, feedback_outcome, trace_count,
+                        created_at, updated_at
+                   from evolution_episodes where id = $1 for update",
+                &[&episode_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
+        let current = row_to_evolution_episode(current_row)?;
+        let stored_traces = transaction
+            .query(
+                "select id, value from experience_traces where episode_id = $1 order by ordinal",
+                &[&episode_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if stored_traces.len() != trace_values.len() {
+            return Err(ServerError::InvalidRequest(
+                "episode valuation must cover every trace exactly once".to_string(),
+            ));
+        }
+        let trace_values_match = trace_values.iter().all(|(trace_id, value)| {
+            stored_traces.iter().any(|row| {
+                row.get::<_, Uuid>("id") == *trace_id
+                    && row.get::<_, Option<f32>>("value") == Some(*value)
+            })
+        });
+        let stored_outcomes = transaction
+            .query(
+                "select name, digest, pass from skill_runtime_outcomes where episode_id = $1",
+                &[&episode_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let outcomes_match = stored_outcomes.len() == skill_outcomes.len()
+            && skill_outcomes.iter().all(|(name, digest, pass)| {
+                stored_outcomes.iter().any(|row| {
+                    row.get::<_, String>("name") == *name
+                        && row.get::<_, String>("digest") == *digest
+                        && row.get::<_, bool>("pass") == *pass
+                })
+            });
+        if current.status == status
+            && current.terminal_reward == Some(terminal_reward)
+            && current.reward_source == Some(reward_source)
+            && current.feedback_outcome == feedback_outcome
+            && trace_values_match
+            && outcomes_match
+        {
+            transaction
+                .commit()
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            return Ok(current);
+        }
+        if current.status != tm_memory::EpisodeStatus::Captured {
+            return Err(ServerError::Conflict(format!(
+                "episode {episode_id} is already terminally valued"
+            )));
+        }
         for (trace_id, value) in trace_values {
             let updated = transaction
                 .execute(
@@ -4863,11 +5204,30 @@ impl Store for PostgresStore {
                 )));
             }
         }
+        for (name, digest, pass) in skill_outcomes {
+            transaction
+                .execute(
+                    "with recorded as (
+                        insert into skill_runtime_outcomes (episode_id, name, digest, pass)
+                        values ($1, $2, $3, $4)
+                        returning name, digest, pass
+                     )
+                     insert into skill_runtime_stats (name, digest, passes, fails, last_outcome_at)
+                     select name, digest, pass::int, (not pass)::int, now() from recorded
+                     on conflict (name, digest) do update set
+                        passes = skill_runtime_stats.passes + excluded.passes,
+                        fails = skill_runtime_stats.fails + excluded.fails,
+                        last_outcome_at = now()",
+                    &[&episode_id, name, digest, pass],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+        }
         let reward_source = reward_source.as_str();
         let feedback_outcome = feedback_outcome.map(tm_memory::FeedbackOutcome::as_str);
         let status = status.as_str();
         let row = transaction
-            .query_opt(
+            .query_one(
                 "update evolution_episodes
                     set terminal_reward = $2, reward_source = $3, feedback_outcome = $4,
                         status = $5, updated_at = now()
@@ -4884,8 +5244,7 @@ impl Store for PostgresStore {
                 ],
             )
             .await
-            .map_err(|error| ServerError::Store(error.to_string()))?
-            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
+            .map_err(|error| ServerError::Store(error.to_string()))?;
         transaction
             .commit()
             .await
@@ -5246,9 +5605,9 @@ impl Store for PostgresStore {
         let status = SkillProposalStatus::Pending.as_str();
         let row = self
             .client
-            .query_one(
-                "insert into skill_proposals (id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, created_at, updated_at)
-                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), now())
+            .query_opt(
+                "insert into skill_proposals (id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, source_policy_id, estimated_gain, support_episodes, created_at, updated_at)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
                  on conflict (dedupe_key) do update
                    set name = excluded.name,
                        description = excluded.description,
@@ -5260,8 +5619,27 @@ impl Store for PostgresStore {
                        verification_json = excluded.verification_json,
                        source_dream_id = excluded.source_dream_id,
                        source_session_id = excluded.source_session_id,
+                       source_policy_id = excluded.source_policy_id,
+                       estimated_gain = excluded.estimated_gain,
+                       support_episodes = excluded.support_episodes,
                        updated_at = now()
-                 returning id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, created_at, updated_at",
+                 where skill_proposals.status = 'pending'
+                    or (
+                        skill_proposals.name = excluded.name
+                        and skill_proposals.description = excluded.description
+                        and skill_proposals.body = excluded.body
+                        and skill_proposals.trigger = excluded.trigger
+                        and skill_proposals.use_criteria = excluded.use_criteria
+                        and skill_proposals.evidence_json = excluded.evidence_json
+                        and skill_proposals.self_critique = excluded.self_critique
+                        and skill_proposals.verification_json = excluded.verification_json
+                        and skill_proposals.source_dream_id = excluded.source_dream_id
+                        and skill_proposals.source_session_id = excluded.source_session_id
+                        and skill_proposals.source_policy_id is not distinct from excluded.source_policy_id
+                        and skill_proposals.estimated_gain is not distinct from excluded.estimated_gain
+                        and skill_proposals.support_episodes = excluded.support_episodes
+                    )
+                 returning id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, source_policy_id, estimated_gain, support_episodes, created_at, updated_at",
                 &[
                     &Uuid::new_v4(),
                     &proposal.name,
@@ -5276,10 +5654,23 @@ impl Store for PostgresStore {
                     &proposal.dedupe_key,
                     &proposal.source_dream_id,
                     &proposal.source_session_id,
+                    &proposal.source_policy_id,
+                    &proposal.estimated_gain,
+                    &i32::try_from(proposal.support_episodes).map_err(|_| {
+                        ServerError::InvalidRequest(
+                            "skill proposal support episode count exceeds Postgres range".to_string(),
+                        )
+                    })?,
                 ],
             )
             .await
-            .map_err(|err| ServerError::Store(err.to_string()))?;
+            .map_err(|err| ServerError::Store(err.to_string()))?
+            .ok_or_else(|| {
+                ServerError::Conflict(
+                    "terminal skill proposal cannot be overwritten with different content"
+                        .to_string(),
+                )
+            })?;
         row_to_skill_proposal(row)
     }
 
@@ -5296,7 +5687,7 @@ impl Store for PostgresStore {
                     set status = $2,
                         updated_at = now()
                   where id = $1
-                  returning id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, created_at, updated_at",
+                  returning id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, source_policy_id, estimated_gain, support_episodes, created_at, updated_at",
                 &[&id, &status],
             )
             .await
@@ -5309,7 +5700,7 @@ impl Store for PostgresStore {
         let row = self
             .client
             .query_opt(
-                "select id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, created_at, updated_at
+                "select id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, source_policy_id, estimated_gain, support_episodes, created_at, updated_at
                    from skill_proposals
                   where id = $1",
                 &[&id],
@@ -5328,7 +5719,7 @@ impl Store for PostgresStore {
         let rows = self
             .client
             .query(
-                "select id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, created_at, updated_at
+                "select id, name, description, body, trigger, use_criteria, evidence_json, self_critique, verification_json, status, dedupe_key, source_dream_id, source_session_id, source_policy_id, estimated_gain, support_episodes, created_at, updated_at
                    from skill_proposals
                   where source_session_id = $1
                   order by updated_at desc",
@@ -5337,6 +5728,176 @@ impl Store for PostgresStore {
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
         rows.into_iter().map(row_to_skill_proposal).collect()
+    }
+
+    async fn record_skill_exposures_for_turn(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        skills: &[(String, String)],
+    ) -> Result<(SessionEvent, bool)> {
+        self.get_session(session_id).await?;
+        let turn = self.turn(turn_id).await?;
+        if turn.session_id != session_id {
+            return Err(ServerError::NotFound(format!("turn {turn_id}")));
+        }
+        let payload_json = redact_persisted_json(serde_json::json!({
+            "skills": skills.iter().map(|(name, digest)| serde_json::json!({
+                "name": name,
+                "digest": digest,
+            })).collect::<Vec<_>>(),
+        }));
+        let session_key = session_id.to_string();
+        let names = skills
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        let digests = skills
+            .iter()
+            .map(|(_, digest)| digest.as_str())
+            .collect::<Vec<_>>();
+        let mut collision_retries = 0usize;
+        let row = loop {
+            let result = self
+                .client
+                .query_one(
+                    "with lock as (
+                        select pg_advisory_xact_lock(hashtext($1))
+                     ), existing as (
+                        select event.session_id, event.seq, event.event_type, event.payload_json,
+                               event.actor_id, event.artifact_uri, event.history_uri, event.turn_id,
+                               event.created_at, false as inserted
+                          from session_events event, lock
+                         where event.session_id = $2 and event.turn_id = $3
+                           and event.event_type = 'skill_selected'
+                         order by event.seq asc limit 1
+                     ), next_seq as (
+                        select coalesce(max(event.seq) + 1, 1) as seq
+                          from session_events event, lock
+                         where event.session_id = $2
+                        having not exists (select 1 from existing)
+                     ), inserted as (
+                        insert into session_events (
+                            session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                            history_uri, turn_id, created_at
+                        )
+                        select $2, next_seq.seq, 'skill_selected', $4, null, null, null, $3, now()
+                          from next_seq
+                        returning session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                                  history_uri, turn_id, created_at, true as inserted
+                     ), exposures as (
+                        insert into skill_runtime_exposures (turn_id, name, digest)
+                        select $3, selected.name, selected.digest
+                          from inserted,
+                               unnest($5::text[], $6::text[]) as selected(name, digest)
+                        on conflict (turn_id, name, digest) do nothing
+                        returning name, digest
+                     ), stats as (
+                        insert into skill_runtime_stats (name, digest, exposures, last_selected_at)
+                        select name, digest, 1, now() from exposures
+                        on conflict (name, digest) do update set
+                           exposures = skill_runtime_stats.exposures + 1,
+                           last_selected_at = now()
+                     ), touch as (
+                        update sessions
+                           set updated_at = (select created_at from inserted)
+                         where id = $2 and exists (select 1 from inserted)
+                     )
+                     select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                            history_uri, turn_id, created_at, inserted
+                       from existing
+                     union all
+                     select session_id, seq, event_type, payload_json, actor_id, artifact_uri,
+                            history_uri, turn_id, created_at, inserted
+                       from inserted
+                      order by seq asc limit 1",
+                    &[
+                        &session_key,
+                        &session_id,
+                        &turn_id,
+                        &payload_json,
+                        &names,
+                        &digests,
+                    ],
+                )
+                .await;
+            match result {
+                Ok(row) => break row,
+                Err(error)
+                    if error.code() == Some(&SqlState::UNIQUE_VIOLATION)
+                        && collision_retries < 8 =>
+                {
+                    collision_retries += 1;
+                }
+                Err(error) if error.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
+                    return Err(ServerError::Conflict(
+                        "could not allocate exact-once skill exposure event after concurrent writes"
+                            .to_string(),
+                    ));
+                }
+                Err(error) => return Err(ServerError::Store(error.to_string())),
+            }
+        };
+        Ok((
+            SessionEvent {
+                session_id: row.get("session_id"),
+                seq: row.get("seq"),
+                event_type: row.get("event_type"),
+                payload_json: row.get("payload_json"),
+                actor_id: row.get("actor_id"),
+                artifact_uri: row.get("artifact_uri"),
+                history_uri: row.get("history_uri"),
+                turn_id: row.get("turn_id"),
+                created_at: row.get("created_at"),
+            },
+            row.get("inserted"),
+        ))
+    }
+
+    async fn record_skill_outcome(&self, name: &str, digest: &str, pass: bool) -> Result<()> {
+        self.client
+            .execute(
+                "insert into skill_runtime_stats (name, digest, passes, fails, last_outcome_at)
+                 values ($1, $2, $3, $4, now())
+                 on conflict (name, digest) do update set
+                    passes = skill_runtime_stats.passes + excluded.passes,
+                    fails = skill_runtime_stats.fails + excluded.fails,
+                    last_outcome_at = now()",
+                &[&name, &digest, &i64::from(pass), &i64::from(!pass)],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        Ok(())
+    }
+
+    async fn skill_runtime_stats(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<(String, String, u64, u64, u64)>> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.client
+            .query(
+                "select name, digest, exposures, passes, fails
+                   from skill_runtime_stats
+                  where name = any($1)
+                  order by name, digest",
+                &[&names],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .into_iter()
+            .map(|row| {
+                let exposures = u64::try_from(row.get::<_, i64>("exposures"))
+                    .map_err(|_| ServerError::Store("invalid skill exposure count".to_string()))?;
+                let passes = u64::try_from(row.get::<_, i64>("passes"))
+                    .map_err(|_| ServerError::Store("invalid skill pass count".to_string()))?;
+                let fails = u64::try_from(row.get::<_, i64>("fails"))
+                    .map_err(|_| ServerError::Store("invalid skill fail count".to_string()))?;
+                Ok((row.get("name"), row.get("digest"), exposures, passes, fails))
+            })
+            .collect()
     }
 
     async fn upsert_cron_job(&self, job: NewCronJobRecord) -> Result<CronJobRecord> {

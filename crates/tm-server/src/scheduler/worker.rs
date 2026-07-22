@@ -282,7 +282,12 @@ where
         .store
         .append_message(session.id, "user", prompt_text)
         .await?;
-    let composed = build_turn_prompt(state, &mode, prompt_text);
+    let composed = build_turn_prompt(
+        state,
+        &mode,
+        prompt_text,
+        &std::collections::BTreeSet::new(),
+    );
     let sink = Arc::new(PersistingEventSink::new(
         session.id,
         Arc::clone(&state.store),

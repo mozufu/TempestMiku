@@ -173,15 +173,17 @@ Rollback is a separate durable manual approval and may activate an older immutab
 or restore the unmodified base catalog. Deny, timeout, stale base/pointer, malformed sections,
 symlinks, and retries cannot change the active pointer.
 
-**Skill candidate path:** post-session dreaming can distill a reusable workflow into a
-`SkillProposalRecord` with name, description, trigger/use criteria, `SKILL.md`-style body, evidence
-links, self-critique, verification checks, status, dedupe key, and source dream/session ids. The
-proposal emits `write_proposal` with `kind: "skill"` and uses the shared approval/default-deny path.
-Rejection or timeout leaves it pending/denied/timed-out without mutating the live catalog. Low-value
-sessions do not create skill proposals, and candidates that fail self-verification emit a replayable
-`skill_proposal_rejected` dream progress event instead of failing the whole dream or surfacing an
-unsafe proposal. Completed dream re-runs reuse the existing queued dream/skill records and do not
-duplicate skill approvals. The constrained candidate resource remains
+**Skill candidate path:** post-session dreaming can crystallize an active evidence-linked procedural
+policy into a `SkillProposalRecord` only when its estimated gain exceeds the configured threshold and
+its distinct positive support reaches `n_min`. The candidate records name, description, trigger/use
+criteria, applicability boundary, procedure, verification rules, positive trace evidence,
+self-critique, verification checks, status, dedupe key, source dream/session/policy ids, gain, and
+support count. The proposal emits `write_proposal` with `kind: "skill"` and uses the shared
+approval/default-deny path. Transcript phrasing alone never creates a skill proposal. Rejection or
+timeout leaves it pending/denied/timed-out without mutating the live catalog. Candidates that fail
+self-verification emit a replayable `skill_proposal_rejected` dream progress event instead of failing
+the whole dream or surfacing an unsafe proposal. Completed dream re-runs reuse the existing queued
+dream/skill records and do not duplicate skill approvals. The constrained candidate resource remains
 `memory://skill-proposals/<id>`.
 
 `SkillProposalRecord` is the only candidate format. `memory://skill-proposals` lists session
@@ -201,6 +203,14 @@ atomic `active.json` pointer selects the live version. `ModesConfig` reads that 
 prompt composition and adds the stored triggers to the layered catalog; it does not mutate process-global
 state or broaden mode capabilities. Deny, timeout, tampered content, stale effects, invalid names/paths,
 symlinks, and retries leave the active pointer unchanged.
+
+Prompt composition governs active managed skills per durable turn. Trigger-matched candidates use
+Beta-smoothed pass/fail reliability; versions below the configured archive threshold after the
+minimum trial count are suppressed, and only the configured top-K are composed. The turn records one
+`skill_selected` event containing exact active digests and increments exposure counters. Dream
+valuation later maps the same durable event to at most one pass/fail outcome per selected digest;
+neutral rewards record neither. Rollback activates a distinct digest and therefore starts a distinct
+runtime evidence series. Selection changes guidance only and never broadens capabilities.
 
 Rollback is a separate durable manual approval created by
 `POST /sessions/:id/evolution/skills/:name/rollback`. Its effect requires both the expected current

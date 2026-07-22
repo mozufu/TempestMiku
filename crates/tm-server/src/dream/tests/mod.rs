@@ -5,10 +5,12 @@ use std::time::Duration as StdDuration;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
+use tm_host::SelfEvolutionTier;
 use tm_memory::{
     DreamInputBudget, DreamLease, DreamQueueRecord, DreamReason, DreamStatus, DreamWorker,
     DreamWorkerReport, MemorySummaryKind, MemorySummaryRecord, NewDreamQueueRecord,
     NewMemorySummaryRecord, NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus,
+    SkillVerification,
 };
 use tm_modes::{AssetStatus, ModeId, ModesConfig};
 use tokio::sync::broadcast;

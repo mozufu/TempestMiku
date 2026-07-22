@@ -109,21 +109,6 @@ pub(super) fn unresolved_approvals(events: &[SessionEvent]) -> Vec<String> {
     approvals.into_values().take(6).collect()
 }
 
-pub(super) fn reusable_workflow_signal(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    [
-        "workflow:",
-        "playbook:",
-        "reusable workflow",
-        "reuse this workflow",
-        "my process is",
-        "our process is",
-        "when i ask",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
 pub(super) fn skill_name(scenario: &str) -> String {
     let normalized = normalize_key(scenario);
     let suffix = normalized

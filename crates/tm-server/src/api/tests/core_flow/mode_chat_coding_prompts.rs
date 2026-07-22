@@ -296,3 +296,170 @@ async fn coding_turn_prompt_uses_active_mode_bundle() {
         );
     }
 }
+
+#[tokio::test]
+async fn managed_skill_selector_archives_unreliable_and_records_survivor() {
+    use sha2::{Digest, Sha256};
+
+    fn install(name: &str, marker: &str) -> tm_modes::ManagedSkillInstall {
+        let body = format!("# {name}\n\n{marker}\n");
+        tm_modes::ManagedSkillInstall {
+            name: name.to_string(),
+            content_digest: format!("sha256:{:x}", Sha256::digest(body.as_bytes())),
+            body,
+            source_proposal_id: Uuid::new_v4().to_string(),
+            description: format!("{name} test skill"),
+            triggers: vec!["release notes".to_string()],
+            use_criteria: "Use only for release notes.".to_string(),
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let persona = ModesConfig::default().with_managed_skills_path(root.path());
+    let survivor = persona
+        .install_managed_skill(install("release-survivor", "SURVIVOR_SKILL_BODY"))
+        .unwrap()
+        .active;
+    let archived = persona
+        .install_managed_skill(install("release-archived", "ARCHIVED_SKILL_BODY"))
+        .unwrap()
+        .active;
+    let store = Arc::new(InMemoryStore::default());
+    for _ in 0..3 {
+        store
+            .record_skill_outcome(&archived.name, &archived.content_digest, false)
+            .await
+            .unwrap();
+    }
+    let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+    let chat = Arc::new(RecordingChatRunner::default());
+    let turns = Arc::clone(&chat.turns);
+    let state = AppState::new(
+        Arc::clone(&store),
+        memory,
+        chat,
+        persona,
+        AuthConfig::NoAuth,
+    )
+    .with_evolution_config(crate::EvolutionDreamConfig {
+        reliability_archive: 0.3,
+        min_trials_archive: 3,
+        top_k_skills: 1,
+        ..crate::EvolutionDreamConfig::default()
+    });
+    let app = app(state);
+    let session = create(&app).await;
+    post_user_message(&app, session.id, "draft release notes from these changes").await;
+
+    {
+        let turns = turns.lock();
+        assert_eq!(turns.len(), 1);
+        assert!(turns[0].system_prompt.contains("SURVIVOR_SKILL_BODY"));
+        assert!(!turns[0].system_prompt.contains("ARCHIVED_SKILL_BODY"));
+    }
+    let selected = store
+        .events_by_type(session.id, "skill_selected", 10)
+        .await
+        .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].payload_json["skills"][0]["name"], survivor.name);
+    assert_eq!(
+        selected[0].payload_json["skills"][0]["digest"],
+        survivor.content_digest
+    );
+    let stats = store
+        .skill_runtime_stats(&[survivor.name.clone(), archived.name.clone()])
+        .await
+        .unwrap();
+    let survivor_stats = stats
+        .iter()
+        .find(|(name, digest, _, _, _)| {
+            name == &survivor.name && digest == &survivor.content_digest
+        })
+        .expect("survivor exposure stats");
+    assert_eq!(survivor_stats.2, 1);
+    assert!(stats.iter().all(|(name, digest, exposures, _, _)| {
+        name != &archived.name || digest != &archived.content_digest || *exposures == 0
+    }));
+}
+
+#[tokio::test]
+async fn managed_skill_catalog_failure_keeps_base_turn_available() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("broken-skill")).unwrap();
+    std::fs::write(root.path().join("broken-skill/active.json"), b"not-json").unwrap();
+    let persona = ModesConfig::default().with_managed_skills_path(root.path());
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(Arc::clone(&store)));
+    let chat = Arc::new(RecordingChatRunner::default());
+    let turns = Arc::clone(&chat.turns);
+    let state = AppState::new(
+        Arc::clone(&store),
+        memory,
+        chat,
+        persona,
+        AuthConfig::NoAuth,
+    );
+    let app = app(state);
+    let session = create(&app).await;
+
+    post_user_message(
+        &app,
+        session.id,
+        "ordinary question without a managed skill",
+    )
+    .await;
+
+    assert_eq!(turns.lock().len(), 1);
+    assert!(
+        store
+            .events_by_type(session.id, "skill_selected", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn skill_exposure_is_idempotent_for_the_same_durable_turn() {
+    let active_name = "release-workflow".to_string();
+    let active_digest = "sha256:test".to_string();
+    let store = Arc::new(InMemoryStore::default());
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: tm_modes::AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let turn = store
+        .enqueue_turn(session.id, "retry-exposure", "draft release notes")
+        .await
+        .unwrap();
+
+    let skills = [(active_name.clone(), active_digest)];
+    store
+        .record_skill_exposures_for_turn(session.id, turn.id, &skills)
+        .await
+        .unwrap();
+    store
+        .record_skill_exposures_for_turn(session.id, turn.id, &skills)
+        .await
+        .unwrap();
+
+    let stats = store
+        .skill_runtime_stats(std::slice::from_ref(&active_name))
+        .await
+        .unwrap();
+    assert_eq!(stats[0].2, 1);
+    assert_eq!(
+        store
+            .events_by_type(session.id, "skill_selected", 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}

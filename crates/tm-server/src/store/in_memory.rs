@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -6,10 +9,10 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, EnvironmentCognitionRecord, EvolutionEpisodeRecord,
-    EvolutionPolicyRecord, ExperienceTraceRecord, FeedbackOutcome, MemoryEmbeddingJobRecord,
-    MemoryEmbeddingJobStatus, MemoryRecordKind, MemoryScopeTombstone, MemorySummaryRecord,
-    NewDreamQueueRecord, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, EnvironmentCognitionRecord, EpisodeStatus,
+    EvolutionEpisodeRecord, EvolutionPolicyRecord, ExperienceTraceRecord, FeedbackOutcome,
+    MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus, MemoryRecordKind, MemoryScopeTombstone,
+    MemorySummaryRecord, NewDreamQueueRecord, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
     NewMemoryEmbeddingJob, NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus,
     SkillProposalRecord, SkillProposalStatus, StoredMemoryRecord,
 };
@@ -37,9 +40,10 @@ use super::{
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MemoryPolicy,
     MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
     NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
-    NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind, ProjectItemRecord,
-    ProjectRecord, ProjectStatus, RecallChunkRecord, SessionEvent, SessionRecord,
-    SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
+    NewProjectItem, NewSession, NewSkillApprovalBundle, ProfileFactRecord, ProjectItemKind,
+    ProjectItemRecord, ProjectRecord, ProjectStatus, RecallChunkRecord, SessionEvent,
+    SessionRecord, SessionSummaryRecord, SessionTurnRecord, SkillApprovalBundleResult, Store,
+    StoreRuntimeMetrics,
 };
 
 mod approval_helpers;
@@ -87,6 +91,8 @@ struct Inner {
     policy_trace_links: Vec<(Uuid, Uuid, Uuid, f32, bool)>,
     environment_cognitions: Vec<EnvironmentCognitionRecord>,
     skill_proposals: Vec<SkillProposalRecord>,
+    skill_runtime_stats: BTreeMap<(String, String), (u64, u64, u64)>,
+    skill_outcomes: BTreeSet<(Uuid, String, String, bool)>,
     cron_jobs: Vec<CronJobRecord>,
     cron_runs: Vec<CronRunRecord>,
     mcp_mutation_effects: BTreeMap<String, tm_mcp::McpMutationEffectRecord>,
@@ -1208,6 +1214,190 @@ impl Store for InMemoryStore {
             append_evolution_audit_in_memory(&mut inner, audit)?;
         }
         Ok(record)
+    }
+
+    async fn approval_request_for_skill_proposal(
+        &self,
+        session_id: Uuid,
+        proposal_id: Uuid,
+    ) -> Result<Option<ApprovalRequestRecord>> {
+        let inner = self.inner.lock();
+        Ok(inner
+            .approval_effects
+            .iter()
+            .find(|effect| {
+                effect.session_id == session_id
+                    && effect.effect_type == "skill_write"
+                    && effect
+                        .payload_json
+                        .get("proposalId")
+                        .and_then(Value::as_str)
+                        .and_then(|value| Uuid::parse_str(value).ok())
+                        == Some(proposal_id)
+            })
+            .and_then(|effect| {
+                inner
+                    .approval_requests
+                    .iter()
+                    .find(|approval| approval.id == effect.approval_id)
+            })
+            .cloned())
+    }
+    async fn create_skill_approval_bundle(
+        &self,
+        bundle: NewSkillApprovalBundle,
+    ) -> Result<SkillApprovalBundleResult> {
+        let proposal = bundle.proposal;
+        let approval = sanitize_approval_request_persistence(bundle.approval)?;
+        let proposal_payload_json = redact_persisted_json(bundle.proposal_payload_json);
+        let approval_payload_json = redact_persisted_json(bundle.approval_payload_json);
+        let proposal_id = proposal.id.to_string();
+        let approval_id = approval.id.to_string();
+        if approval.session_id != proposal.source_session_id
+            || approval.turn_id.is_some()
+            || approval.effect_type != "skill_write"
+            || approval
+                .effect_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || proposal_payload_json
+                .get("proposalId")
+                .and_then(Value::as_str)
+                != Some(proposal_id.as_str())
+            || approval_payload_json
+                .get("approvalId")
+                .and_then(Value::as_str)
+                != Some(approval_id.as_str())
+        {
+            return Err(ServerError::InvalidRequest(
+                "skill approval bundle has inconsistent proposal, approval, or event references"
+                    .to_string(),
+            ));
+        }
+        self.get_session(proposal.source_session_id).await?;
+        let audit = crate::evolution::evolution_audit_record(
+            &approval.effect_payload_json,
+            approval.id,
+            approval.id,
+            EvolutionAuditStatus::AwaitingApproval,
+            approval.created_at,
+            None,
+        )?
+        .map(|record| EvolutionAuditEntry {
+            idempotency_key: format!("approval:{}:attempt", approval.id),
+            record,
+        });
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner
+            .approval_effects
+            .iter()
+            .find(|effect| {
+                effect.session_id == approval.session_id
+                    && effect.effect_type == "skill_write"
+                    && effect
+                        .payload_json
+                        .get("proposalId")
+                        .and_then(Value::as_str)
+                        == Some(proposal_id.as_str())
+            })
+            .and_then(|effect| {
+                inner
+                    .approval_requests
+                    .iter()
+                    .find(|request| request.id == effect.approval_id)
+            })
+            .cloned()
+        {
+            return Ok(SkillApprovalBundleResult {
+                approval: existing,
+                events: Vec::new(),
+            });
+        }
+        if !inner
+            .skill_proposals
+            .iter()
+            .any(|existing| existing.id == proposal.id && existing == &proposal)
+        {
+            return Err(ServerError::Conflict(format!(
+                "skill proposal {} changed before approval persistence",
+                proposal.id
+            )));
+        }
+        let first_seq = inner
+            .events
+            .get(&approval.session_id)
+            .map_or(1, |events| events.len() as i64 + 1);
+        let proposal_event = SessionEvent::new(
+            approval.session_id,
+            first_seq,
+            "write_proposal",
+            proposal_payload_json,
+            approval.created_at,
+        );
+        let approval_event = SessionEvent::new(
+            approval.session_id,
+            first_seq + 1,
+            "approval",
+            approval_payload_json,
+            approval.created_at,
+        );
+        let approval_record = ApprovalRequestRecord {
+            id: approval.id,
+            session_id: approval.session_id,
+            turn_id: approval.turn_id,
+            requester_id: approval.requester_id,
+            origin: approval.origin,
+            action: approval.action,
+            scope_json: approval.scope_json,
+            options_json: approval.options_json,
+            status: "pending".to_string(),
+            resumable: approval.resumable,
+            created_at: approval.created_at,
+            expires_at: approval.expires_at,
+            heartbeat_at: approval.created_at,
+            resolved_at: None,
+            selected_option_id: None,
+            resolution_json: None,
+            request_event_seq: Some(approval_event.seq),
+            resolution_event_seq: None,
+            resolution_version: 0,
+        };
+        let effect = ApprovalEffectRecord {
+            id: approval.id,
+            approval_id: approval.id,
+            session_id: approval.session_id,
+            effect_type: approval.effect_type,
+            payload_json: approval.effect_payload_json,
+            status: "blocked".to_string(),
+            attempts: 0,
+            available_at: approval.expires_at,
+            locked_at: None,
+            lease_owner: None,
+            lease_epoch: 0,
+            applied_at: None,
+            error_at: None,
+            last_error: None,
+            created_at: approval.created_at,
+            updated_at: approval.created_at,
+        };
+        inner.approval_requests.push(approval_record.clone());
+        inner.approval_effects.push(effect);
+        if let Some(audit) = audit {
+            append_evolution_audit_in_memory(&mut inner, audit)?;
+        }
+        inner
+            .events
+            .entry(approval.session_id)
+            .or_default()
+            .extend([proposal_event.clone(), approval_event.clone()]);
+        if let Some(session) = inner.sessions.get_mut(&approval.session_id) {
+            session.updated_at = approval.created_at;
+        }
+        Ok(SkillApprovalBundleResult {
+            approval: approval_record,
+            events: vec![proposal_event, approval_event],
+        })
     }
 
     async fn approval_request(
@@ -3090,19 +3280,22 @@ impl Store for InMemoryStore {
             .collect::<Result<Vec<_>>>()?;
         validate_experience_trace_replacement(episode_id, &traces)?;
         let mut inner = self.inner.lock();
-        let episode_index = inner
+        let episode = inner
             .evolution_episodes
-            .iter()
-            .position(|episode| episode.id == episode_id)
+            .iter_mut()
+            .find(|episode| episode.id == episode_id)
             .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
-        let trace_count = u32::try_from(traces.len())
-            .map_err(|_| ServerError::InvalidRequest("too many experience traces".to_string()))?;
+        episode.trace_count = u32::try_from(traces.len()).unwrap_or(u32::MAX);
+        episode.updated_at = Utc::now();
+        inner
+            .experience_traces
+            .retain(|trace| trace.episode_id != episode_id);
         let now = Utc::now();
         let records = traces
             .into_iter()
             .map(|trace| ExperienceTraceRecord {
                 id: Uuid::new_v4(),
-                episode_id: trace.episode_id,
+                episode_id,
                 ordinal: trace.ordinal,
                 kind: trace.kind,
                 capability: trace.capability,
@@ -3115,12 +3308,7 @@ impl Store for InMemoryStore {
                 created_at: now,
             })
             .collect::<Vec<_>>();
-        inner
-            .experience_traces
-            .retain(|trace| trace.episode_id != episode_id);
         inner.experience_traces.extend(records.iter().cloned());
-        inner.evolution_episodes[episode_index].trace_count = trace_count;
-        inner.evolution_episodes[episode_index].updated_at = now;
         Ok(records)
     }
 
@@ -3144,7 +3332,8 @@ impl Store for InMemoryStore {
         reward_source: tm_memory::RewardSource,
         feedback_outcome: Option<FeedbackOutcome>,
         trace_values: &[(Uuid, f32)],
-        status: tm_memory::EpisodeStatus,
+        skill_outcomes: &[(String, String, bool)],
+        status: EpisodeStatus,
     ) -> Result<EvolutionEpisodeRecord> {
         if !terminal_reward.is_finite() || trace_values.iter().any(|(_, value)| !value.is_finite())
         {
@@ -3153,17 +3342,60 @@ impl Store for InMemoryStore {
             ));
         }
         let mut inner = self.inner.lock();
+        let current = inner
+            .evolution_episodes
+            .iter()
+            .find(|episode| episode.id == episode_id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
+        let expected_trace_count = inner
+            .experience_traces
+            .iter()
+            .filter(|trace| trace.episode_id == episode_id)
+            .count();
+        if expected_trace_count != trace_values.len() {
+            return Err(ServerError::InvalidRequest(
+                "episode valuation must cover every trace exactly once".to_string(),
+            ));
+        }
+        let trace_values_match = trace_values.iter().all(|(trace_id, value)| {
+            inner.experience_traces.iter().any(|trace| {
+                trace.id == *trace_id
+                    && trace.episode_id == episode_id
+                    && trace.value == Some(*value)
+            })
+        });
+        let stored_outcome_count = inner
+            .skill_outcomes
+            .iter()
+            .filter(|(stored_episode_id, _, _, _)| *stored_episode_id == episode_id)
+            .count();
+        let outcomes_match = stored_outcome_count == skill_outcomes.len()
+            && skill_outcomes.iter().all(|(name, digest, pass)| {
+                inner
+                    .skill_outcomes
+                    .contains(&(episode_id, name.clone(), digest.clone(), *pass))
+            });
+        if current.status == status
+            && current.terminal_reward == Some(terminal_reward)
+            && current.reward_source == Some(reward_source)
+            && current.feedback_outcome == feedback_outcome
+            && trace_values_match
+            && outcomes_match
+        {
+            return Ok(current);
+        }
+        if current.status != EpisodeStatus::Captured {
+            return Err(ServerError::Conflict(format!(
+                "episode {episode_id} is already terminally valued"
+            )));
+        }
         #[cfg(test)]
         if std::mem::take(&mut inner.fail_set_episode_valuation_once) {
             return Err(ServerError::Store(
                 "simulated episode valuation failure /tmp/private/123".to_string(),
             ));
         }
-        let episode_index = inner
-            .evolution_episodes
-            .iter()
-            .position(|episode| episode.id == episode_id)
-            .ok_or_else(|| ServerError::NotFound(format!("evolution episode {episode_id}")))?;
         for (trace_id, _) in trace_values {
             if !inner
                 .experience_traces
@@ -3176,15 +3408,34 @@ impl Store for InMemoryStore {
             }
         }
         for (trace_id, value) in trace_values {
-            if let Some(trace) = inner
+            let trace = inner
                 .experience_traces
                 .iter_mut()
                 .find(|trace| trace.id == *trace_id)
+                .expect("trace existence checked before valuation");
+            trace.value = Some(*value);
+        }
+        for (name, digest, pass) in skill_outcomes {
+            if inner
+                .skill_outcomes
+                .insert((episode_id, name.clone(), digest.clone(), *pass))
             {
-                trace.value = Some(*value);
+                let stats = inner
+                    .skill_runtime_stats
+                    .entry((name.clone(), digest.clone()))
+                    .or_default();
+                if *pass {
+                    stats.1 = stats.1.saturating_add(1);
+                } else {
+                    stats.2 = stats.2.saturating_add(1);
+                }
             }
         }
-        let episode = &mut inner.evolution_episodes[episode_index];
+        let episode = inner
+            .evolution_episodes
+            .iter_mut()
+            .find(|episode| episode.id == episode_id)
+            .expect("episode existence checked before valuation");
         episode.terminal_reward = Some(terminal_reward);
         episode.reward_source = Some(reward_source);
         episode.feedback_outcome = feedback_outcome;
@@ -3435,6 +3686,28 @@ impl Store for InMemoryStore {
             .iter_mut()
             .find(|existing| existing.dedupe_key == proposal.dedupe_key)
         {
+            if existing.status != SkillProposalStatus::Pending {
+                let same_revision = existing.name == proposal.name
+                    && existing.description == proposal.description
+                    && existing.body == proposal.body
+                    && existing.trigger == proposal.trigger
+                    && existing.use_criteria == proposal.use_criteria
+                    && existing.evidence == proposal.evidence
+                    && existing.self_critique == proposal.self_critique
+                    && existing.verification == proposal.verification
+                    && existing.source_dream_id == proposal.source_dream_id
+                    && existing.source_session_id == proposal.source_session_id
+                    && existing.source_policy_id == proposal.source_policy_id
+                    && existing.estimated_gain == proposal.estimated_gain
+                    && existing.support_episodes == proposal.support_episodes;
+                if same_revision {
+                    return Ok(existing.clone());
+                }
+                return Err(ServerError::Conflict(format!(
+                    "terminal skill proposal {} cannot be overwritten",
+                    existing.id
+                )));
+            }
             existing.name = proposal.name;
             existing.description = proposal.description;
             existing.body = proposal.body;
@@ -3445,6 +3718,9 @@ impl Store for InMemoryStore {
             existing.verification = proposal.verification;
             existing.source_dream_id = proposal.source_dream_id;
             existing.source_session_id = proposal.source_session_id;
+            existing.source_policy_id = proposal.source_policy_id;
+            existing.estimated_gain = proposal.estimated_gain;
+            existing.support_episodes = proposal.support_episodes;
             existing.updated_at = Utc::now();
             return Ok(existing.clone());
         }
@@ -3463,6 +3739,9 @@ impl Store for InMemoryStore {
             dedupe_key: proposal.dedupe_key,
             source_dream_id: proposal.source_dream_id,
             source_session_id: proposal.source_session_id,
+            source_policy_id: proposal.source_policy_id,
+            estimated_gain: proposal.estimated_gain,
+            support_episodes: proposal.support_episodes,
             created_at: now,
             updated_at: now,
         };
@@ -3511,6 +3790,86 @@ impl Store for InMemoryStore {
             .collect::<Vec<_>>();
         proposals.sort_by_key(|proposal| std::cmp::Reverse(proposal.updated_at));
         Ok(proposals)
+    }
+
+    async fn record_skill_exposures_for_turn(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        skills: &[(String, String)],
+    ) -> Result<(SessionEvent, bool)> {
+        let payload_json = serde_json::json!({
+            "skills": skills.iter().map(|(name, digest)| serde_json::json!({
+                "name": name,
+                "digest": digest,
+            })).collect::<Vec<_>>(),
+        });
+        let mut inner = self.inner.lock();
+        if !inner.sessions.contains_key(&session_id) {
+            return Err(ServerError::NotFound(format!("session {session_id}")));
+        }
+        if !inner
+            .turns
+            .iter()
+            .any(|turn| turn.id == turn_id && turn.session_id == session_id)
+        {
+            return Err(ServerError::NotFound(format!("turn {turn_id}")));
+        }
+        let events = inner.events.entry(session_id).or_default();
+        if let Some(existing) = events
+            .iter()
+            .find(|event| event.turn_id == Some(turn_id) && event.event_type == "skill_selected")
+            .cloned()
+        {
+            return Ok((existing, false));
+        }
+        let seq = events.len() as i64 + 1;
+        let mut event =
+            SessionEvent::new(session_id, seq, "skill_selected", payload_json, Utc::now());
+        event.turn_id = Some(turn_id);
+        events.push(event.clone());
+        for (name, digest) in skills {
+            let stats = inner
+                .skill_runtime_stats
+                .entry((name.clone(), digest.clone()))
+                .or_default();
+            stats.0 = stats.0.saturating_add(1);
+        }
+        if let Some(session) = inner.sessions.get_mut(&session_id) {
+            session.updated_at = event.created_at;
+        }
+        Ok((event, true))
+    }
+
+    async fn record_skill_outcome(&self, name: &str, digest: &str, pass: bool) -> Result<()> {
+        let mut inner = self.inner.lock();
+        let stats = inner
+            .skill_runtime_stats
+            .entry((name.to_string(), digest.to_string()))
+            .or_default();
+        if pass {
+            stats.1 = stats.1.saturating_add(1);
+        } else {
+            stats.2 = stats.2.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    async fn skill_runtime_stats(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<(String, String, u64, u64, u64)>> {
+        let names = names.iter().collect::<std::collections::BTreeSet<_>>();
+        Ok(self
+            .inner
+            .lock()
+            .skill_runtime_stats
+            .iter()
+            .filter(|((name, _), _)| names.contains(name))
+            .map(|((name, digest), (exposures, passes, fails))| {
+                (name.clone(), digest.clone(), *exposures, *passes, *fails)
+            })
+            .collect())
     }
 
     async fn upsert_cron_job(&self, job: NewCronJobRecord) -> Result<CronJobRecord> {

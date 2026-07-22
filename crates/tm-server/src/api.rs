@@ -100,7 +100,7 @@ mod tests;
 use memory_search::MEMORY_SEARCH_CAPABILITY;
 use memory_search::MemorySearchHostFn;
 use mode_suggest::{MODE_SUGGEST_APPROVAL_TIMEOUT, MODE_SUGGEST_CAPABILITY, ModeSuggestHostFn};
-use modes::{active_skills, build_turn_prompt, mode_changed_payload, mode_profile};
+use modes::{active_skills, mode_changed_payload, mode_profile};
 use projects::{build_project_overview, record_project_observations};
 
 pub use modes::{ModeRequest, ModeResponse};
@@ -132,6 +132,7 @@ pub struct AppState<S, M, C> {
     pub memory_embedding_worker: Option<Arc<dyn crate::MemoryEmbeddingWorker>>,
     pub(crate) self_hosted_asr: Option<Arc<crate::SelfHostedAsr>>,
     pub self_evolution_tier: SelfEvolutionTier,
+    pub evolution: crate::EvolutionDreamConfig,
     egress_turn_capabilities: Arc<Vec<String>>,
     egress_admin: Option<EgressAdmin>,
     mcp_catalog: Option<Arc<McpCatalogView>>,
@@ -165,6 +166,7 @@ impl<S, M, C> Clone for AppState<S, M, C> {
             memory_embedding_worker: self.memory_embedding_worker.clone(),
             self_hosted_asr: self.self_hosted_asr.clone(),
             self_evolution_tier: self.self_evolution_tier,
+            evolution: self.evolution.clone(),
             egress_turn_capabilities: Arc::clone(&self.egress_turn_capabilities),
             egress_admin: self.egress_admin.clone(),
             mcp_catalog: self.mcp_catalog.clone(),
@@ -210,6 +212,7 @@ impl<S, M, C> AppState<S, M, C> {
             memory_embedding_worker: None,
             self_hosted_asr: None,
             self_evolution_tier: SelfEvolutionTier::default(),
+            evolution: crate::EvolutionDreamConfig::default(),
             egress_turn_capabilities: Arc::new(Vec::new()),
             egress_admin: None,
             mcp_catalog: None,
@@ -418,6 +421,11 @@ impl<S, M, C> AppState<S, M, C> {
         self
     }
 
+    pub fn with_evolution_config(mut self, config: crate::EvolutionDreamConfig) -> Self {
+        self.evolution = config;
+        self
+    }
+
     pub fn with_runtime_status(mut self, runtime_status: Arc<crate::RuntimeStatus>) -> Self {
         self.runtime_status = runtime_status;
         self
@@ -436,6 +444,8 @@ impl<S, M, C> AppState<S, M, C> {
     where
         S: Store + Send + Sync + 'static,
     {
+        let mut config = config;
+        config.evolution = self.evolution.clone();
         let live_events = Arc::clone(&self.live_events);
         let sender_for = Arc::new(move |session_id| {
             live_events

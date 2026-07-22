@@ -6,9 +6,9 @@ use std::{
 use serde_json::{Value, json};
 use tm_memory::{
     DreamQueueRecord, EnvironmentCognitionRecord, EpisodeStatus, EvolutionEpisodeRecord,
-    EvolutionPolicyRecord, ExperienceTraceRecord, FeedbackOutcome, NewEvolutionEpisodeRecord,
-    NewExperienceTraceRecord, PolicyStatus, RewardSource, TraceKind, backfill_trace_values,
-    error_signature, policy_gain,
+    EvolutionPolicyRecord, ExperienceTraceRecord, FeedbackOutcome, MemoryEvidenceRef,
+    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, PolicyStatus, RewardSource, TraceKind,
+    backfill_trace_values, error_signature, policy_gain,
 };
 use uuid::Uuid;
 
@@ -111,7 +111,8 @@ pub(super) async fn value_episodes<S: Store>(
     }
     let mut pending = Vec::new();
     for episode in episodes {
-        if episode.status != EpisodeStatus::Captured {
+        let current = store.evolution_episode(episode.id).await?;
+        if current.status != EpisodeStatus::Captured {
             continue;
         }
         let turn_events = events
@@ -134,10 +135,18 @@ pub(super) async fn value_episodes<S: Store>(
             .zip(values)
             .map(|(trace, value)| (trace.id, value))
             .collect::<Vec<_>>();
-        pending.push((episode.id, reward, source, feedback_outcome, trace_values));
+        let skill_outcomes = selected_skill_outcomes(store, dream, episode.turn_id, reward).await?;
+        pending.push((
+            episode.id,
+            reward,
+            source,
+            feedback_outcome,
+            trace_values,
+            skill_outcomes,
+        ));
     }
     let mut valued = Vec::new();
-    for (episode_id, reward, source, feedback_outcome, trace_values) in pending {
+    for (episode_id, reward, source, feedback_outcome, trace_values, skill_outcomes) in pending {
         valued.push(
             store
                 .set_episode_valuation(
@@ -146,6 +155,7 @@ pub(super) async fn value_episodes<S: Store>(
                     source,
                     feedback_outcome,
                     &trace_values,
+                    &skill_outcomes,
                     EpisodeStatus::Valued,
                 )
                 .await?,
@@ -161,6 +171,43 @@ pub(super) async fn value_episodes<S: Store>(
     )
     .await?;
     Ok(valued)
+}
+
+async fn selected_skill_outcomes<S: Store>(
+    store: &Arc<S>,
+    dream: &DreamQueueRecord,
+    turn_id: Uuid,
+    reward: f32,
+) -> Result<Vec<(String, String, bool)>> {
+    let pass = if reward >= 0.5 {
+        Some(true)
+    } else if reward <= -0.3 {
+        Some(false)
+    } else {
+        None
+    };
+    let Some(pass) = pass else {
+        return Ok(Vec::new());
+    };
+    let Some(event) = store
+        .event_for_turn(dream.session_id, turn_id, "skill_selected")
+        .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(skills) = event.payload_json.get("skills").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    Ok(skills
+        .iter()
+        .filter_map(|skill| {
+            Some((
+                skill.get("name")?.as_str()?.to_string(),
+                skill.get("digest")?.as_str()?.to_string(),
+                pass,
+            ))
+        })
+        .collect())
 }
 
 pub(super) async fn update_policies<S: Store>(
@@ -341,6 +388,86 @@ pub(super) async fn update_policies<S: Store>(
     )
     .await?;
     Ok(updated)
+}
+
+pub(super) async fn crystallize_skill_proposals<S: Store>(
+    store: &Arc<S>,
+    config: &EvolutionDreamConfig,
+    dream: &DreamQueueRecord,
+) -> Result<Vec<(EvolutionPolicyRecord, Vec<MemoryEvidenceRef>)>> {
+    if !config.enabled {
+        return Ok(Vec::new());
+    }
+    let mut policies = store
+        .evolution_policies(
+            &dream.subject,
+            &dream.scope,
+            Some(PolicyStatus::Active),
+            usize::MAX,
+        )
+        .await?;
+    let episode_sessions = store
+        .evolution_episodes(&dream.subject, &dream.scope, usize::MAX)
+        .await?
+        .into_iter()
+        .map(|episode| (episode.id, episode.session_id))
+        .collect::<BTreeMap<_, _>>();
+    policies.retain(|policy| {
+        policy.gain > config.gain_threshold
+            && policy.support_episode_ids.len() >= config.n_min as usize
+    });
+    policies.sort_by(|left, right| {
+        right
+            .gain
+            .total_cmp(&left.gain)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut eligible = Vec::new();
+    for policy in policies {
+        let mut links = store
+            .policy_trace_values(policy.id)
+            .await?
+            .into_iter()
+            .filter(|(_, _, _, positive)| *positive)
+            .collect::<Vec<_>>();
+        links.sort_by(|left, right| {
+            right
+                .2
+                .total_cmp(&left.2)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        let mut evidence = Vec::new();
+        for (trace_id, episode_id, _, _) in links {
+            if evidence.len() >= config.max_evidence_per_skill {
+                break;
+            }
+            let event_seq = store
+                .experience_traces(episode_id)
+                .await?
+                .into_iter()
+                .find(|trace| trace.id == trace_id)
+                .map(|trace| trace.event_seq);
+            let Some(event_seq) = event_seq else {
+                continue;
+            };
+            evidence.push(MemoryEvidenceRef {
+                session_id: episode_sessions
+                    .get(&episode_id)
+                    .copied()
+                    .unwrap_or(dream.session_id),
+                event_seq: Some(event_seq),
+                message_seq: None,
+                uri: Some(format!("memory://evolution/episodes/{episode_id}")),
+                label: format!("policy {} positive trace", policy.id),
+            });
+        }
+        if !evidence.is_empty() {
+            eligible.push((policy, evidence));
+        }
+    }
+    Ok(eligible)
 }
 
 pub(super) async fn update_environment<S: Store>(

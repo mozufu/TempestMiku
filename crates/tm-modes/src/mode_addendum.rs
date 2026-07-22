@@ -619,7 +619,13 @@ mod tests {
             })
             .unwrap();
         assert_eq!(first.previous_digest, None);
-        let prompt = config.build_system_prompt(&mode_id, "base", "", "ship this");
+        let prompt = config.build_system_prompt(
+            &mode_id,
+            "base",
+            "",
+            "ship this",
+            &std::collections::BTreeSet::new(),
+        );
         assert!(prompt.system_prompt.contains("Approved mode addendum"));
         assert!(
             prompt
@@ -652,7 +658,13 @@ mod tests {
         assert!(base.active.is_none());
         assert!(
             !config
-                .build_system_prompt(&mode_id, "base", "", "ship this")
+                .build_system_prompt(
+                    &mode_id,
+                    "base",
+                    "",
+                    "ship this",
+                    &std::collections::BTreeSet::new(),
+                )
                 .system_prompt
                 .contains("Approved mode addendum")
         );

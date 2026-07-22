@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use crate::dream::proposals::spawn_skill_write_proposal;
 
 #[tokio::test]
 async fn skill_proposal_approval_installs_or_rejects_without_mutating_hand_authored_skills() {
@@ -19,6 +20,12 @@ async fn skill_proposal_approval_installs_or_rejects_without_mutating_hand_autho
         let persona =
             tm_modes::ModesConfig::default().with_managed_skills_path(managed_root.path());
         let store = Arc::new(InMemoryStore::default());
+        seed_active_skill_policy(
+            &store,
+            "Recurring release notes workflow",
+            "- gather verified commits\n- draft concise notes",
+        )
+        .await;
         let broker = Arc::new(ApprovalBroker::default());
         let session = store
             .create_session(NewSession {
@@ -256,28 +263,10 @@ async fn skill_verification_failure_is_rejected_without_failing_dream() {
             .iter()
             .any(|event| event.event_type == "dream_completed")
     );
-    let rejection = events
-        .iter()
-        .find(|event| {
-            event.event_type == "dream_progress"
-                && event.payload_json["phase"] == json!("skill_proposal_rejected")
-        })
-        .expect("skill rejection progress");
-    assert_eq!(
-        rejection.payload_json["reason"],
-        json!("generated skill proposal failed self-verification")
-    );
-    assert_eq!(
-        rejection.payload_json["verification"]["passed"],
-        json!(false)
-    );
-    assert!(
-        rejection.payload_json["verification"]["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|check| check == "does_not_mutate_identity:fail")
-    );
+    assert!(events.iter().all(|event| {
+        event.event_type != "dream_progress"
+            || event.payload_json["phase"] != json!("skill_proposal_rejected")
+    }));
 }
 
 #[tokio::test]
@@ -305,6 +294,12 @@ async fn completed_dream_rerun_does_not_duplicate_skill_proposals() {
         .append_event(session.id, "session_end", json!({"status": "ended"}))
         .await
         .unwrap();
+    seed_active_skill_policy(
+        &store,
+        "Recurring release notes workflow",
+        "- gather verified commits\n- draft concise notes",
+    )
+    .await;
     let new_dream = NewDreamQueueRecord {
         session_id: session.id,
         subject: "brian".to_string(),
@@ -359,4 +354,158 @@ async fn completed_dream_rerun_does_not_duplicate_skill_proposals() {
             .count(),
         2
     );
+}
+
+#[tokio::test]
+async fn skill_proposal_retry_reuses_existing_approval() {
+    let store = Arc::new(InMemoryStore::default());
+    let broker = Arc::new(ApprovalBroker::default());
+    broker.bind_store(Arc::clone(&store));
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let proposal = store
+        .upsert_skill_proposal(NewSkillProposalRecord {
+            name: "release-workflow".to_string(),
+            description: "release workflow".to_string(),
+            body: "# release-workflow\n\n## Trigger\nrelease notes\n\n## Applicability\nOnly release notes.\n\n## Procedure\n- gather commits\n\n## Verification\nVerify notes.\n\n## Guardrails\n- Stop on mismatch.\n\n## Evidence\n- memory://evolution/episodes/test\n".to_string(),
+            trigger: "release notes".to_string(),
+            use_criteria: "Only release notes.".to_string(),
+            evidence: vec![],
+            self_critique: "bounded".to_string(),
+            verification: SkillVerification {
+                passed: true,
+                checks: vec!["test:pass".to_string()],
+            },
+            dedupe_key: "skill:retry-approval".to_string(),
+            source_dream_id: Uuid::new_v4(),
+            source_session_id: session.id,
+            source_policy_id: Some(Uuid::new_v4()),
+            estimated_gain: Some(0.4),
+            support_episodes: 2,
+        })
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        spawn_skill_write_proposal(
+            Arc::clone(&store),
+            Arc::clone(&broker),
+            test_sender_factory(),
+            proposal.clone(),
+            StdDuration::from_secs(5),
+            SelfEvolutionTier::Conservative,
+        )
+        .await
+        .unwrap();
+    }
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "approval")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "write_proposal")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn concurrent_skill_proposal_retries_create_one_approval_bundle() {
+    let store = Arc::new(InMemoryStore::default());
+    let broker = Arc::new(ApprovalBroker::default());
+    broker.bind_store(Arc::clone(&store));
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let proposal = store
+        .upsert_skill_proposal(NewSkillProposalRecord {
+            name: "release-workflow-concurrent".to_string(),
+            description: "release workflow".to_string(),
+            body: "# release-workflow-concurrent\n\n## Trigger\nrelease notes\n\n## Applicability\nOnly release notes.\n\n## Procedure\n- gather commits\n\n## Verification\nVerify notes.\n\n## Guardrails\n- Stop on mismatch.\n\n## Evidence\n- memory://evolution/episodes/test\n".to_string(),
+            trigger: "release notes".to_string(),
+            use_criteria: "Only release notes.".to_string(),
+            evidence: vec![],
+            self_critique: "bounded".to_string(),
+            verification: SkillVerification {
+                passed: true,
+                checks: vec!["test:pass".to_string()],
+            },
+            dedupe_key: "skill:retry-approval-concurrent".to_string(),
+            source_dream_id: Uuid::new_v4(),
+            source_session_id: session.id,
+            source_policy_id: Some(Uuid::new_v4()),
+            estimated_gain: Some(0.4),
+            support_episodes: 2,
+        })
+        .await
+        .unwrap();
+    let first = spawn_skill_write_proposal(
+        Arc::clone(&store),
+        Arc::clone(&broker),
+        test_sender_factory(),
+        proposal.clone(),
+        StdDuration::from_secs(5),
+        SelfEvolutionTier::Conservative,
+    );
+    let second = spawn_skill_write_proposal(
+        Arc::clone(&store),
+        Arc::clone(&broker),
+        test_sender_factory(),
+        proposal,
+        StdDuration::from_secs(5),
+        SelfEvolutionTier::Conservative,
+    );
+    let (first, second) = tokio::join!(first, second);
+    first.unwrap();
+    second.unwrap();
+
+    let events = store.events_after(session.id, None).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "approval")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "write_proposal")
+            .count(),
+        1
+    );
+    let approval = store
+        .approval_request_for_skill_proposal(
+            session.id,
+            events
+                .iter()
+                .find(|event| event.event_type == "write_proposal")
+                .and_then(|event| event.payload_json["proposalId"].as_str())
+                .unwrap()
+                .parse()
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(approval.request_event_seq.is_some());
 }

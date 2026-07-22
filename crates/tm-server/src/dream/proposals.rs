@@ -2,18 +2,19 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use tm_host::{EvolutionTargetClass, SelfEvolutionTier};
 use tm_memory::{
-    DreamQueueRecord, MemoryEvidenceRef, NewSkillProposalRecord, SkillProposalRecord,
-    SkillProposalStatus, SkillVerification,
+    DreamQueueRecord, EvolutionPolicyRecord, MemoryEvidenceRef, NewSkillProposalRecord,
+    SkillProposalRecord, SkillProposalStatus, SkillVerification,
 };
 
 use crate::memory::{MemoryWriteProposal, MemoryWriteStatus};
 use crate::{
-    ApprovalBroker, ApprovalOption, ApprovalPrompt, CodingEventSink, DurableApprovalSpec, Result,
-    Store, StoreCodingEventSink,
+    ApprovalBroker, ApprovalOption, ApprovalPrompt, CodingEventSink, DurableApprovalSpec,
+    NewApprovalRequest, NewSkillApprovalBundle, Result, Store, StoreCodingEventSink,
 };
 
 pub(super) struct MemoryProposalContext {
@@ -22,9 +23,7 @@ pub(super) struct MemoryProposalContext {
     pub self_evolution_tier: SelfEvolutionTier,
 }
 
-use super::util::{
-    RedactedMessage, normalize_key, preview_text, reusable_workflow_signal, skill_name,
-};
+use super::util::skill_name;
 use super::worker::SenderFactory;
 
 pub(super) enum DreamSkillProposal {
@@ -37,44 +36,73 @@ pub(super) enum DreamSkillProposal {
     },
 }
 
-pub(super) fn dream_skill_proposal(
+pub(super) fn policy_skill_proposal(
     dream: &DreamQueueRecord,
-    messages: &[RedactedMessage],
+    policy: &EvolutionPolicyRecord,
     evidence: &[MemoryEvidenceRef],
 ) -> Option<DreamSkillProposal> {
-    let workflow_source = messages
+    if evidence.is_empty() {
+        return None;
+    }
+    let name = skill_name(&policy.trigger);
+    let evidence_lines = evidence
         .iter()
-        .find(|message| message.role == "user" && reusable_workflow_signal(&message.content))?;
-    let scenario = preview_text(&workflow_source.content, 360);
-    let name = skill_name(&scenario);
+        .filter_map(|reference| {
+            reference.uri.as_ref().map(|uri| match reference.event_seq {
+                Some(seq) => format!("- {uri} (event {seq})"),
+                None => format!("- {uri}"),
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if evidence_lines.is_empty() {
+        return None;
+    }
     let body = format!(
-        "# {name}\n\nUse when Brian asks for the recurring workflow captured from this session.\n\n## Trigger\n{scenario}\n\n## Procedure\n- Restate the target outcome and scope.\n- Gather only missing constraints that affect the workflow.\n- Execute the smallest repeatable sequence of steps.\n- Preserve approvals for external, destructive, or sensitive actions.\n- End with the reusable result and any open loops.\n\n## Guardrails\n- Do not edit SOUL.md, mode catalogs, or capability configuration.\n- Do not install or activate automatically.\n"
+        "# {name}\n\n{}\n\n## Trigger\n{}\n\n## Applicability\n{}\n\n## Procedure\n{}\n\n## Verification\n{}\n\n## Guardrails\n- Do not edit SOUL.md, mode catalogs, or capability configuration.\n- Do not install or activate automatically.\n- Stop and fall back to first-principles investigation when the Applicability boundary does not match.\n\n## Evidence\n{evidence_lines}\n",
+        policy.trigger, policy.trigger, policy.boundary, policy.procedure, policy.verification,
     );
     let verification = verify_skill_body(&body);
     if !verification.passed {
         return Some(DreamSkillProposal::Rejected {
             name,
-            scenario,
+            scenario: policy.trigger.clone(),
             reason: "generated skill proposal failed self-verification".to_string(),
             verification,
         });
     }
+    let revision_digest = Sha256::digest(
+        serde_json::to_vec(&json!({
+            "name": name,
+            "body": body,
+            "trigger": policy.trigger,
+            "useCriteria": policy.boundary,
+            "evidence": evidence,
+            "estimatedGain": policy.gain,
+            "supportEpisodes": policy.support_episode_ids,
+        }))
+        .expect("skill proposal revision fields are serializable"),
+    );
+    let revision_digest = format!("sha256:{revision_digest:x}");
     Some(DreamSkillProposal::Accepted(NewSkillProposalRecord {
         name,
-        description: "Reusable workflow distilled by a post-session dream.".to_string(),
+        description: "Evidence-grounded procedure crystallized from a durable evolution policy."
+            .to_string(),
         body,
-        trigger: scenario.clone(),
-        use_criteria: "Use only when the user asks for the same recurring workflow, not for one-off repo trivia.".to_string(),
+        trigger: policy.trigger.clone(),
+        use_criteria: policy.boundary.clone(),
         evidence: evidence.to_vec(),
-        self_critique: "The proposal is intentionally narrow, cites the source session, and keeps live skill installation out of scope.".to_string(),
+        self_critique: "The proposal is bounded by its policy applicability, preserves evidence links, and requires explicit approval before installation.".to_string(),
         verification,
         dedupe_key: format!(
-            "skill:{}:{}",
-            dream.session_id,
-            normalize_key(&scenario)
+            "skill:policy:{}:{}:{revision_digest}",
+            policy.id, policy.version
         ),
         source_dream_id: dream.id,
         source_session_id: dream.session_id,
+        source_policy_id: Some(policy.id),
+        estimated_gain: Some(policy.gain),
+        support_episodes: u32::try_from(policy.support_episode_ids.len()).unwrap_or(u32::MAX),
     }))
 }
 
@@ -82,8 +110,14 @@ fn verify_skill_body(body: &str) -> SkillVerification {
     let checks = [
         ("has_title", body.starts_with("# ")),
         ("has_trigger", body.contains("## Trigger")),
+        ("has_applicability", body.contains("## Applicability")),
         ("has_procedure", body.contains("## Procedure")),
+        ("has_verification", body.contains("## Verification")),
         ("has_guardrails", body.contains("## Guardrails")),
+        (
+            "has_evidence",
+            body.contains("memory://evolution/episodes/"),
+        ),
         ("does_not_mutate_identity", !body.contains("write SOUL.md")),
         (
             "does_not_claim_live_reload",
@@ -168,31 +202,53 @@ where
         &proposal,
     )?;
     let session_id = proposal.source_session_id;
-    let sink: Arc<dyn CodingEventSink> = Arc::new(StoreCodingEventSink::new(
-        session_id,
-        Arc::clone(&store),
-        sender_for(session_id),
-    ));
-    sink.emit(
-        "write_proposal",
-        skill_proposal_payload(&proposal, SkillProposalStatus::Pending),
-    )
-    .await?;
-    approval_broker
-        .enqueue_permission_for_backend(DurableApprovalSpec {
-            session_id,
-            origin: "skill".to_string(),
-            prompt: skill_write_approval_prompt(&proposal, timeout),
-            timeout,
-            effect_type: "skill_write".to_string(),
-            effect_payload_json: json!({
-                "evolution": evolution,
-                "proposalId": proposal.id,
-            }),
-            resumable: true,
-            sink,
+    let prompt = skill_write_approval_prompt(&proposal, timeout);
+    let approval_id = Uuid::new_v4();
+    let created_at = chrono::Utc::now();
+    let expires_at = created_at
+        + chrono::Duration::from_std(timeout)
+            .map_err(|error| crate::ServerError::InvalidRequest(error.to_string()))?;
+    let approval_payload_json = json!({
+        "approvalId": approval_id,
+        "backend": "skill",
+        "action": prompt.action,
+        "scope": prompt.scope,
+        "options": prompt.options,
+        "timeoutMs": timeout.as_millis(),
+        "expiresAt": expires_at,
+        "resumable": true,
+    });
+    let result = store
+        .create_skill_approval_bundle(NewSkillApprovalBundle {
+            proposal: proposal.clone(),
+            approval: NewApprovalRequest {
+                id: approval_id,
+                session_id,
+                turn_id: None,
+                requester_id: approval_broker.requester_id(),
+                origin: "skill".to_string(),
+                action: prompt.action,
+                scope_json: prompt.scope,
+                options_json: serde_json::to_value(&prompt.options)?,
+                effect_type: "skill_write".to_string(),
+                effect_payload_json: json!({
+                    "evolution": evolution,
+                    "proposalId": proposal.id,
+                }),
+                resumable: true,
+                created_at,
+                expires_at,
+            },
+            proposal_payload_json: skill_proposal_payload(&proposal, SkillProposalStatus::Pending),
+            approval_payload_json,
         })
         .await?;
+    if !result.events.is_empty() {
+        let sender = sender_for(session_id);
+        for event in result.events {
+            let _ = sender.send(event);
+        }
+    }
     Ok(())
 }
 
@@ -297,4 +353,117 @@ fn bounded_preview(value: &str, max_bytes: usize) -> String {
 
 fn skill_proposal_uri(id: Uuid) -> String {
     format!("memory://skill-proposals/{id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use tm_memory::{DreamReason, DreamStatus, PolicyStatus};
+
+    #[test]
+    fn policy_proposal_preserves_evidence_and_applicability() {
+        let now = Utc::now();
+        let dream = DreamQueueRecord {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::SessionEnded,
+            status: DreamStatus::Running,
+            dedupe_key: "dream:test".to_string(),
+            source_event_seq: None,
+            attempts: 1,
+            enqueued_at: now,
+            available_at: now,
+            locked_at: Some(now),
+            lease_owner: Some(Uuid::new_v4()),
+            lease_epoch: 1,
+            heartbeat_at: Some(now),
+            completed_at: None,
+            error_at: None,
+            last_error: None,
+        };
+        let policy = EvolutionPolicyRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+            signature: "fs|enoent".to_string(),
+            trigger: "Recurring safe release notes work".to_string(),
+            procedure: "- inspect evidence\n- draft notes".to_string(),
+            verification: "The draft cites the checked changes.".to_string(),
+            boundary: "Only for release notes from verified repository evidence.".to_string(),
+            support_episode_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+            gain: 0.42,
+            status: PolicyStatus::Active,
+            version: 3,
+            created_at: now,
+            updated_at: now,
+        };
+        let episode_id = policy.support_episode_ids[0];
+        let evidence = vec![MemoryEvidenceRef {
+            session_id: dream.session_id,
+            event_seq: Some(17),
+            message_seq: None,
+            uri: Some(format!("memory://evolution/episodes/{episode_id}")),
+            label: "positive trace".to_string(),
+        }];
+
+        let DreamSkillProposal::Accepted(proposal) =
+            policy_skill_proposal(&dream, &policy, &evidence).expect("eligible proposal")
+        else {
+            panic!("valid policy proposal rejected")
+        };
+        assert_eq!(proposal.source_policy_id, Some(policy.id));
+        assert_eq!(proposal.estimated_gain, Some(policy.gain));
+        assert_eq!(proposal.support_episodes, 2);
+        assert!(proposal.body.contains("## Applicability"));
+        assert!(proposal.body.contains("## Verification"));
+        assert!(proposal.body.contains(&format!(
+            "memory://evolution/episodes/{episode_id} (event 17)"
+        )));
+        assert!(proposal.verification.passed);
+    }
+
+    #[test]
+    fn policy_proposal_requires_grounding_evidence() {
+        let now = Utc::now();
+        let dream = DreamQueueRecord {
+            id: Uuid::new_v4(),
+            session_id: Uuid::new_v4(),
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::SessionEnded,
+            status: DreamStatus::Running,
+            dedupe_key: "dream:test-empty".to_string(),
+            source_event_seq: None,
+            attempts: 1,
+            enqueued_at: now,
+            available_at: now,
+            locked_at: Some(now),
+            lease_owner: Some(Uuid::new_v4()),
+            lease_epoch: 1,
+            heartbeat_at: Some(now),
+            completed_at: None,
+            error_at: None,
+            last_error: None,
+        };
+        let policy = EvolutionPolicyRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+            signature: "fs|ok".to_string(),
+            trigger: "Recurring work".to_string(),
+            procedure: "- inspect".to_string(),
+            verification: "Checked result.".to_string(),
+            boundary: "Global only.".to_string(),
+            support_episode_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+            gain: 0.2,
+            status: PolicyStatus::Active,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        assert!(policy_skill_proposal(&dream, &policy, &[]).is_none());
+    }
 }

@@ -122,6 +122,7 @@ and git status.\n"
             // No live user message at CLI startup; always-on layered skills (e.g.
             // scope-guard) still compose, only keyword-triggered ones are skipped.
             "",
+            &std::collections::BTreeSet::new(),
         )
         .system_prompt
 }

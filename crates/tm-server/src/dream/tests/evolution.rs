@@ -1,7 +1,8 @@
 use super::support::test_sender_factory;
 use super::*;
 use crate::dream::evolution::{
-    capture_episodes, update_environment, update_policies, value_episodes,
+    capture_episodes, crystallize_skill_proposals, update_environment, update_policies,
+    value_episodes,
 };
 use tm_memory::{EpisodeStatus, PolicyStatus, RewardSource, TraceKind};
 
@@ -695,6 +696,7 @@ async fn dream_policy_induction_uses_distinct_evidence_and_recomputes_gain() {
                 RewardSource::Runtime,
                 None,
                 &[(traces[0].id, 0.5), (traces[1].id, 0.1)],
+                &[],
                 EpisodeStatus::Valued,
             )
             .await
@@ -910,6 +912,251 @@ Established procedures exist for: Read project configuration safely."
             .await
             .unwrap()
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn valuation_records_selected_skill_pass_and_fail_once() {
+    let store = Arc::new(InMemoryStore::default());
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let worker_id = Uuid::new_v4();
+    let turn = store
+        .enqueue_turn(session.id, "skill-outcome", "use selected workflow")
+        .await
+        .unwrap();
+    store
+        .append_event_for_turn_once(
+            session.id,
+            "skill_selected",
+            json!({"skills":[{"name":"release-workflow","digest":"sha256:test"}]}),
+            turn.id,
+        )
+        .await
+        .unwrap();
+    let final_event = store
+        .append_event_for_turn(session.id, "final", json!({"text":"done"}), Some(turn.id))
+        .await
+        .unwrap();
+    store
+        .claim_next_turn(worker_id, Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .complete_turn(turn.id, worker_id, "done", Utc::now())
+        .await
+        .unwrap();
+    let dream = DreamQueueRecord {
+        id: Uuid::new_v4(),
+        session_id: session.id,
+        subject: "brian".to_string(),
+        scope: "global".to_string(),
+        reason: DreamReason::SessionEnded,
+        status: DreamStatus::Running,
+        dedupe_key: "dream:skill-outcome".to_string(),
+        source_event_seq: Some(final_event.seq),
+        attempts: 1,
+        enqueued_at: Utc::now(),
+        available_at: Utc::now(),
+        locked_at: Some(Utc::now()),
+        lease_owner: Some(Uuid::new_v4()),
+        lease_epoch: 1,
+        heartbeat_at: Some(Utc::now()),
+        completed_at: None,
+        error_at: None,
+        last_error: None,
+    };
+    let sink = StoreCodingEventSink::new(session.id, Arc::clone(&store), broadcast::channel(16).0);
+    let events = store.events_after(session.id, None).await.unwrap();
+    let episodes = capture_episodes(
+        &store,
+        &EvolutionDreamConfig::default(),
+        &dream,
+        &events,
+        &sink,
+    )
+    .await
+    .unwrap();
+    value_episodes(
+        &store,
+        &EvolutionDreamConfig::default(),
+        &dream,
+        &episodes,
+        &events,
+        &sink,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .skill_runtime_stats(&["release-workflow".to_string()])
+            .await
+            .unwrap(),
+        vec![(
+            "release-workflow".to_string(),
+            "sha256:test".to_string(),
+            0,
+            1,
+            0,
+        )]
+    );
+    value_episodes(
+        &store,
+        &EvolutionDreamConfig::default(),
+        &dream,
+        &episodes,
+        &events,
+        &sink,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .skill_runtime_stats(&["release-workflow".to_string()])
+            .await
+            .unwrap()[0]
+            .3,
+        1
+    );
+}
+
+#[tokio::test]
+async fn skill_crystallization_requires_active_positive_supported_policy_and_evidence() {
+    let store = Arc::new(InMemoryStore::default());
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let turn = store
+        .enqueue_turn(session.id, "skill-crystallization", "prepare release notes")
+        .await
+        .unwrap();
+    let (episode, _) = store
+        .upsert_evolution_episode(tm_memory::NewEvolutionEpisodeRecord {
+            session_id: session.id,
+            turn_id: turn.id,
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+        })
+        .await
+        .unwrap();
+    let trace = store
+        .replace_experience_traces(
+            episode.id,
+            vec![tm_memory::NewExperienceTraceRecord {
+                episode_id: episode.id,
+                ordinal: 0,
+                kind: TraceKind::Effect,
+                capability: Some("fs.read".to_string()),
+                action_summary: "read release history".to_string(),
+                observation_summary: "release history loaded".to_string(),
+                error_signature: None,
+                event_seq: 17,
+                result_event_seq: Some(18),
+            }],
+        )
+        .await
+        .unwrap()
+        .remove(0);
+    store
+        .set_episode_valuation(
+            episode.id,
+            0.8,
+            RewardSource::Runtime,
+            None,
+            &[(trace.id, 0.8)],
+            &[],
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap();
+    let now = Utc::now();
+    let eligible = store
+        .upsert_evolution_policy(tm_memory::EvolutionPolicyRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+            signature: "fs|ok".to_string(),
+            trigger: "Recurring release note preparation".to_string(),
+            procedure: "- inspect release history".to_string(),
+            verification: "The release history is present in the draft.".to_string(),
+            boundary: "Only for release note preparation.".to_string(),
+            support_episode_ids: vec![episode.id, Uuid::new_v4()],
+            gain: 0.4,
+            status: PolicyStatus::Active,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    store
+        .link_policy_traces(eligible.id, &[(trace.id, episode.id, 0.8, true)])
+        .await
+        .unwrap();
+    for (status, gain) in [(PolicyStatus::Candidate, 0.4), (PolicyStatus::Active, -0.1)] {
+        store
+            .upsert_evolution_policy(tm_memory::EvolutionPolicyRecord {
+                id: Uuid::new_v4(),
+                owner_subject: "brian".to_string(),
+                memory_scope: "global".to_string(),
+                signature: format!("code|{}", status.as_str()),
+                trigger: "Ineligible policy".to_string(),
+                procedure: "- ignore".to_string(),
+                verification: "Ignored.".to_string(),
+                boundary: "None.".to_string(),
+                support_episode_ids: vec![episode.id, Uuid::new_v4()],
+                gain,
+                status,
+                version: 1,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+    }
+    let dream = DreamQueueRecord {
+        id: Uuid::new_v4(),
+        session_id: session.id,
+        subject: "brian".to_string(),
+        scope: "global".to_string(),
+        reason: DreamReason::SessionEnded,
+        status: DreamStatus::Running,
+        dedupe_key: "dream:skill-crystallization".to_string(),
+        source_event_seq: None,
+        attempts: 1,
+        enqueued_at: now,
+        available_at: now,
+        locked_at: Some(now),
+        lease_owner: Some(Uuid::new_v4()),
+        lease_epoch: 1,
+        heartbeat_at: Some(now),
+        completed_at: None,
+        error_at: None,
+        last_error: None,
+    };
+
+    let candidates = crystallize_skill_proposals(&store, &EvolutionDreamConfig::default(), &dream)
+        .await
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].0.id, eligible.id);
+    assert_eq!(
+        candidates[0].1[0].uri,
+        Some(format!("memory://evolution/episodes/{}", episode.id))
     );
 }
 

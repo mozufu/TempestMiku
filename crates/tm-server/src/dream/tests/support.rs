@@ -17,6 +17,132 @@ pub(super) fn test_sender_factory() -> SenderFactory {
     })
 }
 
+pub(super) async fn seed_active_skill_policy(
+    store: &Arc<InMemoryStore>,
+    trigger: &str,
+    procedure: &str,
+) -> tm_memory::EvolutionPolicyRecord {
+    let mut episode_ids = Vec::new();
+    let mut links = Vec::new();
+    for ordinal in 0..2 {
+        let source_session = store
+            .create_session(NewSession {
+                mode: ModeId::from("general"),
+                persona_status: AssetStatus::Degraded {
+                    warning: "skill-policy-evidence".to_string(),
+                },
+            })
+            .await
+            .unwrap();
+        let turn = store
+            .enqueue_turn(
+                source_session.id,
+                &format!("skill-policy-evidence-{ordinal}-{}", Uuid::new_v4()),
+                trigger,
+            )
+            .await
+            .unwrap();
+        let start = store
+            .append_event_for_turn(
+                source_session.id,
+                "effect_start",
+                json!({
+                    "nodeId": format!("node-{ordinal}"),
+                    "capability": "fs.read",
+                    "argsPreview": "read verified release history",
+                }),
+                Some(turn.id),
+            )
+            .await
+            .unwrap();
+        let result = store
+            .append_event_for_turn(
+                source_session.id,
+                "effect_result",
+                json!({
+                    "nodeId": format!("node-{ordinal}"),
+                    "status": "completed",
+                    "resultPreview": "verified release history loaded",
+                }),
+                Some(turn.id),
+            )
+            .await
+            .unwrap();
+        store
+            .append_event_for_turn(
+                source_session.id,
+                "final",
+                json!({"text": "release workflow completed"}),
+                Some(turn.id),
+            )
+            .await
+            .unwrap();
+        let (episode, _) = store
+            .upsert_evolution_episode(tm_memory::NewEvolutionEpisodeRecord {
+                session_id: source_session.id,
+                turn_id: turn.id,
+                owner_subject: "brian".to_string(),
+                memory_scope: "global".to_string(),
+            })
+            .await
+            .unwrap();
+        let trace = store
+            .replace_experience_traces(
+                episode.id,
+                vec![tm_memory::NewExperienceTraceRecord {
+                    episode_id: episode.id,
+                    ordinal: 0,
+                    kind: tm_memory::TraceKind::Effect,
+                    capability: Some("fs.read".to_string()),
+                    action_summary: "read verified release history".to_string(),
+                    observation_summary: "verified release history loaded".to_string(),
+                    error_signature: None,
+                    event_seq: start.seq,
+                    result_event_seq: Some(result.seq),
+                }],
+            )
+            .await
+            .unwrap()
+            .remove(0);
+        store
+            .set_episode_valuation(
+                episode.id,
+                0.8,
+                tm_memory::RewardSource::Runtime,
+                None,
+                &[(trace.id, 0.8)],
+                &[],
+                tm_memory::EpisodeStatus::Valued,
+            )
+            .await
+            .unwrap();
+        episode_ids.push(episode.id);
+        links.push((trace.id, episode.id, 0.8, true));
+    }
+    let now = Utc::now();
+    let policy = store
+        .upsert_evolution_policy(tm_memory::EvolutionPolicyRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+            signature: format!("fs|fixture-{}", Uuid::new_v4()),
+            trigger: trigger.to_string(),
+            procedure: procedure.to_string(),
+            verification: "The verified release history is reflected in the result.".to_string(),
+            boundary: "Use only for release-note work backed by repository evidence.".to_string(),
+            support_episode_ids: episode_ids,
+            gain: 0.4,
+            status: tm_memory::PolicyStatus::Active,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    store.link_policy_traces(policy.id, &links).await.unwrap();
+    policy
+}
+
 pub(super) struct FailingPublishSink;
 
 #[async_trait]

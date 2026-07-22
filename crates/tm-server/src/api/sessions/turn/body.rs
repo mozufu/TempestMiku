@@ -3,6 +3,7 @@ use super::{
     dispatcher::{ExecutedTurn, TurnRuntime},
     drive_recall::persist_drive_recall_chunks,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use tm_core::Message;
 use tm_host::{HostFn, ResourceHandler};
 
@@ -35,7 +36,24 @@ where
     let project_id = session.project_id.clone();
     let memory_scope = session.memory_scope();
     let subject = session.owner_subject.clone();
-    let persona_prompt = build_turn_prompt(state, &session.mode_state.mode, &durable_turn.content);
+    let mut selection = select_managed_skills(state, &durable_turn.content).await?;
+    let existing_selection = state
+        .store
+        .event_for_turn(session_id, durable_turn.id, "skill_selected")
+        .await?;
+    if let Some(event) = &existing_selection {
+        selection.selected = load_managed_skill_snapshot(state, event)?;
+        for skill in &selection.selected {
+            selection.suppressed.remove(&skill.version.name);
+        }
+    }
+    let mut persona_prompt = crate::api::modes::build_turn_prompt_with_managed_snapshot(
+        state,
+        &session.mode_state.mode,
+        &durable_turn.content,
+        &selection.suppressed,
+        &selection.selected,
+    );
     state
         .store
         .ensure_memory_scope_active(&subject, &memory_scope)
@@ -66,6 +84,34 @@ where
         })
         .unwrap_or_default();
 
+    if existing_selection.is_none() && !selection.selected.is_empty() {
+        let skills = selection
+            .selected
+            .iter()
+            .map(|skill| {
+                (
+                    skill.version.name.clone(),
+                    skill.version.content_digest.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (event, inserted) = state
+            .store
+            .record_skill_exposures_for_turn(session_id, durable_turn.id, &skills)
+            .await?;
+        if inserted {
+            let _ = state.sender(session_id).send(event);
+        } else {
+            selection.selected = load_managed_skill_snapshot(state, &event)?;
+            persona_prompt = crate::api::modes::build_turn_prompt_with_managed_snapshot(
+                state,
+                &session.mode_state.mode,
+                &durable_turn.content,
+                &selection.suppressed,
+                &selection.selected,
+            );
+        }
+    }
     let (response, runtime) = if turn_profile.has_capability("backend.coding") {
         let backend = state.coding_backend.as_ref().ok_or_else(|| {
             ServerError::Backend(
@@ -192,6 +238,161 @@ where
         runtime,
         auto_persona_candidate,
     })
+}
+
+struct ManagedSkillSelection {
+    suppressed: BTreeSet<String>,
+    selected: Vec<tm_modes::ManagedSkillPromptSnapshot>,
+}
+
+async fn select_managed_skills<S, M, C>(
+    state: &AppState<S, M, C>,
+    message: &str,
+) -> Result<ManagedSkillSelection>
+where
+    S: Store,
+{
+    let Some(_) = state.persona.managed_skills_path() else {
+        return Ok(ManagedSkillSelection {
+            suppressed: BTreeSet::new(),
+            selected: Vec::new(),
+        });
+    };
+    let managed = match state.persona.managed_skills() {
+        Ok(managed) => managed,
+        Err(error) => {
+            tracing::warn!(%error, "managed skill selection unavailable");
+            return Ok(ManagedSkillSelection {
+                suppressed: BTreeSet::new(),
+                selected: Vec::new(),
+            });
+        }
+    };
+    let lower = message.to_lowercase();
+    let mut candidates = Vec::new();
+    for skill in managed {
+        if !skill
+            .active
+            .triggers
+            .iter()
+            .any(|trigger| lower.contains(&trigger.to_lowercase()))
+        {
+            continue;
+        }
+        match state
+            .persona
+            .managed_skill_version_body(&skill.active.name, &skill.active.content_digest)
+        {
+            Ok((version, body)) if version == skill.active => {
+                candidates.push(tm_modes::ManagedSkillPromptSnapshot { version, body });
+            }
+            Ok(_) => tracing::warn!(
+                skill = %skill.active.name,
+                "managed skill changed while selecting prompt snapshot"
+            ),
+            Err(error) => tracing::warn!(
+                skill = %skill.active.name,
+                %error,
+                "managed skill prompt snapshot unavailable"
+            ),
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(ManagedSkillSelection {
+            suppressed: BTreeSet::new(),
+            selected: Vec::new(),
+        });
+    }
+    let names = candidates
+        .iter()
+        .map(|skill| skill.version.name.clone())
+        .collect::<Vec<_>>();
+    let stats = state
+        .store
+        .skill_runtime_stats(&names)
+        .await?
+        .into_iter()
+        .map(|(name, digest, exposures, passes, fails)| {
+            ((name, digest), (exposures, passes, fails))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut suppressed = BTreeSet::new();
+    candidates.retain(|skill| {
+        let (_, passes, fails) = stats
+            .get(&(
+                skill.version.name.clone(),
+                skill.version.content_digest.clone(),
+            ))
+            .copied()
+            .unwrap_or_default();
+        let trials = passes.saturating_add(fails);
+        let archived = trials >= u64::from(state.evolution.min_trials_archive)
+            && tm_memory::skill_reliability(passes, fails) < state.evolution.reliability_archive;
+        if archived {
+            suppressed.insert(skill.version.name.clone());
+        }
+        !archived
+    });
+    candidates.sort_by(|left, right| {
+        let left_stats = stats
+            .get(&(
+                left.version.name.clone(),
+                left.version.content_digest.clone(),
+            ))
+            .copied()
+            .unwrap_or_default();
+        let right_stats = stats
+            .get(&(
+                right.version.name.clone(),
+                right.version.content_digest.clone(),
+            ))
+            .copied()
+            .unwrap_or_default();
+        tm_memory::skill_reliability(right_stats.1, right_stats.2)
+            .total_cmp(&tm_memory::skill_reliability(left_stats.1, left_stats.2))
+            .then_with(|| left_stats.0.cmp(&right_stats.0))
+            .then_with(|| left.version.name.cmp(&right.version.name))
+    });
+    let keep = state.evolution.top_k_skills.min(candidates.len());
+    for skill in candidates.iter().skip(keep) {
+        suppressed.insert(skill.version.name.clone());
+    }
+    candidates.truncate(keep);
+    Ok(ManagedSkillSelection {
+        suppressed,
+        selected: candidates,
+    })
+}
+
+fn load_managed_skill_snapshot<S, M, C>(
+    state: &AppState<S, M, C>,
+    event: &crate::SessionEvent,
+) -> Result<Vec<tm_modes::ManagedSkillPromptSnapshot>> {
+    let skills = event
+        .payload_json
+        .get("skills")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ServerError::Store("skill_selected event is missing skills".to_string()))?;
+    skills
+        .iter()
+        .map(|skill| {
+            let name = skill.get("name").and_then(Value::as_str).ok_or_else(|| {
+                ServerError::Store("skill_selected entry is missing name".to_string())
+            })?;
+            let digest = skill.get("digest").and_then(Value::as_str).ok_or_else(|| {
+                ServerError::Store("skill_selected entry is missing digest".to_string())
+            })?;
+            let (version, body) = state
+                .persona
+                .managed_skill_version_body(name, digest)
+                .map_err(|error| {
+                    ServerError::Store(format!(
+                        "persisted managed skill snapshot {name}@{digest} is unavailable: {error}"
+                    ))
+                })?;
+            Ok(tm_modes::ManagedSkillPromptSnapshot { version, body })
+        })
+        .collect()
 }
 
 fn persisted_memory_context(

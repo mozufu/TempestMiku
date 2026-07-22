@@ -403,6 +403,11 @@ pub(super) fn row_to_skill_proposal(row: tokio_postgres::Row) -> Result<SkillPro
         dedupe_key: row.get("dedupe_key"),
         source_dream_id: row.get("source_dream_id"),
         source_session_id: row.get("source_session_id"),
+        source_policy_id: row.get("source_policy_id"),
+        estimated_gain: row.get("estimated_gain"),
+        support_episodes: u32::try_from(row.get::<_, i32>("support_episodes")).map_err(|_| {
+            ServerError::Store("invalid skill proposal support episode count".to_string())
+        })?,
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     })

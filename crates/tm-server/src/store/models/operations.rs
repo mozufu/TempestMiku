@@ -152,6 +152,20 @@ pub struct AutoEvolutionReviewBundleResult {
     pub events: Vec<SessionEvent>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NewSkillApprovalBundle {
+    pub proposal: SkillProposalRecord,
+    pub approval: NewApprovalRequest,
+    pub proposal_payload_json: Value,
+    pub approval_payload_json: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillApprovalBundleResult {
+    pub approval: ApprovalRequestRecord,
+    pub events: Vec<SessionEvent>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalEffectRecord {

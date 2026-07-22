@@ -226,7 +226,13 @@ async fn approved_mode_addendum_composes_without_widening_authority_and_rolls_ba
     let managed = persona.managed_mode_addendum(&mode_id).unwrap();
     let active = managed.active.unwrap();
     assert_eq!(active.content_digest, pending.content_digest);
-    let prompt = persona.build_system_prompt(&mode_id, "base", "", "close the gate");
+    let prompt = persona.build_system_prompt(
+        &mode_id,
+        "base",
+        "",
+        "close the gate",
+        &std::collections::BTreeSet::new(),
+    );
     assert!(
         prompt
             .system_prompt
@@ -276,7 +282,13 @@ async fn approved_mode_addendum_composes_without_widening_authority_and_rolls_ba
     );
     assert!(
         !persona
-            .build_system_prompt(&mode_id, "base", "", "close the gate")
+            .build_system_prompt(
+                &mode_id,
+                "base",
+                "",
+                "close the gate",
+                &std::collections::BTreeSet::new(),
+            )
             .system_prompt
             .contains("Approved mode addendum")
     );
@@ -320,7 +332,13 @@ async fn approved_persona_addendum_composes_across_modes_and_rolls_back_to_base(
         (general.clone(), general_profile),
         (serious, serious_profile),
     ] {
-        let prompt = persona.build_system_prompt(&mode, "base", "", "report status");
+        let prompt = persona.build_system_prompt(
+            &mode,
+            "base",
+            "",
+            "report status",
+            &std::collections::BTreeSet::new(),
+        );
         assert!(prompt.system_prompt.contains("Approved persona addendum"));
         assert!(prompt.system_prompt.contains("Use Brian"));
         assert_eq!(prompt.profile, profile);
@@ -364,7 +382,13 @@ async fn approved_persona_addendum_composes_across_modes_and_rolls_back_to_base(
     );
     assert!(
         !persona
-            .build_system_prompt(&general, "base", "", "report status")
+            .build_system_prompt(
+                &general,
+                "base",
+                "",
+                "report status",
+                &std::collections::BTreeSet::new(),
+            )
             .system_prompt
             .contains("Approved persona addendum")
     );

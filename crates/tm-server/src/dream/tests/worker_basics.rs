@@ -97,7 +97,7 @@ async fn dream_worker_writes_summary_and_defers_proposals() {
 
     assert_eq!(report.attempted, 1);
     assert_eq!(report.completed, 1);
-    assert_eq!(report.proposals, 2);
+    assert_eq!(report.proposals, 1);
     let dreams = store.dream_queue_for_session(session.id).await.unwrap();
     assert_eq!(dreams[0].id, dream.id);
     assert_eq!(dreams[0].status, DreamStatus::Completed);
@@ -118,14 +118,9 @@ async fn dream_worker_writes_summary_and_defers_proposals() {
     );
 
     let proposals = store.skill_proposals_for_session(session.id).await.unwrap();
-    assert_eq!(proposals.len(), 1);
-    assert!(proposals[0].verification.passed);
-    assert!(matches!(
-        proposals[0].status,
-        SkillProposalStatus::Pending | SkillProposalStatus::TimedOut
-    ));
+    assert!(proposals.is_empty());
 
-    let events = wait_for_event_count(&store, session.id, "approval_resolved", 2).await;
+    let events = wait_for_event_count(&store, session.id, "approval_resolved", 1).await;
     assert!(
         events
             .iter()
@@ -141,17 +136,14 @@ async fn dream_worker_writes_summary_and_defers_proposals() {
             .iter()
             .filter(|event| event.event_type == "write_proposal")
             .count(),
-        4
+        2
     );
     assert_eq!(
         store.profile_facts("brian").await.unwrap(),
         Vec::new(),
         "timed-out dream memory approval must not write profile facts"
     );
-    assert_eq!(
-        store.skill_proposal(proposals[0].id).await.unwrap().status,
-        SkillProposalStatus::TimedOut
-    );
+    assert!(proposals.is_empty());
 }
 
 #[tokio::test]

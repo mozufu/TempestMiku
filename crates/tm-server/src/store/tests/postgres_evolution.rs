@@ -109,6 +109,7 @@ async fn gated_postgres_evolution_valuation_is_atomic_and_survives_restart() {
             RewardSource::Explicit,
             Some(FeedbackOutcome::Accepted),
             &[(traces[0].id, 0.9), (foreign_trace.id, 1.0)],
+            &[],
             EpisodeStatus::Valued,
         )
         .await
@@ -134,10 +135,48 @@ async fn gated_postgres_evolution_valuation_is_atomic_and_survives_restart() {
             RewardSource::Explicit,
             Some(FeedbackOutcome::Corrected),
             &[(traces[0].id, -0.37), (traces[1].id, -0.4)],
+            &[],
             EpisodeStatus::Valued,
         )
         .await
         .unwrap();
+    let skill_outcome = (
+        format!("release-workflow-{}", Uuid::new_v4()),
+        "sha256:test".to_string(),
+        false,
+    );
+    let conflicting = store
+        .set_episode_valuation(
+            episode.id,
+            -0.4,
+            RewardSource::Explicit,
+            Some(FeedbackOutcome::Corrected),
+            &[(traces[0].id, -0.37), (traces[1].id, -0.4)],
+            std::slice::from_ref(&skill_outcome),
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(conflicting, ServerError::Conflict(_)));
+    store
+        .set_episode_valuation(
+            episode.id,
+            -0.4,
+            RewardSource::Explicit,
+            Some(FeedbackOutcome::Corrected),
+            &[(traces[0].id, -0.37), (traces[1].id, -0.4)],
+            &[],
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .skill_runtime_stats(std::slice::from_ref(&skill_outcome.0))
+            .await
+            .unwrap()
+            .is_empty()
+    );
     drop(store);
 
     let restarted = PostgresStore::connect(&dsn).await.unwrap();
@@ -215,6 +254,7 @@ async fn gated_postgres_evolution_policy_links_survive_restart() {
             RewardSource::Runtime,
             None,
             &[(trace.id, 0.5)],
+            &[],
             EpisodeStatus::Valued,
         )
         .await

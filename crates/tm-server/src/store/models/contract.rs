@@ -267,6 +267,19 @@ pub trait Store: Send + Sync + 'static {
         session_id: Uuid,
         approval_id: Uuid,
     ) -> Result<ApprovalRequestRecord>;
+    async fn approval_request_for_skill_proposal(
+        &self,
+        session_id: Uuid,
+        proposal_id: Uuid,
+    ) -> Result<Option<ApprovalRequestRecord>>;
+    async fn create_skill_approval_bundle(
+        &self,
+        _bundle: NewSkillApprovalBundle,
+    ) -> Result<SkillApprovalBundleResult> {
+        Err(ServerError::Store(
+            "atomic skill approval bundle persistence is not implemented".to_string(),
+        ))
+    }
     async fn heartbeat_approval_request(
         &self,
         approval_id: Uuid,
@@ -640,6 +653,7 @@ pub trait Store: Send + Sync + 'static {
         &self,
         episode_id: Uuid,
     ) -> Result<Vec<tm_memory::ExperienceTraceRecord>>;
+    #[allow(clippy::too_many_arguments)]
     async fn set_episode_valuation(
         &self,
         episode_id: Uuid,
@@ -647,6 +661,7 @@ pub trait Store: Send + Sync + 'static {
         reward_source: tm_memory::RewardSource,
         feedback_outcome: Option<tm_memory::FeedbackOutcome>,
         trace_values: &[(Uuid, f32)],
+        skill_outcomes: &[(String, String, bool)],
         status: tm_memory::EpisodeStatus,
     ) -> Result<tm_memory::EvolutionEpisodeRecord>;
     async fn upsert_evolution_policy(
@@ -701,6 +716,17 @@ pub trait Store: Send + Sync + 'static {
         &self,
         session_id: Uuid,
     ) -> Result<Vec<SkillProposalRecord>>;
+    async fn record_skill_exposures_for_turn(
+        &self,
+        session_id: Uuid,
+        turn_id: Uuid,
+        skills: &[(String, String)],
+    ) -> Result<(SessionEvent, bool)>;
+    async fn record_skill_outcome(&self, name: &str, digest: &str, pass: bool) -> Result<()>;
+    async fn skill_runtime_stats(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<(String, String, u64, u64, u64)>>;
     async fn upsert_cron_job(&self, job: NewCronJobRecord) -> Result<CronJobRecord>;
     async fn cron_job(&self, id: &str) -> Result<CronJobRecord>;
     async fn cron_jobs(&self) -> Result<Vec<CronJobRecord>>;

@@ -167,6 +167,9 @@ async fn memory_resource_gateway_reads_dream_summaries_and_skill_proposals() {
             dedupe_key: format!("skill:test:{}", session.id),
             source_dream_id: dream_id,
             source_session_id: session.id,
+            source_policy_id: None,
+            estimated_gain: None,
+            support_episodes: 0,
         })
         .await
         .unwrap();

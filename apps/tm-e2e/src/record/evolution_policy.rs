@@ -310,7 +310,13 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
         ensure!(
             moderate
                 .persona
-                .build_system_prompt(&serious_mode, "base", "", "close this gate")
+                .build_system_prompt(
+                    &serious_mode,
+                    "base",
+                    "",
+                    "close this gate",
+                    &std::collections::BTreeSet::new(),
+                )
                 .system_prompt
                 .contains("tail-marker"),
             "approved mode addendum did not compose on the next prompt"
@@ -350,7 +356,13 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
         ensure!(
             !moderate
                 .persona
-                .build_system_prompt(&serious_mode, "base", "", "close this gate")
+                .build_system_prompt(
+                    &serious_mode,
+                    "base",
+                    "",
+                    "close this gate",
+                    &std::collections::BTreeSet::new(),
+                )
                 .system_prompt
                 .contains("tail-marker"),
             "mode addendum remained composed after rollback"
@@ -480,7 +492,13 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
         ensure!(
             moderate
                 .persona
-                .build_system_prompt(&default_mode, "base", "", "verify persona composition")
+                .build_system_prompt(
+                    &default_mode,
+                    "base",
+                    "",
+                    "verify persona composition",
+                    &std::collections::BTreeSet::new(),
+                )
                 .system_prompt
                 .contains("Use Traditional Chinese for routine conversation"),
             "approved auto candidate did not compose into the next-turn persona prompt"
@@ -519,7 +537,13 @@ async fn run_evolution_policy_scenario(recorder: &EvidenceRecorder) -> Result<()
         ensure!(
             !moderate
                 .persona
-                .build_system_prompt(&default_mode, "base", "", "verify persona rollback")
+                .build_system_prompt(
+                    &default_mode,
+                    "base",
+                    "",
+                    "verify persona rollback",
+                    &std::collections::BTreeSet::new(),
+                )
                 .system_prompt
                 .contains("Use Traditional Chinese for routine conversation"),
             "rolled-back persona guidance remained active"

@@ -137,17 +137,24 @@ terminal failure, collects session messages/events through `DreamInputBudget` ch
 secrets/credentials/PII before derived writes, writes a session summary with evidence links and input
 budget metadata, and enqueues approval-backed writes into the durable idempotent effect outbox. Dream
 completion happens only after downstream effects are durably enqueued. It reuses the existing
-approval/default-deny memory proposal path for durable
-facts/chunks with deterministic `importanceScore` metadata in provenance, and creates a constrained
-approval-gated skill proposal when the session contains reusable-workflow signal. The `dream_progress`
-`input_collected` payload reports total/included
-messages, omitted/truncated messages, chunk count, redaction count, and input chars so clients can
-inspect bounded dream context without raw transcript dumps. The daemon loops by poll interval, honors
+approval/default-deny memory proposal path for durable facts/chunks with deterministic
+`importanceScore` metadata in provenance. Skill proposals are not inferred directly from transcript
+phrasing: only active procedural policies whose estimated gain exceeds the configured threshold and
+whose distinct positive support reaches `n_min` may crystallize. Each candidate retains bounded
+positive trace references, applicability boundaries, decision procedure, verification rules,
+estimated gain, and source-policy/support metadata, then uses the same approval/default-deny path.
+The `dream_progress` `input_collected` payload reports total/included messages,
+omitted/truncated messages, chunk count, redaction count, and input chars so clients can inspect
+bounded dream context without raw transcript dumps. The daemon loops by poll interval, honors
 configured concurrency, and exits on shutdown without leaving completed work locked.
 The same deterministic worker captures one evolution episode per committed terminal turn, normalizes
 bounded cell/effect/terminal traces, assigns explicit or runtime terminal reward, and performs
 reflection-weighted value backfilling. Repeated positive evidence in distinct episodes induces
-scope-bound procedural policies; counter-evidence recomputes their gain and can archive them. For a
+scope-bound procedural policies; counter-evidence recomputes their gain and can archive them.
+At turn composition, trigger-matched managed skills are ranked by Beta-smoothed observed reliability,
+versions below the archive threshold after the minimum trial count are suppressed, and only the
+configured top-K enter the prompt. Selection persists the exact name/digest and one exposure; later
+episode valuation records at most one pass/fail outcome for that durable turn. For a
 `project:<id>` scope with at least two active policies, the worker maintains one versioned declarative
 environment cognition containing capability families, recurring failure families, and the active
 policy triggers. Persistence failures enqueue successor dreams with unique dedupe identities, so a

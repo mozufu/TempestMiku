@@ -337,12 +337,25 @@ pub(crate) fn build_turn_prompt<S, M, C>(
     state: &AppState<S, M, C>,
     mode: &ModeId,
     message: &str,
+    suppressed_skills: &std::collections::BTreeSet<String>,
 ) -> tm_modes::ComposedPrompt {
-    state.persona.build_system_prompt(
+    build_turn_prompt_with_managed_snapshot(state, mode, message, suppressed_skills, &[])
+}
+
+pub(crate) fn build_turn_prompt_with_managed_snapshot<S, M, C>(
+    state: &AppState<S, M, C>,
+    mode: &ModeId,
+    message: &str,
+    suppressed_skills: &std::collections::BTreeSet<String>,
+    managed_skills: &[tm_modes::ManagedSkillPromptSnapshot],
+) -> tm_modes::ComposedPrompt {
+    state.persona.build_system_prompt_with_managed_snapshot(
         mode,
         DEFAULT_SYSTEM_PROMPT,
         &linked_folder_capability_notes(&state.linked_folders),
         message,
+        suppressed_skills,
+        managed_skills,
     )
 }
 

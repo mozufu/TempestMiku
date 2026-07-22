@@ -606,7 +606,13 @@ mod tests {
             })
             .unwrap();
         for mode in [ModeId::new("general"), ModeId::new("serious_engineer")] {
-            let prompt = config.build_system_prompt(&mode, "base", "", "help");
+            let prompt = config.build_system_prompt(
+                &mode,
+                "base",
+                "",
+                "help",
+                &std::collections::BTreeSet::new(),
+            );
             assert!(prompt.system_prompt.contains("Approved persona addendum"));
             assert!(prompt.system_prompt.contains("Address the owner as Brian"));
         }
@@ -635,7 +641,13 @@ mod tests {
             .unwrap();
         assert!(
             !config
-                .build_system_prompt(&ModeId::new("general"), "base", "", "help")
+                .build_system_prompt(
+                    &ModeId::new("general"),
+                    "base",
+                    "",
+                    "help",
+                    &std::collections::BTreeSet::new(),
+                )
                 .system_prompt
                 .contains("Approved persona addendum")
         );

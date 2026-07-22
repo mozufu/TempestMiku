@@ -154,6 +154,14 @@ impl Store for ClaimFailureStore {
         panic!("unused store method approval_request")
     }
 
+    async fn approval_request_for_skill_proposal(
+        &self,
+        _session_id: Uuid,
+        _proposal_id: Uuid,
+    ) -> Result<Option<ApprovalRequestRecord>> {
+        panic!("unused store method approval_request_for_skill_proposal")
+    }
+
     async fn heartbeat_approval_request(
         &self,
         _approval_id: Uuid,
@@ -421,6 +429,7 @@ impl Store for ClaimFailureStore {
         _reward_source: tm_memory::RewardSource,
         _feedback_outcome: Option<tm_memory::FeedbackOutcome>,
         _trace_values: &[(Uuid, f32)],
+        _skill_outcomes: &[(String, String, bool)],
         _status: tm_memory::EpisodeStatus,
     ) -> Result<tm_memory::EvolutionEpisodeRecord> {
         panic!("unused store method set_episode_valuation")
@@ -515,6 +524,26 @@ impl Store for ClaimFailureStore {
         _session_id: Uuid,
     ) -> Result<Vec<SkillProposalRecord>> {
         panic!("unused store method skill_proposals_for_session")
+    }
+
+    async fn record_skill_exposures_for_turn(
+        &self,
+        _session_id: Uuid,
+        _turn_id: Uuid,
+        _skills: &[(String, String)],
+    ) -> Result<(SessionEvent, bool)> {
+        panic!("unused store method record_skill_exposures_for_turn")
+    }
+
+    async fn record_skill_outcome(&self, _name: &str, _digest: &str, _pass: bool) -> Result<()> {
+        panic!("unused store method record_skill_outcome")
+    }
+
+    async fn skill_runtime_stats(
+        &self,
+        _names: &[String],
+    ) -> Result<Vec<(String, String, u64, u64, u64)>> {
+        panic!("unused store method skill_runtime_stats")
     }
 
     async fn upsert_cron_job(&self, _job: NewCronJobRecord) -> Result<CronJobRecord> {

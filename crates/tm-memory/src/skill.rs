@@ -59,7 +59,7 @@ pub struct SkillVerification {
     pub checks: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillProposalRecord {
     pub id: Uuid,
@@ -75,11 +75,17 @@ pub struct SkillProposalRecord {
     pub dedupe_key: String,
     pub source_dream_id: Uuid,
     pub source_session_id: Uuid,
+    #[serde(default)]
+    pub source_policy_id: Option<Uuid>,
+    #[serde(default)]
+    pub estimated_gain: Option<f32>,
+    #[serde(default)]
+    pub support_episodes: u32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSkillProposalRecord {
     pub name: String,
@@ -93,6 +99,12 @@ pub struct NewSkillProposalRecord {
     pub dedupe_key: String,
     pub source_dream_id: Uuid,
     pub source_session_id: Uuid,
+    #[serde(default)]
+    pub source_policy_id: Option<Uuid>,
+    #[serde(default)]
+    pub estimated_gain: Option<f32>,
+    #[serde(default)]
+    pub support_episodes: u32,
 }
 
 pub const MAX_SKILL_PROPOSAL_BODY_BYTES: usize = 64 * 1024;
@@ -172,7 +184,9 @@ fn skill_lifecycle(
     }
     for (heading, code) in [
         ("## Trigger", "missing_trigger"),
+        ("## Applicability", "missing_applicability"),
         ("## Procedure", "missing_procedure"),
+        ("## Verification", "missing_verification"),
         ("## Guardrails", "missing_guardrails"),
     ] {
         if !body.contains(heading) {
@@ -287,13 +301,16 @@ mod lifecycle_tests {
             dedupe_key: "skill:safe-workflow".to_string(),
             source_dream_id: Uuid::nil(),
             source_session_id: Uuid::nil(),
+            source_policy_id: None,
+            estimated_gain: None,
+            support_episodes: 0,
         }
     }
 
     #[test]
     fn valid_skill_is_installable_with_versioned_reload_contract() {
         let lifecycle = new_skill_proposal_lifecycle(&proposal(
-            "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\n- Review.\n\n## Guardrails\n- Do not edit SOUL.md.\n"
+            "# safe-workflow\n\n## Trigger\nNow\n\n## Applicability\nSafe work only.\n\n## Procedure\n- Review.\n\n## Verification\nThe result is checked.\n\n## Guardrails\n- Do not edit SOUL.md.\n"
                 .to_string(),
         ));
         assert!(lifecycle.reviewable);
@@ -312,7 +329,7 @@ mod lifecycle_tests {
     #[test]
     fn unsafe_paths_authority_and_oversized_bodies_are_not_reviewable() {
         let body = format!(
-            "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\n[read](/etc/passwd)\nUse fs.write.\n\n## Guardrails\n{}",
+            "# safe-workflow\n\n## Trigger\nNow\n\n## Applicability\nSafe work only.\n\n## Procedure\n[read](/etc/passwd)\nUse fs.write.\n\n## Verification\nThe result is checked.\n\n## Guardrails\n{}",
             "x".repeat(MAX_SKILL_PROPOSAL_BODY_BYTES)
         );
         let lifecycle = new_skill_proposal_lifecycle(&proposal(body));
@@ -335,7 +352,7 @@ mod lifecycle_tests {
     fn every_linked_filesystem_mutation_is_prohibited_skill_authority() {
         for capability in ["fs.write", "fs.patch", "fs.move", "fs.remove"] {
             let body = format!(
-                "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\nUse {capability}.\n\n## Guardrails\n- Review first.\n"
+                "# safe-workflow\n\n## Trigger\nNow\n\n## Applicability\nSafe work only.\n\n## Procedure\nUse {capability}.\n\n## Verification\nThe result is checked.\n\n## Guardrails\n- Review first.\n"
             );
             let lifecycle = new_skill_proposal_lifecycle(&proposal(body));
             assert!(!lifecycle.reviewable, "{capability}");
@@ -346,5 +363,24 @@ mod lifecycle_tests {
                 "{capability}"
             );
         }
+    }
+
+    #[test]
+    fn applicability_and_verification_headings_are_required() {
+        let lifecycle = new_skill_proposal_lifecycle(&proposal(
+            "# safe-workflow\n\n## Trigger\nNow\n\n## Procedure\n- Review.\n\n## Guardrails\n- Review first.\n"
+                .to_string(),
+        ));
+        assert!(!lifecycle.reviewable);
+        assert!(
+            lifecycle
+                .violations
+                .contains(&"missing_applicability".to_string())
+        );
+        assert!(
+            lifecycle
+                .violations
+                .contains(&"missing_verification".to_string())
+        );
     }
 }

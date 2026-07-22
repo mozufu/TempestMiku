@@ -172,9 +172,48 @@ async fn in_memory_memory_and_project_store_boundaries_cannot_persist_credential
             dedupe_key: "skill:credential-test".to_string(),
             source_dream_id: Uuid::new_v4(),
             source_session_id: session.id,
+            source_policy_id: None,
+            estimated_gain: None,
+            support_episodes: 0,
         })
         .await
         .unwrap();
+    assert_eq!(skill.source_policy_id, None);
+    assert_eq!(skill.estimated_gain, None);
+    assert_eq!(skill.support_episodes, 0);
+    let turn = store
+        .enqueue_turn(session.id, "skill-runtime-stats", "use safe workflow")
+        .await
+        .unwrap();
+    store
+        .record_skill_exposures_for_turn(
+            session.id,
+            turn.id,
+            &[("safe-workflow".to_string(), "sha256:test".to_string())],
+        )
+        .await
+        .unwrap();
+    store
+        .record_skill_outcome("safe-workflow", "sha256:test", true)
+        .await
+        .unwrap();
+    store
+        .record_skill_outcome("safe-workflow", "sha256:test", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .skill_runtime_stats(&["safe-workflow".to_string()])
+            .await
+            .unwrap(),
+        vec![(
+            "safe-workflow".to_string(),
+            "sha256:test".to_string(),
+            1,
+            1,
+            1,
+        )]
+    );
     assert!(!serde_json::to_string(&skill).unwrap().contains(secret));
 
     assert!(

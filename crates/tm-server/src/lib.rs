@@ -41,8 +41,8 @@ pub use coding_backend::{
     DetailedApprovalOutcome, DurableApprovalSpec, ResolveApprovalRequest, StoreCodingEventSink,
 };
 pub use dream::{
-    DreamModelRoles, DreamWorkerConfig, DreamWorkerDaemon, DreamWorkerDaemonHandle, SenderFactory,
-    ServerDreamWorker,
+    DreamModelRoles, DreamWorkerConfig, DreamWorkerDaemon, DreamWorkerDaemonHandle,
+    EvolutionDreamConfig, SenderFactory, ServerDreamWorker,
 };
 pub use error::{Result, ServerError};
 pub use memory::{
@@ -75,11 +75,11 @@ pub use store::{
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, InMemoryStore,
     MemoryPolicy, MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
     NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
-    NewProjectItem, NewSession, PersonaAutoCandidate, PersonaAutoCandidateEvidence,
-    PersonaAutoCandidateTrigger, PostgresDriveMetadataStore, PostgresStore, ProjectItemKind,
-    ProjectItemRecord, ProjectRecord, ProjectStatus, SessionEvent, SessionRecord,
-    SessionSummaryRecord, SessionTurnRecord, Store, StoreEgressStateStore, StoreEvent,
-    StoreMcpMutationEffectStore, StoreRuntimeMetrics,
+    NewProjectItem, NewSession, NewSkillApprovalBundle, PersonaAutoCandidate,
+    PersonaAutoCandidateEvidence, PersonaAutoCandidateTrigger, PostgresDriveMetadataStore,
+    PostgresStore, ProjectItemKind, ProjectItemRecord, ProjectRecord, ProjectStatus, SessionEvent,
+    SessionRecord, SessionSummaryRecord, SessionTurnRecord, SkillApprovalBundleResult, Store,
+    StoreEgressStateStore, StoreEvent, StoreMcpMutationEffectStore, StoreRuntimeMetrics,
 };
 pub use tm_agents::MailboxRegistry;
 pub use tm_memory::{

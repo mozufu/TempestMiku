@@ -127,7 +127,13 @@ fn runtime_fluency_skill_is_pinned_before_identity_for_every_mode() {
     assert!(!skill.contains("stale tag"));
 
     for profile in &assets.modes.modes {
-        let prompt = config.build_system_prompt(&profile.mode, "base", "", "");
+        let prompt = config.build_system_prompt(
+            &profile.mode,
+            "base",
+            "",
+            "",
+            &std::collections::BTreeSet::new(),
+        );
         let fluency = prompt
             .system_prompt
             .find("# tm Language Fluency")
@@ -147,7 +153,13 @@ fn runtime_fluency_skill_is_pinned_before_identity_for_every_mode() {
 fn composed_prompt_states_the_active_mode() {
     let config = ModesConfig::default();
 
-    let general = config.build_system_prompt(&ModeId::from("general"), "base", "", "");
+    let general = config.build_system_prompt(
+        &ModeId::from("general"),
+        "base",
+        "",
+        "",
+        &std::collections::BTreeSet::new(),
+    );
     assert!(general.system_prompt.contains("## Current mode"));
     assert!(
         general
@@ -155,13 +167,25 @@ fn composed_prompt_states_the_active_mode() {
             .contains("operating in **General** mode (`general`, conversation class)")
     );
 
-    let serious = config.build_system_prompt(&ModeId::from("serious_engineer"), "base", "", "");
+    let serious = config.build_system_prompt(
+        &ModeId::from("serious_engineer"),
+        "base",
+        "",
+        "",
+        &std::collections::BTreeSet::new(),
+    );
     assert!(serious.system_prompt.contains(
         "operating in **Serious Engineer** mode (`serious_engineer`, engineering class)"
     ));
 
     // Unknown modes still announce which id is active so the model is never left guessing.
-    let unknown = config.build_system_prompt(&ModeId::from("mystery_mode"), "base", "", "");
+    let unknown = config.build_system_prompt(
+        &ModeId::from("mystery_mode"),
+        "base",
+        "",
+        "",
+        &std::collections::BTreeSet::new(),
+    );
     assert!(
         unknown
             .system_prompt
@@ -194,7 +218,13 @@ fn configured_assets_cannot_replace_runtime_fluency_skill() {
     assert!(skill.contains("fun value -> expr"));
     assert!(!skill.contains("fixture skill body"));
 
-    let prompt = config.build_system_prompt(&ModeId::from("custom_runtime_mode"), "base", "", "");
+    let prompt = config.build_system_prompt(
+        &ModeId::from("custom_runtime_mode"),
+        "base",
+        "",
+        "",
+        &std::collections::BTreeSet::new(),
+    );
     assert!(prompt.system_prompt.contains("# tm Language Fluency"));
     assert!(
         !prompt
@@ -211,7 +241,13 @@ fn composed_prompt_never_leaks_skill_frontmatter_or_mode_metadata() {
     for profile in &catalog.modes {
         // Empty message still composes the always-on scope-guard skill, so this also
         // exercises frontmatter stripping on a layered (not mode-declared) skill.
-        let prompt = ModesConfig::default().build_system_prompt(&profile.mode, "base", "", "");
+        let prompt = ModesConfig::default().build_system_prompt(
+            &profile.mode,
+            "base",
+            "",
+            "",
+            &std::collections::BTreeSet::new(),
+        );
         let leaks = [
             "description:",
             "tags:",
@@ -334,6 +370,7 @@ fn degrades_when_soul_modes_or_skills_are_missing() {
         "base prompt",
         "capability notes",
         "grill me, I don't know what I want",
+        &std::collections::BTreeSet::new(),
     );
     assert!(prompt.system_prompt.contains("SOUL.md"));
     assert!(prompt.system_prompt.contains("語氣層"));
@@ -367,6 +404,7 @@ fn configured_missing_active_skill_warns_and_uses_prompt_fallback() {
         "base prompt",
         "",
         "",
+        &std::collections::BTreeSet::new(),
     );
     assert_eq!(prompt.warnings, [expected_warning]);
     assert!(prompt.system_prompt.contains(MISSING_SKILL_PROMPT_FALLBACK));
@@ -465,6 +503,7 @@ fn negative_state_grounding_layers_health_first_posture_onto_general_mode() {
         "base prompt",
         "",
         "I'm overwhelmed and exhausted, I can't do this",
+        &std::collections::BTreeSet::new(),
     );
 
     assert_eq!(prompt.profile.mode.as_str(), "general");
@@ -503,6 +542,7 @@ fn negative_state_grounding_does_not_layer_without_a_trigger() {
         "base prompt",
         "",
         "what's the weather like for a walk today?",
+        &std::collections::BTreeSet::new(),
     );
     assert!(!prompt.system_prompt.contains("Health-over-productivity"));
 }
@@ -514,7 +554,12 @@ fn resolve_active_skills_includes_always_on_without_any_trigger() {
         .modes
         .profile(&ModeId::from("general"))
         .expect("general profile");
-    let resolved = resolve_active_skills(&assets.modes, profile, "");
+    let resolved = resolve_active_skills(
+        &assets.modes,
+        profile,
+        "",
+        &std::collections::BTreeSet::new(),
+    );
     assert!(resolved.contains(&"scope-guard".to_string()));
     assert!(resolved.contains(&"miku-voice".to_string()));
     assert!(!resolved.contains(&"ambiguity-grill".to_string()));
@@ -528,7 +573,12 @@ fn resolve_active_skills_triggers_only_on_matching_message() {
         .modes
         .profile(&ModeId::from("general"))
         .expect("general profile");
-    let resolved = resolve_active_skills(&assets.modes, profile, "grill me please");
+    let resolved = resolve_active_skills(
+        &assets.modes,
+        profile,
+        "grill me please",
+        &std::collections::BTreeSet::new(),
+    );
     assert!(resolved.contains(&"ambiguity-grill".to_string()));
     assert!(!resolved.contains(&"negative-state-grounding".to_string()));
 }
@@ -540,7 +590,12 @@ fn resolve_active_skills_dedupes_and_preserves_order() {
         .modes
         .profile(&ModeId::from("general"))
         .expect("general profile");
-    let resolved = resolve_active_skills(&assets.modes, profile, "grill me");
+    let resolved = resolve_active_skills(
+        &assets.modes,
+        profile,
+        "grill me",
+        &std::collections::BTreeSet::new(),
+    );
     assert_eq!(
         resolved,
         vec![

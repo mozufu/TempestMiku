@@ -27,7 +27,7 @@ pub use persona_addendum::{
     ManagedPersonaAddendumActivation, ManagedPersonaAddendumError, ManagedPersonaAddendumInstall,
     ManagedPersonaAddendumState, ManagedPersonaAddendumVersion, persona_addendum_content_digest,
 };
-pub use prompt::ComposedPrompt;
+pub use prompt::{ComposedPrompt, ManagedSkillPromptSnapshot};
 pub use resource::SkillResourceHandler;
 pub use skills::resolve_active_skills;
 pub use types::{Mode, ModeCatalog, ModeId, ModeProfile, ModeRoute, SkillActivation, SkillTrigger};

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::{ModeCatalog, ModeProfile, SkillActivation};
 
@@ -15,6 +15,7 @@ pub fn resolve_active_skills(
     catalog: &ModeCatalog,
     profile: &ModeProfile,
     message: &str,
+    suppressed_skills: &BTreeSet<String>,
 ) -> Vec<String> {
     let lower_message = message.to_lowercase();
     let mut candidates: Vec<&str> = Vec::new();
@@ -29,6 +30,7 @@ pub fn resolve_active_skills(
     }
     for entry in &catalog.skills {
         if entry.activation == SkillActivation::Triggered
+            && !suppressed_skills.contains(&entry.name)
             && entry
                 .triggers
                 .iter()

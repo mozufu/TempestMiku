@@ -531,13 +531,26 @@ mod tests {
             .unwrap();
         assert_eq!(first.previous_digest, None);
 
-        let prompt = config.build_system_prompt(
+        let prompt = config.build_system_prompt_with_managed_snapshot(
             &ModeId::from("general"),
             "base",
             "",
             "please draft release notes",
+            &std::collections::BTreeSet::new(),
+            &[crate::ManagedSkillPromptSnapshot {
+                version: first.active.clone(),
+                body: first_body.to_string(),
+            }],
         );
         assert!(prompt.system_prompt.contains("first version"));
+        let ungoverned = config.build_system_prompt(
+            &ModeId::from("general"),
+            "base",
+            "",
+            "please draft release notes",
+            &std::collections::BTreeSet::new(),
+        );
+        assert!(!ungoverned.system_prompt.contains("first version"));
 
         let second_body = "# release-workflow\n\nsecond version\n";
         let second = config

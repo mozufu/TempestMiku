@@ -149,8 +149,9 @@ Zep/Graphiti bi-temporal facts.
 - **Write path & dreaming.** Turns append to episodic storage and enqueue without blocking.
   Background **dreaming** (idle / session end / scheduler) redacts and budgets source material,
   creates deterministic session/reflection/rollup summaries, captures valued experience traces,
-  evolves evidence-linked procedural policies, and emits evidence-backed memory and skill proposals
-  through the durable approval outbox. Project-scoped dreams with enough active policies also maintain
+  evolves evidence-linked procedural policies, and crystallizes only active positive-gain policies
+  with enough distinct supporting episodes into evidence-backed skill proposals through the durable
+  approval outbox. Project-scoped dreams with enough active policies also maintain
   declarative environment cognition. Unsupported inference cannot silently become an owner fact;
   general LLM-backed relation extraction remains demand-triggered. A durable fenced worker leases
   work by owner/epoch and emits replayable lifecycle events.

@@ -1,3 +1,26 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+
+use crate::ManagedSkillVersion;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedSkillPromptSnapshot {
+    pub version: ManagedSkillVersion,
+    pub body: String,
+}
+
+impl ManagedSkillPromptSnapshot {
+    pub fn name(&self) -> &str {
+        &self.version.name
+    }
+
+    pub fn content_digest(&self) -> &str {
+        &self.version.content_digest
+    }
+}
+
 use crate::assets::{
     BUNDLED_SOUL, BUNDLED_TM_LANG_FLUENCY_SKILL, MISSING_SKILL_PROMPT_FALLBACK,
     missing_layered_skill_reference_warning, missing_skill_reference_warning,
@@ -19,8 +42,45 @@ impl ModesConfig {
         base_system_prompt: &str,
         capability_notes: &str,
         message: &str,
+        suppressed_skills: &BTreeSet<String>,
     ) -> ComposedPrompt {
-        let assets = self.load_assets();
+        self.build_system_prompt_with_managed_snapshot(
+            mode,
+            base_system_prompt,
+            capability_notes,
+            message,
+            suppressed_skills,
+            &[],
+        )
+    }
+
+    pub fn build_system_prompt_with_managed_snapshot(
+        &self,
+        mode: &ModeId,
+        base_system_prompt: &str,
+        capability_notes: &str,
+        message: &str,
+        suppressed_skills: &BTreeSet<String>,
+        managed_skills: &[ManagedSkillPromptSnapshot],
+    ) -> ComposedPrompt {
+        let mut assets = self.load_assets();
+        if let Ok(states) = self.managed_skills() {
+            let selected = managed_skills
+                .iter()
+                .map(|skill| skill.version.name.as_str())
+                .collect::<BTreeSet<_>>();
+            for state in states {
+                if selected.contains(state.active.name.as_str()) {
+                    continue;
+                }
+                assets.skills.remove(&state.active.name);
+                assets
+                    .modes
+                    .skills
+                    .retain(|entry| entry.name != state.active.name);
+            }
+        }
+        overlay_managed_prompt_snapshot(&mut assets, managed_skills);
         let mut warnings = assets.warnings.clone();
         let profile = match assets.mode_profile(mode) {
             Some(profile) => profile.clone(),
@@ -62,7 +122,7 @@ impl ModesConfig {
             }
         }
 
-        for skill in resolve_active_skills(&assets.modes, &profile, message) {
+        for skill in resolve_active_skills(&assets.modes, &profile, message, suppressed_skills) {
             match assets.skills.get(skill.as_str()) {
                 Some(contents) => push_raw(&mut prompt, strip_frontmatter(contents)),
                 None => {
@@ -113,6 +173,33 @@ impl ModesConfig {
             status: assets.status,
             warnings,
         }
+    }
+}
+
+fn overlay_managed_prompt_snapshot(
+    assets: &mut crate::ModeAssets,
+    managed_skills: &[ManagedSkillPromptSnapshot],
+) {
+    if managed_skills.is_empty() {
+        return;
+    }
+    let selected = managed_skills
+        .iter()
+        .map(|skill| (skill.name(), skill))
+        .collect::<BTreeMap<_, _>>();
+    assets
+        .modes
+        .skills
+        .retain(|entry| !selected.contains_key(entry.name.as_str()));
+    for skill in managed_skills {
+        assets
+            .skills
+            .insert(skill.version.name.clone(), skill.body.clone());
+        assets.modes.skills.push(crate::SkillTrigger {
+            name: skill.version.name.clone(),
+            activation: crate::SkillActivation::Triggered,
+            triggers: skill.version.triggers.clone(),
+        });
     }
 }
 

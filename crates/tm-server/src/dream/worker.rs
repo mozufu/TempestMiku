@@ -20,9 +20,12 @@ use tm_memory::{
 use crate::{CodingEventSink, Result, ServerError, SessionEvent, Store, StoreCodingEventSink};
 
 use super::config::DreamWorkerConfig;
-use super::evolution::{capture_episodes, update_environment, update_policies, value_episodes};
+use super::evolution::{
+    capture_episodes, crystallize_skill_proposals, update_environment, update_policies,
+    value_episodes,
+};
 use super::proposals::{
-    DreamSkillProposal, MemoryProposalContext, dream_skill_proposal, spawn_memory_write_proposal,
+    DreamSkillProposal, MemoryProposalContext, policy_skill_proposal, spawn_memory_write_proposal,
     spawn_skill_write_proposal,
 };
 use super::summary::{
@@ -394,6 +397,24 @@ where
             }
         }
 
+        let skill_candidates =
+            match crystallize_skill_proposals(&self.store, &self.config.evolution, dream).await {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    let reason = redact_dream_text(&error.to_string()).text;
+                    tracing::warn!(%reason, "dream skill crystallization skipped");
+                    sink.emit(
+                        "dream_progress",
+                        json!({
+                            "dreamId": dream.id,
+                            "phase": "evolution_skipped",
+                            "reason": reason,
+                        }),
+                    )
+                    .await?;
+                    Vec::new()
+                }
+            };
         let evidence = evidence_refs(dream, &redacted_messages, &events);
         let summary_body = bounded_summary(
             dream,
@@ -530,7 +551,10 @@ where
             proposal_count += 1;
         }
 
-        if let Some(skill_outcome) = dream_skill_proposal(dream, &redacted_messages, &evidence) {
+        for (policy, evidence) in skill_candidates {
+            let Some(skill_outcome) = policy_skill_proposal(dream, &policy, &evidence) else {
+                continue;
+            };
             match skill_outcome {
                 DreamSkillProposal::Accepted(skill_proposal) => {
                     if let Err(error) = crate::evolution::ensure_evolution_proposal_reachable(
@@ -569,11 +593,7 @@ where
                             }),
                         )
                         .await?;
-                        return Ok(DreamWorkerReport {
-                            attempted: 1,
-                            completed: 0,
-                            proposals: proposal_count,
-                        });
+                        continue;
                     }
                     let skill = self.store.upsert_skill_proposal(skill_proposal).await?;
                     proposal_count += 1;

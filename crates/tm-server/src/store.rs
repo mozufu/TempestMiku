@@ -21,10 +21,10 @@ pub use models::{
     MAX_PERSONA_AUTO_CANDIDATE_EVIDENCE_REFS, MemoryPolicy, MessageRecord, ModeChangedStoreEvent,
     ModeState, NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle,
     NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
-    PERSONA_AUTO_CANDIDATE_SCHEMA_VERSION, PersonaAutoCandidate, PersonaAutoCandidateEvidence,
-    PersonaAutoCandidateTrigger, ProjectItemKind, ProjectItemRecord, ProjectRecord, ProjectStatus,
-    SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store, StoreEvent,
-    StoreRuntimeMetrics,
+    NewSkillApprovalBundle, PERSONA_AUTO_CANDIDATE_SCHEMA_VERSION, PersonaAutoCandidate,
+    PersonaAutoCandidateEvidence, PersonaAutoCandidateTrigger, ProjectItemKind, ProjectItemRecord,
+    ProjectRecord, ProjectStatus, SessionEvent, SessionRecord, SessionSummaryRecord,
+    SessionTurnRecord, SkillApprovalBundleResult, Store, StoreEvent, StoreRuntimeMetrics,
 };
 pub use postgres::PostgresStore;
 pub use tm_memory::{ProfileFactRecord, RecallChunkRecord};

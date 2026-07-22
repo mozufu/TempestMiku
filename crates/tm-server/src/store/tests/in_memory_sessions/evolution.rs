@@ -97,6 +97,7 @@ async fn evolution_episode_trace_and_feedback_lifecycle_is_atomic_and_idempotent
             RewardSource::Runtime,
             None,
             &values,
+            &[],
             EpisodeStatus::Valued,
         )
         .await
@@ -113,6 +114,94 @@ async fn evolution_episode_trace_and_feedback_lifecycle_is_atomic_and_idempotent
             .collect::<Vec<_>>(),
         vec![Some(0.4), Some(0.5)]
     );
+
+    let skill_outcome = (
+        "release-workflow".to_string(),
+        "sha256:test".to_string(),
+        true,
+    );
+    let conflicting = store
+        .set_episode_valuation(
+            episode.id,
+            0.5,
+            RewardSource::Runtime,
+            None,
+            &values,
+            std::slice::from_ref(&skill_outcome),
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(conflicting, ServerError::Conflict(_)));
+    let repeated = store
+        .set_episode_valuation(
+            episode.id,
+            0.5,
+            RewardSource::Runtime,
+            None,
+            &values,
+            &[],
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap();
+    assert_eq!(repeated.id, valued.id);
+    assert_eq!(repeated.status, valued.status);
+    assert!(
+        store
+            .skill_runtime_stats(std::slice::from_ref(&skill_outcome.0))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let outcome_turn = store
+        .enqueue_turn(session.id, "evolution-outcomes", "exercise selected skills")
+        .await
+        .unwrap();
+    let outcome_episode = store
+        .upsert_evolution_episode(NewEvolutionEpisodeRecord {
+            session_id: session.id,
+            turn_id: outcome_turn.id,
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+        })
+        .await
+        .unwrap()
+        .0;
+    let outcomes = vec![
+        skill_outcome.clone(),
+        (
+            "test-workflow".to_string(),
+            "sha256:other".to_string(),
+            false,
+        ),
+    ];
+    store
+        .set_episode_valuation(
+            outcome_episode.id,
+            0.5,
+            RewardSource::Runtime,
+            None,
+            &[],
+            &outcomes,
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap();
+    let subset_retry = store
+        .set_episode_valuation(
+            outcome_episode.id,
+            0.5,
+            RewardSource::Runtime,
+            None,
+            &[],
+            std::slice::from_ref(&skill_outcome),
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(subset_retry, ServerError::Conflict(_)));
 
     assert!(
         store
@@ -155,7 +244,12 @@ async fn evolution_episode_trace_and_feedback_lifecycle_is_atomic_and_idempotent
         .evolution_episodes("brian", "global", 10)
         .await
         .unwrap();
-    assert_eq!(listed, vec![valued]);
+    assert_eq!(listed.len(), 2);
+    let listed_valued = listed
+        .iter()
+        .find(|listed_episode| listed_episode.id == valued.id)
+        .unwrap();
+    assert_eq!(listed_valued.status, EpisodeStatus::Valued);
 }
 
 #[tokio::test]
@@ -263,6 +357,7 @@ async fn trace_replacement_rejects_cross_episode_and_valuation_rolls_back_on_unk
                 RewardSource::Explicit,
                 Some(FeedbackOutcome::Accepted),
                 &[(Uuid::new_v4(), 1.0)],
+                &[],
                 EpisodeStatus::Valued,
             )
             .await,
@@ -324,6 +419,7 @@ async fn evolution_policy_links_are_idempotent_and_content_updates_bump_version(
             RewardSource::Runtime,
             None,
             &[(traces[0].id, 0.5)],
+            &[],
             EpisodeStatus::Valued,
         )
         .await

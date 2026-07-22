@@ -1,7 +1,7 @@
 use super::support::test_sender_factory;
 use super::*;
-use crate::dream::evolution::{capture_episodes, value_episodes};
-use tm_memory::{EpisodeStatus, RewardSource, TraceKind};
+use crate::dream::evolution::{capture_episodes, update_policies, value_episodes};
+use tm_memory::{EpisodeStatus, PolicyStatus, RewardSource, TraceKind};
 
 #[tokio::test]
 async fn dream_capture_pairs_bounded_traces_and_is_idempotent() {
@@ -614,4 +614,134 @@ async fn dream_valuation_maps_runtime_terminal_outcomes() {
         assert_eq!(valued[0].reward_source, Some(RewardSource::Runtime));
         assert_eq!(valued[0].feedback_outcome, None);
     }
+}
+
+#[tokio::test]
+async fn dream_policy_induction_uses_distinct_evidence_and_recomputes_gain() {
+    let store = Arc::new(InMemoryStore::default());
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let dream = store
+        .enqueue_dream(NewDreamQueueRecord {
+            session_id: session.id,
+            subject: "brian".to_string(),
+            scope: "global".to_string(),
+            reason: DreamReason::SessionEnded,
+            dedupe_key: format!("dream:policy:{}", session.id),
+            source_event_seq: None,
+            available_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let mut episodes = Vec::new();
+    for index in 0..2 {
+        let idempotency_key = format!("policy-{index}");
+        let turn = store
+            .enqueue_turn(session.id, &idempotency_key, "inspect")
+            .await
+            .unwrap();
+        let (episode, _) = store
+            .upsert_evolution_episode(tm_memory::NewEvolutionEpisodeRecord {
+                session_id: session.id,
+                turn_id: turn.id,
+                owner_subject: "brian".to_string(),
+                memory_scope: "global".to_string(),
+            })
+            .await
+            .unwrap();
+        let traces = store
+            .replace_experience_traces(
+                episode.id,
+                vec![
+                    tm_memory::NewExperienceTraceRecord {
+                        episode_id: episode.id,
+                        ordinal: 0,
+                        kind: TraceKind::Effect,
+                        capability: Some("fs.read".to_string()),
+                        action_summary: format!("read config {index}"),
+                        observation_summary: "done".to_string(),
+                        error_signature: None,
+                        event_seq: 1,
+                        result_event_seq: Some(2),
+                    },
+                    tm_memory::NewExperienceTraceRecord {
+                        episode_id: episode.id,
+                        ordinal: 1,
+                        kind: TraceKind::Terminal,
+                        capability: None,
+                        action_summary: "turn terminal".to_string(),
+                        observation_summary: "done".to_string(),
+                        error_signature: None,
+                        event_seq: 3,
+                        result_event_seq: None,
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        let valued = store
+            .set_episode_valuation(
+                episode.id,
+                0.5,
+                RewardSource::Runtime,
+                None,
+                &[(traces[0].id, 0.5), (traces[1].id, 0.1)],
+                EpisodeStatus::Valued,
+            )
+            .await
+            .unwrap();
+        episodes.push(valued);
+    }
+    let sink = StoreCodingEventSink::new(
+        session.id,
+        Arc::clone(&store),
+        test_sender_factory()(session.id),
+    );
+    let config = EvolutionDreamConfig::default();
+
+    let updated = update_policies(&store, &config, &dream, &episodes, &sink)
+        .await
+        .unwrap();
+    assert_eq!(updated.len(), 1);
+    let policy = &updated[0];
+    assert_eq!(policy.signature, "fs|ok");
+    assert_eq!(policy.status, PolicyStatus::Active);
+    assert_eq!(policy.support_episode_ids.len(), 2);
+    assert_eq!(policy.version, 1);
+    assert_eq!(policy.procedure.lines().count(), 2);
+    assert!((policy.gain - 0.11428571).abs() < 0.000_001);
+    assert!(
+        policy
+            .boundary
+            .contains("memory scope global and the fs.* capability family")
+    );
+    assert_eq!(store.policy_trace_values(policy.id).await.unwrap().len(), 2);
+
+    let rerun = update_policies(&store, &config, &dream, &episodes, &sink)
+        .await
+        .unwrap();
+    assert_eq!(rerun.len(), 1);
+    assert_eq!(rerun[0].id, policy.id);
+    assert_eq!(rerun[0].version, 1);
+    assert_eq!(store.policy_trace_values(policy.id).await.unwrap().len(), 2);
+    let progress = store
+        .events_after(session.id, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event.event_type == "dream_progress"
+                && event.payload_json["phase"] == json!("evolution_policies_updated")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(progress[0].payload_json["policies"], json!(1));
+    assert_eq!(progress[0].payload_json["induced"], json!(1));
+    assert_eq!(progress[1].payload_json["induced"], json!(0));
 }

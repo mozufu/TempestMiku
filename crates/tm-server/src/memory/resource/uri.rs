@@ -1,8 +1,8 @@
 use tm_artifacts::preview;
 use tm_host::{HostError, Result as HostResult};
 use tm_memory::{
-    DreamQueueRecord, EvolutionEpisodeRecord, MemoryRecordKind, MemorySummaryRecord,
-    SkillProposalRecord, StoredMemoryRecord,
+    DreamQueueRecord, EvolutionEpisodeRecord, EvolutionPolicyRecord, MemoryRecordKind,
+    MemorySummaryRecord, SkillProposalRecord, StoredMemoryRecord,
 };
 use uuid::Uuid;
 
@@ -16,6 +16,7 @@ pub(super) enum MemoryUri {
     Dreams,
     EvolutionAudits,
     EvolutionEpisode { id: Uuid },
+    EvolutionPolicy { id: Uuid },
     Dream { id: Uuid },
     ProfileFact { subject: String, id: Uuid },
     RecallChunk { scope: String, id: Uuid },
@@ -35,6 +36,7 @@ pub(super) enum MemoryListUri {
     Recalls,
     Summaries,
     EvolutionEpisodes,
+    EvolutionPolicies,
     Dreams,
     SkillProposals,
     ReviewProposals,
@@ -88,6 +90,9 @@ pub(super) fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
         ["evolution", "episodes", id] => Ok(MemoryUri::EvolutionEpisode {
             id: parse_memory_uuid(id, uri)?,
         }),
+        ["evolution", "policies", id] => Ok(MemoryUri::EvolutionPolicy {
+            id: parse_memory_uuid(id, uri)?,
+        }),
         ["review-proposals", id] => Ok(MemoryUri::ReviewProposal {
             id: parse_memory_uuid(id, uri)?,
         }),
@@ -123,6 +128,7 @@ pub(super) fn parse_memory_list_uri(uri: &str) -> HostResult<MemoryListUri> {
         ["skill-proposals"] => Ok(MemoryListUri::SkillProposals),
         ["review-proposals"] => Ok(MemoryListUri::ReviewProposals),
         ["evolution", "episodes"] => Ok(MemoryListUri::EvolutionEpisodes),
+        ["evolution", "policies"] => Ok(MemoryListUri::EvolutionPolicies),
         _ => Err(unsupported_memory_uri(uri)),
     }
 }
@@ -191,6 +197,10 @@ pub(super) fn evolution_proposal_uri(id: Uuid) -> String {
 
 pub(super) fn evolution_episode_uri(episode: &EvolutionEpisodeRecord) -> String {
     format!("memory://evolution/episodes/{}", episode.id)
+}
+
+pub(super) fn evolution_policy_uri(policy: &EvolutionPolicyRecord) -> String {
+    format!("memory://evolution/policies/{}", policy.id)
 }
 
 pub(super) fn review_proposal_uri(id: Uuid) -> String {

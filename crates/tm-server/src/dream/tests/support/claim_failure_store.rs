@@ -426,6 +426,39 @@ impl Store for ClaimFailureStore {
         panic!("unused store method set_episode_valuation")
     }
 
+    async fn upsert_evolution_policy(
+        &self,
+        _policy: tm_memory::EvolutionPolicyRecord,
+    ) -> Result<tm_memory::EvolutionPolicyRecord> {
+        panic!("unused store method upsert_evolution_policy")
+    }
+
+    async fn evolution_policy(&self, _id: Uuid) -> Result<tm_memory::EvolutionPolicyRecord> {
+        panic!("unused store method evolution_policy")
+    }
+
+    async fn evolution_policies(
+        &self,
+        _owner_subject: &str,
+        _memory_scope: &str,
+        _status: Option<tm_memory::PolicyStatus>,
+        _limit: usize,
+    ) -> Result<Vec<tm_memory::EvolutionPolicyRecord>> {
+        panic!("unused store method evolution_policies")
+    }
+
+    async fn link_policy_traces(
+        &self,
+        _policy_id: Uuid,
+        _links: &[(Uuid, Uuid, f32, bool)],
+    ) -> Result<()> {
+        panic!("unused store method link_policy_traces")
+    }
+
+    async fn policy_trace_values(&self, _policy_id: Uuid) -> Result<Vec<(Uuid, Uuid, f32, bool)>> {
+        panic!("unused store method policy_trace_values")
+    }
+
     async fn record_turn_feedback(
         &self,
         _session_id: Uuid,

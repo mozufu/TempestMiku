@@ -194,6 +194,45 @@ pub(crate) fn validate_experience_trace_replacement(
     Ok(())
 }
 
+pub(crate) fn validate_evolution_policy(policy: &tm_memory::EvolutionPolicyRecord) -> Result<()> {
+    reject_sensitive_persistence_fields([
+        (
+            "evolution policy owner subject",
+            policy.owner_subject.as_str(),
+        ),
+        (
+            "evolution policy memory scope",
+            policy.memory_scope.as_str(),
+        ),
+        ("evolution policy signature", policy.signature.as_str()),
+    ])?;
+    if policy.version == 0 {
+        return Err(ServerError::InvalidRequest(
+            "evolution policy version must be positive".to_string(),
+        ));
+    }
+    if !policy.gain.is_finite() {
+        return Err(ServerError::InvalidRequest(
+            "evolution policy gain must be finite".to_string(),
+        ));
+    }
+    if [
+        policy.signature.as_str(),
+        policy.trigger.as_str(),
+        policy.procedure.as_str(),
+        policy.verification.as_str(),
+        policy.boundary.as_str(),
+    ]
+    .iter()
+    .any(|field| field.trim().is_empty())
+    {
+        return Err(ServerError::InvalidRequest(
+            "evolution policy fields must not be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn sanitize_turn_feedback_comment(comment: Option<&str>) -> Option<String> {
     comment.map(redact_persisted_text)
 }

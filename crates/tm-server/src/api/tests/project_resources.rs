@@ -4,9 +4,9 @@ use crate::{NewCronJobRecord, NewCronRunRecord};
 use tm_artifacts::ArtifactStore;
 use tm_drive::{DriveListOptions, DrivePutOptions, InMemoryDriveStore};
 use tm_memory::{
-    DreamReason, DreamStatus, MemoryEvidenceRef, MemorySummaryKind, NewDreamQueueRecord,
-    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, NewMemorySummaryRecord,
-    NewSkillProposalRecord, SkillVerification, TraceKind,
+    DreamReason, DreamStatus, EvolutionPolicyRecord, MemoryEvidenceRef, MemorySummaryKind,
+    NewDreamQueueRecord, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
+    NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus, SkillVerification, TraceKind,
 };
 
 mod assignment;

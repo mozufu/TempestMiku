@@ -6,11 +6,12 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, ExperienceTraceRecord,
-    FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus, MemoryRecordKind,
-    MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord, NewEvolutionEpisodeRecord,
-    NewExperienceTraceRecord, NewMemoryEmbeddingJob, NewMemorySummaryRecord,
-    NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus, StoredMemoryRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, EvolutionPolicyRecord,
+    ExperienceTraceRecord, FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus,
+    MemoryRecordKind, MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord,
+    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, NewMemoryEmbeddingJob,
+    NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus, SkillProposalRecord,
+    SkillProposalStatus, StoredMemoryRecord,
 };
 use tm_modes::ReviewProposalStatus;
 use uuid::Uuid;
@@ -24,8 +25,9 @@ use super::models::{
     sanitize_experience_trace_persistence, sanitize_memory_summary_persistence,
     sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
     sanitize_skill_proposal_persistence, sanitize_turn_feedback_comment, turn_content_hash,
-    validate_experience_trace_replacement, validate_persistence_identifier,
-    validate_profile_fact_persistence, validate_recall_chunk_persistence,
+    validate_evolution_policy, validate_experience_trace_replacement,
+    validate_persistence_identifier, validate_profile_fact_persistence,
+    validate_recall_chunk_persistence,
 };
 
 use super::{
@@ -81,6 +83,8 @@ struct Inner {
     evolution_episodes: Vec<EvolutionEpisodeRecord>,
     experience_traces: Vec<ExperienceTraceRecord>,
     turn_feedback: BTreeMap<Uuid, (Uuid, FeedbackOutcome, Option<String>)>,
+    evolution_policies: Vec<EvolutionPolicyRecord>,
+    policy_trace_links: Vec<(Uuid, Uuid, Uuid, f32, bool)>,
     skill_proposals: Vec<SkillProposalRecord>,
     cron_jobs: Vec<CronJobRecord>,
     cron_runs: Vec<CronRunRecord>,
@@ -3180,6 +3184,148 @@ impl Store for InMemoryStore {
         episode.status = status;
         episode.updated_at = Utc::now();
         Ok(episode.clone())
+    }
+
+    async fn upsert_evolution_policy(
+        &self,
+        mut policy: EvolutionPolicyRecord,
+    ) -> Result<EvolutionPolicyRecord> {
+        validate_evolution_policy(&policy)?;
+        let mut inner = self.inner.lock();
+        if let Some(existing) = inner.evolution_policies.iter_mut().find(|existing| {
+            existing.owner_subject == policy.owner_subject
+                && existing.memory_scope == policy.memory_scope
+                && existing.signature == policy.signature
+        }) {
+            let content_changed = existing.trigger != policy.trigger
+                || existing.procedure != policy.procedure
+                || existing.verification != policy.verification
+                || existing.boundary != policy.boundary;
+            policy.id = existing.id;
+            policy.created_at = existing.created_at;
+            policy.version = if content_changed {
+                existing.version.saturating_add(1)
+            } else {
+                existing.version
+            };
+            policy.updated_at = Utc::now();
+            *existing = policy.clone();
+            return Ok(policy);
+        }
+        if policy.version == 0 {
+            policy.version = 1;
+        }
+        inner.evolution_policies.push(policy.clone());
+        Ok(policy)
+    }
+
+    async fn evolution_policy(&self, id: Uuid) -> Result<EvolutionPolicyRecord> {
+        self.inner
+            .lock()
+            .evolution_policies
+            .iter()
+            .find(|policy| policy.id == id)
+            .cloned()
+            .ok_or_else(|| ServerError::NotFound(format!("evolution policy {id}")))
+    }
+
+    async fn evolution_policies(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        status: Option<PolicyStatus>,
+        limit: usize,
+    ) -> Result<Vec<EvolutionPolicyRecord>> {
+        let mut policies = self
+            .inner
+            .lock()
+            .evolution_policies
+            .iter()
+            .filter(|policy| {
+                policy.owner_subject == owner_subject
+                    && policy.memory_scope == memory_scope
+                    && status.is_none_or(|status| policy.status == status)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        policies.sort_by_key(|policy| std::cmp::Reverse(policy.updated_at));
+        policies.truncate(limit);
+        Ok(policies)
+    }
+
+    async fn link_policy_traces(
+        &self,
+        policy_id: Uuid,
+        links: &[(Uuid, Uuid, f32, bool)],
+    ) -> Result<()> {
+        if links.iter().any(|(_, _, value, _)| !value.is_finite()) {
+            return Err(ServerError::InvalidRequest(
+                "policy trace values must be finite".to_string(),
+            ));
+        }
+        let mut inner = self.inner.lock();
+        if !inner
+            .evolution_policies
+            .iter()
+            .any(|policy| policy.id == policy_id)
+        {
+            return Err(ServerError::NotFound(format!(
+                "evolution policy {policy_id}"
+            )));
+        }
+        for (trace_id, episode_id, _, _) in links {
+            if !inner.experience_traces.iter().any(|trace| {
+                trace.id == *trace_id && trace.episode_id == *episode_id && trace.value.is_some()
+            }) {
+                return Err(ServerError::NotFound(format!(
+                    "valued experience trace {trace_id} in episode {episode_id}"
+                )));
+            }
+        }
+        for (trace_id, episode_id, value, positive) in links {
+            if !inner
+                .policy_trace_links
+                .iter()
+                .any(|(existing_policy, existing_trace, _, _, _)| {
+                    *existing_policy == policy_id && *existing_trace == *trace_id
+                })
+            {
+                inner.policy_trace_links.push((
+                    policy_id,
+                    *trace_id,
+                    *episode_id,
+                    *value,
+                    *positive,
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn policy_trace_values(&self, policy_id: Uuid) -> Result<Vec<(Uuid, Uuid, f32, bool)>> {
+        if !self
+            .inner
+            .lock()
+            .evolution_policies
+            .iter()
+            .any(|policy| policy.id == policy_id)
+        {
+            return Err(ServerError::NotFound(format!(
+                "evolution policy {policy_id}"
+            )));
+        }
+        let mut links = self
+            .inner
+            .lock()
+            .policy_trace_links
+            .iter()
+            .filter(|(existing_policy, _, _, _, _)| *existing_policy == policy_id)
+            .map(|(_, trace_id, episode_id, value, positive)| {
+                (*trace_id, *episode_id, *value, *positive)
+            })
+            .collect::<Vec<_>>();
+        links.sort_by_key(|(_, episode_id, _, _)| *episode_id);
+        Ok(links)
     }
 
     async fn record_turn_feedback(

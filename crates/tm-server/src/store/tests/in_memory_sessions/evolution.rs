@@ -1,7 +1,7 @@
 use super::*;
 use tm_memory::{
-    EpisodeStatus, FeedbackOutcome, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
-    RewardSource, TraceKind,
+    EpisodeStatus, EvolutionPolicyRecord, FeedbackOutcome, NewEvolutionEpisodeRecord,
+    NewExperienceTraceRecord, PolicyStatus, RewardSource, TraceKind,
 };
 
 #[tokio::test]
@@ -273,4 +273,105 @@ async fn trace_replacement_rejects_cross_episode_and_valuation_rolls_back_on_unk
         None
     );
     assert_eq!(traces.len(), 1);
+}
+
+#[tokio::test]
+async fn evolution_policy_links_are_idempotent_and_content_updates_bump_version() {
+    let store = InMemoryStore::default();
+    let session = store
+        .create_session(NewSession {
+            mode: ModeId::from("general"),
+            persona_status: AssetStatus::Degraded {
+                warning: "test".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+    let turn = store
+        .enqueue_turn(session.id, "policy-store", "inspect")
+        .await
+        .unwrap();
+    let (episode, _) = store
+        .upsert_evolution_episode(NewEvolutionEpisodeRecord {
+            session_id: session.id,
+            turn_id: turn.id,
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+        })
+        .await
+        .unwrap();
+    let traces = store
+        .replace_experience_traces(
+            episode.id,
+            vec![NewExperienceTraceRecord {
+                episode_id: episode.id,
+                ordinal: 0,
+                kind: TraceKind::Effect,
+                capability: Some("fs.read".to_string()),
+                action_summary: "read config".to_string(),
+                observation_summary: "done".to_string(),
+                error_signature: None,
+                event_seq: 1,
+                result_event_seq: Some(2),
+            }],
+        )
+        .await
+        .unwrap();
+    store
+        .set_episode_valuation(
+            episode.id,
+            0.5,
+            RewardSource::Runtime,
+            None,
+            &[(traces[0].id, 0.5)],
+            EpisodeStatus::Valued,
+        )
+        .await
+        .unwrap();
+    let now = Utc::now();
+    let policy = store
+        .upsert_evolution_policy(EvolutionPolicyRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+            signature: "fs|ok".to_string(),
+            trigger: "Recurring fs work".to_string(),
+            procedure: "- read config → done".to_string(),
+            verification: "Verify completion".to_string(),
+            boundary: "Only fs.*".to_string(),
+            support_episode_ids: vec![episode.id],
+            gain: 0.2,
+            status: PolicyStatus::Active,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    let link = (traces[0].id, episode.id, 0.5, true);
+    store.link_policy_traces(policy.id, &[link]).await.unwrap();
+    store.link_policy_traces(policy.id, &[link]).await.unwrap();
+    assert_eq!(
+        store.policy_trace_values(policy.id).await.unwrap(),
+        vec![link]
+    );
+
+    let same = store.upsert_evolution_policy(policy.clone()).await.unwrap();
+    assert_eq!(same.version, 1);
+    let changed = store
+        .upsert_evolution_policy(EvolutionPolicyRecord {
+            procedure: "- read config → verified".to_string(),
+            ..same
+        })
+        .await
+        .unwrap();
+    assert_eq!(changed.version, 2);
+    assert_eq!(store.evolution_policy(policy.id).await.unwrap(), changed);
+    assert_eq!(
+        store
+            .evolution_policies("brian", "global", Some(PolicyStatus::Active), 10)
+            .await
+            .unwrap(),
+        vec![changed]
+    );
 }

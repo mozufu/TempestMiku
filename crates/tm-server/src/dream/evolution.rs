@@ -1,10 +1,13 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use serde_json::{Value, json};
 use tm_memory::{
-    DreamQueueRecord, EpisodeStatus, EvolutionEpisodeRecord, FeedbackOutcome,
-    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, RewardSource, TraceKind,
-    backfill_trace_values, error_signature,
+    DreamQueueRecord, EpisodeStatus, EvolutionEpisodeRecord, EvolutionPolicyRecord,
+    ExperienceTraceRecord, FeedbackOutcome, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
+    PolicyStatus, RewardSource, TraceKind, backfill_trace_values, error_signature, policy_gain,
 };
 use uuid::Uuid;
 
@@ -157,6 +160,212 @@ pub(super) async fn value_episodes<S: Store>(
     )
     .await?;
     Ok(valued)
+}
+
+pub(super) async fn update_policies<S: Store>(
+    store: &Arc<S>,
+    config: &EvolutionDreamConfig,
+    dream: &DreamQueueRecord,
+    episodes: &[EvolutionEpisodeRecord],
+    sink: &dyn CodingEventSink,
+) -> Result<Vec<EvolutionPolicyRecord>> {
+    if !config.enabled {
+        return Ok(Vec::new());
+    }
+
+    let mut policies = store
+        .evolution_policies(&dream.subject, &dream.scope, None, usize::MAX)
+        .await?
+        .into_iter()
+        .map(|policy| (policy.signature.clone(), policy))
+        .collect::<BTreeMap<_, _>>();
+    let mut pooled = BTreeMap::<String, Vec<ExperienceTraceRecord>>::new();
+    let mut pending_links = BTreeMap::<String, Vec<(Uuid, Uuid, f32, bool)>>::new();
+
+    for episode in episodes {
+        if episode.status != EpisodeStatus::Valued && episode.status != EpisodeStatus::Evolved {
+            continue;
+        }
+        for trace in store.experience_traces(episode.id).await? {
+            let Some(value) = trace.value else {
+                continue;
+            };
+            if value < config.v_min && value > config.v_counter {
+                continue;
+            }
+            let Some((signature, _)) = trace_signature(&trace) else {
+                continue;
+            };
+            let positive = value >= config.v_min;
+            if policies.contains_key(&signature) {
+                pending_links.entry(signature).or_default().push((
+                    trace.id,
+                    trace.episode_id,
+                    value,
+                    positive,
+                ));
+            } else if positive {
+                pooled.entry(signature).or_default().push(trace);
+            }
+        }
+    }
+
+    let mut induced = 0usize;
+    for (signature, mut traces) in pooled {
+        let distinct_episodes = traces
+            .iter()
+            .map(|trace| trace.episode_id)
+            .collect::<BTreeSet<_>>();
+        if distinct_episodes.len() < config.n_min as usize {
+            continue;
+        }
+        traces.sort_by(|left, right| {
+            right
+                .value
+                .unwrap_or_default()
+                .total_cmp(&left.value.unwrap_or_default())
+                .then_with(|| left.episode_id.cmp(&right.episode_id))
+                .then_with(|| left.ordinal.cmp(&right.ordinal))
+        });
+        let (_, capability_prefix) = trace_signature(&traces[0])
+            .expect("pooled traces always have an associable capability");
+        let now = chrono::Utc::now();
+        let policy = EvolutionPolicyRecord {
+            id: deterministic_policy_id(&dream.subject, &dream.scope, &signature),
+            owner_subject: dream.subject.clone(),
+            memory_scope: dream.scope.clone(),
+            signature: signature.clone(),
+            trigger: format!(
+                "Recurring {capability_prefix} work matching signature `{signature}` in {}",
+                dream.scope
+            ),
+            procedure: traces
+                .iter()
+                .take(6)
+                .map(|trace| format!("- {} → {}", trace.action_summary, trace.observation_summary))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            verification: format!(
+                "The {capability_prefix} call completes without an error signature and the turn ends with a final response."
+            ),
+            boundary: format!(
+                "Applies only to memory scope {} and the {capability_prefix}.* capability family.",
+                dream.scope
+            ),
+            support_episode_ids: Vec::new(),
+            gain: 0.0,
+            status: PolicyStatus::Candidate,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        let policy = store.upsert_evolution_policy(policy).await?;
+        pending_links.insert(
+            signature.clone(),
+            traces
+                .into_iter()
+                .map(|trace| {
+                    (
+                        trace.id,
+                        trace.episode_id,
+                        trace.value.expect("pooled traces are valued"),
+                        true,
+                    )
+                })
+                .collect(),
+        );
+        policies.insert(signature, policy);
+        induced += 1;
+    }
+
+    let mut updated = Vec::new();
+    for (signature, links) in pending_links {
+        let mut policy = policies
+            .remove(&signature)
+            .expect("pending links always reference a known policy");
+        store.link_policy_traces(policy.id, &links).await?;
+        let linked = store.policy_trace_values(policy.id).await?;
+        let linked_trace_ids = linked
+            .iter()
+            .map(|(trace_id, _, _, _)| *trace_id)
+            .collect::<BTreeSet<_>>();
+        let linked_episode_ids = linked
+            .iter()
+            .map(|(_, episode_id, _, _)| *episode_id)
+            .collect::<BTreeSet<_>>();
+        let with = linked
+            .iter()
+            .map(|(_, _, value, _)| *value)
+            .collect::<Vec<_>>();
+        let mut without = Vec::new();
+        for episode_id in &linked_episode_ids {
+            without.extend(
+                store
+                    .experience_traces(*episode_id)
+                    .await?
+                    .into_iter()
+                    .filter_map(|trace| {
+                        (!linked_trace_ids.contains(&trace.id))
+                            .then_some(trace.value)
+                            .flatten()
+                    }),
+            );
+        }
+        policy.support_episode_ids = linked
+            .iter()
+            .filter_map(|(_, episode_id, _, positive)| positive.then_some(*episode_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        policy.gain = policy_gain(&with, &without, config.tau_v, config.n0, config.baseline);
+        policy.status = if policy.gain > 0.0 {
+            PolicyStatus::Active
+        } else if policy.gain >= config.archive_gain {
+            PolicyStatus::Candidate
+        } else {
+            PolicyStatus::Archived
+        };
+        policy.updated_at = chrono::Utc::now();
+        updated.push(store.upsert_evolution_policy(policy).await?);
+    }
+
+    sink.emit(
+        "dream_progress",
+        json!({
+            "dreamId": dream.id,
+            "phase": "evolution_policies_updated",
+            "policies": updated.len(),
+            "induced": induced,
+        }),
+    )
+    .await?;
+    Ok(updated)
+}
+
+fn trace_signature(trace: &ExperienceTraceRecord) -> Option<(String, String)> {
+    let capability = trace.capability.as_deref()?;
+    let capability_prefix = capability.split('.').next()?.trim();
+    if capability_prefix.is_empty() {
+        return None;
+    }
+    let family = trace.error_signature.as_deref().unwrap_or("ok");
+    Some((
+        format!("{capability_prefix}|{family}"),
+        capability_prefix.to_string(),
+    ))
+}
+
+fn deterministic_policy_id(owner_subject: &str, memory_scope: &str, signature: &str) -> Uuid {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(format!(
+        "tempestmiku:evolution-policy:{owner_subject}:{memory_scope}:{signature}"
+    ));
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
 }
 
 fn explicit_reward(outcome: FeedbackOutcome) -> f32 {

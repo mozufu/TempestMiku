@@ -8,8 +8,8 @@ use super::super::util::short_id;
 use super::MemoryResourceHandler;
 use super::access::map_memory_store_error;
 use super::uri::{
-    dream_uri, evolution_episode_uri, memory_record_title, memory_record_uri, profile_fact_uri,
-    recall_chunk_uri, review_proposal_uri, skill_proposal_uri, summary_uri,
+    dream_uri, evolution_episode_uri, evolution_policy_uri, memory_record_title, memory_record_uri,
+    profile_fact_uri, recall_chunk_uri, review_proposal_uri, skill_proposal_uri, summary_uri,
 };
 
 impl<S> MemoryResourceHandler<S>
@@ -71,6 +71,14 @@ where
                 name: "evolution-episodes".to_string(),
                 kind: "evolution_episode_collection".to_string(),
                 title: Some(format!("{} evolution episodes", self.scope)),
+                size_bytes: None,
+                modified_at: None,
+            },
+            ResourceEntry {
+                uri: "memory://evolution/policies".to_string(),
+                name: "evolution-policies".to_string(),
+                kind: "evolution_policy_collection".to_string(),
+                title: Some(format!("{} evolution policies", self.scope)),
                 size_bytes: None,
                 modified_at: None,
             },
@@ -235,6 +243,28 @@ where
                 )),
                 size_bytes: serde_json::to_vec(&episode).ok().map(|value| value.len()),
                 modified_at: Some(episode.updated_at.to_rfc3339()),
+            })
+            .collect())
+    }
+
+    pub(super) async fn evolution_policy_entries(
+        &self,
+        authority: &tm_host::MemoryAuthority,
+    ) -> HostResult<Vec<ResourceEntry>> {
+        let policies = self
+            .store
+            .evolution_policies(&authority.subject, &authority.scope, None, 50)
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(policies
+            .into_iter()
+            .map(|policy| ResourceEntry {
+                uri: evolution_policy_uri(&policy),
+                name: short_id(policy.id),
+                kind: "evolution_policy".to_string(),
+                title: Some(format!("{} ({})", policy.signature, policy.status)),
+                size_bytes: serde_json::to_vec(&policy).ok().map(|value| value.len()),
+                modified_at: Some(policy.updated_at.to_rfc3339()),
             })
             .collect())
     }

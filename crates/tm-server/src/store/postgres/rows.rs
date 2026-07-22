@@ -2,11 +2,11 @@ use serde_json::Value;
 use tm_host::EvolutionAuditRecord;
 use tm_memory::{
     DreamQueueRecord, DreamReason, DreamStatus, EmbeddingNormalization, EmbeddingProvenance,
-    EmbeddingProvider, EpisodicMemoryRecord, EvolutionEpisodeRecord, ExperienceTraceRecord,
-    MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus, MemoryRecordKind, MemoryRecordLinks,
-    MemoryRecordResource, MemoryRecordStatus, MemorySummaryKind, MemorySummaryRecord,
-    ReembeddingState, SemanticMemoryRecord, SkillProposalRecord, SkillProposalStatus,
-    SkillVerification, StoredMemoryRecord,
+    EmbeddingProvider, EpisodicMemoryRecord, EvolutionEpisodeRecord, EvolutionPolicyRecord,
+    ExperienceTraceRecord, MemoryEmbeddingJobRecord, MemoryEmbeddingJobStatus, MemoryRecordKind,
+    MemoryRecordLinks, MemoryRecordResource, MemoryRecordStatus, MemorySummaryKind,
+    MemorySummaryRecord, ReembeddingState, SemanticMemoryRecord, SkillProposalRecord,
+    SkillProposalStatus, SkillVerification, StoredMemoryRecord,
 };
 
 use crate::{Result, ServerError};
@@ -162,6 +162,33 @@ pub(super) fn row_to_experience_trace(row: tokio_postgres::Row) -> Result<Experi
         event_seq: row.get("event_seq"),
         result_event_seq: row.get("result_event_seq"),
         created_at: row.get("created_at"),
+    })
+}
+
+pub(super) fn row_to_evolution_policy(row: tokio_postgres::Row) -> Result<EvolutionPolicyRecord> {
+    let status = row
+        .get::<_, String>("status")
+        .parse()
+        .map_err(|error: tm_memory::UnknownPolicyStatus| ServerError::Store(error.to_string()))?;
+    let support_episode_ids = serde_json::from_value(row.get("support_episode_ids"))
+        .map_err(|error| ServerError::Store(error.to_string()))?;
+    let version: i32 = row.get("version");
+    Ok(EvolutionPolicyRecord {
+        id: row.get("id"),
+        owner_subject: row.get("owner_subject"),
+        memory_scope: row.get("memory_scope"),
+        signature: row.get("signature"),
+        trigger: row.get("trigger"),
+        procedure: row.get("procedure"),
+        verification: row.get("verification"),
+        boundary: row.get("boundary"),
+        support_episode_ids,
+        gain: row.get("gain"),
+        status,
+        version: u32::try_from(version)
+            .map_err(|_| ServerError::Store("invalid evolution policy version".to_string()))?,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
     })
 }
 

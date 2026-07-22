@@ -649,6 +649,24 @@ pub trait Store: Send + Sync + 'static {
         trace_values: &[(Uuid, f32)],
         status: tm_memory::EpisodeStatus,
     ) -> Result<tm_memory::EvolutionEpisodeRecord>;
+    async fn upsert_evolution_policy(
+        &self,
+        policy: tm_memory::EvolutionPolicyRecord,
+    ) -> Result<tm_memory::EvolutionPolicyRecord>;
+    async fn evolution_policy(&self, id: Uuid) -> Result<tm_memory::EvolutionPolicyRecord>;
+    async fn evolution_policies(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        status: Option<tm_memory::PolicyStatus>,
+        limit: usize,
+    ) -> Result<Vec<tm_memory::EvolutionPolicyRecord>>;
+    async fn link_policy_traces(
+        &self,
+        policy_id: Uuid,
+        links: &[(Uuid, Uuid, f32, bool)],
+    ) -> Result<()>;
+    async fn policy_trace_values(&self, policy_id: Uuid) -> Result<Vec<(Uuid, Uuid, f32, bool)>>;
     async fn record_turn_feedback(
         &self,
         session_id: Uuid,

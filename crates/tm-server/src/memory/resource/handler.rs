@@ -17,9 +17,9 @@ use super::render::{
     render_skill_proposal, render_summary, render_user_model,
 };
 use super::uri::{
-    MemoryListUri, MemoryUri, dream_uri, evolution_episode_uri, evolution_proposal_uri,
-    memory_record_uri, parse_memory_list_uri, parse_memory_uri, profile_fact_uri, recall_chunk_uri,
-    review_proposal_uri, skill_proposal_uri, summary_uri,
+    MemoryListUri, MemoryUri, dream_uri, evolution_episode_uri, evolution_policy_uri,
+    evolution_proposal_uri, memory_record_uri, parse_memory_list_uri, parse_memory_uri,
+    profile_fact_uri, recall_chunk_uri, review_proposal_uri, skill_proposal_uri, summary_uri,
 };
 
 #[async_trait]
@@ -90,6 +90,31 @@ where
                     "evolution_episode",
                     Some(format!("evolution episode {}", short_id(episode.id))),
                     serde_json::json!({"episode": episode, "traces": traces}),
+                    selector,
+                )
+            }
+            MemoryUri::EvolutionPolicy { id } => {
+                let policy = self
+                    .store
+                    .evolution_policy(id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                ensure_authorized_record(
+                    authority,
+                    &policy.owner_subject,
+                    &policy.memory_scope,
+                    uri,
+                )?;
+                let trace_values = self
+                    .store
+                    .policy_trace_values(policy.id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                self.json_resource(
+                    &evolution_policy_uri(&policy),
+                    "evolution_policy",
+                    Some(format!("evolution policy {}", short_id(policy.id))),
+                    serde_json::json!({"policy": policy, "traceValues": trace_values}),
                     selector,
                 )
             }
@@ -294,6 +319,7 @@ where
             }
             MemoryListUri::Summaries => self.summary_entries(&self.scope).await,
             MemoryListUri::EvolutionEpisodes => self.evolution_episode_entries(authority).await,
+            MemoryListUri::EvolutionPolicies => self.evolution_policy_entries(authority).await,
             MemoryListUri::Dreams => self.dream_entries(&self.scope).await,
             MemoryListUri::SkillProposals => {
                 let session_id = Uuid::parse_str(&ctx.session_id)

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use rows::{
     row_to_approval_effect, row_to_approval_request, row_to_cron_job, row_to_cron_run,
-    row_to_dream_record, row_to_evolution_audit, row_to_evolution_episode,
+    row_to_dream_record, row_to_evolution_audit, row_to_evolution_episode, row_to_evolution_policy,
     row_to_evolution_review_proposal, row_to_experience_trace, row_to_memory_embedding_job,
     row_to_memory_summary, row_to_message_record, row_to_project, row_to_project_item,
     row_to_session_record, row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
@@ -18,11 +18,12 @@ use rows::{
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus, EvolutionPolicyReason};
 use tm_memory::{
-    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, ExperienceTraceRecord,
-    FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryRecordKind, MemoryRecordResource,
-    MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord, NewEvolutionEpisodeRecord,
-    NewExperienceTraceRecord, NewMemoryEmbeddingJob, NewMemorySummaryRecord,
-    NewSkillProposalRecord, SkillProposalRecord, SkillProposalStatus, StoredMemoryRecord,
+    DreamLease, DreamQueueRecord, DreamStatus, EvolutionEpisodeRecord, EvolutionPolicyRecord,
+    ExperienceTraceRecord, FeedbackOutcome, MemoryEmbeddingJobRecord, MemoryRecordKind,
+    MemoryRecordResource, MemoryScopeTombstone, MemorySummaryRecord, NewDreamQueueRecord,
+    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, NewMemoryEmbeddingJob,
+    NewMemorySummaryRecord, NewSkillProposalRecord, PolicyStatus, SkillProposalRecord,
+    SkillProposalStatus, StoredMemoryRecord,
 };
 use tm_modes::{ReviewProposalStatus, ReviewProposalTarget};
 use tokio_postgres::{Config as PostgresConfig, NoTls, error::SqlState};
@@ -39,8 +40,9 @@ use super::models::{
     sanitize_experience_trace_persistence, sanitize_memory_summary_persistence,
     sanitize_new_memory_embedding_job, sanitize_project_item_persistence,
     sanitize_skill_proposal_persistence, sanitize_turn_feedback_comment, turn_content_hash,
-    validate_experience_trace_replacement, validate_persistence_identifier,
-    validate_profile_fact_persistence, validate_recall_chunk_persistence,
+    validate_evolution_policy, validate_experience_trace_replacement,
+    validate_persistence_identifier, validate_profile_fact_persistence,
+    validate_recall_chunk_persistence,
 };
 
 use super::{
@@ -4888,6 +4890,214 @@ impl Store for PostgresStore {
             .await
             .map_err(|error| ServerError::Store(error.to_string()))?;
         row_to_evolution_episode(row)
+    }
+
+    async fn upsert_evolution_policy(
+        &self,
+        policy: EvolutionPolicyRecord,
+    ) -> Result<EvolutionPolicyRecord> {
+        validate_evolution_policy(&policy)?;
+        let support_episode_ids = serde_json::to_value(&policy.support_episode_ids)
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        let version = i32::try_from(policy.version).map_err(|_| {
+            ServerError::InvalidRequest(
+                "evolution policy version exceeds Postgres range".to_string(),
+            )
+        })?;
+        let row = self
+            .client
+            .query_one(
+                "insert into evolution_policies (
+                    id, owner_subject, memory_scope, signature, trigger, procedure,
+                    verification, boundary, support_episode_ids, gain, status, version,
+                    created_at, updated_at
+                 ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 on conflict (owner_subject, memory_scope, signature) do update set
+                    trigger = excluded.trigger,
+                    procedure = excluded.procedure,
+                    verification = excluded.verification,
+                    boundary = excluded.boundary,
+                    support_episode_ids = excluded.support_episode_ids,
+                    gain = excluded.gain,
+                    status = excluded.status,
+                    version = case
+                        when evolution_policies.trigger is distinct from excluded.trigger
+                          or evolution_policies.procedure is distinct from excluded.procedure
+                          or evolution_policies.verification is distinct from excluded.verification
+                          or evolution_policies.boundary is distinct from excluded.boundary
+                        then evolution_policies.version + 1
+                        else evolution_policies.version
+                    end,
+                    updated_at = now()
+                 returning id, owner_subject, memory_scope, signature, trigger, procedure,
+                           verification, boundary, support_episode_ids, gain, status, version,
+                           created_at, updated_at",
+                &[
+                    &policy.id,
+                    &policy.owner_subject,
+                    &policy.memory_scope,
+                    &policy.signature,
+                    &policy.trigger,
+                    &policy.procedure,
+                    &policy.verification,
+                    &policy.boundary,
+                    &support_episode_ids,
+                    &policy.gain,
+                    &policy.status.as_str(),
+                    &version,
+                    &policy.created_at,
+                    &policy.updated_at,
+                ],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        row_to_evolution_policy(row)
+    }
+
+    async fn evolution_policy(&self, id: Uuid) -> Result<EvolutionPolicyRecord> {
+        let row = self
+            .client
+            .query_opt(
+                "select id, owner_subject, memory_scope, signature, trigger, procedure,
+                        verification, boundary, support_episode_ids, gain, status, version,
+                        created_at, updated_at
+                   from evolution_policies where id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .ok_or_else(|| ServerError::NotFound(format!("evolution policy {id}")))?;
+        row_to_evolution_policy(row)
+    }
+
+    async fn evolution_policies(
+        &self,
+        owner_subject: &str,
+        memory_scope: &str,
+        status: Option<PolicyStatus>,
+        limit: usize,
+    ) -> Result<Vec<EvolutionPolicyRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let status = status.map(PolicyStatus::as_str);
+        self.client
+            .query(
+                "select id, owner_subject, memory_scope, signature, trigger, procedure,
+                        verification, boundary, support_episode_ids, gain, status, version,
+                        created_at, updated_at
+                   from evolution_policies
+                  where owner_subject = $1 and memory_scope = $2
+                    and ($3::text is null or status = $3)
+                  order by updated_at desc
+                  limit $4",
+                &[&owner_subject, &memory_scope, &status, &limit],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .into_iter()
+            .map(row_to_evolution_policy)
+            .collect()
+    }
+
+    async fn link_policy_traces(
+        &self,
+        policy_id: Uuid,
+        links: &[(Uuid, Uuid, f32, bool)],
+    ) -> Result<()> {
+        if links.iter().any(|(_, _, value, _)| !value.is_finite()) {
+            return Err(ServerError::InvalidRequest(
+                "policy trace values must be finite".to_string(),
+            ));
+        }
+        let mut client = self.evolution_mutation_client.lock().await;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        if transaction
+            .query_opt(
+                "select id from evolution_policies where id = $1",
+                &[&policy_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .is_none()
+        {
+            return Err(ServerError::NotFound(format!(
+                "evolution policy {policy_id}"
+            )));
+        }
+        for (trace_id, episode_id, value, positive) in links {
+            let inserted = transaction
+                .execute(
+                    "insert into policy_trace_links (
+                        policy_id, trace_id, episode_id, value, positive, created_at
+                     ) select $1, trace.id, trace.episode_id, $4, $5, now()
+                         from experience_traces trace
+                        where trace.id = $2 and trace.episode_id = $3 and trace.value is not null
+                     on conflict (policy_id, trace_id) do nothing",
+                    &[&policy_id, trace_id, episode_id, value, positive],
+                )
+                .await
+                .map_err(|error| ServerError::Store(error.to_string()))?;
+            if inserted == 0 {
+                let exists = transaction
+                    .query_opt(
+                        "select 1 from policy_trace_links where policy_id = $1 and trace_id = $2",
+                        &[&policy_id, trace_id],
+                    )
+                    .await
+                    .map_err(|error| ServerError::Store(error.to_string()))?
+                    .is_some();
+                if !exists {
+                    return Err(ServerError::NotFound(format!(
+                        "valued experience trace {trace_id} in episode {episode_id}"
+                    )));
+                }
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?;
+        Ok(())
+    }
+
+    async fn policy_trace_values(&self, policy_id: Uuid) -> Result<Vec<(Uuid, Uuid, f32, bool)>> {
+        if self
+            .client
+            .query_opt(
+                "select id from evolution_policies where id = $1",
+                &[&policy_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .is_none()
+        {
+            return Err(ServerError::NotFound(format!(
+                "evolution policy {policy_id}"
+            )));
+        }
+        Ok(self
+            .client
+            .query(
+                "select trace_id, episode_id, value, positive
+                   from policy_trace_links
+                  where policy_id = $1
+                  order by episode_id, trace_id",
+                &[&policy_id],
+            )
+            .await
+            .map_err(|error| ServerError::Store(error.to_string()))?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("trace_id"),
+                    row.get("episode_id"),
+                    row.get("value"),
+                    row.get("positive"),
+                )
+            })
+            .collect())
     }
 
     async fn record_turn_feedback(

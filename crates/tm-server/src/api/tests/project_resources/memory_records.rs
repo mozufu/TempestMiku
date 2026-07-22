@@ -379,3 +379,97 @@ async fn memory_resource_gateway_lists_and_authorizes_evolution_episodes() {
         .unwrap();
     assert_eq!(denied.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn memory_resource_gateway_lists_and_authorizes_evolution_policies() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let now = Utc::now();
+    let policy = store
+        .upsert_evolution_policy(EvolutionPolicyRecord {
+            id: Uuid::new_v4(),
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+            signature: "fs|ok".to_string(),
+            trigger: "Recurring fs work".to_string(),
+            procedure: "- read → done".to_string(),
+            verification: "The fs call completes without an error signature.".to_string(),
+            boundary: "Applies only to global fs.* work.".to_string(),
+            support_episode_ids: Vec::new(),
+            gain: 0.25,
+            status: PolicyStatus::Active,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    let uri = format!("memory://evolution/policies/{}", policy.id);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={uri}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = response_json(response).await;
+    assert_eq!(json["kind"], json!("evolution_policy"));
+    let content: Value = serde_json::from_str(json["content"].as_str().unwrap()).unwrap();
+    assert_eq!(content["policy"]["signature"], json!("fs|ok"));
+    assert_eq!(content["traceValues"], json!([]));
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=memory://evolution/policies",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = response_json(listed).await;
+    assert!(
+        listed.as_array().unwrap().iter().any(|entry| {
+            entry["uri"] == json!(uri) && entry["kind"] == json!("evolution_policy")
+        })
+    );
+
+    let other_session = create(&app).await;
+    store
+        .set_session_memory_context(
+            other_session.id,
+            Some("other"),
+            crate::MemoryPolicy::Project,
+        )
+        .await
+        .unwrap();
+    let denied = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={uri}",
+                    other_session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+}

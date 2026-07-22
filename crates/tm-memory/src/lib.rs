@@ -8,6 +8,7 @@ mod dream;
 mod durable;
 mod embedding;
 mod evaluation;
+mod evolution;
 mod hybrid;
 mod input;
 mod records;
@@ -51,6 +52,13 @@ pub use evaluation::{
     RecallEvaluationSplitReport, RecallFalseInclusionCounts, RecallFalseInclusionKind,
     RecallFixtureCoverage, RecallFixtureRecord, RecallRecordQuality, RecallRelevanceJudgment,
     evaluate_recall_observations,
+};
+pub use evolution::{
+    EnvironmentCognitionRecord, EpisodeStatus, EvolutionEpisodeRecord, EvolutionPolicyRecord,
+    ExperienceTraceRecord, FeedbackOutcome, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
+    PolicyStatus, RewardSource, TraceKind, UnknownEpisodeStatus, UnknownFeedbackOutcome,
+    UnknownPolicyStatus, UnknownRewardSource, UnknownTraceKind, backfill_trace_values,
+    error_signature, policy_gain, skill_reliability,
 };
 pub use hybrid::{
     DEFAULT_HYBRID_CANDIDATE_LIMIT, DEFAULT_HYBRID_TOP_K, DEFAULT_RRF_K, DenseRecallQuery,

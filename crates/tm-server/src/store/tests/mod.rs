@@ -179,6 +179,7 @@ mod postgres_approvals;
 mod postgres_drive;
 mod postgres_durable_memory;
 mod postgres_end_to_end;
+mod postgres_evolution;
 mod postgres_memory_embeddings;
 mod postgres_persona_candidate;
 mod postgres_platform;

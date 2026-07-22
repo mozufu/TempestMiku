@@ -14,13 +14,13 @@ use uuid::Uuid;
 use tm_host::{EvolutionTargetClass, SelfEvolutionTier};
 use tm_memory::{
     DreamInputMessage, DreamQueueRecord, DreamStatus, DreamWorker, DreamWorkerReport,
-    MemorySummaryKind, NewMemorySummaryRecord, redact_dream_text,
+    MemorySummaryKind, NewDreamQueueRecord, NewMemorySummaryRecord, redact_dream_text,
 };
 
 use crate::{CodingEventSink, Result, ServerError, SessionEvent, Store, StoreCodingEventSink};
 
 use super::config::DreamWorkerConfig;
-use super::evolution::capture_episodes;
+use super::evolution::{capture_episodes, value_episodes};
 use super::proposals::{
     DreamSkillProposal, MemoryProposalContext, dream_skill_proposal, spawn_memory_write_proposal,
     spawn_skill_write_proposal,
@@ -259,7 +259,7 @@ where
         )
         .await?;
 
-        capture_episodes(
+        let episodes = capture_episodes(
             &self.store,
             &self.config.evolution,
             dream,
@@ -267,6 +267,39 @@ where
             sink.as_ref(),
         )
         .await?;
+        if let Err(error) = value_episodes(
+            &self.store,
+            &self.config.evolution,
+            dream,
+            &episodes,
+            &events,
+            sink.as_ref(),
+        )
+        .await
+        {
+            let reason = redact_dream_text(&error.to_string()).text;
+            tracing::warn!(%reason, "dream evolution valuation skipped");
+            self.store
+                .enqueue_dream(NewDreamQueueRecord {
+                    session_id: dream.session_id,
+                    subject: dream.subject.clone(),
+                    scope: dream.scope.clone(),
+                    reason: dream.reason,
+                    dedupe_key: format!("dream:evolution-valuation:{}", dream.session_id),
+                    source_event_seq: dream.source_event_seq,
+                    available_at: Utc::now() + self.config.retry_backoff,
+                })
+                .await?;
+            sink.emit(
+                "dream_progress",
+                json!({
+                    "dreamId": dream.id,
+                    "phase": "evolution_skipped",
+                    "reason": reason,
+                }),
+            )
+            .await?;
+        }
 
         let evidence = evidence_refs(dream, &redacted_messages, &events);
         let summary_body = bounded_summary(

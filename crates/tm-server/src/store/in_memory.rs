@@ -89,6 +89,8 @@ struct Inner {
     fail_auto_evolution_bundle_before_commit_once: bool,
     #[cfg(test)]
     fail_complete_approval_effect_with_event_once: bool,
+    #[cfg(test)]
+    fail_set_episode_valuation_once: bool,
 }
 
 #[cfg(test)]
@@ -103,6 +105,10 @@ impl InMemoryStore {
         self.inner
             .lock()
             .fail_complete_approval_effect_with_event_once = true;
+    }
+
+    pub(crate) fn fail_next_set_episode_valuation(&self) {
+        self.inner.lock().fail_set_episode_valuation_once = true;
     }
 }
 
@@ -3136,6 +3142,12 @@ impl Store for InMemoryStore {
             ));
         }
         let mut inner = self.inner.lock();
+        #[cfg(test)]
+        if std::mem::take(&mut inner.fail_set_episode_valuation_once) {
+            return Err(ServerError::Store(
+                "simulated episode valuation failure /tmp/private/123".to_string(),
+            ));
+        }
         let episode_index = inner
             .evolution_episodes
             .iter()

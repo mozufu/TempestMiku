@@ -2,8 +2,9 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use serde_json::{Value, json};
 use tm_memory::{
-    DreamQueueRecord, EvolutionEpisodeRecord, NewEvolutionEpisodeRecord, NewExperienceTraceRecord,
-    TraceKind, error_signature,
+    DreamQueueRecord, EpisodeStatus, EvolutionEpisodeRecord, FeedbackOutcome,
+    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, RewardSource, TraceKind,
+    backfill_trace_values, error_signature,
 };
 use uuid::Uuid;
 
@@ -91,6 +92,90 @@ pub(super) async fn capture_episodes<S: Store>(
     )
     .await?;
     Ok(episodes)
+}
+
+pub(super) async fn value_episodes<S: Store>(
+    store: &Arc<S>,
+    config: &EvolutionDreamConfig,
+    dream: &DreamQueueRecord,
+    episodes: &[EvolutionEpisodeRecord],
+    events: &[SessionEvent],
+    sink: &dyn CodingEventSink,
+) -> Result<Vec<EvolutionEpisodeRecord>> {
+    if !config.enabled {
+        return Ok(Vec::new());
+    }
+    let mut pending = Vec::new();
+    for episode in episodes {
+        if episode.status != EpisodeStatus::Captured {
+            continue;
+        }
+        let turn_events = events
+            .iter()
+            .filter(|event| event.turn_id == Some(episode.turn_id))
+            .collect::<Vec<_>>();
+        let feedback = store.turn_feedback(episode.turn_id).await?;
+        let (reward, source, feedback_outcome) = match feedback {
+            Some((outcome, _)) => (
+                explicit_reward(outcome),
+                RewardSource::Explicit,
+                Some(outcome),
+            ),
+            None => (runtime_reward(&turn_events), RewardSource::Runtime, None),
+        };
+        let traces = store.experience_traces(episode.id).await?;
+        let values = backfill_trace_values(reward, config.gamma, config.alpha, traces.len());
+        let trace_values = traces
+            .iter()
+            .zip(values)
+            .map(|(trace, value)| (trace.id, value))
+            .collect::<Vec<_>>();
+        pending.push((episode.id, reward, source, feedback_outcome, trace_values));
+    }
+    let mut valued = Vec::new();
+    for (episode_id, reward, source, feedback_outcome, trace_values) in pending {
+        valued.push(
+            store
+                .set_episode_valuation(
+                    episode_id,
+                    reward,
+                    source,
+                    feedback_outcome,
+                    &trace_values,
+                    EpisodeStatus::Valued,
+                )
+                .await?,
+        );
+    }
+    sink.emit(
+        "dream_progress",
+        json!({
+            "dreamId": dream.id,
+            "phase": "evolution_valued",
+            "episodes": valued.len(),
+        }),
+    )
+    .await?;
+    Ok(valued)
+}
+
+fn explicit_reward(outcome: FeedbackOutcome) -> f32 {
+    match outcome {
+        FeedbackOutcome::Accepted => 1.0,
+        FeedbackOutcome::Corrected => -0.4,
+        FeedbackOutcome::Rejected => -0.8,
+    }
+}
+
+fn runtime_reward(events: &[&SessionEvent]) -> f32 {
+    if events.iter().any(|event| event.event_type == "error") {
+        return -0.6;
+    }
+    let failed_cell = events.iter().any(|event| {
+        event.event_type == "cell_result"
+            && string_field(&event.payload_json, "status") == Some("failed")
+    });
+    if failed_cell { -0.2 } else { 0.5 }
 }
 
 fn extract_traces(

@@ -34,29 +34,20 @@ impl DriveAuthority {
 }
 
 pub(crate) fn drive_authority(ctx: &InvocationCtx) -> tm_host::Result<DriveAuthority> {
-    let Some(scope) = ctx.session_scope.as_deref() else {
-        if ctx.session_id.is_empty() || ctx.session_id == "default" {
-            return Ok(DriveAuthority::Trusted);
+    let real_session = !ctx.session_id.is_empty() && ctx.session_id != "default";
+    match ctx.project_id.as_deref() {
+        Some(project) => {
+            let project = project.trim();
+            if project.is_empty() {
+                return Err(HostError::CapabilityDenied(
+                    "drive requires a non-empty project scope".to_string(),
+                ));
+            }
+            Ok(DriveAuthority::Project(project.to_string()))
         }
-        return Err(HostError::CapabilityDenied(
-            "drive requires server-authoritative project scope".to_string(),
-        ));
-    };
-    if scope == "global" {
-        return Ok(DriveAuthority::Global);
+        None if real_session => Ok(DriveAuthority::Global),
+        None => Ok(DriveAuthority::Trusted),
     }
-    let Some(project) = scope.strip_prefix("project:") else {
-        return Err(HostError::CapabilityDenied(format!(
-            "drive is unavailable from non-project session scope {scope}"
-        )));
-    };
-    let project = project.trim();
-    if project.is_empty() {
-        return Err(HostError::CapabilityDenied(
-            "drive requires a non-empty project scope".to_string(),
-        ));
-    }
-    Ok(DriveAuthority::Project(project.to_string()))
 }
 
 pub(super) fn cross_project_error(operation: &str, project: &str) -> HostError {

@@ -44,12 +44,12 @@ use super::{
     ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord,
     AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
     AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
-    EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MessageRecord,
-    ModeState, NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle,
-    NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
-    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, ProjectRecord, RecallChunkRecord,
-    SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store,
-    StoreRuntimeMetrics,
+    EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MemoryPolicy,
+    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
+    NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
+    NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind, ProjectItemRecord,
+    ProjectRecord, RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord,
+    SessionTurnRecord, Store, StoreRuntimeMetrics,
 };
 
 fn evolution_audit_entry(
@@ -295,7 +295,8 @@ impl Store for PostgresStore {
             mode_state: ModeState::new(new.mode, Utc::now()),
             persona_status: new.persona_status,
             owner_subject,
-            memory_scope: "global".to_string(),
+            project_id: None,
+            memory_policy: MemoryPolicy::default(),
         };
         let mode = serde_json::to_value(session.mode.clone())
             .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -305,8 +306,8 @@ impl Store for PostgresStore {
             .map_err(|err| ServerError::Store(err.to_string()))?;
         self.client
             .execute(
-                "insert into sessions (id, created_at, updated_at, status, mode, mode_state_json, persona_status, owner_subject, memory_scope) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                &[&session.id, &session.created_at, &session.updated_at, &session.status, &mode, &mode_state, &persona_status, &session.owner_subject, &session.memory_scope],
+                "insert into sessions (id, created_at, updated_at, status, mode, mode_state_json, persona_status, owner_subject, project_id, memory_policy) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                &[&session.id, &session.created_at, &session.updated_at, &session.status, &mode, &mode_state, &persona_status, &session.owner_subject, &session.project_id.as_deref(), &session.memory_policy.as_str()],
             )
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -416,27 +417,24 @@ impl Store for PostgresStore {
         Ok(row.get::<_, i64>("updated").max(0) as usize)
     }
 
-    async fn set_session_memory_scope(
+    async fn set_session_memory_context(
         &self,
         session_id: Uuid,
-        memory_scope: &str,
+        project_id: Option<&str>,
+        memory_policy: MemoryPolicy,
     ) -> Result<SessionRecord> {
-        let memory_scope = memory_scope.trim();
-        if memory_scope.is_empty() {
-            return Err(ServerError::InvalidRequest(
-                "memory scope must not be empty".to_string(),
-            ));
+        if let Some(project_id) = project_id {
+            validate_persistence_identifier("project id", project_id)?;
         }
-        validate_persistence_identifier("memory scope", memory_scope)?;
         let row = self
             .client
             .query_opt(
                 "update sessions
-                    set memory_scope = $2, updated_at = now()
+                    set project_id = $2, memory_policy = $3, updated_at = now()
                   where id = $1 and status <> 'ended'
                   returning id, created_at, updated_at, status, mode, mode_state_json,
-                            persona_status, owner_subject, memory_scope",
-                &[&session_id, &memory_scope],
+                            persona_status, owner_subject, project_id, memory_policy",
+                &[&session_id, &project_id, &memory_policy.as_str()],
             )
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?;
@@ -523,7 +521,7 @@ impl Store for PostgresStore {
                 "with advisory_lock as (
                     select pg_advisory_xact_lock(hashtext($1))
                  ), locked_session as (
-                    select sessions.status, sessions.owner_subject, sessions.memory_scope
+                    select sessions.status, sessions.owner_subject, sessions.project_id, sessions.memory_policy
                       from sessions, advisory_lock
                      where sessions.id = $2
                      for update
@@ -547,7 +545,10 @@ impl Store for PostgresStore {
                  ), lifecycle as (
                     select locked_session.status,
                            locked_session.owner_subject,
-                           locked_session.memory_scope,
+                           case when locked_session.memory_policy = 'global'
+                                then 'global'
+                                else 'project:' || locked_session.project_id
+                           end as memory_scope,
                            active_turn.present as has_active_turn,
                            base_seq.seq,
                            (locked_session.status <> 'ended'
@@ -682,7 +683,8 @@ impl Store for PostgresStore {
                         s.mode_state_json,
                         s.persona_status,
                         s.owner_subject,
-                        s.memory_scope,
+                        s.project_id,
+                        s.memory_policy,
                         coalesce(m.message_count, 0)::bigint as message_count,
                         coalesce(p.summary, m.assistant_summary) as summary,
                         m.title,
@@ -729,7 +731,7 @@ impl Store for PostgresStore {
 
     async fn get_session(&self, session_id: Uuid) -> Result<SessionRecord> {
         let row = self.client
-            .query_opt("select id, created_at, updated_at, status, mode, mode_state_json, persona_status, owner_subject, memory_scope from sessions where id = $1", &[&session_id])
+            .query_opt("select id, created_at, updated_at, status, mode, mode_state_json, persona_status, owner_subject, project_id, memory_policy from sessions where id = $1", &[&session_id])
             .await
             .map_err(|err| ServerError::Store(err.to_string()))?
             .ok_or_else(|| ServerError::NotFound(format!("session {session_id}")))?;
@@ -4157,18 +4159,23 @@ impl Store for PostgresStore {
         rows.into_iter().map(row_to_project_item).collect()
     }
 
-    async fn ensure_project(&self, id: &str, title: &str) -> Result<ProjectRecord> {
+    async fn ensure_project(
+        &self,
+        id: &str,
+        title: &str,
+        default_memory_policy: MemoryPolicy,
+    ) -> Result<ProjectRecord> {
         validate_persistence_identifier("project id", id)?;
         let title = title.trim();
         let title = if title.is_empty() { id } else { title };
         let row = self
             .client
             .query_one(
-                "insert into projects(id, title, status, created_at, updated_at)
-                 values ($1, $2, 'active', now(), now())
+                "insert into projects(id, title, status, default_memory_policy, created_at, updated_at)
+                 values ($1, $2, 'active', $3, now(), now())
                  on conflict (id) do update set updated_at = projects.updated_at
-                 returning id, title, status, created_at, updated_at, archived_at",
-                &[&id, &title],
+                 returning id, title, status, default_memory_policy, created_at, updated_at, archived_at",
+                &[&id, &title, &default_memory_policy.as_str()],
             )
             .await
             .map_err(store_error)?;
@@ -4179,7 +4186,7 @@ impl Store for PostgresStore {
         let row = self
             .client
             .query_opt(
-                "select id, title, status, created_at, updated_at, archived_at
+                "select id, title, status, default_memory_policy, created_at, updated_at, archived_at
                    from projects where id = $1",
                 &[&id],
             )
@@ -4192,7 +4199,7 @@ impl Store for PostgresStore {
         let rows = if include_archived {
             self.client
                 .query(
-                    "select id, title, status, created_at, updated_at, archived_at
+                    "select id, title, status, default_memory_policy, created_at, updated_at, archived_at
                        from projects order by id asc",
                     &[],
                 )
@@ -4200,7 +4207,7 @@ impl Store for PostgresStore {
         } else {
             self.client
                 .query(
-                    "select id, title, status, created_at, updated_at, archived_at
+                    "select id, title, status, default_memory_policy, created_at, updated_at, archived_at
                        from projects where status = 'active' order by id asc",
                     &[],
                 )

@@ -73,13 +73,17 @@ where
             .get_session(session_id)
             .await
             .map_err(host_error)?;
-        if ctx.session_scope.as_deref() != Some(session.memory_scope.as_str()) {
+        let expected = tm_host::MemoryAuthority {
+            subject: session.owner_subject.clone(),
+            scope: session.memory_scope(),
+        };
+        if ctx.memory_authority.as_ref() != Some(&expected) {
             return Err(HostError::CapabilityDenied(
-                "memory.search session scope does not match server authority".to_string(),
+                "memory.search authority does not match server authority".to_string(),
             ));
         }
         self.store
-            .ensure_memory_scope_active(&session.owner_subject, &session.memory_scope)
+            .ensure_memory_scope_active(&session.owner_subject, &session.memory_scope())
             .await
             .map_err(host_error)?;
 
@@ -89,13 +93,13 @@ where
             .await
             .map_err(host_error)?
         {
-            validate_persisted_context(&event, &session.owner_subject, &session.memory_scope)?;
+            validate_persisted_context(&event, &session.owner_subject, &session.memory_scope())?;
             return Ok(event.payload_json);
         }
 
         let memory = self
             .memory
-            .context_for_turn(&session.owner_subject, &session.memory_scope, query)
+            .context_for_turn(&session.owner_subject, &session.memory_scope(), query)
             .await
             .map_err(host_error)?;
         let payload = json!({
@@ -108,7 +112,7 @@ where
             .append_event_for_turn_once(session_id, "memory_recall", payload, turn_id)
             .await
             .map_err(host_error)?;
-        validate_persisted_context(&event, &session.owner_subject, &session.memory_scope)?;
+        validate_persisted_context(&event, &session.owner_subject, &session.memory_scope())?;
         Ok(event.payload_json)
     }
 }

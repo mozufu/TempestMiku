@@ -443,8 +443,8 @@ async fn run_job(state: AppState, entry: Arc<JobEntry>, request: JobRequest) {
     .with_event_sink(Arc::new(CapturingEventSink {
         events: Arc::clone(&events),
     }));
-    if let Some(scope) = request.authority.session_scope {
-        ctx = ctx.with_session_scope(scope);
+    if let Some(project_id) = request.authority.project_id {
+        ctx = ctx.with_project_id(project_id);
     }
     let result = match request.operation {
         WorkerOperation::Invoke { capability, args } => {
@@ -833,7 +833,7 @@ mod tests {
             Duration::from_secs(2),
         )
         .with_session_id(Uuid::new_v4().to_string())
-        .with_session_scope("project:repo");
+        .with_project_id("repo");
 
         let read = registry
             .invoke("fs.read", json!({ "path": "repo:hello.txt" }), &ctx)

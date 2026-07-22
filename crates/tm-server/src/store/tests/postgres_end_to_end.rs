@@ -426,13 +426,16 @@ async fn gated_postgres_project_entity_lifecycle_archives_and_fails_closed() {
         .unwrap();
 
     // §30: a project is a server-owned durable entity. ensure_project is idempotent on id.
-    let created = store.ensure_project("atlas", "Atlas").await.unwrap();
+    let created = store
+        .ensure_project("atlas", "Atlas", crate::MemoryPolicy::Project)
+        .await
+        .unwrap();
     assert_eq!(created.id, "atlas");
     assert_eq!(created.title, "Atlas");
     assert_eq!(created.status, ProjectStatus::Active);
     assert!(created.archived_at.is_none());
     let again = store
-        .ensure_project("atlas", "Atlas Renamed")
+        .ensure_project("atlas", "Atlas Renamed", crate::MemoryPolicy::Project)
         .await
         .unwrap();
     assert_eq!(again.id, created.id);
@@ -517,7 +520,10 @@ async fn gated_postgres_project_entity_lifecycle_archives_and_fails_closed() {
         vec![("atlas".to_string(), ProjectStatus::Archived)]
     );
     // ensure_project never resurrects an archived entity (§30 lifecycle).
-    let after = store.ensure_project("atlas", "Atlas").await.unwrap();
+    let after = store
+        .ensure_project("atlas", "Atlas", crate::MemoryPolicy::Project)
+        .await
+        .unwrap();
     assert_eq!(after.status, ProjectStatus::Archived);
 
     drop(store);

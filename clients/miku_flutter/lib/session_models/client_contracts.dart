@@ -60,7 +60,10 @@ abstract class MikuSessionClient {
 
   Future<MikuSession> createOrReuseSession();
 
-  Future<MikuSession> createSession({String scope = 'global'});
+  Future<MikuSession> createSession({
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  });
 
   Future<void> endSession(String sessionId);
 
@@ -69,7 +72,11 @@ abstract class MikuSessionClient {
   Future<List<ProjectCatalogEntry>> listProjects();
 
   /// Creates (or returns) a project entity (§30.2). Owner-initiated; idempotent on id.
-  Future<ProjectCatalogEntry> createProject(String id, {String? title});
+  Future<ProjectCatalogEntry> createProject(
+    String id, {
+    String? title,
+    MikuMemoryPolicy? defaultMemoryPolicy,
+  });
 
   /// Archives a project entity, tombstoning its memory scope (§30.4).
   Future<ProjectCatalogEntry> archiveProject(
@@ -77,7 +84,11 @@ abstract class MikuSessionClient {
     String? reason,
   });
 
-  Future<String> setSessionScope(String sessionId, String scope);
+  Future<MikuSession> setSessionMemoryContext(
+    String sessionId, {
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  });
 
   Future<LoadedSession> loadSession(String sessionId);
 

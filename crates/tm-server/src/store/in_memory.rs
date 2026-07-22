@@ -29,12 +29,12 @@ use super::{
     ApprovalEffectLease, ApprovalEffectRecord, ApprovalRequestRecord,
     AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
     AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
-    EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MessageRecord,
-    ModeState, NewApprovalRequest, NewApprovalResolution, NewAutoEvolutionReviewBundle,
-    NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal, NewProjectItem, NewSession,
-    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, ProjectRecord, ProjectStatus,
-    RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord, Store,
-    StoreRuntimeMetrics,
+    EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MemoryPolicy,
+    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
+    NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
+    NewProjectItem, NewSession, ProfileFactRecord, ProjectItemKind, ProjectItemRecord,
+    ProjectRecord, ProjectStatus, RecallChunkRecord, SessionEvent, SessionRecord,
+    SessionSummaryRecord, SessionTurnRecord, Store, StoreRuntimeMetrics,
 };
 
 mod approval_helpers;
@@ -143,7 +143,8 @@ impl Store for InMemoryStore {
                 .configured_owner_subject
                 .clone()
                 .unwrap_or_else(|| "brian".to_string()),
-            memory_scope: "global".to_string(),
+            project_id: None,
+            memory_policy: MemoryPolicy::default(),
         };
         inner.sessions.insert(session.id, session.clone());
         Ok(session)
@@ -199,18 +200,15 @@ impl Store for InMemoryStore {
         Ok(updated)
     }
 
-    async fn set_session_memory_scope(
+    async fn set_session_memory_context(
         &self,
         session_id: Uuid,
-        memory_scope: &str,
+        project_id: Option<&str>,
+        memory_policy: MemoryPolicy,
     ) -> Result<SessionRecord> {
-        let memory_scope = memory_scope.trim();
-        if memory_scope.is_empty() {
-            return Err(ServerError::InvalidRequest(
-                "memory scope must not be empty".to_string(),
-            ));
+        if let Some(project_id) = project_id {
+            validate_persistence_identifier("project id", project_id)?;
         }
-        validate_persistence_identifier("memory scope", memory_scope)?;
         let mut inner = self.inner.lock();
         let session = inner
             .sessions
@@ -221,7 +219,8 @@ impl Store for InMemoryStore {
                 "session {session_id} has ended"
             )));
         }
-        session.memory_scope = memory_scope.to_string();
+        session.project_id = project_id.map(str::to_string);
+        session.memory_policy = memory_policy;
         session.updated_at = Utc::now();
         Ok(session.clone())
     }
@@ -265,7 +264,7 @@ impl Store for InMemoryStore {
             (
                 session.status == "ended",
                 session.owner_subject.clone(),
-                session.memory_scope.clone(),
+                session.memory_scope(),
             )
         };
         validate_persistence_identifier("dream subject", &subject)?;
@@ -2609,7 +2608,12 @@ impl Store for InMemoryStore {
         Ok(items)
     }
 
-    async fn ensure_project(&self, id: &str, title: &str) -> Result<ProjectRecord> {
+    async fn ensure_project(
+        &self,
+        id: &str,
+        title: &str,
+        default_memory_policy: MemoryPolicy,
+    ) -> Result<ProjectRecord> {
         validate_persistence_identifier("project id", id)?;
         let title = title.trim();
         let title = if title.is_empty() { id } else { title };
@@ -2625,6 +2629,7 @@ impl Store for InMemoryStore {
                 created_at: now,
                 updated_at: now,
                 archived_at: None,
+                default_memory_policy,
             });
         Ok(record.clone())
     }

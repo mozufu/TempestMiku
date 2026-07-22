@@ -250,20 +250,16 @@ class ScriptedMikuClient
   }
 
   @override
-  Future<MikuSession> createSession({String scope = 'global'}) async {
-    final normalizedScope = scope.trim().isEmpty ? 'global' : scope.trim();
+  Future<MikuSession> createSession({
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) async {
     final id = 'scripted-${_nextId++}';
     final now = DateTime.now();
     final base = _sessionForMode(id, 'personal_assistant');
-    final session = MikuSession(
-      id: base.id,
-      status: base.status,
-      mode: base.mode,
-      label: base.label,
-      defaultScope: normalizedScope,
-      activeSkills: base.activeSkills,
-      lastEventId: base.lastEventId,
-      locked: base.locked,
+    final session = base.copyWith(
+      projectId: projectId,
+      memoryPolicy: memoryPolicy ?? MikuMemoryPolicy.global,
     );
     _sessions[id] = session;
     _updatedAt[id] = now;
@@ -331,16 +327,7 @@ class ScriptedMikuClient
   void endSessionForTesting(String sessionId) {
     final session = _sessions[sessionId];
     if (session == null) throw StateError('unknown session $sessionId');
-    _sessions[sessionId] = MikuSession(
-      id: session.id,
-      status: 'ended',
-      mode: session.mode,
-      label: session.label,
-      defaultScope: session.defaultScope,
-      activeSkills: session.activeSkills,
-      lastEventId: session.lastEventId,
-      locked: session.locked,
-    );
+    _sessions[sessionId] = session.copyWith(status: 'ended');
   }
 
   @override
@@ -390,6 +377,7 @@ class ScriptedMikuClient
         title: 'TempestMiku',
         status: 'active',
         memoryScope: 'project:tempestmiku',
+        defaultMemoryPolicy: MikuMemoryPolicy.project,
         projectUri: 'project://tempestmiku',
         linkedFoldersUri: 'project://tempestmiku/linked-folders',
         linkedFolderUris: ['project://tempestmiku/linked-folders/tempestmiku/'],
@@ -400,6 +388,7 @@ class ScriptedMikuClient
           title: 'Archive',
           status: 'active',
           memoryScope: 'project:archive',
+          defaultMemoryPolicy: MikuMemoryPolicy.project,
           projectUri: 'project://archive',
           linkedFoldersUri: 'project://archive/linked-folders',
         ),
@@ -408,24 +397,23 @@ class ScriptedMikuClient
   }
 
   @override
-  Future<String> setSessionScope(String sessionId, String scope) async {
+  Future<MikuSession> setSessionMemoryContext(
+    String sessionId, {
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) async {
     if (failProjectScope) throw StateError('project scope unavailable');
     final session = _sessions[sessionId];
     if (session == null) throw StateError('unknown session $sessionId');
     if (session.status == 'ended') {
       throw StateError('session $sessionId has ended');
     }
-    _sessions[sessionId] = MikuSession(
-      id: session.id,
-      status: session.status,
-      mode: session.mode,
-      label: session.label,
-      defaultScope: scope,
-      activeSkills: session.activeSkills,
-      lastEventId: session.lastEventId,
-      locked: session.locked,
+    final updated = session.copyWith(
+      projectId: projectId,
+      memoryPolicy: memoryPolicy ?? session.memoryPolicy,
     );
-    return scope;
+    _sessions[sessionId] = updated;
+    return updated;
   }
 
   @override
@@ -917,8 +905,8 @@ class ScriptedMikuClient
         ),
       ];
     }
-    final scope = _sessions[sessionId]?.defaultScope;
-    if (scope != 'project:tempestmiku') {
+    final projectId = _sessions[sessionId]?.projectId;
+    if (projectId != 'tempestmiku') {
       throw StateError('404 active project scope');
     }
     return switch (uri) {
@@ -968,13 +956,18 @@ class ScriptedMikuClient
   }
 
   @override
-  Future<ProjectCatalogEntry> createProject(String id, {String? title}) async {
+  Future<ProjectCatalogEntry> createProject(
+    String id, {
+    String? title,
+    MikuMemoryPolicy? defaultMemoryPolicy,
+  }) async {
     final slug = id.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
     final entry = ProjectCatalogEntry(
       id: slug,
       title: title ?? id,
       status: 'active',
       memoryScope: 'project:$slug',
+      defaultMemoryPolicy: defaultMemoryPolicy ?? MikuMemoryPolicy.project,
       projectUri: 'project://$slug',
       linkedFoldersUri: 'project://$slug/linked-folders',
     );
@@ -997,6 +990,8 @@ class ScriptedMikuClient
       title: existing?.title ?? projectId,
       status: 'archived',
       memoryScope: 'project:$projectId',
+      defaultMemoryPolicy:
+          existing?.defaultMemoryPolicy ?? MikuMemoryPolicy.project,
       projectUri: 'project://$projectId',
       linkedFoldersUri: 'project://$projectId/linked-folders',
     );
@@ -1034,26 +1029,14 @@ class ScriptedMikuClient
       id: id,
       mode: mode,
       label: _label(mode),
-      defaultScope:
-          mode == 'serious_engineer' ? 'project:tempestmiku' : 'global',
       activeSkills: _activeSkills(mode),
       locked: locked,
       lastEventId: lastEventId,
     );
   }
 
-  MikuSession _copySession(MikuSession session, {String? lastEventId}) {
-    return MikuSession(
-      id: session.id,
-      status: session.status,
-      mode: session.mode,
-      label: session.label,
-      defaultScope: session.defaultScope,
-      activeSkills: session.activeSkills,
-      locked: session.locked,
-      lastEventId: lastEventId,
-    );
-  }
+  MikuSession _copySession(MikuSession session, {String? lastEventId}) =>
+      session.copyWith(lastEventId: lastEventId);
 
   void _appendMessage(String sessionId, String role, String content) {
     final now = DateTime.now();
@@ -1069,14 +1052,7 @@ class ScriptedMikuClient
     _updatedAt[sessionId] = now;
     final session = _sessions[sessionId];
     if (session != null) {
-      _sessions[sessionId] = MikuSession(
-        id: session.id,
-        status: session.status,
-        mode: session.mode,
-        label: session.label,
-        defaultScope: session.defaultScope,
-        activeSkills: session.activeSkills,
-        locked: session.locked,
+      _sessions[sessionId] = session.copyWith(
         lastEventId: '${_nextEventId - 1}',
       );
     }

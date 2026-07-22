@@ -44,7 +44,11 @@ async fn chat_turn_indexes_drive_without_automatic_prompt_injection() {
     .with_linked_folders(linked)
     .with_drive_store(drive_store);
     let app = app(state);
-    let session = create_with_body(&app, Body::from(r#"{"scope":"project:tempestmiku"}"#)).await;
+    let session = create_with_body(
+        &app,
+        Body::from(r#"{"projectId":"tempestmiku","memoryPolicy":"project"}"#),
+    )
+    .await;
 
     post_user_message(&app, session.id, "recall local drive docs").await;
 
@@ -144,7 +148,7 @@ async fn chat_turn_indexes_drive_without_automatic_prompt_injection() {
                 .method(Method::POST)
                 .uri(format!("/sessions/{}/scope", session.id))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"scope":"global"}"#))
+                .body(Body::from(r#"{"projectId":null,"memoryPolicy":"global"}"#))
                 .unwrap(),
         )
         .await
@@ -211,7 +215,11 @@ async fn drive_recall_chunk_updates_after_move_and_tag_without_losing_provenance
     .with_linked_folders(linked)
     .with_drive_store(drive_store.clone());
     let app = app(state);
-    let session = create_with_body(&app, Body::from(r#"{"scope":"project:tempestmiku"}"#)).await;
+    let session = create_with_body(
+        &app,
+        Body::from(r#"{"projectId":"tempestmiku","memoryPolicy":"project"}"#),
+    )
+    .await;
 
     post_user_message(&app, session.id, "recall local drive docs").await;
     let original_chunks = store_for_assert

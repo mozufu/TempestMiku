@@ -10,7 +10,7 @@ class _ProjectPage extends StatefulWidget {
     required this.client,
     required this.session,
     required this.sessionEnded,
-    required this.onScopeChanged,
+    required this.onMemoryContextChanged,
     required this.onNewConversation,
   });
 
@@ -18,9 +18,9 @@ class _ProjectPage extends StatefulWidget {
   final MikuSession session;
   final bool sessionEnded;
 
-  /// Reports a committed memory-scope change back to the conversation so the composer and Drive
-  /// reflect the session's new project (or Global).
-  final ValueChanged<String> onScopeChanged;
+  /// Reports a committed project and memory-policy change back to the conversation.
+  final void Function(String? projectId, MikuMemoryPolicy memoryPolicy)
+  onMemoryContextChanged;
 
   final Future<bool> Function(ProjectCatalogEntry project) onNewConversation;
 
@@ -33,7 +33,8 @@ class _ProjectPageState extends State<_ProjectPage> {
   ProjectOverview? _overview;
   List<MikuResourceEntry>? _entries;
   final List<_ProjectBrowserLocation> _path = [];
-  String _scope = 'global';
+  String? _activeProjectId;
+  MikuMemoryPolicy _memoryPolicy = MikuMemoryPolicy.global;
   bool _catalogLoading = false;
   bool _browserLoading = false;
   String? _switchingProjectId;
@@ -44,12 +45,12 @@ class _ProjectPageState extends State<_ProjectPage> {
   bool _startingConversation = false;
   bool _busy = false;
 
-  String? get _activeProjectId => _projectIdFromScope(_scope);
 
   @override
   void initState() {
     super.initState();
-    _scope = widget.session.defaultScope;
+    _activeProjectId = widget.session.projectId;
+    _memoryPolicy = widget.session.memoryPolicy;
     unawaited(_loadCatalog());
   }
 
@@ -86,17 +87,21 @@ class _ProjectPageState extends State<_ProjectPage> {
       _error = null;
     });
     try {
-      final scope = await widget.client.setSessionScope(
+      final updated = await widget.client.setSessionMemoryContext(
         widget.session.id,
-        project.memoryScope,
+        projectId: project.id,
+        memoryPolicy: project.defaultMemoryPolicy,
       );
       if (!mounted) return;
-      if (scope != project.memoryScope) {
-        throw StateError('server selected unexpected project scope $scope');
+      if (updated.projectId != project.id) {
+        throw StateError(
+          'server selected unexpected project ${updated.projectId}',
+        );
       }
-      widget.onScopeChanged(scope);
+      widget.onMemoryContextChanged(updated.projectId, updated.memoryPolicy);
       setState(() {
-        _scope = scope;
+        _activeProjectId = updated.projectId;
+        _memoryPolicy = updated.memoryPolicy;
         _overview = null;
         _entries = null;
         _path.clear();
@@ -110,26 +115,25 @@ class _ProjectPageState extends State<_ProjectPage> {
     }
   }
 
-  Future<void> _selectGlobalScope() async {
+  Future<void> _selectGlobal() async {
     if (_switchingProjectId != null || _switchingToGlobal) return;
     if (widget.sessionEnded && _activeProjectId != null) return;
-    if (_scope == 'global') return;
+    if (_activeProjectId == null) return;
     setState(() {
       _switchingToGlobal = true;
       _error = null;
     });
     try {
-      final scope = await widget.client.setSessionScope(
+      final updated = await widget.client.setSessionMemoryContext(
         widget.session.id,
-        'global',
+        projectId: null,
+        memoryPolicy: MikuMemoryPolicy.global,
       );
       if (!mounted) return;
-      if (scope != 'global') {
-        throw StateError('server selected unexpected global scope $scope');
-      }
-      widget.onScopeChanged(scope);
+      widget.onMemoryContextChanged(updated.projectId, updated.memoryPolicy);
       setState(() {
-        _scope = scope;
+        _activeProjectId = updated.projectId;
+        _memoryPolicy = updated.memoryPolicy;
         _overview = null;
         _entries = null;
         _path.clear();
@@ -139,6 +143,29 @@ class _ProjectPageState extends State<_ProjectPage> {
       setState(() => _error = _friendlyProjectError(error));
     } finally {
       if (mounted) setState(() => _switchingToGlobal = false);
+    }
+  }
+
+  Future<void> _setMemoryPolicy(MikuMemoryPolicy policy) async {
+    if (_activeProjectId == null || _busy || policy == _memoryPolicy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final updated = await widget.client.setSessionMemoryContext(
+        widget.session.id,
+        projectId: _activeProjectId,
+        memoryPolicy: policy,
+      );
+      if (!mounted) return;
+      widget.onMemoryContextChanged(updated.projectId, updated.memoryPolicy);
+      setState(() => _memoryPolicy = updated.memoryPolicy);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = _friendlyProjectError(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -188,7 +215,7 @@ class _ProjectPageState extends State<_ProjectPage> {
       await widget.client.archiveProject(project.id);
       if (!mounted) return;
       if (_activeProjectId == project.id) {
-        await _selectGlobalScope();
+        await _selectGlobal();
       }
       await _loadCatalog();
     } catch (error) {
@@ -390,12 +417,14 @@ class _ProjectPageState extends State<_ProjectPage> {
         projects: projects,
         activeProjectId: _activeProjectId,
         switchingProjectId: _switchingProjectId,
+        memoryPolicy: _memoryPolicy,
         switchingToGlobal: _switchingToGlobal,
+        onMemoryPolicyChanged: _setMemoryPolicy,
         sessionEnded: widget.sessionEnded,
         busy: _busy,
         error: _error,
         onRetry: _loadCatalog,
-        onSelectGlobalScope: _selectGlobalScope,
+        onSelectGlobalScope: _selectGlobal,
         onSelect: _selectProject,
         onArchive: _archiveProject,
       );
@@ -447,6 +476,7 @@ class _CreateProjectDialog extends StatefulWidget {
 
 class _CreateProjectDialogState extends State<_CreateProjectDialog> {
   final TextEditingController _controller = TextEditingController();
+  MikuMemoryPolicy _defaultMemoryPolicy = MikuMemoryPolicy.project;
   bool _submitting = false;
   String? _error;
 
@@ -465,7 +495,11 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
     });
     try {
       final slug = _projectIdForTitle(title);
-      final created = await widget.client.createProject(slug, title: title);
+      final created = await widget.client.createProject(
+        slug,
+        title: title,
+        defaultMemoryPolicy: _defaultMemoryPolicy,
+      );
       if (!mounted) return;
       Navigator.of(context).pop(created);
     } catch (_) {
@@ -496,6 +530,22 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
               hintText: '例如：旅遊規劃',
             ),
             onSubmitted: (_) => _submit(),
+          ),
+          SwitchListTile.adaptive(
+            key: const Key('create-project-memory-policy'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('這個 Project 預設使用它自己的記憶'),
+            value: _defaultMemoryPolicy == MikuMemoryPolicy.project,
+            onChanged:
+                _submitting
+                    ? null
+                    : (value) => setState(
+                      () =>
+                          _defaultMemoryPolicy =
+                              value
+                                  ? MikuMemoryPolicy.project
+                                  : MikuMemoryPolicy.global,
+                    ),
           ),
           if (_error != null) ...[
             const SizedBox(height: 8),
@@ -548,11 +598,13 @@ class _ProjectCatalogList extends StatelessWidget {
     required this.activeProjectId,
     required this.switchingProjectId,
     required this.switchingToGlobal,
+    required this.memoryPolicy,
     required this.sessionEnded,
     required this.busy,
     required this.error,
     required this.onRetry,
     required this.onSelectGlobalScope,
+    required this.onMemoryPolicyChanged,
     required this.onSelect,
     required this.onArchive,
   });
@@ -561,11 +613,13 @@ class _ProjectCatalogList extends StatelessWidget {
   final String? activeProjectId;
   final String? switchingProjectId;
   final bool switchingToGlobal;
+  final MikuMemoryPolicy memoryPolicy;
   final bool sessionEnded;
   final bool busy;
   final String? error;
   final VoidCallback onRetry;
   final VoidCallback onSelectGlobalScope;
+  final ValueChanged<MikuMemoryPolicy> onMemoryPolicyChanged;
   final ValueChanged<ProjectCatalogEntry> onSelect;
   final ValueChanged<ProjectCatalogEntry> onArchive;
 
@@ -573,149 +627,126 @@ class _ProjectCatalogList extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
     final busySwitch = switchingProjectId != null || switchingToGlobal || busy;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final horizontal = constraints.maxWidth < 600 ? 16.0 : 28.0;
-        return ListView(
-          key: const Key('project-page-content'),
-          padding: EdgeInsets.fromLTRB(horizontal, 12, horizontal, 28),
-          children: [
-            Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 760),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '把對話放回它正在前進的事情裡。',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '選一個 Project，Miku 會沿用它的記憶、下一步與連結資料。',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodyMedium?.copyWith(color: palette.muted),
-                    ),
-                    if (error != null) ...[
-                      const SizedBox(height: 12),
-                      _DrawerErrorState(error: error!, onRetry: onRetry),
-                    ],
-                    const SizedBox(height: 20),
-                    Text(
-                      '你的 Projects',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.labelLarge?.copyWith(color: palette.muted),
-                    ),
-                    const SizedBox(height: 8),
-                    if (projects.isEmpty)
-                      const _DrawerEmptyState(
-                        text: '還沒有 Project。按右上角的「＋」建立第一個。',
-                      )
-                    else
-                      for (final project in projects) ...[
-                        _ProjectCatalogCard(
-                          project: project,
-                          active: project.id == activeProjectId,
-                          loading: switchingProjectId == project.id,
-                          enabled:
-                              !busySwitch &&
-                              (!sessionEnded || project.id == activeProjectId),
-                          sessionEnded: sessionEnded,
-                          onTap: () => onSelect(project),
-                          onArchive:
-                              busySwitch ? null : () => onArchive(project),
-                        ),
-                        const SizedBox(height: 10),
-                      ],
-                    const SizedBox(height: 10),
-                    Text(
-                      '其他對話',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.labelLarge?.copyWith(color: palette.muted),
-                    ),
-                    const SizedBox(height: 8),
-                    Semantics(
-                      button: true,
-                      selected: activeProjectId == null,
-                      label:
-                          'Global 範圍${activeProjectId == null ? '，目前使用中' : '，不綁定 Project'}',
-                      child: ListTile(
-                        key: const Key('project-global-scope'),
-                        minTileHeight: 58,
-                        selected: activeProjectId == null,
-                        selectedTileColor: palette.miku.withValues(alpha: 0.09),
-                        tileColor: Theme.of(context).colorScheme.surface,
-                        shape: RoundedRectangleBorder(
-                          side: BorderSide(
-                            color:
-                                activeProjectId == null
-                                    ? palette.miku.withValues(alpha: 0.45)
-                                    : palette.outline,
-                          ),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        leading: const Icon(Icons.public_rounded, size: 21),
-                        title: const Text('不使用 Project'),
-                        subtitle: Text(
-                          activeProjectId == null ? '目前對話' : '使用全域記憶',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing:
-                            switchingToGlobal
-                                ? const SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                                : activeProjectId == null
-                                ? Icon(
-                                  Icons.check_circle_rounded,
-                                  size: 20,
-                                  color: palette.miku,
-                                )
-                                : const Icon(
-                                  Icons.chevron_right_rounded,
-                                  size: 20,
-                                ),
-                        enabled:
-                            !busySwitch &&
-                            (!sessionEnded || activeProjectId == null),
-                        onTap: onSelectGlobalScope,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          Icons.link_rounded,
-                          size: 17,
-                          color: palette.muted,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            '要加入資料夾，直接在對話中告訴 Miku 路徑；執行前仍會請你核准。',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: palette.muted),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+    return ListView(
+      key: const Key('project-page-content'),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      children: [
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '把對話放回它正在前進的事情裡。',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 6),
+                Text(
+                  'Project 決定可使用的資料；記憶可獨立選擇此 Project 或全域。',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: palette.muted,
+                  ),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  _DrawerErrorState(error: error!, onRetry: onRetry),
+                ],
+                const SizedBox(height: 20),
+                Text(
+                  '你的 Projects',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: palette.muted,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (projects.isEmpty)
+                  const _DrawerEmptyState(
+                    text: '還沒有 Project。按右上角的「＋」建立第一個。',
+                  )
+                else
+                  for (final project in projects) ...[
+                    _ProjectCatalogCard(
+                      project: project,
+                      active: project.id == activeProjectId,
+                      loading: switchingProjectId == project.id,
+                      enabled:
+                          !busySwitch &&
+                          (!sessionEnded || project.id == activeProjectId),
+                      sessionEnded: sessionEnded,
+                      memoryPolicy:
+                          project.id == activeProjectId ? memoryPolicy : null,
+                      onMemoryPolicyChanged:
+                          project.id == activeProjectId
+                              ? onMemoryPolicyChanged
+                              : null,
+                      onTap: () => onSelect(project),
+                      onArchive: busySwitch ? null : () => onArchive(project),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                const SizedBox(height: 10),
+                Text(
+                  '其他對話',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: palette.muted,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Semantics(
+                  button: true,
+                  selected: activeProjectId == null,
+                  child: ListTile(
+                    key: const Key('project-global-scope'),
+                    minTileHeight: 58,
+                    selected: activeProjectId == null,
+                    selectedTileColor: palette.miku.withValues(alpha: 0.09),
+                    tileColor: Theme.of(context).colorScheme.surface,
+                    shape: RoundedRectangleBorder(
+                      side: BorderSide(
+                        color:
+                            activeProjectId == null
+                                ? palette.miku.withValues(alpha: 0.45)
+                                : palette.outline,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    leading: const Icon(Icons.public_rounded, size: 21),
+                    title: const Text('不使用 Project'),
+                    subtitle: const Text('使用全域記憶'),
+                    trailing:
+                        switchingToGlobal
+                            ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                            : activeProjectId == null
+                            ? Icon(
+                              Icons.check_circle_rounded,
+                              size: 20,
+                              color: palette.miku,
+                            )
+                            : const Icon(Icons.chevron_right_rounded, size: 20),
+                    enabled:
+                        !busySwitch &&
+                        (!sessionEnded || activeProjectId == null),
+                    onTap: onSelectGlobalScope,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  '要加入資料夾，直接在對話中告訴 Miku 路徑；執行前仍會請你核准。',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: palette.muted,
+                  ),
+                ),
+              ],
             ),
-          ],
-        );
-      },
+          ),
+        ),
+      ],
     );
   }
 }
@@ -729,6 +760,8 @@ class _ProjectCatalogCard extends StatelessWidget {
     required this.sessionEnded,
     required this.onTap,
     required this.onArchive,
+    this.memoryPolicy,
+    this.onMemoryPolicyChanged,
   });
 
   final ProjectCatalogEntry project;
@@ -738,6 +771,8 @@ class _ProjectCatalogCard extends StatelessWidget {
   final bool sessionEnded;
   final VoidCallback onTap;
   final VoidCallback? onArchive;
+  final MikuMemoryPolicy? memoryPolicy;
+  final ValueChanged<MikuMemoryPolicy>? onMemoryPolicyChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -757,7 +792,7 @@ class _ProjectCatalogCard extends StatelessWidget {
       label: '${project.title} Project${active ? '，目前使用中' : ''}',
       child: ListTile(
         key: Key('project-${project.id}'),
-        minTileHeight: 76,
+        minTileHeight: active ? 122 : 76,
         contentPadding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
         selected: active,
         selectedTileColor: palette.miku.withValues(alpha: 0.09),
@@ -790,9 +825,34 @@ class _ProjectCatalogCard extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.w600),
         ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 3),
-          child: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+            if (active && memoryPolicy != null && onMemoryPolicyChanged != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: SegmentedButton<MikuMemoryPolicy>(
+                  key: Key('project-memory-policy-${project.id}'),
+                  segments: const [
+                    ButtonSegment(
+                      value: MikuMemoryPolicy.project,
+                      label: Text('此 Project 記憶'),
+                    ),
+                    ButtonSegment(
+                      value: MikuMemoryPolicy.global,
+                      label: Text('沿用全域記憶'),
+                    ),
+                  ],
+                  selected: {memoryPolicy!},
+                  onSelectionChanged:
+                      (selection) => onMemoryPolicyChanged!(selection.first),
+                ),
+              ),
+          ],
         ),
         trailing:
             loading
@@ -1414,21 +1474,15 @@ class _ProjectFileSheet extends StatelessWidget {
             ],
             const SizedBox(height: 12),
             Expanded(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  border: Border.all(color: palette.outline),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Scrollbar(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(14),
-                    child: SelectableText(
-                      body.isEmpty ? '沒有可顯示的文字內容。' : body,
-                      key: const Key('project-file-content'),
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontFamily: 'monospace',
-                        height: 1.45,
-                      ),
+              child: Scrollbar(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(14),
+                  child: SelectableText(
+                    body.isEmpty ? '沒有可顯示的文字內容。' : body,
+                    key: const Key('project-file-content'),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontFamily: 'monospace',
+                      height: 1.45,
                     ),
                   ),
                 ),
@@ -1441,11 +1495,6 @@ class _ProjectFileSheet extends StatelessWidget {
   }
 }
 
-String? _projectIdFromScope(String scope) {
-  if (!scope.startsWith('project:')) return null;
-  final id = scope.substring('project:'.length).trim();
-  return id.isEmpty ? null : id;
-}
 
 String _friendlyProjectError(Object error) {
   final message = error.toString();

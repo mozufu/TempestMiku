@@ -35,7 +35,6 @@ class ModeProfile {
   const ModeProfile({
     required this.id,
     required this.label,
-    required this.defaultScope,
     required this.capabilityClass,
     required this.activeSkills,
     required this.capabilities,
@@ -44,7 +43,6 @@ class ModeProfile {
 
   final String id;
   final String label;
-  final String defaultScope;
   final String capabilityClass;
   final List<String> activeSkills;
   final List<String> capabilities;
@@ -63,10 +61,6 @@ class ModeProfile {
     return ModeProfile(
       id: _stringValue(json['mode']),
       label: _stringValue(json['label']),
-      defaultScope:
-          _stringValue(json['defaultScope']).isEmpty
-              ? 'global'
-              : _stringValue(json['defaultScope']),
       capabilityClass:
           _stringValue(json['capabilityClass']).isEmpty
               ? 'conversation'

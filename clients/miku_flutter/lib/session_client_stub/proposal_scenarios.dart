@@ -372,7 +372,12 @@ extension _ScriptedProposalScenarios on ScriptedMikuClient {
     final memoryKind = proposal['memoryKind']?.toString() ?? '';
     final recordId = proposal['recordId']?.toString() ?? '';
     final sessionId = _approvalSessions[approvalId];
-    final scope = _sessions[sessionId]?.defaultScope ?? 'global';
+    final session = _sessions[sessionId];
+    final scope =
+        session?.memoryPolicy == MikuMemoryPolicy.project &&
+                session?.projectId != null
+            ? 'project:${session!.projectId}'
+            : 'global';
     final uri =
         memoryKind == 'profile_fact'
             ? 'memory://profile/brian/facts/$recordId'

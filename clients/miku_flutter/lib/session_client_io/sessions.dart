@@ -26,12 +26,17 @@ extension _NativeSessionsClient on NativeMikuSessionClient {
     return createSession();
   }
 
-  Future<MikuSession> _createSessionImpl({String scope = 'global'}) async {
-    final normalizedScope = scope.trim().isEmpty ? 'global' : scope.trim();
+  Future<MikuSession> _createSessionImpl({
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) async {
     final json = await _request(
       'POST',
       '/sessions',
-      body: {'scope': normalizedScope},
+      body: {
+        if (projectId != null) 'projectId': projectId,
+        if (memoryPolicy != null) 'memoryPolicy': memoryPolicy.toJson(),
+      },
     );
     final session = _sessionFromJson(json);
     await _rememberSession(session);
@@ -161,12 +166,10 @@ extension _NativeSessionsClient on NativeMikuSessionClient {
       status: json['status'] as String? ?? 'active',
       mode: (json['mode'] as String?) ?? (modeState['mode'] as String?) ?? '',
       label: json['label'] as String? ?? '',
-      defaultScope:
-          (json['memory_scope'] as String?) ??
-          (json['memoryScope'] as String?) ??
-          (json['default_scope'] as String?) ??
-          (json['defaultScope'] as String?) ??
-          'global',
+      projectId: json['projectId'] as String? ?? json['project_id'] as String?,
+      memoryPolicy: MikuMemoryPolicy.fromJson(
+        json['memoryPolicy'] ?? json['memory_policy'],
+      ),
       activeSkills:
           ((json['activeSkills'] as List?) ??
                   (json['active_skills'] as List?) ??

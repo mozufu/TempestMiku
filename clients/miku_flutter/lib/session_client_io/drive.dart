@@ -14,11 +14,17 @@ extension _NativeDriveClient on NativeMikuSessionClient {
   Future<ProjectCatalogEntry> _createProjectImpl(
     String id,
     String? title,
+    MikuMemoryPolicy? defaultMemoryPolicy,
   ) async {
     final json = await _request(
       'POST',
       '/projects',
-      body: {'id': id, if (title != null) 'title': title},
+      body: {
+        'id': id,
+        if (title != null) 'title': title,
+        if (defaultMemoryPolicy != null)
+          'defaultMemoryPolicy': defaultMemoryPolicy.toJson(),
+      },
     );
     return ProjectCatalogEntry.fromJson(json);
   }
@@ -35,15 +41,26 @@ extension _NativeDriveClient on NativeMikuSessionClient {
     return ProjectCatalogEntry.fromJson(json);
   }
 
-  Future<String> _setSessionScopeImpl(String sessionId, String scope) async {
+  Future<MikuSession> _setSessionMemoryContextImpl(
+    String sessionId, {
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) async {
     final json = await _request(
       'POST',
       '/sessions/$sessionId/scope',
-      body: {'scope': scope},
+      body: {
+        'projectId': projectId,
+        if (memoryPolicy != null) 'memoryPolicy': memoryPolicy.toJson(),
+      },
     );
-    return (json['memoryScope'] as String?) ??
-        (json['memory_scope'] as String?) ??
-        scope;
+    return MikuSession(
+      id: sessionId,
+      mode: '',
+      label: '',
+      projectId: json['projectId'] as String?,
+      memoryPolicy: MikuMemoryPolicy.fromJson(json['memoryPolicy']),
+    );
   }
 
   Future<ProjectOverview> _projectOverviewImpl(String sessionId) async {

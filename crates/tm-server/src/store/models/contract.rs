@@ -8,10 +8,14 @@ pub trait Store: Send + Sync + 'static {
     async fn owner_subject(&self) -> Result<String> {
         Ok("owner".to_string())
     }
-    async fn set_session_memory_scope(
+    /// Sets the session's active project and memory read/write policy in one durable update.
+    /// `project_id: None` requires `memory_policy: MemoryPolicy::Global` — callers validate this
+    /// before calling (see `resources::util::resolve_memory_context`).
+    async fn set_session_memory_context(
         &self,
         session_id: Uuid,
-        memory_scope: &str,
+        project_id: Option<&str>,
+        memory_policy: MemoryPolicy,
     ) -> Result<SessionRecord>;
     async fn end_session(&self, session_id: Uuid) -> Result<SessionRecord>;
     async fn end_session_and_enqueue_dream(
@@ -534,8 +538,13 @@ pub trait Store: Send + Sync + 'static {
     ) -> Result<Vec<ProjectItemRecord>>;
     /// Create or return the project entity for `id` (§30). `id` is the canonical `project:<id>`
     /// slug; `title` is the display name. Idempotent on `id`.
-    async fn ensure_project(&self, id: &str, title: &str) -> Result<ProjectRecord> {
-        let _ = (id, title);
+    async fn ensure_project(
+        &self,
+        id: &str,
+        title: &str,
+        default_memory_policy: MemoryPolicy,
+    ) -> Result<ProjectRecord> {
+        let _ = (id, title, default_memory_policy);
         Err(ServerError::Store(
             "project entities are not implemented by this store".to_string(),
         ))

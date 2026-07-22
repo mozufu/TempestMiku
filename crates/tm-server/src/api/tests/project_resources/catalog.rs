@@ -16,8 +16,14 @@ async fn project_catalog_lists_entities_with_attached_folders_without_host_detai
     }])
     .unwrap();
     let store = Arc::new(InMemoryStore::default());
-    store.ensure_project("alpha", "Alpha").await.unwrap();
-    store.ensure_project("zeta", "Zeta").await.unwrap();
+    store
+        .ensure_project("alpha", "Alpha", crate::MemoryPolicy::Project)
+        .await
+        .unwrap();
+    store
+        .ensure_project("zeta", "Zeta", crate::MemoryPolicy::Project)
+        .await
+        .unwrap();
     let state = AppState::new(
         store.clone(),
         Arc::new(StoreMemoryProvider::new(store.clone())),
@@ -50,6 +56,7 @@ async fn project_catalog_lists_entities_with_attached_folders_without_host_detai
                     "title": "Alpha",
                     "status": "active",
                     "memoryScope": "project:alpha",
+                    "defaultMemoryPolicy": "project",
                     "projectUri": "project://alpha",
                     "linkedFoldersUri": "project://alpha/linked-folders",
                     "linkedFolderUris": []
@@ -59,6 +66,7 @@ async fn project_catalog_lists_entities_with_attached_folders_without_host_detai
                     "title": "Zeta",
                     "status": "active",
                     "memoryScope": "project:zeta",
+                    "defaultMemoryPolicy": "project",
                     "projectUri": "project://zeta",
                     "linkedFoldersUri": "project://zeta/linked-folders",
                     "linkedFolderUris": ["project://zeta/linked-folders/zeta/"]
@@ -143,7 +151,10 @@ async fn empty_catalog_and_project_resource_root_are_navigable() {
     assert_eq!(response_json(response).await, json!([]));
 
     // §30: a folderless project entity appears in the catalog and the resource root.
-    store.ensure_project("runtime", "Runtime").await.unwrap();
+    store
+        .ensure_project("runtime", "Runtime", crate::MemoryPolicy::Project)
+        .await
+        .unwrap();
     let response = app
         .clone()
         .oneshot(
@@ -163,6 +174,7 @@ async fn empty_catalog_and_project_resource_root_are_navigable() {
                 "title": "Runtime",
                 "status": "active",
                 "memoryScope": "project:runtime",
+                "defaultMemoryPolicy": "project",
                 "projectUri": "project://runtime",
                 "linkedFoldersUri": "project://runtime/linked-folders",
                 "linkedFolderUris": []

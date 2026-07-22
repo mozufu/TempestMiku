@@ -43,7 +43,9 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+    state
+        .store
+        .ensure_memory_scope_active(&session.owner_subject, &session.memory_scope())
         .await?;
     let (proposal, timeout) = memory_write_proposal_from_request(session_id, &session, payload)?;
     Ok(Json(
@@ -274,7 +276,7 @@ fn memory_write_proposal_from_request(
     let timeout_ms = payload.timeout_ms.unwrap_or(60_000).clamp(1, 60_000);
     let timeout = Duration::from_millis(timeout_ms);
     let subject = session.owner_subject.clone();
-    let scope = session.memory_scope.clone();
+    let scope = session.memory_scope();
     let source = payload
         .source
         .unwrap_or_else(|| format!("session:{session_id}:memory-write"));

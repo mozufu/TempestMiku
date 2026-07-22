@@ -170,7 +170,7 @@ pub async fn run_workflow(
     let coding_step = WorkflowStep::CodingModeProbe;
     let coding_message = speaker.message(coding_step, &context).await?;
     client
-        .set_session_scope(&session.id, "project:tempestmiku")
+        .set_session_memory_context(&session.id, Some("tempestmiku"), "project")
         .await
         .context("selecting the linked TempestMiku project scope")?;
     // Modes no longer auto-switch from message keywords (they're sticky capability envelopes
@@ -326,7 +326,11 @@ pub async fn run_workflow(
     );
 
     let continuity_session = client
-        .create_session_scoped(Some("serious_engineer"), Some("project:tempestmiku"))
+        .create_session_scoped(
+            Some("serious_engineer"),
+            Some("tempestmiku"),
+            Some("project"),
+        )
         .await?;
     ensure!(
         continuity_session.id != session.id,

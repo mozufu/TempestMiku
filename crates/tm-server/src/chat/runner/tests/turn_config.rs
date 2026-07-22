@@ -251,7 +251,8 @@ result |> display {kind: "json"}"#,
         options(1, Duration::from_secs(60)),
     );
     let mut turn = chat_turn(Uuid::from_u128(10));
-    turn.scope = "project:repo".to_string();
+    turn.project_id = Some("repo".to_string());
+    turn.memory_scope = "project:repo".to_string();
     turn.capabilities = vec!["proc.*".to_string()];
     turn.deny_approvals = true;
 

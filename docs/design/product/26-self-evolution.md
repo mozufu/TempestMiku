@@ -162,8 +162,9 @@ Mode addenda apply only typed `description` and `routing_guidance` changes. The 
 beneath the configured managed-mode-addendum root as immutable digest-addressed metadata, then a
 per-mode `active.json` pointer is atomically replaced under a cross-process lock. The next prompt
 composition reads the active version and adds an **Approved mode addendum** section. The base
-`ModeProfile` remains byte-for-byte authoritative for capabilities, default scope, active skills,
-label, and route triggers; `SOUL.md` and the hand-authored `modes.json` are never mutated.
+`ModeProfile` remains byte-for-byte authoritative for capabilities, active skills, label, and route
+triggers; `SOUL.md` and the hand-authored `modes.json` are never mutated. Session project and memory
+policy are outside the mode profile and outside this evolution path.
 Rollback is a separate durable manual approval and may activate an older immutable version
 or restore the unmodified base catalog. Deny, timeout, stale base/pointer, malformed sections,
 symlinks, and retries cannot change the active pointer.
@@ -226,9 +227,10 @@ cannot race the same candidate into existence.
 Auto mode decides only *when to propose*, never when to approve or activate. The proposal records a
 stable base digest and uses the same durable manual approval/default-deny, stale-base, immutable
 version, next-turn composition, and separate rollback path as a manual proposal. `SOUL.md`, core
-Miku identity, safety rules, capabilities, mode scopes, route triggers, source code, configuration,
-and deployment remain immutable. Auto approval, aggressive evolution, and direct persona-file writes
-are permanent non-goals. The exact acceptance matrix is in the
+Miku identity, safety rules, capabilities, route triggers, source code, configuration, and
+deployment remain immutable. Session project and memory policy remain explicit owner controls and
+cannot be proposed or changed by Auto mode. Auto approval, aggressive evolution, and direct
+persona-file writes are permanent non-goals. The exact acceptance matrix is in the
 [persona-addendum evidence note](../../evidence/2026-07-18-p7-2b-persona-addenda.md).
 
 ## 26.5 Crate layout

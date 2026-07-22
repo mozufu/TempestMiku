@@ -71,7 +71,7 @@ pub use store::{
     AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
     AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, InMemoryStore,
-    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
+    MemoryPolicy, MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
     NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
     NewProjectItem, NewSession, PersonaAutoCandidate, PersonaAutoCandidateEvidence,
     PersonaAutoCandidateTrigger, PostgresDriveMetadataStore, PostgresStore, ProjectItemKind,

@@ -8,7 +8,9 @@ pub struct CreateSessionRequest {
     #[serde(default)]
     pub mode: Option<ModeId>,
     #[serde(default)]
-    pub scope: Option<String>,
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub memory_policy: Option<crate::MemoryPolicy>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -26,9 +28,9 @@ pub struct CreateSessionResponse {
     pub mode_state: ModeState,
     pub persona_status: crate::AssetStatus,
     pub label: String,
-    pub default_scope: String,
     pub owner_subject: String,
-    pub memory_scope: String,
+    pub project_id: Option<String>,
+    pub memory_policy: crate::MemoryPolicy,
     #[serde(rename = "activeSkills")]
     pub active_skills: Vec<String>,
 }
@@ -65,9 +67,9 @@ pub struct SessionMessagesResponse {
     pub mode_state: ModeState,
     pub persona_status: crate::AssetStatus,
     pub label: String,
-    pub default_scope: String,
     pub owner_subject: String,
-    pub memory_scope: String,
+    pub project_id: Option<String>,
+    pub memory_policy: crate::MemoryPolicy,
     #[serde(rename = "activeSkills")]
     pub active_skills: Vec<String>,
     pub messages: Vec<SessionMessageResponse>,
@@ -103,7 +105,10 @@ pub struct EndSessionRequest {}
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetSessionScopeRequest {
-    pub scope: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub memory_policy: Option<crate::MemoryPolicy>,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,7 +116,8 @@ pub struct SetSessionScopeRequest {
 pub struct SetSessionScopeResponse {
     pub id: Uuid,
     pub owner_subject: String,
-    pub memory_scope: String,
+    pub project_id: Option<String>,
+    pub memory_policy: crate::MemoryPolicy,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,8 +163,12 @@ where
         Some(mode) => modes::validate_mode(&state.persona, mode)?,
         None => assets.modes.default_mode(),
     };
-    let scope = payload.scope.unwrap_or_else(|| "global".to_string());
-    resources::util::ensure_active_project_scope(state.store.as_ref(), &scope).await?;
+    let (project_id, memory_policy) = resources::util::resolve_memory_context(
+        state.store.as_ref(),
+        payload.project_id,
+        payload.memory_policy,
+    )
+    .await?;
     let persona_status = assets.status.clone();
     let mut session = state
         .store
@@ -167,10 +177,10 @@ where
             persona_status: persona_status.clone(),
         })
         .await?;
-    if session.memory_scope != scope {
+    if session.project_id != project_id || session.memory_policy != memory_policy {
         session = state
             .store
-            .set_session_memory_scope(session.id, &scope)
+            .set_session_memory_context(session.id, project_id.as_deref(), memory_policy)
             .await?;
     }
     let profile = mode_profile(&state.persona, &session.mode_state.mode);
@@ -243,9 +253,9 @@ where
         mode_state: session.mode_state.clone(),
         persona_status,
         label: profile.label,
-        default_scope: session.memory_scope.clone(),
         owner_subject: session.owner_subject.clone(),
-        memory_scope: session.memory_scope,
+        project_id: session.project_id,
+        memory_policy: session.memory_policy,
         active_skills: active_skills(&state.persona, &session.mode),
         messages,
         last_event_id,
@@ -264,9 +274,10 @@ where
     C: ChatRunner,
 {
     let existing = state.store.get_session(session_id).await?;
+    let scope = existing.memory_scope();
     let result = state
         .store
-        .end_session_and_enqueue_dream(session_id, existing.owner_subject, existing.memory_scope)
+        .end_session_and_enqueue_dream(session_id, existing.owner_subject, scope)
         .await?;
     for event in result.events {
         let _ = state.sender(session_id).send(event);
@@ -296,7 +307,12 @@ where
     M: MemoryProvider,
     C: ChatRunner,
 {
-    resources::util::ensure_active_project_scope(state.store.as_ref(), &payload.scope).await?;
+    let (project_id, memory_policy) = resources::util::resolve_memory_context(
+        state.store.as_ref(),
+        payload.project_id,
+        payload.memory_policy,
+    )
+    .await?;
     let existing = state.store.get_session(session_id).await?;
     if existing.status == "ended" {
         return Err(ServerError::Conflict(format!(
@@ -305,12 +321,13 @@ where
     }
     let session = state
         .store
-        .set_session_memory_scope(session_id, &payload.scope)
+        .set_session_memory_context(session_id, project_id.as_deref(), memory_policy)
         .await?;
     Ok(Json(SetSessionScopeResponse {
         id: session.id,
         owner_subject: session.owner_subject,
-        memory_scope: session.memory_scope,
+        project_id: session.project_id,
+        memory_policy: session.memory_policy,
     }))
 }
 
@@ -327,9 +344,9 @@ fn session_response(
         mode_state: session.mode_state.clone(),
         persona_status,
         label: profile.label,
-        default_scope: session.memory_scope.clone(),
         owner_subject: session.owner_subject.clone(),
-        memory_scope: session.memory_scope,
+        project_id: session.project_id,
+        memory_policy: session.memory_policy,
         active_skills: profile.active_skills,
     }
 }

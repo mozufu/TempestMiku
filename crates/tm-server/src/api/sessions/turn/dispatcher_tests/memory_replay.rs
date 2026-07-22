@@ -80,7 +80,15 @@ async fn persisted_memory_recall_rechecks_a_revoked_project_scope() {
         .await
         .unwrap();
     store
-        .set_session_memory_scope(session.id, "project:tempestmiku")
+        .ensure_project("tempestmiku", "TempestMiku", crate::MemoryPolicy::Project)
+        .await
+        .unwrap();
+    store
+        .set_session_memory_context(
+            session.id,
+            Some("tempestmiku"),
+            crate::MemoryPolicy::Project,
+        )
         .await
         .unwrap();
     let turn = store

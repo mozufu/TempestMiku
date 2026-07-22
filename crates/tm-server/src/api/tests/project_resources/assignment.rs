@@ -115,7 +115,7 @@ async fn archived_project_scope_fails_closed_for_reads_and_new_sessions() {
                 .uri("/sessions")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"mode":"serious_engineer","scope":"project:tempestmiku"}"#,
+                    r#"{"mode":"serious_engineer","projectId":"tempestmiku","memoryPolicy":"project"}"#,
                 ))
                 .unwrap(),
         )
@@ -157,7 +157,11 @@ async fn assigning_a_closed_session_replays_observations() {
 
     // Create the target project, then assign the closed session to it.
     store
-        .ensure_project("archive-target", "Archive Target")
+        .ensure_project(
+            "archive-target",
+            "Archive Target",
+            crate::MemoryPolicy::Project,
+        )
         .await
         .unwrap();
     let assigned = app
@@ -189,7 +193,10 @@ async fn assigning_a_closed_session_replays_observations() {
 async fn assigning_an_active_session_is_rejected() {
     let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
     let session = create(&app).await;
-    store.ensure_project("live", "Live").await.unwrap();
+    store
+        .ensure_project("live", "Live", crate::MemoryPolicy::Project)
+        .await
+        .unwrap();
     let response = app
         .clone()
         .oneshot(

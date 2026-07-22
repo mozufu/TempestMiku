@@ -39,29 +39,38 @@ impl MikuClient {
     }
 
     pub async fn create_session(&self, mode: Option<&str>) -> Result<SessionInfo> {
-        self.create_session_scoped(mode, None).await
+        self.create_session_scoped(mode, None, None).await
     }
 
     pub async fn create_session_scoped(
         &self,
         mode: Option<&str>,
-        scope: Option<&str>,
+        project_id: Option<&str>,
+        memory_policy: Option<&str>,
     ) -> Result<SessionInfo> {
         let mut body = serde_json::Map::new();
         if let Some(mode) = mode {
             body.insert("mode".to_string(), json!(mode));
         }
-        if let Some(scope) = scope {
-            body.insert("scope".to_string(), json!(scope));
+        if let Some(project_id) = project_id {
+            body.insert("projectId".to_string(), json!(project_id));
+        }
+        if let Some(memory_policy) = memory_policy {
+            body.insert("memoryPolicy".to_string(), json!(memory_policy));
         }
         let value = self.post_json("/sessions", Value::Object(body)).await?;
         serde_json::from_value(value).context("decoding create-session response")
     }
 
-    pub async fn set_session_scope(&self, session_id: &str, scope: &str) -> Result<Value> {
+    pub async fn set_session_memory_context(
+        &self,
+        session_id: &str,
+        project_id: Option<&str>,
+        memory_policy: &str,
+    ) -> Result<Value> {
         self.post_json(
             &format!("/sessions/{session_id}/scope"),
-            json!({ "scope": scope }),
+            json!({ "projectId": project_id, "memoryPolicy": memory_policy }),
         )
         .await
     }
@@ -472,8 +481,10 @@ pub struct SessionInfo {
     pub id: String,
     pub mode: String,
     pub label: String,
-    #[serde(alias = "default_scope")]
-    pub default_scope: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub memory_policy: String,
     #[serde(default)]
     pub active_skills: Vec<String>,
 }

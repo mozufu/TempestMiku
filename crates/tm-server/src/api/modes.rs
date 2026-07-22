@@ -15,7 +15,6 @@ pub struct ModeRequest {
 pub struct ModeResponse {
     pub mode_state: ModeState,
     pub label: String,
-    pub default_scope: String,
     pub capabilities: Vec<String>,
     pub active_skills: Vec<String>,
     pub profile: ModeProfile,
@@ -214,7 +213,6 @@ pub(super) fn mode_response(
     let profile = mode_profile(persona, &mode_state.mode);
     ModeResponse {
         label: profile.label.clone(),
-        default_scope: profile.default_scope.clone(),
         capabilities: profile.capabilities.clone(),
         active_skills: profile.active_skills.clone(),
         profile,

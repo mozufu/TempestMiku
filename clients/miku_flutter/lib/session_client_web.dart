@@ -266,12 +266,17 @@ class WebMikuSessionClient
   }
 
   @override
-  Future<MikuSession> createSession({String scope = 'global'}) async {
-    final normalizedScope = scope.trim().isEmpty ? 'global' : scope.trim();
+  Future<MikuSession> createSession({
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) async {
     final json = await _request(
       'POST',
       '/sessions',
-      body: {'scope': normalizedScope},
+      body: {
+        if (projectId != null) 'projectId': projectId,
+        if (memoryPolicy != null) 'memoryPolicy': memoryPolicy.toJson(),
+      },
     );
     final session = _sessionFromJson(json);
     _rememberSession(session);
@@ -305,11 +310,20 @@ class WebMikuSessionClient
   }
 
   @override
-  Future<ProjectCatalogEntry> createProject(String id, {String? title}) async {
+  Future<ProjectCatalogEntry> createProject(
+    String id, {
+    String? title,
+    MikuMemoryPolicy? defaultMemoryPolicy,
+  }) async {
     final json = await _request(
       'POST',
       '/projects',
-      body: {'id': id, if (title != null) 'title': title},
+      body: {
+        'id': id,
+        if (title != null) 'title': title,
+        if (defaultMemoryPolicy != null)
+          'defaultMemoryPolicy': defaultMemoryPolicy.toJson(),
+      },
     );
     return ProjectCatalogEntry.fromJson(json);
   }
@@ -328,15 +342,26 @@ class WebMikuSessionClient
   }
 
   @override
-  Future<String> setSessionScope(String sessionId, String scope) async {
+  Future<MikuSession> setSessionMemoryContext(
+    String sessionId, {
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) async {
     final json = await _request(
       'POST',
       '/sessions/$sessionId/scope',
-      body: {'scope': scope},
+      body: {
+        'projectId': projectId,
+        if (memoryPolicy != null) 'memoryPolicy': memoryPolicy.toJson(),
+      },
     );
-    return (json['memoryScope'] as String?) ??
-        (json['memory_scope'] as String?) ??
-        scope;
+    return MikuSession(
+      id: sessionId,
+      mode: '',
+      label: '',
+      projectId: json['projectId'] as String?,
+      memoryPolicy: MikuMemoryPolicy.fromJson(json['memoryPolicy']),
+    );
   }
 
   @override
@@ -836,12 +861,10 @@ class WebMikuSessionClient
       status: json['status'] as String? ?? 'active',
       mode: (json['mode'] as String?) ?? (modeState['mode'] as String?) ?? '',
       label: json['label'] as String? ?? '',
-      defaultScope:
-          (json['memory_scope'] as String?) ??
-          (json['memoryScope'] as String?) ??
-          (json['default_scope'] as String?) ??
-          (json['defaultScope'] as String?) ??
-          'global',
+      projectId: json['projectId'] as String? ?? json['project_id'] as String?,
+      memoryPolicy: MikuMemoryPolicy.fromJson(
+        json['memoryPolicy'] ?? json['memory_policy'],
+      ),
       activeSkills:
           ((json['activeSkills'] as List?) ??
                   (json['active_skills'] as List?) ??

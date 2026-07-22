@@ -268,7 +268,7 @@ let deniedHttp = handle (@http.request {method: "GET", url: "https://evil.test/"
     let router = app(state);
     let session = create_with_body(
         &router,
-        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+        Body::from(r#"{"mode":"serious_engineer","projectId":"repo","memoryPolicy":"project"}"#),
     )
     .await;
 
@@ -476,7 +476,7 @@ let driveHit = match driveHits {{ | first :: _ -> first | [] -> null }};
     let router = app(state);
     let session = create_with_body(
         &router,
-        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+        Body::from(r#"{"mode":"serious_engineer","projectId":"repo","memoryPolicy":"project"}"#),
     )
     .await;
 

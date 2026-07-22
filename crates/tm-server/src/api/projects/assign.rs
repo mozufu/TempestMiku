@@ -6,6 +6,8 @@ pub(crate) struct CreateProjectRequest {
     pub id: String,
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
+    pub default_memory_policy: Option<crate::MemoryPolicy>,
 }
 
 #[derive(Debug, Serialize)]
@@ -16,6 +18,7 @@ pub(crate) struct ProjectResponse {
     pub status: String,
     pub memory_scope: String,
     pub project_uri: String,
+    pub default_memory_policy: crate::MemoryPolicy,
 }
 
 impl ProjectResponse {
@@ -26,6 +29,7 @@ impl ProjectResponse {
             status: record.status.as_str().to_string(),
             memory_scope: format!("project:{id}"),
             project_uri: format!("project://{id}"),
+            default_memory_policy: record.default_memory_policy,
             id,
         }
     }
@@ -48,7 +52,16 @@ where
         ));
     }
     let title = payload.title.unwrap_or_else(|| payload.id.clone());
-    let record = state.store.ensure_project(&id, &title).await?;
+    let record = state
+        .store
+        .ensure_project(
+            &id,
+            &title,
+            payload
+                .default_memory_policy
+                .unwrap_or(crate::MemoryPolicy::Project),
+        )
+        .await?;
     Ok(Json(ProjectResponse::from_record(record)))
 }
 

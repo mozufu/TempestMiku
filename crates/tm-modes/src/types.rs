@@ -125,7 +125,6 @@ pub struct SkillTrigger {
 pub struct ModeProfile {
     pub mode: ModeId,
     pub label: String,
-    pub default_scope: String,
     #[serde(default)]
     pub active_skills: Vec<String>,
     #[serde(default)]
@@ -142,7 +141,6 @@ impl ModeProfile {
         Self {
             label: mode.as_str().to_string(),
             mode,
-            default_scope: "global".to_string(),
             active_skills: Vec::new(),
             capabilities: Vec::new(),
             capability_class: "conversation".to_string(),

@@ -65,7 +65,7 @@ void main() {
     const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
     final client = _FlakyResolveClient(failUri: readme);
     final session = await client.createSession();
-    await client.setSessionScope(session.id, 'project:tempestmiku');
+    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
     await loadApp(tester, client);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();

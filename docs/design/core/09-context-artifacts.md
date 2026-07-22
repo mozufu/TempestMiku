@@ -153,11 +153,11 @@ project-scoped recall while `memory://root` remains the active session-scope vie
 
 The authenticated `GET /projects` catalog and the session resource listing root `project://` expose
 active project **entities** (§30), each with zero or more attached linked folders. Each catalog entry
-supplies the stable project URI, matching `project:<id>` memory scope, and `project://<id>/linked-folders`
-collection URI. The catalog never serializes canonical host paths,
-worker endpoints, command allowlists, or other connector details; unlink detaches a folder but never
-removes the project — only archive/delete does (§30). Entering a project or reading a linked-folder
-child still requires the session's exact server-owned project scope.
+supplies the stable project URI, matching `project:<id>` memory scope, immutable default memory
+policy, and `project://<id>/linked-folders` collection URI. The catalog never serializes canonical
+host paths, worker endpoints, command allowlists, or other connector details; unlink detaches a
+folder but never removes the project. Entering a project or reading a linked-folder child requires
+the session's exact server-owned `project_id`, independently of its memory policy.
 
 The Flutter project picker presents each catalog project as one flat root. Selecting
 `<id>` lists `project://<id>/linked-folders/<id>/` directly when a same-name folder is attached, so
@@ -172,8 +172,9 @@ per-turn project-observation pipeline, and plain `drive.put` filing in one speci
 could only target link-backed projects. The surviving server concept is **session assignment** —
 declaring that a session belongs to a project:
 
-- An active session changes scope through the existing `POST /sessions/:id/scope`; project-scoped
-  turns grow project items automatically via the per-turn observation pipeline (§27).
+- An active session independently updates its optional `projectId` and `memoryPolicy` through
+  `POST /sessions/:id/scope`; turns with a project id grow project items automatically via the
+  per-turn observation pipeline (§27), regardless of memory policy.
 - A closed session can be attached to a project retroactively; the server re-runs the same
   observation extraction over the session's event log. Nothing is copied or renamed.
 - Keeping a session output is ordinary approval-gated drive filing: `drive.put` with `sourceUri`

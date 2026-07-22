@@ -158,10 +158,13 @@ Zep/Graphiti bi-temporal facts.
   or stale/partial re-embedding degrade to lexical-only results rather than failing. Records and
   recalls are inspectable through authority-filtered `memory://records/<kind>/<id>` and
   `memory://recalls/<turn-id>` resources.
-- **Scope authority is server-owned.** `owner_subject` and `memory_scope` are session authority; a
-  session runs in `global` or an active `project:<slug>` scope rooted in a project entity (§30).
-  Changing modes never changes memory authority. Archiving revokes active/new session use while
-  preserving authority-filtered exact history; deleting the project is the scope-killing transition.
+- **Project and memory authority are independent.** Each session stores an optional server-owned
+  `project_id` and a user-selected `memory_policy` (`global | project`). `project_id` gates
+  project-relative Drive, `project://`, linked-folder, `fs.*`, `code.*`, and `proc.*` access;
+  `memory_policy` selects the derived `global` or `project:<project_id>` memory scope, and `project`
+  requires a project. Choosing a project does not force project memory, and changing modes changes
+  neither field. Project archive revokes active project use and tombstones its memory scope while
+  preserving authority-filtered exact history.
 
 ## 6. Sub-agents & orchestration
 
@@ -202,12 +205,11 @@ Content outside both doors is invisible to Miku; privacy needs no in-drive ACL b
 stay private simply never enters.
 
 - **Project** — a first-class, server-owned, durable entity with a subject: stable slug id, title,
-  `active | archived` status, 0..n attached linked-folder grants, assigned sessions, drive entries,
-  and grown items (summaries / open loops / decisions / next actions). A project may exist with no
-  folder; a folder may move path without the project noticing. `GET /projects` lists entities;
-  `project://<id>/<view>` composes memory, items, sessions, artifacts, agents, and attached links.
-  **Archive** hides a project but preserves memory for exact reads; **delete** is the only
-  scope-killing transition and writes a durable tombstone.
+  `active | archived` status, immutable default memory policy, 0..n attached linked-folder grants,
+  assigned sessions, drive entries, and grown items (summaries / open loops / decisions / next
+  actions). A project may exist with no folder; a folder may move path without the project noticing.
+  `GET /projects` lists entities; `project://<id>/<view>` composes memory, items, sessions, artifacts,
+  agents, and attached links. **Archive** hides the project and tombstones its memory scope.
 - **Drive** — a Miku-facing document space with model-driven filing (Semantic File Systems
   transducers + virtual directories + the user model): `drive.put/get/ls/move/search/tag/organize`.
   Attributes are the index, not the folder; `drive://by-project/<project>` and `drive://by-type/<kind>`
@@ -216,13 +218,14 @@ stay private simply never enters.
   fully functional offline, no cloud dependency.
 - **Linking / revocation** — `project.link` / `project.unlink` are approval-gated host calls that
   attach or detach an `FsPolicy` grant; `fs.*` / `code.*` / `proc.*` authority requires **both** the
-  matching project scope and a live attached grant, and global sessions fail closed. Filesystem
-  authority and memory-scope authority are two independent revocation axes: unlink revokes only the
-  filesystem grant; the memory scope dies only at project archive/delete.
-- **Session assignment** replaces the retired promotion path: an active session changes scope through
-  `POST /sessions/:id/scope`; a closed session is attached with `POST /projects/:id/sessions/:sid`,
-  and the server re-runs per-turn observation over its event log. Keeping an output is ordinary
-  approval-gated `drive.put` with `sourceUri` provenance.
+  session's matching `project_id` and a live attached grant, and sessions without a project fail
+  closed. Filesystem authority and memory-scope authority are independent: unlink revokes only the
+  filesystem grant, while project archive tombstones the project memory scope.
+- **Session assignment and memory policy** — an active session updates its optional `projectId` and
+  `memoryPolicy` independently through `POST /sessions/:id/scope`; omitted policy uses the selected
+  project's immutable default (or `global` with no project). A closed session is attached with
+  `POST /projects/:id/sessions/:sid`, and the server re-runs per-turn observation over its event log.
+  Keeping an output is ordinary approval-gated `drive.put` with `sourceUri` provenance.
 
 ## 8. The coding SDK & artifacts
 
@@ -322,9 +325,10 @@ targets rather than paths:
   deduplicated, cooldown-limited addenda — but it decides only **when to propose**, never when to
   approve or activate.
 - **Human review stands in for the Gödel machine's proof.** `SOUL.md`, core identity, safety rules,
-  capabilities, mode scopes, route triggers, source code, configuration, and deployment are
-  immutable to this contract. Auto-approve, aggressive evolution, and direct persona-file writes
-  are permanent non-goals. Every write is human-readable through `memory://` / `skill://` and fully
+  capabilities, route triggers, source code, configuration, and deployment are immutable to this
+  contract. Session project and memory choices remain explicit owner controls, never evolution
+  outputs. Auto-approve, aggressive evolution, and direct persona-file writes are permanent
+  non-goals. Every write is human-readable through `memory://` / `skill://` and fully
   auditable and replayable.
 
 ## 10. Security model

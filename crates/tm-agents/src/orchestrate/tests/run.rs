@@ -27,7 +27,7 @@ async fn agents_run_executor_not_configured_returns_not_implemented() {
 }
 
 #[tokio::test]
-async fn agents_run_preserves_authoritative_session_scope_for_child_executor() {
+async fn agents_run_preserves_authoritative_project_id_for_child_executor() {
     use crate::actor::{ActorDigest, ActorSpec};
     use crate::executor::{ActorError, ActorExecutor};
 
@@ -39,7 +39,7 @@ async fn agents_run_preserves_authoritative_session_scope_for_child_executor() {
             &self,
             spec: ActorSpec,
         ) -> std::result::Result<ActorDigest, ActorError> {
-            *self.0.lock().unwrap() = spec.session_scope.clone();
+            *self.0.lock().unwrap() = spec.project_id.clone();
             Ok(ActorDigest {
                 actor_id: spec.id,
                 summary: "scoped".to_string(),
@@ -56,15 +56,12 @@ async fn agents_run_preserves_authoritative_session_scope_for_child_executor() {
     let function = AgentsRunFn::new(roster);
     let context = ctx_with(caps::AGENTS_RUN)
         .with_session_id("session-scope-test")
-        .with_session_scope("project:tempestmiku");
+        .with_project_id("tempestmiku");
     function
         .call(json!({"role": "worker", "task": "check scope"}), &context)
         .await
         .unwrap();
-    assert_eq!(
-        captured.lock().unwrap().as_deref(),
-        Some("project:tempestmiku")
-    );
+    assert_eq!(captured.lock().unwrap().as_deref(), Some("tempestmiku"));
 }
 
 #[tokio::test]
@@ -340,7 +337,7 @@ async fn actor_wall_clock_timeout_trips_cancellation_token() {
     let spec = ActorSpec {
         id: ActorId::new("SlowWorker").unwrap(),
         session_id: "session-1".to_string(),
-        session_scope: None,
+        project_id: None,
         role: "worker".to_string(),
         task: "sleep".to_string(),
         mode: None,

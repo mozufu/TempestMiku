@@ -455,7 +455,7 @@ impl ApprovedPathReport {
 
 async fn start_native_session(client: &MikuClient) -> Result<(String, Option<i64>)> {
     let session = client
-        .create_session_scoped(Some("serious_engineer"), Some("project:repo"))
+        .create_session_scoped(Some("serious_engineer"), Some("repo"), Some("project"))
         .await?;
     ensure!(
         session.mode == "serious_engineer",

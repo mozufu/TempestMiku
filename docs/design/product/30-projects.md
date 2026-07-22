@@ -43,12 +43,12 @@ stay private simply never enters.
 
 Server-owned durable record:
 
-- **Identity:** stable slug id, display title, `active | archived` status, created/updated
-  timestamps.
+- **Identity:** stable slug id, display title, `active | archived` status, created/updated timestamps,
+  and an immutable default memory policy (`project` by default, optionally `global`) used only when a
+  caller selects this project without specifying a session memory policy.
 - **Lifecycle:** created explicitly (owner action, or an approval-gated Miku proposal — including
   "new project" chosen inside the link flow); **archive** hides the project from pickers and new
-  sessions while preserving memory for exact reads; **delete** is the only scope-killing transition
-  and writes the durable tombstone (§30.4).
+  sessions and tombstones its memory scope (§30.4).
 - **Attachments:** 0..n linked-folder grants (`project.link` / `project.unlink`), sessions assigned
   to it, drive entries referencing it, and project items (summaries / open loops / decisions / next
   actions) grown by the per-turn observation pipeline (§27).
@@ -66,8 +66,9 @@ they were never the folder's contents.
   attaches it to an existing project entity. Replaces `drive.link`, which never touched the document
   store.
 - `project.unlink(alias_or_uri)` — approval-gated detach; revokes **only** the filesystem grant.
-- `fs.*` / `code.*` / `proc.*` authority still requires **both** the matching project scope **and** a
-  live attached grant; global sessions fail closed (§24.4).
+- `fs.*` / `code.*` / `proc.*` authority requires **both** the session's matching `project_id` and a
+  live attached grant; sessions without a project fail closed (§24.4). Memory policy is irrelevant
+  to this check.
 - Durable-link fail-closed restart semantics (existence, canonical identity, non-symlink root, mode,
   alias revalidation) are unchanged (§24.4).
 - The `drive_linked` / `drive_unlinked` session-event types retire with the move; link events become
@@ -79,9 +80,10 @@ The durable memory authority contract — durable tombstones, serialized scope r
 typed-memory / embedding-provenance / generation / pointer / job write (migrations 0017–0018), and
 exact replay consulting the same durable authority — is preserved and rooted in the project entity:
 
-- the revocation trigger is project **archive/delete** (entity lifecycle), not folder unlink;
+- the revocation trigger is project **archive** (entity lifecycle), not folder unlink;
 - unlink no longer tombstones, cancels embedding jobs, or denies scoped reads;
-- sessions already inside a revoked scope still fail closed, now against the entity tombstone.
+- sessions that still select the archived project or its memory scope fail closed against the entity
+  status and durable tombstone.
 
 This is a deliberate authority-root move: memory-scope authority was rooted in a live filesystem
 grant; it is now rooted in the server-owned project record. Filesystem authority stays grant-rooted.
@@ -102,9 +104,11 @@ The two revocation axes are independent, and each fails closed on its own trigge
 
 ## 30.6 Session assignment replaces promotion
 
-- Active session → the existing `POST /sessions/:id/scope`.
-- Closed session → `POST /projects/:id/sessions/:session_id` attaches it; the server re-runs the
-  per-turn observation extraction (§27) over the session's event log. Project items grow through one
+- Active session → `POST /sessions/:id/scope` independently updates optional `projectId` and
+  `memoryPolicy`; `project` policy requires a project. When policy is omitted, the selected project's
+  immutable default applies, or `global` when no project is selected.
+- Closed session → `POST /projects/:id/sessions/:session_id` attaches it for project observation; the
+  server re-runs the per-turn extraction (§27) over its event log. Project items grow through one
   mechanism regardless of when assignment happened.
 - User-initiated assignment is the approval; Miku-initiated assignment emits a `write_proposal` and
   waits for approval.
@@ -119,7 +123,7 @@ The two revocation axes are independent, and each fails closed on its own trigge
 1. `projects` table + entity CRUD + lifecycle tombstones; backfill one entity per active link alias.
 2. `project.link` / `project.unlink` host calls; `drive.link` / `drive.unlink` removed with every
    caller (tm docs, server routes, tests, Flutter) migrated in the same change.
-3. Memory-scope authority re-pointed at the entity record; archive/delete serialization reuses the
+3. Memory-scope authority re-pointed at the entity record; archive serialization reuses the
    0017–0018 machinery; the unlink path stops tombstoning.
 4. Session-assignment endpoints; the promote endpoint and `importResourcesToDrive` removed;
    observation catch-up for closed sessions.

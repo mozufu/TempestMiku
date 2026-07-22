@@ -355,6 +355,7 @@ pub(super) fn row_to_project(row: tokio_postgres::Row) -> Result<ProjectRecord> 
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         archived_at: row.get("archived_at"),
+        default_memory_policy: row.get::<_, String>("default_memory_policy").parse()?,
     })
 }
 
@@ -380,7 +381,8 @@ pub(super) fn row_to_session_record(row: &tokio_postgres::Row) -> Result<Session
         persona_status: serde_json::from_value(persona_status)
             .map_err(|err| ServerError::Store(err.to_string()))?,
         owner_subject: row.get("owner_subject"),
-        memory_scope: row.get("memory_scope"),
+        project_id: row.get("project_id"),
+        memory_policy: row.get::<_, String>("memory_policy").parse()?,
     })
 }
 

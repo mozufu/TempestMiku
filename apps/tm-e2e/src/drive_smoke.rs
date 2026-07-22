@@ -16,7 +16,11 @@ pub struct DriveSmokeReport {
 
 pub async fn run_drive_smoke(client: &MikuClient) -> Result<DriveSmokeReport> {
     let session = client
-        .create_session_scoped(Some("serious_engineer"), Some("project:tempestmiku"))
+        .create_session_scoped(
+            Some("serious_engineer"),
+            Some("tempestmiku"),
+            Some("project"),
+        )
         .await?;
     ensure!(
         session.mode == "serious_engineer",

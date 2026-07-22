@@ -124,8 +124,9 @@ There is no external deriver/dreamer to depend on or fall behind: steps 2–6 *a
 `tm-memory` owns the dream queue, summary, skill-proposal, evidence, and redaction data contracts.
 `tm-server` persists a `dream_queue` row when `POST /sessions/:id/end` ends a session. Session status,
 `session_end`, deterministic dream enqueue, and `dream_queued` commit in one transaction or not at
-all; the transaction reads `owner_subject` and `memory_scope` from the locked session row rather than
-trusting request data. It exposes a server-owned `ServerDreamWorker` plus `DreamWorkerDaemon` runner.
+all; the transaction reads `owner_subject`, `project_id`, and `memory_policy` from the locked session
+row and derives the memory scope rather than trusting request data. It exposes a server-owned
+`ServerDreamWorker` plus `DreamWorkerDaemon` runner.
 The worker is deterministic and external-service-free: it leases ready dreams by exact `lease_owner`
 plus incrementing `lease_epoch`,
 heartbeats and completes/fails only under that fence, and terminalizes exhausted work after three
@@ -182,9 +183,9 @@ lexical query remain unchanged. New records use a SHA-256 logical content key in
 generated UUID and a state-bearing version key (excluding immutable creation time);
 scope/owner-filtered reads apply only active/effective corrections before any later ranking. Project
 scope revocation creates a durable tombstone, immediately denies future scoped reads/writes, and
-cancels queued/running embedding jobs. The revocation trigger is rooted by §30: project
-archive/delete revokes; unlinking a folder only revokes that filesystem grant and leaves project
-memory intact. Startup/readiness checks report schema corruption separately from
+cancels queued/running embedding jobs. The revocation trigger is rooted by §30: project archive
+revokes; unlinking a folder only revokes that filesystem grant and leaves project memory intact.
+Startup/readiness checks report schema corruption separately from
 disabled/missing/unsupported pgvector and temporarily unavailable embeddings; a corrupt durable
 schema fails closed. This durable-spine layer does not itself install the vector extension/index,
 provider, hybrid ranker, or turn integration. Migration/restart/rollback and frozen-control evidence
@@ -223,10 +224,9 @@ advances an active generation only after complete current coverage. Frozen overa
 quality, zero unsafe inclusions, provider loss/restart, resumable re-embedding, server restart,
 strict Postgres/client gates, and the self-hosted lumo deployment are verified in the
 [`fuller-memory evidence`](../../evidence/2026-07-15-p8-5-fuller-memory.md).
-
-**Authority/lifecycle hardening:** ordered migrations 0017–0018 serialize project
-scope revocation with every typed-memory, embedding-provenance, generation, pointer, and job write.
-Under §30 the serialized revocation event is project archive/delete rather than folder unlink.
+**Authority/lifecycle hardening:** ordered migrations 0017–0018 serialize project scope revocation
+with every typed-memory, embedding-provenance, generation, pointer, and job write. Under §30 the
+serialized revocation event is project archive rather than folder unlink.
 Approved legacy plus typed memory effects now commit in one transaction and preserve every
 contradictory predecessor. Exact resource replay and list/read paths consult the same durable scope
 authority as live recall. Each embedding generation pins a monotonic generation order, scope
@@ -268,12 +268,14 @@ follow-up hardening.
   produces candidates only and cannot silently promote unsupported inference into owner facts.
   Evidence-backed automatic persona proposals consume only bounded active records and never approve
   or activate their own guidance.
-- **Scope:** `owner_subject` and `memory_scope` are server-owned session authority. A session starts in
-  `global` or an active `project:<slug>` scope backed by a project entity (§30); changing modes never
-  changes memory authority. Exact read/list/recall operations compare subject and scope to the
-  authorized invocation context and return not-found on mismatch. Project archive revokes active/new
-  session use while preserving authority-filtered exact history; project delete is scope-killing.
-  Folder unlink does neither (§24.4).
+- **Session memory policy:** `owner_subject`, optional `project_id`, and `memory_policy` are
+  server-owned session state selected by the user-facing session contract. `memory_policy` is
+  `global | project`; `project` requires `project_id` and derives the durable
+  `project:<project_id>` scope, while `global` remains global even when a project is selected.
+  Project selection independently gates project-relative Drive/host resources (§24, §30), and mode
+  changes alter neither field. Exact read/list/recall operations compare subject and derived scope
+  to the authorized invocation context and return not-found on mismatch. Project archive revokes
+  active project use and tombstones its memory scope; folder unlink does neither (§24.4).
 
 ### 22.6.1 Durable schema
 
@@ -282,7 +284,9 @@ persists it in Postgres when `TM_DATABASE_URL` is configured; normal local devel
 `cargo test` may use the in-memory implementation so the baseline suite stays
 external-service-free. Ordered migrations expand this schema while preserving project continuity:
 
-- `sessions(id, owner_subject, memory_scope, created_at, updated_at, status, mode, persona_status)`
+- `sessions(id, owner_subject, project_id?, memory_policy, created_at, updated_at, status, mode,
+  persona_status)` — `memory_scope` is derived as `global` or `project:<project_id>`, never stored on
+  the session row
 - `session_turns(id, session_id, client_message_id, content_hash, status, worker_id, error,
   created_at, started_at, completed_at)` — idempotent durable message work (§27)
 - `session_events(session_id, seq, turn_id?, event_type, payload_json, created_at)` — SSE replay source (§27)

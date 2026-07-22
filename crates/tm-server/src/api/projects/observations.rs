@@ -143,11 +143,3 @@ fn extract_line_with_markers(text: &str, markers: &[&str]) -> Option<String> {
         .filter(|line| !line.is_empty())
         .map(str::to_string)
 }
-
-pub(crate) fn project_id_from_scope(scope: &str) -> String {
-    scope
-        .strip_prefix("project:")
-        .filter(|id| !id.is_empty())
-        .unwrap_or("tempestmiku")
-        .to_string()
-}

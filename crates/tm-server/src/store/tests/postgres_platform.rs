@@ -289,6 +289,7 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
         .await
         .unwrap();
     let session_id = Uuid::new_v4();
+    let project_session_id = Uuid::new_v4();
     let created_at = Utc::now() - Duration::days(30);
     let mode = serde_json::to_value(ModeId::from("general")).unwrap();
     let persona_status = serde_json::to_value(AssetStatus::Degraded {
@@ -301,6 +302,22 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
                 (id, created_at, updated_at, status, mode, mode_state_json, persona_status)
              values ($1, $2, $2, 'open', $3, null, $4)",
             &[&session_id, &created_at, &mode, &persona_status],
+        )
+        .await
+        .unwrap();
+    legacy_client
+        .batch_execute(include_str!(
+            "../../../migrations/0004_session_authority_turns.sql"
+        ))
+        .await
+        .unwrap();
+    legacy_client
+        .execute(
+            "insert into sessions
+                (id, created_at, updated_at, status, mode, mode_state_json, persona_status,
+                 owner_subject, memory_scope)
+             values ($1, $2, $2, 'open', $3, null, $4, 'owner', 'project:legacy-project')",
+            &[&project_session_id, &created_at, &mode, &persona_status],
         )
         .await
         .unwrap();
@@ -321,7 +338,15 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
     let session = upgraded.get_session(session_id).await.unwrap();
     assert_eq!(session.status, "open");
     assert_eq!(session.owner_subject, "owner");
-    assert_eq!(session.memory_scope, "global");
+    assert_eq!(session.memory_scope(), "global");
+    let project_session = upgraded.get_session(project_session_id).await.unwrap();
+    assert_eq!(
+        project_session.project_id.as_deref(),
+        Some("legacy-project")
+    );
+    assert_eq!(project_session.memory_policy, crate::MemoryPolicy::Project);
+    assert_eq!(project_session.memory_scope(), "project:legacy-project");
+    assert!(upgraded.project("legacy-project").await.unwrap().is_some());
     let messages = upgraded.session_messages(session_id).await.unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].content, "preserve this legacy message");
@@ -333,7 +358,7 @@ async fn gated_postgres_upgrades_legacy_base_schema_without_losing_history() {
         )
         .await
         .unwrap();
-    assert_eq!(migrations.len(), 21);
+    assert_eq!(migrations.len(), 23);
     assert!(migrations.iter().enumerate().all(|(index, row)| {
         row.get::<_, i64>("version") == index as i64 + 1
             && row.get::<_, String>("checksum").len() == 64

@@ -5,52 +5,67 @@ use std::{
     io::{BufRead, BufReader},
 };
 
-pub(crate) async fn validate_authorized_memory_scope<S>(store: &S, scope: &str) -> Result<()>
+pub(crate) async fn validate_authorized_project<S>(
+    store: &S,
+    project_id: Option<&str>,
+) -> Result<()>
 where
     S: Store,
 {
-    if scope == "global" {
+    let Some(project_id) = project_id else {
         return Ok(());
-    }
-    let project = scope
-        .strip_prefix("project:")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            ServerError::InvalidRequest("scope must be global or project:<id>".to_string())
-        })?;
-    // §30: scope authority is the server-owned project entity, not a live linked-folder alias. A
-    // folderless project is a valid scope; an archived project fails closed.
-    match store.project(project).await? {
+    };
+    match store.project(project_id).await? {
         Some(record) if record.status == crate::ProjectStatus::Active => Ok(()),
         _ => Err(ServerError::NotFound(format!(
-            "active project scope {scope}"
+            "active project {project_id}"
         ))),
     }
 }
 
-/// Enter a memory scope as the owner (session create / scope switch). `global` is always valid.
-/// A `project:<id>` scope lazily creates the entity (owner action, §30.2) but never resurrects an
-/// archived one — re-entering an archived project fails closed.
-pub(crate) async fn ensure_active_project_scope<S>(store: &S, scope: &str) -> Result<()>
+pub(crate) async fn ensure_active_project<S>(
+    store: &S,
+    project_id: &str,
+    default_memory_policy: crate::MemoryPolicy,
+) -> Result<crate::ProjectRecord>
 where
     S: Store,
 {
-    if scope == "global" {
-        return Ok(());
-    }
-    let project = scope
-        .strip_prefix("project:")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            ServerError::InvalidRequest("scope must be global or project:<id>".to_string())
-        })?;
-    let record = store.ensure_project(project, project).await?;
+    let record = store
+        .ensure_project(project_id, project_id, default_memory_policy)
+        .await?;
     if record.status != crate::ProjectStatus::Active {
         return Err(ServerError::NotFound(format!(
-            "active project scope {scope}"
+            "active project {project_id}"
         )));
     }
-    Ok(())
+    Ok(record)
+}
+
+/// Resolves the independently selected project and memory policy for a session.
+pub(crate) async fn resolve_memory_context<S>(
+    store: &S,
+    project_id: Option<String>,
+    memory_policy: Option<crate::MemoryPolicy>,
+) -> Result<(Option<String>, crate::MemoryPolicy)>
+where
+    S: Store,
+{
+    let project = match project_id.as_deref() {
+        Some(id) => Some(ensure_active_project(store, id, crate::MemoryPolicy::Project).await?),
+        None => None,
+    };
+    let memory_policy = match (memory_policy, &project) {
+        (Some(policy), _) => policy,
+        (None, Some(record)) => record.default_memory_policy,
+        (None, None) => crate::MemoryPolicy::Global,
+    };
+    if memory_policy == crate::MemoryPolicy::Project && project_id.is_none() {
+        return Err(ServerError::InvalidRequest(
+            "memoryPolicy \"project\" requires projectId".to_string(),
+        ));
+    }
+    Ok((project_id, memory_policy))
 }
 
 pub(crate) fn authorized_project_id(
@@ -58,9 +73,8 @@ pub(crate) fn authorized_project_id(
     requested: Option<&str>,
 ) -> Result<String> {
     let project_id = session
-        .memory_scope
-        .strip_prefix("project:")
-        .filter(|value| !value.is_empty())
+        .project_id
+        .as_deref()
         .ok_or_else(|| ServerError::NotFound("active project scope".to_string()))?;
     if requested.is_some_and(|requested| requested != project_id) {
         return Err(ServerError::NotFound(format!(
@@ -134,7 +148,7 @@ where
 {
     let (project_id, view) = parse_project_uri(uri)?;
     let session = state.store.get_session(session_id).await?;
-    validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope).await?;
+    validate_authorized_project(state.store.as_ref(), session.project_id.as_deref()).await?;
     authorized_project_id(&session, Some(&project_id))?;
     if let Some(view) = view.as_deref()
         && let Some(linked_uri) = project_linked_uri(view)
@@ -146,7 +160,7 @@ where
             &linked_uri,
             selector,
             session_id,
-            &session.memory_scope,
+            session.project_id.as_deref(),
         )
         .await?;
         content.uri = uri.to_string();
@@ -222,7 +236,7 @@ where
     }
     let (project_id, view) = parse_project_uri(uri)?;
     let session = state.store.get_session(session_id).await?;
-    validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope).await?;
+    validate_authorized_project(state.store.as_ref(), session.project_id.as_deref()).await?;
     authorized_project_id(&session, Some(&project_id))?;
     if let Some(view) = view.as_deref() {
         if view == "memory" {
@@ -242,7 +256,7 @@ where
                 state.linked_resource_handler.as_ref(),
                 Some(&linked_uri),
                 session_id,
-                &session.memory_scope,
+                session.project_id.as_deref(),
             )
             .await?;
             return Ok(entries

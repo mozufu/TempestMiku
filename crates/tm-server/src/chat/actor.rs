@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use super::util::last_artifact_uri_in_text;
 
+// 4th param: the spawning session's project id (bare, no "project:" prefix), or None.
 type ActorSandboxFactory = dyn Fn(
         Uuid,
         Option<&str>,
@@ -217,7 +218,7 @@ impl ActorExecutor for ChatActorExecutor {
             owner_session_id,
             Some(actor_id.as_str()),
             &spec.grants,
-            spec.session_scope.as_deref(),
+            spec.project_id.as_deref(),
             Some(Arc::clone(&cancellation)),
         );
         let inbox = ActorMailboxDrain {

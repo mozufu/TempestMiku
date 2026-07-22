@@ -33,7 +33,7 @@ struct NativeTmRequest {
 }
 
 enum NativeRequest {
-    Run(NativeTmRequest),
+    Run(Box<NativeTmRequest>),
     Promote {
         session_id: Uuid,
         turn_id: Uuid,
@@ -80,7 +80,8 @@ impl Default for NativeTmBackendOptions {
 #[derive(Clone, PartialEq, Eq)]
 struct NativeSessionProfile {
     mode: tm_modes::ModeId,
-    scope: String,
+    project_id: Option<String>,
+    memory_scope: String,
     capabilities: Vec<String>,
 }
 
@@ -88,7 +89,8 @@ impl From<&CodingTurn> for NativeSessionProfile {
     fn from(turn: &CodingTurn) -> Self {
         Self {
             mode: turn.mode.clone(),
-            scope: turn.scope.clone(),
+            project_id: turn.project_id.clone(),
+            memory_scope: turn.memory_scope.clone(),
             capabilities: turn.capabilities.clone(),
         }
     }
@@ -181,12 +183,12 @@ impl CodingBackend for NativeTmBackend {
         self.shards
             .send(
                 session_id,
-                NativeRequest::Run(NativeTmRequest {
+                NativeRequest::Run(Box::new(NativeTmRequest {
                     turn,
                     sink,
                     cancellation,
                     reply,
-                }),
+                })),
             )
             .map_err(|_| ServerError::Store("native coding shard stopped".to_string()))?;
         let result = response
@@ -346,7 +348,11 @@ async fn run_cached_native_turn(
         cancellation_proxy.bind(Arc::clone(&request.cancellation));
         let mut options = base_options.clone();
         options.session_id = session_id.to_string();
-        options.session_scope = Some(request.turn.scope.clone());
+        options.project_id = request.turn.project_id.clone();
+        options.memory_authority = Some(tm_host::MemoryAuthority {
+            subject: request.turn.owner_subject.clone(),
+            scope: request.turn.memory_scope.clone(),
+        });
         options.grants =
             CapabilityGrants::default().allow_many(request.turn.capabilities.iter().cloned());
         options.approval_policy = match approval_mode {

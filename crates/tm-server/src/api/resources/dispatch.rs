@@ -38,7 +38,7 @@ where
                 uri,
                 selector,
                 session_id,
-                &session.memory_scope,
+                session.project_id.as_deref(),
             )
             .await
         }
@@ -136,7 +136,7 @@ where
                 state.linked_resource_handler.as_ref(),
                 Some(uri),
                 session_id,
-                &session.memory_scope,
+                session.project_id.as_deref(),
             )
             .await
         }

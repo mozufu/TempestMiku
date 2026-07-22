@@ -398,4 +398,5 @@ pub struct ProjectRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
+    pub default_memory_policy: MemoryPolicy,
 }

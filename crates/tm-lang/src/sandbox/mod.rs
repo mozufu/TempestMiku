@@ -6,7 +6,7 @@ use tm_core::{CancellationToken, Result, Sandbox, Session, SessionConfig};
 use tm_drive::SharedDriveStore;
 use tm_host::{
     ApprovalPolicy, ArtifactResourceHandler, CapabilityGrants, DefaultDenyApprovalPolicy,
-    HostEventSink, HostRegistry, InvocationCtx, LinkedFolders, NoopHostEventSink,
+    HostEventSink, HostRegistry, InvocationCtx, LinkedFolders, MemoryAuthority, NoopHostEventSink,
     ProcIsolationConfig, ResourceRegistry, SessionHostConnector,
     register_p0_linked_folder_functions_with_isolation,
 };
@@ -18,7 +18,8 @@ pub struct TmSandboxOptions {
     pub artifact_root: PathBuf,
     pub session_id: String,
     pub actor_id: Option<String>,
-    pub session_scope: Option<String>,
+    pub project_id: Option<String>,
+    pub memory_authority: Option<MemoryAuthority>,
     pub http_allowlist: BTreeMap<String, String>,
     pub host_registry: HostRegistry,
     pub resource_registry: ResourceRegistry,
@@ -42,7 +43,8 @@ impl Default for TmSandboxOptions {
             artifact_root: tm_artifacts::default_root(),
             session_id: "default".into(),
             actor_id: None,
-            session_scope: None,
+            project_id: None,
+            memory_authority: None,
             http_allowlist: BTreeMap::new(),
             host_registry: HostRegistry::new(),
             resource_registry: ResourceRegistry::new(),
@@ -136,8 +138,11 @@ impl Sandbox for TmSandbox {
         .with_session_id(self.options.session_id.clone())
         .with_actor_id(self.options.actor_id.clone())
         .with_event_sink(self.options.host_event_sink.clone());
-        if let Some(scope) = self.options.session_scope.clone() {
-            invocation = invocation.with_session_scope(scope);
+        if let Some(project_id) = self.options.project_id.clone() {
+            invocation = invocation.with_project_id(project_id);
+        }
+        if let Some(authority) = self.options.memory_authority.clone() {
+            invocation = invocation.with_memory_authority(authority.subject, authority.scope);
         }
         let resource_schemes = resources
             .capabilities()

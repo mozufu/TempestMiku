@@ -126,13 +126,17 @@ async fn gated_postgres_session_authority_and_durable_turns() {
         .await
         .unwrap();
     assert_eq!(session.owner_subject, "brian");
-    assert_eq!(session.memory_scope, "global");
+    assert_eq!(session.memory_scope(), "global");
     assert_eq!(
         store
-            .set_session_memory_scope(session.id, "project:postgres-turns")
+            .set_session_memory_context(
+                session.id,
+                Some("postgres-turns"),
+                crate::MemoryPolicy::Project,
+            )
             .await
             .unwrap()
-            .memory_scope,
+            .memory_scope(),
         "project:postgres-turns"
     );
 
@@ -390,7 +394,7 @@ async fn gated_postgres_session_authority_and_durable_turns() {
     assert_eq!(ended.dream.scope, "project:postgres-turns");
     assert!(matches!(
         other_store
-            .set_session_memory_scope(session.id, "global")
+            .set_session_memory_context(session.id, None, crate::MemoryPolicy::Global)
             .await,
         Err(ServerError::Conflict(_))
     ));

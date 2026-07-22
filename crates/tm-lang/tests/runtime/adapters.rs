@@ -154,7 +154,7 @@ async fn application_linked_connector_takes_precedence_over_empty_local_registry
         linked_aliases: vec!["tempestmiku".into()],
         host_connectors: vec![Arc::new(RemoteLinkedConnector)],
         grants: CapabilityGrants::default().allow("fs.read"),
-        session_scope: Some("project:tempestmiku".into()),
+        project_id: Some("tempestmiku".into()),
         ..TmSandboxOptions::default()
     })
     .open(SessionConfig::default())

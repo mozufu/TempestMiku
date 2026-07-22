@@ -38,7 +38,10 @@ pub struct CodingTurn {
     pub user_prompt: String,
     pub system_prompt: String,
     pub mode: tm_modes::ModeId,
-    pub scope: String,
+    /// Project authority drives sandbox fs/proc access; memory scope drives memory.search.
+    pub owner_subject: String,
+    pub project_id: Option<String>,
+    pub memory_scope: String,
     /// Exact capabilities declared for this turn (e.g. `["agents.*", "backend.coding"]`).
     /// The sandbox replaces its externally authorized grants with this set; `.*` capability
     /// patterns remain supported. Runtime-intrinsic artifact output and catalog inspection do not

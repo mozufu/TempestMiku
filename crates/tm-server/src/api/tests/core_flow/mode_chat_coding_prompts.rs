@@ -92,7 +92,6 @@ async fn modes_catalog_is_loaded_from_runtime_mode_assets() {
                 "mode": "custom_runtime_mode",
                 "label": "Custom Runtime Mode",
                 "description": "Runtime-only mode from the mode catalog.",
-                "defaultScope": "global",
                 "activeSkills": ["miku-voice"],
                 "capabilityClass": "conversation",
                 "route": {
@@ -246,7 +245,8 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
             .system_prompt
             .contains("ambiguity-grill fixture body")
     );
-    assert_eq!(turns[2].scope, "global");
+    assert_eq!(turns[2].project_id, None);
+    assert_eq!(turns[2].memory_scope, "global");
 }
 
 #[tokio::test]

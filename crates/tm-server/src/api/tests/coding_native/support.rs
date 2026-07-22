@@ -86,7 +86,7 @@ pub(super) async fn native_tm_approval_app(
     let router = app(state);
     let session = create_with_body(
         &router,
-        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+        Body::from(r#"{"mode":"serious_engineer","projectId":"repo","memoryPolicy":"project"}"#),
     )
     .await;
     (router, store, llm, session, temp)
@@ -175,7 +175,7 @@ hits |> par map (fun hit -> @fs.remove {path: hit.path, tag: hit.tag}) |> displa
     let router = app(state);
     let session = create_with_body(
         &router,
-        Body::from(r#"{"mode":"serious_engineer","scope":"project:repo"}"#),
+        Body::from(r#"{"mode":"serious_engineer","projectId":"repo","memoryPolicy":"project"}"#),
     )
     .await;
     (router, store, llm, session, temp)

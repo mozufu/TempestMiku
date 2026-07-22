@@ -161,12 +161,12 @@ pub(super) async fn build_runtime(
             move |session_id: uuid::Uuid,
                   actor_id: Option<&str>,
                   grants: &tm_host::CapabilityGrants,
-                  session_scope: Option<&str>,
+                  project_id: Option<&str>,
                   cancellation: Option<Arc<dyn tm_core::CancellationToken>>| {
                 let mut opts = executor_options.clone();
                 opts.session_id = session_id.to_string();
                 opts.actor_id = actor_id.map(str::to_string);
-                opts.session_scope = session_scope.map(str::to_string);
+                opts.project_id = project_id.map(str::to_string);
                 opts.cancellation = cancellation;
                 opts.grants =
                     CapabilityGrants::default().allow_many(grants.names().map(str::to_string));

@@ -199,7 +199,7 @@ impl RemoteWorkerClient {
             authority: WorkerAuthority {
                 session_id: ctx.session_id.clone(),
                 actor_id: ctx.actor_id.clone(),
-                session_scope: ctx.session_scope.clone(),
+                project_id: ctx.project_id.clone(),
                 grants: ctx.grants.names().map(str::to_string).collect(),
             },
         };

@@ -10,7 +10,7 @@ tempest-miku/
 │   ├── tm-lang/        # sole tm language/runtime, Sandbox adapter, host/resource wiring
 │   ├── tm-host/        # host capability registry, linked folders, approvals, resource handlers (§9.2)
 │   ├── tm-artifacts/   # content-addressed artifact store
-│   ├── tm-modes/       # runtime mode catalog, default scopes, prompt assets, mode/skill asset status
+│   ├── tm-modes/       # runtime mode catalog, prompt assets, mode/skill asset status
 │   ├── tm-agents/      # actor lifecycle, mailbox, agents.* host fns, agent:// + history:// resources
 │   ├── tm-memory/      # recall, summaries, dream queue/worker, redaction helpers
 │   ├── tm-drive/       # local-first drive metadata, transducers, vdirs, resources, host fns

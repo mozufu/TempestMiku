@@ -260,7 +260,8 @@ async fn native_runtime_reset_persistence_failure_retries_before_model_turn() {
     let requests_before_reset = llm.requests.lock().len();
 
     let mut resumed = coding_turn(session_id);
-    resumed.scope = "project:retry-reset".to_string();
+    resumed.project_id = Some("retry-reset".to_string());
+    resumed.memory_scope = "project:retry-reset".to_string();
     resumed.prior_messages = vec![
         Message::user("earlier native question"),
         Message::assistant("earlier native answer"),

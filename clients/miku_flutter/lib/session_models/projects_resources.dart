@@ -6,6 +6,7 @@ class ProjectCatalogEntry {
     required this.title,
     required this.status,
     required this.memoryScope,
+    required this.defaultMemoryPolicy,
     required this.projectUri,
     required this.linkedFoldersUri,
     this.linkedFolderUris = const [],
@@ -20,6 +21,9 @@ class ProjectCatalogEntry {
       title: title.isEmpty ? id : title,
       status: status.isEmpty ? 'active' : status,
       memoryScope: _stringValue(json['memoryScope']),
+      defaultMemoryPolicy: MikuMemoryPolicy.fromJson(
+        json['defaultMemoryPolicy'],
+      ),
       projectUri: _stringValue(json['projectUri']),
       linkedFoldersUri: _stringValue(json['linkedFoldersUri']),
       linkedFolderUris: _stringList(json['linkedFolderUris']),
@@ -30,6 +34,7 @@ class ProjectCatalogEntry {
   final String title;
   final String status;
   final String memoryScope;
+  final MikuMemoryPolicy defaultMemoryPolicy;
   final String projectUri;
   final String linkedFoldersUri;
   final List<String> linkedFolderUris;

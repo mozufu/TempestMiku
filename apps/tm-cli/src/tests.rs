@@ -306,10 +306,9 @@ async fn multi_folder_default_session_id_stays_fail_closed() {
         .unwrap();
 
     assert!(
-        output
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("non-project session scope cli:unscoped")),
+        output.error.as_deref().is_some_and(
+            |error| error.contains("linked resources require a server-authoritative project")
+        ),
         "{output:?}"
     );
 }

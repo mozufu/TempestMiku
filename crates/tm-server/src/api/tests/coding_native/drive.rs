@@ -94,7 +94,9 @@ let proposal = match proposals { | first :: _ -> first | [] -> null };
     let router = app(state);
     let session = create_with_body(
         &router,
-        Body::from(r#"{"mode":"serious_engineer","scope":"project:tempestmiku"}"#),
+        Body::from(
+            r#"{"mode":"serious_engineer","projectId":"tempestmiku","memoryPolicy":"project"}"#,
+        ),
     )
     .await;
 

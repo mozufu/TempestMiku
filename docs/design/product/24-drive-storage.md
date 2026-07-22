@@ -195,8 +195,8 @@ flowchart LR
 ## 24.4 Sandbox-default, linked-folder opt-in (decision C, amended by §30)
 
 > **Current §30 contract.** Linking lives under `project.link` / `project.unlink`, no longer mints
-> the project or its memory scope, and unlink no longer tombstones project memory. The bullets below
-> are the live contract.
+> the project or its memory scope, and unlink no longer tombstones project memory. Project selection
+> and session memory policy are independent. The bullets below are the live contract.
 
 - **Default = sandbox jail** (§07/§08): **no ambient real-FS authority**. The drive lives in the
   per-session sandbox workspace; nothing touches the real machine.
@@ -211,15 +211,16 @@ flowchart LR
   records with versions. Startup restores only active records whose directory still exists and whose
   canonical identity, non-symlink root, mode, and alias policy all revalidate. A failure is persisted
   as `invalid`; invalid and revoked records are not auto-reactivated on later restarts.
-- **Session scope is authority, rooted in the project record (§30).** `global` sessions may access
-  only unprojected drive entries. `project:<slug>` sessions may access only entries for that project,
-  including `drive://` virtual/search listings. Drive host calls, resource reads, child actors, and
-  organizer proposal application inherit the exact server scope. Linked-folder, `fs.*`, `code.*`, and
-  `proc.*` authority requires **both** the matching project scope **and** a live attached grant;
-  global sessions fail closed.
+- **Project authority is session state (§30).** A session with no `project_id` may access only
+  unprojected Drive entries. A session with `project_id = <slug>` may access only entries for that
+  project, including `drive://` virtual/search listings. Drive host calls, resource reads, child
+  actors, and organizer proposal application inherit that exact project id. Linked-folder, `fs.*`,
+  `code.*`, and `proc.*` authority requires **both** the matching project id and a live attached
+  grant; sessions without a project fail closed. The independent memory policy may be global or
+  project-scoped without changing this authority.
 - **Attenuation & revocation are two independent axes.** `ro` vs `rw` is attenuation; a grant narrows
-  or revokes, never escalates. Unlink revokes only the filesystem axis; the memory axis dies only at
-  project archive/delete (§30.4). This remains the **only** path by which **Serious Engineer** (§21)
+  or revokes, never escalates. Unlink revokes only the filesystem axis; project archive tombstones
+  the project memory scope (§30.4). This remains the **only** path by which **Serious Engineer** (§21)
   and `fs.*` / `proc.*` (§25) reach real repos. A linked folder is exposed for read/list/preview as
   `linked://<alias>/…` (§9.3), and through the project aggregate view as
   `project://<id>/linked-folders/<alias>/...`, not as `drive://`; writes and commands still go
@@ -249,7 +250,7 @@ flowchart LR
 - **Bad auto-placement** — `drive.move` corrects it; the correction is learned into the user model (§22).
 - **Link revoked / path vanished** — the grant invalidates; capability checks **fail closed**; the
   sandbox copy is unaffected. Project memory, items, and drive entries are also unaffected (§30);
-  only project archive/delete tombstones the memory scope.
+  project archive tombstones the memory scope.
 - **Dedup integrity** — content-addressed (`sha256`); collisions are practically nil; integrity verified on `get`.
 - **Offline / no cloud** — local-first means **full function**; later sync resumes via CRDT merge with no data loss.
 

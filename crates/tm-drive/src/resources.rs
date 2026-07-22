@@ -289,9 +289,7 @@ mod tests {
         let mut registry = ResourceRegistry::new();
         registry.register(std::sync::Arc::new(DriveResourceHandler::new(store)));
         let grants = CapabilityGrants::default().allow("resources.read:drive");
-        let global_ctx = InvocationCtx::new(grants.clone())
-            .with_session_id("global-session")
-            .with_session_scope("global");
+        let global_ctx = InvocationCtx::new(grants.clone()).with_session_id("global-session");
         let global_list = registry.list(Some("drive://"), &global_ctx).await.unwrap();
         assert!(global_list.iter().any(|entry| entry.uri == global.uri));
         assert!(!global_list.iter().any(|entry| entry.uri == alpha.uri));
@@ -302,7 +300,7 @@ mod tests {
 
         let alpha_ctx = InvocationCtx::new(grants)
             .with_session_id("alpha-session")
-            .with_session_scope("project:alpha");
+            .with_project_id("alpha");
         assert_eq!(
             registry
                 .read(&alpha.uri, None, &alpha_ctx)

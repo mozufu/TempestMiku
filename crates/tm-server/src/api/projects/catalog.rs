@@ -7,6 +7,7 @@ pub struct ProjectCatalogEntry {
     pub title: String,
     pub status: String,
     pub memory_scope: String,
+    pub default_memory_policy: crate::MemoryPolicy,
     pub project_uri: String,
     pub linked_folders_uri: String,
     /// 0..n linked folders currently attached to this project (§30). Empty for a folderless project.
@@ -51,6 +52,7 @@ fn catalog_entry(record: ProjectRecord, linked_folders: &LinkedFolders) -> Proje
         title: record.title,
         status: record.status.as_str().to_string(),
         memory_scope: format!("project:{id}"),
+        default_memory_policy: record.default_memory_policy,
         project_uri: format!("project://{id}"),
         linked_folders_uri: format!("project://{id}/linked-folders"),
         linked_folder_uris,

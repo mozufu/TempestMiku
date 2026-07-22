@@ -138,7 +138,7 @@ impl HostFn for AgentsPipelineFn {
 
         let session_id = ctx.session_id.clone();
         let parent_id = caller_parent_id(ctx)?;
-        let session_scope = ctx.session_scope.clone();
+        let project_id = ctx.project_id.clone();
         let mut stage_outputs = Vec::with_capacity(stages.len());
 
         for (stage_index, stage) in stages.into_iter().enumerate() {
@@ -149,7 +149,7 @@ impl HostFn for AgentsPipelineFn {
                 session_id.clone(),
                 parent_id.clone(),
                 grants.clone(),
-                session_scope.clone(),
+                project_id.clone(),
                 wave_tasks,
             )
             .await?;
@@ -308,7 +308,7 @@ async fn run_pipeline_wave(
     session_id: String,
     parent_id: Option<ActorId>,
     grants: CapabilityGrants,
-    session_scope: Option<String>,
+    project_id: Option<String>,
     tasks: Vec<(String, String)>,
 ) -> Result<Vec<Value>> {
     if tasks.len() > MAX_ACTORS_PER_CALL {
@@ -379,7 +379,7 @@ async fn run_pipeline_wave(
         let spec = ActorSpec {
             id: actor_id.clone(),
             session_id: session_id.clone(),
-            session_scope: session_scope.clone(),
+            project_id: project_id.clone(),
             role,
             task,
             mode: None,

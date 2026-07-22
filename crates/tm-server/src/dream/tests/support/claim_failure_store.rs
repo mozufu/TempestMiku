@@ -12,12 +12,13 @@ impl Store for ClaimFailureStore {
         panic!("unused store method configure_owner_subject")
     }
 
-    async fn set_session_memory_scope(
+    async fn set_session_memory_context(
         &self,
         _session_id: Uuid,
-        _memory_scope: &str,
+        _project_id: Option<&str>,
+        _memory_policy: crate::MemoryPolicy,
     ) -> Result<SessionRecord> {
-        panic!("unused store method set_session_memory_scope")
+        panic!("unused store method set_session_memory_context")
     }
 
     async fn end_session(&self, _session_id: Uuid) -> Result<SessionRecord> {

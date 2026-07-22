@@ -17,7 +17,8 @@ async fn serious_engineer_persists_open_loops_without_automatic_next_session_rec
     .with_coding_backend(backend);
     let app = app(state);
     let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-    assert_eq!(session_a.default_scope, "global");
+    assert_eq!(session_a.project_id, None);
+    assert_eq!(session_a.memory_policy, crate::MemoryPolicy::Global);
     assert_eq!(session_a.active_skills, vec!["serious-engineer-ops"]);
     post_user_message(&app, session_a.id, "tempestmiku code open loop").await;
     let chunks = store

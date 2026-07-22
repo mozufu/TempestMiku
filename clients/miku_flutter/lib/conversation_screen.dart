@@ -327,7 +327,8 @@ class _ConversationScreenState extends State<ConversationScreen>
   Future<void> _connect({
     bool createNew = false,
     String? sessionId,
-    String newSessionScope = 'global',
+    String? newSessionProjectId,
+    MikuMemoryPolicy? newSessionMemoryPolicy,
   }) async {
     assert(!createNew || sessionId == null);
     final generation = ++_connectionGeneration;
@@ -343,7 +344,8 @@ class _ConversationScreenState extends State<ConversationScreen>
       late final LoadedSession loaded;
       if (createNew) {
         final session = await widget.client.createSession(
-          scope: newSessionScope,
+          projectId: newSessionProjectId,
+          memoryPolicy: newSessionMemoryPolicy,
         );
         _cancelEventStream();
         loaded = await widget.client.loadSession(session.id);
@@ -414,11 +416,16 @@ class _ConversationScreenState extends State<ConversationScreen>
   Future<bool> _startProjectConversation(ProjectCatalogEntry project) async {
     final previousSessionId = _session?.id;
     _composerController.clear();
-    await _connect(createNew: true, newSessionScope: project.memoryScope);
+    await _connect(
+      createNew: true,
+      newSessionProjectId: project.id,
+      newSessionMemoryPolicy: project.defaultMemoryPolicy,
+    );
     final session = _session;
     return session != null &&
         session.id != previousSessionId &&
-        session.defaultScope == project.memoryScope &&
+        session.projectId == project.id &&
+        session.memoryPolicy == project.defaultMemoryPolicy &&
         _presence != _PresenceState.offline;
   }
 
@@ -743,7 +750,7 @@ class _ConversationScreenState extends State<ConversationScreen>
               client: widget.client,
               session: session,
               sessionEnded: _presence == _PresenceState.ended,
-              onScopeChanged: _applyScope,
+              onMemoryContextChanged: _applyMemoryContext,
               onNewConversation: _startProjectConversation,
             ),
       ),
@@ -766,24 +773,23 @@ class _ConversationScreenState extends State<ConversationScreen>
     );
   }
 
-  /// Applies a committed memory-scope change reported by the project page so the composer and
-  /// session-context surfaces reflect the session's new project (or Global).
-  void _applyScope(String scope) {
+  /// Applies committed project and memory-policy changes from the project page.
+  void _applyMemoryContext(
+    String? projectId,
+    MikuMemoryPolicy memoryPolicy,
+  ) {
     final session = _session;
-    if (session == null || session.defaultScope == scope) return;
-    setState(() => _session = _sessionWithScope(session, scope));
-  }
-
-  MikuSession _sessionWithScope(MikuSession session, String scope) {
-    return MikuSession(
-      id: session.id,
-      status: session.status,
-      mode: session.mode,
-      label: session.label,
-      defaultScope: scope,
-      activeSkills: session.activeSkills,
-      lastEventId: session.lastEventId,
-      locked: session.locked,
+    if (session == null ||
+        (session.projectId == projectId &&
+            session.memoryPolicy == memoryPolicy)) {
+      return;
+    }
+    setState(
+      () =>
+          _session = session.copyWith(
+            projectId: projectId,
+            memoryPolicy: memoryPolicy,
+          ),
     );
   }
 

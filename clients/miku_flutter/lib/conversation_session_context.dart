@@ -157,7 +157,7 @@ class _SessionSummaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = _Palette.of(context);
-    final scope = _projectIdFromScope(session.defaultScope);
+    final projectId = session.projectId;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -184,8 +184,17 @@ class _SessionSummaryCard extends StatelessWidget {
           const SizedBox(height: 10),
           _ContextFact(
             icon: Icons.workspaces_outline,
-            label: '範圍',
-            value: scope == null ? 'Global' : 'Project · $scope',
+            label: 'Project',
+            value: projectId ?? '未選擇',
+          ),
+          const SizedBox(height: 6),
+          _ContextFact(
+            icon: Icons.psychology_outlined,
+            label: '記憶',
+            value:
+                session.memoryPolicy == MikuMemoryPolicy.project
+                    ? '此 Project'
+                    : 'Global',
           ),
           const SizedBox(height: 6),
           _ContextFact(
@@ -347,29 +356,16 @@ MikuSession _sessionWithMode(
   required ModeProfile profile,
   required bool locked,
 }) {
-  return MikuSession(
-    id: session.id,
-    status: session.status,
+  return session.copyWith(
     mode: profile.id,
     label: profile.label,
-    defaultScope: session.defaultScope,
     activeSkills: profile.activeSkills,
-    lastEventId: session.lastEventId,
     locked: locked,
   );
 }
 
 MikuSession _copySessionWithLock(MikuSession session, bool locked) {
-  return MikuSession(
-    id: session.id,
-    status: session.status,
-    mode: session.mode,
-    label: session.label,
-    defaultScope: session.defaultScope,
-    activeSkills: session.activeSkills,
-    lastEventId: session.lastEventId,
-    locked: locked,
-  );
+  return session.copyWith(locked: locked);
 }
 
 MikuSession _sessionFromModeEvent(
@@ -385,14 +381,10 @@ MikuSession _sessionFromModeEvent(
           : session.activeSkills;
   final lockSource =
       data.containsKey('lockSource') ? data['lockSource'] : data['lock_source'];
-  return MikuSession(
-    id: session.id,
-    status: session.status,
+  return session.copyWith(
     mode: mode.isEmpty ? session.mode : mode,
     label: label.isEmpty ? session.label : label,
-    defaultScope: session.defaultScope,
     activeSkills: skills,
-    lastEventId: session.lastEventId,
     locked: lockSource != null && _string(lockSource).isNotEmpty,
   );
 }
@@ -403,14 +395,5 @@ String _shortSessionId(String id) {
 }
 
 MikuSession _copySessionWithStatus(MikuSession session, String status) {
-  return MikuSession(
-    id: session.id,
-    status: status,
-    mode: session.mode,
-    label: session.label,
-    defaultScope: session.defaultScope,
-    activeSkills: session.activeSkills,
-    lastEventId: session.lastEventId,
-    locked: session.locked,
-  );
+  return session.copyWith(status: status);
 }

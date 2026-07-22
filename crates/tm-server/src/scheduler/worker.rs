@@ -294,7 +294,9 @@ where
             durable_turn_id: None,
             user_prompt: prompt_text.to_string(),
             mode,
-            scope: profile.default_scope,
+            owner_subject: session.owner_subject.clone(),
+            project_id: None,
+            memory_scope: "global".to_string(),
             system_prompt: composed.system_prompt,
             // Scheduler authority is fixed by code. Mode capabilities and prompt text cannot
             // expand a background run's grants.

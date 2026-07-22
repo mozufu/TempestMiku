@@ -19,7 +19,7 @@ class _DrivePageState extends State<_DrivePage> {
   String? _error;
   String? _previewingUri;
 
-  String? get _projectId => _projectIdFromScope(widget.session.defaultScope);
+  String? get _projectId => widget.session.projectId;
 
   @override
   void initState() {

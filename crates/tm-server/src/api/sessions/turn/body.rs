@@ -22,19 +22,23 @@ where
             "session {session_id} has ended"
         )));
     }
-    resources::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
-        .await?;
+    resources::util::validate_authorized_project(
+        state.store.as_ref(),
+        session.project_id.as_deref(),
+    )
+    .await?;
     let prior_messages =
         bounded_prior_messages(state.store.as_ref(), session_id, durable_turn.id).await?;
     // Long-term memory is pull-only. Modes may grant memory.search, but retrieval happens only if
     // the model calls it through execute. Mode changes remain separately gated.
     let turn_profile = mode_profile(&state.persona, &session.mode_state.mode);
-    let scope = session.memory_scope.clone();
+    let project_id = session.project_id.clone();
+    let memory_scope = session.memory_scope();
     let subject = session.owner_subject.clone();
     let persona_prompt = build_turn_prompt(state, &session.mode_state.mode, &durable_turn.content);
     state
         .store
-        .ensure_memory_scope_active(&subject, &scope)
+        .ensure_memory_scope_active(&subject, &memory_scope)
         .await?;
     let user_prompt = durable_turn.content.clone();
     let memory_search_host: Arc<dyn HostFn> = Arc::new(MemorySearchHostFn::new(state));
@@ -72,7 +76,9 @@ where
                     user_prompt,
                     system_prompt: persona_prompt.system_prompt.clone(),
                     mode: session.mode_state.mode.clone(),
-                    scope: scope.clone(),
+                    owner_subject: subject.clone(),
+                    project_id: project_id.clone(),
+                    memory_scope: memory_scope.clone(),
                     capabilities: chat_capabilities.clone(),
                     prior_messages: prior_messages.clone(),
                 },
@@ -97,7 +103,9 @@ where
                     user_prompt,
                     system_prompt: persona_prompt.system_prompt,
                     mode: session.mode_state.mode.clone(),
-                    scope: scope.clone(),
+                    owner_subject: subject.clone(),
+                    project_id: project_id.clone(),
+                    memory_scope: memory_scope.clone(),
                     capabilities: chat_capabilities,
                     prior_messages,
                     dialectic: None,
@@ -117,13 +125,13 @@ where
         (response, TurnRuntime::Chat)
     };
 
-    persist_drive_recall_chunks(state, &scope).await?;
+    persist_drive_recall_chunks(state, &memory_scope).await?;
     if turn_profile.has_capability("backend.coding") && !response.trim().is_empty() {
         state
             .store
             .add_recall_chunk(RecallChunkRecord {
                 id: Uuid::new_v4(),
-                scope: scope.clone(),
+                scope: memory_scope.clone(),
                 text: format!(
                     "Project summary/open loop from session {session_id}: {}",
                     response.trim()
@@ -133,14 +141,16 @@ where
                 created_at: Utc::now(),
             })
             .await?;
-        record_project_observations(
-            state,
-            session_id,
-            project_id_from_scope(&scope),
-            &durable_turn.content,
-            &response,
-        )
-        .await?;
+        if let Some(project_id) = project_id {
+            record_project_observations(
+                state,
+                session_id,
+                project_id,
+                &durable_turn.content,
+                &response,
+            )
+            .await?;
+        }
     }
     let auto_persona_candidate = if session.mode_state.lock_source.is_none()
         && !turn_profile.has_capability("backend.coding")
@@ -151,7 +161,7 @@ where
             .event_for_turn(session_id, durable_turn.id, "memory_recall")
             .await?
     {
-        let memory = persisted_memory_context(&event, &subject, &scope)?;
+        let memory = persisted_memory_context(&event, &subject, &memory_scope)?;
         super::super::persona_candidate::detect(durable_turn.id, &durable_turn.content, &memory)
     } else {
         None
@@ -161,7 +171,7 @@ where
         session_id,
         turn_profile,
         subject,
-        scope,
+        memory_scope,
         durable_turn.content.clone(),
     )
     .await?;

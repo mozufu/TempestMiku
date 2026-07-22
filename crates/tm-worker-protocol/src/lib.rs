@@ -52,7 +52,7 @@ pub enum WorkerOperation {
 pub struct WorkerAuthority {
     pub session_id: String,
     pub actor_id: Option<String>,
-    pub session_scope: Option<String>,
+    pub project_id: Option<String>,
     pub grants: Vec<String>,
 }
 

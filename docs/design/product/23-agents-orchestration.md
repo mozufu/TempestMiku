@@ -36,9 +36,9 @@ character + mode, budget, and capability grant. Cast as an actor:
 |---|---|
 | **Address** | stable agent id (CamelCase, ≤32 chars); `agent://<id>` |
 | **Mailbox** | async inbox; a message reaches even idle / parked actors (and wakes them) |
-| **Hidden local state** | its **own context window** (§22 working memory) + a granted **memory scope** (§22 store); no shared mutable state |
+| **Hidden local state** | its **own context window** (§22 working memory) + delegated project and memory authority; no shared mutable state |
 | **Behavior** | current **mode** (§21) + **role** + capability grant; resolved per message (late binding) |
-| **Designate next behavior** | mode switch / scope update between messages (persona self-edit, §21) |
+| **Designate next behavior** | mode switch between messages; project/memory authority changes only through the parent session's explicit owner controls (§22, §30) |
 | **Create** | `agents.spawn` / `agents.run` |
 | **Send** | `agents.send/broadcast/wait/inbox/list/cancel` (§23.2) |
 
@@ -190,9 +190,11 @@ flowchart TD
 - **No shared history.** Sub-agents start with no conversation history — everything needed is in the
   **assignment + shared context** (encapsulation). They coordinate by **messages**, not by reading each
   other's transcript.
-- **Memory scope is granted, late-bound.** A spawn may explicitly delegate a read scope it already
-  holds (global facts, or a linked-project scope, §22); no read capability is ambient. Sub-agents are
-  **ephemeral** and do **not** run the dreaming pipeline (§22) — the parent persists a digest if it matters.
+- **Project and memory authority are delegated, late-bound.** A spawn inherits the parent's exact
+  project id and may receive only memory/resource capabilities the parent already holds; no read
+  capability is ambient, and actor mode changes cannot alter either authority. Sub-agents are
+  **ephemeral** and do **not** run the dreaming pipeline (§22) — the parent persists a digest if it
+  matters.
 
 ## 23.6 Late binding & capabilities (principle #9)
 

@@ -223,7 +223,9 @@ pub(super) fn coding_turn(session_id: Uuid) -> CodingTurn {
         user_prompt: "advance native state".to_string(),
         system_prompt: "native test system".to_string(),
         mode: tm_modes::ModeId::from("serious_engineer"),
-        scope: "project:tempestmiku".to_string(),
+        owner_subject: "brian".to_string(),
+        project_id: Some("tempestmiku".to_string()),
+        memory_scope: "project:tempestmiku".to_string(),
         capabilities: Vec::new(),
         prior_messages: Vec::new(),
     }

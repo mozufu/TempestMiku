@@ -189,7 +189,7 @@ async fn native_tm_http_sse_e2e_approves_and_replays_structured_trace() {
         .await
         .unwrap();
     client
-        .set_session_scope(&session.id, "project:repo")
+        .set_session_memory_context(&session.id, Some("repo"), "project")
         .await
         .unwrap();
     let (_, mode) = client

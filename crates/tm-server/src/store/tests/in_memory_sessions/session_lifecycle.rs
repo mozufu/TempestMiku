@@ -67,7 +67,7 @@ async fn in_memory_session_authority_is_backfilled_and_scope_is_explicit() {
         .await
         .unwrap();
     assert_eq!(first.owner_subject, "brian");
-    assert_eq!(first.memory_scope, "global");
+    assert_eq!(first.memory_scope(), "global");
 
     assert_eq!(store.configure_owner_subject("brian").await.unwrap(), 0);
     assert_eq!(
@@ -81,10 +81,10 @@ async fn in_memory_session_authority_is_backfilled_and_scope_is_explicit() {
     ));
 
     let scoped = store
-        .set_session_memory_scope(first.id, "project:tempestmiku")
+        .set_session_memory_context(first.id, Some("tempestmiku"), crate::MemoryPolicy::Project)
         .await
         .unwrap();
-    assert_eq!(scoped.memory_scope, "project:tempestmiku");
+    assert_eq!(scoped.memory_scope(), "project:tempestmiku");
     let second = store
         .create_session(NewSession {
             mode: ModeId::from("general"),
@@ -95,7 +95,7 @@ async fn in_memory_session_authority_is_backfilled_and_scope_is_explicit() {
         .await
         .unwrap();
     assert_eq!(second.owner_subject, "brian");
-    assert_eq!(second.memory_scope, "global");
+    assert_eq!(second.memory_scope(), "global");
 }
 
 #[tokio::test]
@@ -112,7 +112,11 @@ async fn in_memory_scope_and_session_end_use_one_authoritative_lock() {
         .await
         .unwrap();
     store
-        .set_session_memory_scope(session.id, "project:authoritative")
+        .set_session_memory_context(
+            session.id,
+            Some("authoritative"),
+            crate::MemoryPolicy::Project,
+        )
         .await
         .unwrap();
 
@@ -128,11 +132,13 @@ async fn in_memory_scope_and_session_end_use_one_authoritative_lock() {
         json!("project:authoritative")
     );
     assert!(matches!(
-        store.set_session_memory_scope(session.id, "global").await,
+        store
+            .set_session_memory_context(session.id, None, crate::MemoryPolicy::Global)
+            .await,
         Err(ServerError::Conflict(_))
     ));
     assert_eq!(
-        store.get_session(session.id).await.unwrap().memory_scope,
+        store.get_session(session.id).await.unwrap().memory_scope(),
         "project:authoritative"
     );
 }

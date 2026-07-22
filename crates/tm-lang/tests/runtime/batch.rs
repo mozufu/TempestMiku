@@ -242,7 +242,7 @@ async fn authorized_linked_alias_uri_is_normalized_to_the_host_argument_schema()
     let mut session = TmSandbox::new(TmSandboxOptions {
         artifact_root: artifacts.path().to_path_buf(),
         session_id: "direct-fs-read".into(),
-        session_scope: Some("project:repo".into()),
+        project_id: Some("repo".into()),
         linked_folders: Some(linked),
         grants: CapabilityGrants::default().allow("fs.read"),
         ..TmSandboxOptions::default()
@@ -276,7 +276,7 @@ async fn linked_alias_uri_outside_the_authoritative_scope_is_rejected_before_hos
     .unwrap();
     let mut session = TmSandbox::new(TmSandboxOptions {
         session_id: "scoped-linked-alias".into(),
-        session_scope: Some("project:other".into()),
+        project_id: Some("other".into()),
         linked_folders: Some(linked),
         grants: CapabilityGrants::default().allow("fs.read"),
         ..TmSandboxOptions::default()

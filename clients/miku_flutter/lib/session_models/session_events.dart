@@ -1,12 +1,25 @@
 part of '../session_models.dart';
 
+enum MikuMemoryPolicy {
+  global,
+  project;
+
+  static MikuMemoryPolicy fromJson(Object? value) =>
+      value == 'project' ? MikuMemoryPolicy.project : MikuMemoryPolicy.global;
+
+  String toJson() => name;
+}
+
+const Object _unsetSessionField = Object();
+
 class MikuSession {
   const MikuSession({
     required this.id,
     required this.mode,
     required this.label,
     this.status = 'active',
-    this.defaultScope = 'global',
+    this.projectId,
+    this.memoryPolicy = MikuMemoryPolicy.global,
     this.activeSkills = const [],
     this.lastEventId,
     this.locked = false,
@@ -16,10 +29,39 @@ class MikuSession {
   final String status;
   final String mode;
   final String label;
-  final String defaultScope;
+  final String? projectId;
+  final MikuMemoryPolicy memoryPolicy;
   final List<String> activeSkills;
   final String? lastEventId;
   final bool locked;
+
+  MikuSession copyWith({
+    String? id,
+    String? status,
+    String? mode,
+    String? label,
+    Object? projectId = _unsetSessionField,
+    MikuMemoryPolicy? memoryPolicy,
+    List<String>? activeSkills,
+    Object? lastEventId = _unsetSessionField,
+    bool? locked,
+  }) {
+    return MikuSession(
+      id: id ?? this.id,
+      status: status ?? this.status,
+      mode: mode ?? this.mode,
+      label: label ?? this.label,
+      projectId: identical(projectId, _unsetSessionField)
+          ? this.projectId
+          : projectId as String?,
+      memoryPolicy: memoryPolicy ?? this.memoryPolicy,
+      activeSkills: activeSkills ?? this.activeSkills,
+      lastEventId: identical(lastEventId, _unsetSessionField)
+          ? this.lastEventId
+          : lastEventId as String?,
+      locked: locked ?? this.locked,
+    );
+  }
 }
 
 class MikuEvent {

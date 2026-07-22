@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:miku_flutter/session_client_io.dart';
+import 'package:miku_flutter/session_models.dart';
 import 'package:miku_flutter/session_client_stub.dart';
 
 void main() {
@@ -72,7 +73,10 @@ void main() {
     await client.setServerBaseUrl(
       'http://${server.address.address}:${server.port}',
     );
-    final creation = client.createSession(scope: 'project:tempestmiku');
+    final creation = client.createSession(
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
     final request = await requestFuture;
     final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
     request.response
@@ -84,7 +88,8 @@ void main() {
           'status': 'active',
           'mode': 'personal_assistant',
           'label': 'Personal Assistant',
-          'defaultScope': 'project:tempestmiku',
+          'projectId': 'tempestmiku',
+          'memoryPolicy': 'project',
           'activeSkills': const [],
         }),
       );
@@ -93,8 +98,9 @@ void main() {
     final session = await creation;
     expect(request.method, 'POST');
     expect(request.uri.path, '/sessions');
-    expect(body, {'scope': 'project:tempestmiku'});
-    expect(session.defaultScope, 'project:tempestmiku');
+    expect(body, {'projectId': 'tempestmiku', 'memoryPolicy': 'project'});
+    expect(session.projectId, 'tempestmiku');
+    expect(session.memoryPolicy, MikuMemoryPolicy.project);
   });
 
   test('scripted client deduplicates a repeated caller-owned id', () async {

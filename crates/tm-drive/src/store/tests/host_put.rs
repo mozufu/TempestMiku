@@ -199,7 +199,7 @@ async fn dropped_file_auto_put_records_approval_provenance_and_replay_event() {
         std::time::Duration::from_secs(1),
     )
     .with_session_id("session-drop")
-    .with_session_scope("project:tempestmiku")
+    .with_project_id("tempestmiku")
     .with_event_sink(events.clone());
 
     let result = host

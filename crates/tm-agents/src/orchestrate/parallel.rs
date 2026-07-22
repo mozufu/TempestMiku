@@ -205,7 +205,7 @@ impl HostFn for AgentsParallelFn {
             let spec = ActorSpec {
                 id: actor_id.clone(),
                 session_id: session_id.clone(),
-                session_scope: ctx.session_scope.clone(),
+                project_id: ctx.project_id.clone(),
                 role,
                 task: task_str,
                 mode: None,

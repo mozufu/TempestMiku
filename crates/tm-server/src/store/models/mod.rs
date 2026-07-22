@@ -20,6 +20,35 @@ use uuid::Uuid;
 
 use crate::{Result, ServerError};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryPolicy {
+    #[default]
+    Global,
+    Project,
+}
+
+impl MemoryPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Project => "project",
+        }
+    }
+}
+
+impl std::str::FromStr for MemoryPolicy {
+    type Err = ServerError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "global" => Ok(Self::Global),
+            "project" => Ok(Self::Project),
+            other => Err(ServerError::Store(format!("unknown memory policy {other}"))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub id: Uuid,
@@ -31,16 +60,27 @@ pub struct SessionRecord {
     pub persona_status: AssetStatus,
     #[serde(default = "default_owner_subject")]
     pub owner_subject: String,
-    #[serde(default = "default_memory_scope")]
-    pub memory_scope: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub memory_policy: MemoryPolicy,
+}
+
+impl SessionRecord {
+    /// The flat scope string memory storage/query/dream code has always keyed on
+    /// (`"global"` or `"project:<id>"`), now derived instead of stored directly.
+    pub fn memory_scope(&self) -> String {
+        match self.memory_policy {
+            MemoryPolicy::Global => "global".to_string(),
+            MemoryPolicy::Project => {
+                format!("project:{}", self.project_id.as_deref().unwrap_or_default())
+            }
+        }
+    }
 }
 
 fn default_owner_subject() -> String {
     "brian".to_string()
-}
-
-fn default_memory_scope() -> String {
-    "global".to_string()
 }
 
 #[derive(Debug, Clone)]

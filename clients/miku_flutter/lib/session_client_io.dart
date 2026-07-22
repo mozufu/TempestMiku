@@ -137,8 +137,10 @@ class NativeMikuSessionClient
   Future<MikuSession> createOrReuseSession() => _createOrReuseSessionImpl();
 
   @override
-  Future<MikuSession> createSession({String scope = 'global'}) =>
-      _createSessionImpl(scope: scope);
+  Future<MikuSession> createSession({
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) => _createSessionImpl(projectId: projectId, memoryPolicy: memoryPolicy);
 
   @override
   Future<void> endSession(String sessionId) => _endSessionImpl(sessionId);
@@ -151,8 +153,11 @@ class NativeMikuSessionClient
   Future<List<ProjectCatalogEntry>> listProjects() => _listProjectsImpl();
 
   @override
-  Future<ProjectCatalogEntry> createProject(String id, {String? title}) =>
-      _createProjectImpl(id, title);
+  Future<ProjectCatalogEntry> createProject(
+    String id, {
+    String? title,
+    MikuMemoryPolicy? defaultMemoryPolicy,
+  }) => _createProjectImpl(id, title, defaultMemoryPolicy);
 
   @override
   Future<ProjectCatalogEntry> archiveProject(
@@ -161,8 +166,15 @@ class NativeMikuSessionClient
   }) => _archiveProjectImpl(projectId, reason);
 
   @override
-  Future<String> setSessionScope(String sessionId, String scope) =>
-      _setSessionScopeImpl(sessionId, scope);
+  Future<MikuSession> setSessionMemoryContext(
+    String sessionId, {
+    String? projectId,
+    MikuMemoryPolicy? memoryPolicy,
+  }) => _setSessionMemoryContextImpl(
+    sessionId,
+    projectId: projectId,
+    memoryPolicy: memoryPolicy,
+  );
 
   @override
   Future<LoadedSession> loadSession(String sessionId) =>

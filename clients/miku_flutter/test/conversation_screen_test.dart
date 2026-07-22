@@ -235,6 +235,8 @@ void main() {
               )
               .first,
     );
+    await tester.ensureVisible(find.byKey(const Key('mode-details')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('mode-details')));
     await tester.pumpAndSettle();
 
@@ -832,6 +834,8 @@ void main() {
               )
               .first,
     );
+    await tester.ensureVisible(find.byKey(const Key('end-session')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('end-session')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('confirm-end-session')));
@@ -856,7 +860,7 @@ void main() {
 
     final client = ScriptedMikuClient();
     final session = await client.createSession();
-    await client.setSessionScope(session.id, 'project:tempestmiku');
+    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
     await client.sendMessage(
       session.id,
       '整理 Drive research',
@@ -912,7 +916,7 @@ void main() {
     await tester.pumpAndSettle();
     final failingClient = ScriptedMikuClient(failDriveFeed: true);
     final session = await failingClient.createSession();
-    await failingClient.setSessionScope(session.id, 'project:tempestmiku');
+    await failingClient.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
     await loadApp(tester, failingClient);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
@@ -1042,6 +1046,47 @@ void main() {
     expect(find.textContaining('成長了 3 個 Project 項目'), findsOneWidget);
   });
 
+  testWidgets('toggles memory policy without changing the active project', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(430, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    await client.setSessionMemoryContext(
+      session.id,
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
+    await loadApp(tester, client);
+
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('project-browser-up')));
+    await tester.pumpAndSettle();
+
+    final toggle = find.byKey(
+      const Key('project-memory-policy-tempestmiku'),
+    );
+    expect(toggle, findsOneWidget);
+    await tester.tap(find.text('沿用全域記憶'));
+    await tester.pumpAndSettle();
+
+    final updated = (await client.loadSession(session.id)).session;
+    expect(updated.projectId, 'tempestmiku');
+    expect(updated.memoryPolicy, MikuMemoryPolicy.global);
+    expect(toggle, findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('project-global-scope')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('project-memory-policy-tempestmiku')), findsNothing);
+  });
+
   testWidgets(
     'returns a project-scoped conversation to Global without losing content',
     (tester) async {
@@ -1052,7 +1097,7 @@ void main() {
 
       final client = ScriptedMikuClient();
       final session = await client.createSession();
-      await client.setSessionScope(session.id, 'project:tempestmiku');
+      await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
       await loadApp(tester, client);
 
       await tester.enterText(
@@ -1083,10 +1128,7 @@ void main() {
       await tester.tap(globalScope);
       await tester.pumpAndSettle();
 
-      expect(
-        (await client.loadSession(session.id)).session.defaultScope,
-        'global',
-      );
+      expect((await client.loadSession(session.id)).session.projectId, isNull);
       expect(tester.widget<ListTile>(globalScope).selected, isTrue);
       expect(
         tester
@@ -1162,7 +1204,7 @@ void main() {
   testWidgets('system back walks up the project browser path', (tester) async {
     final client = ScriptedMikuClient();
     final session = await client.createSession();
-    await client.setSessionScope(session.id, 'project:tempestmiku');
+    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
     await loadApp(tester, client);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
@@ -1191,7 +1233,7 @@ void main() {
 
     final client = ScriptedMikuClient();
     final session = await client.createSession();
-    await client.setSessionScope(session.id, 'project:tempestmiku');
+    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
     await client.sendMessage(
       session.id,
       'Summarize the project update',
@@ -1243,7 +1285,8 @@ void main() {
 
     final current = await client.createOrReuseSession();
     expect(current.id, isNot(previous.id));
-    expect(current.defaultScope, 'project:tempestmiku');
+    expect(current.projectId, 'tempestmiku');
+    expect(current.memoryPolicy, MikuMemoryPolicy.project);
     expect(find.byKey(const Key('project-page-content')), findsNothing);
     expect(find.byKey(const Key('conversation-composer')), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -1281,8 +1324,8 @@ void main() {
     expect(created.hasLinkedFolder, isFalse);
     expect(created.id, startsWith('project-'));
     expect(
-      (await client.loadSession(session.id)).session.defaultScope,
-      created.memoryScope,
+      (await client.loadSession(session.id)).session.projectId,
+      created.id,
     );
   });
 
@@ -1340,7 +1383,7 @@ void main() {
     final client = ScriptedMikuClient(failProjectScope: true);
     await loadApp(tester, client);
     final session = await client.createOrReuseSession();
-    expect(session.defaultScope, 'global');
+    expect(session.projectId, isNull);
 
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
@@ -1350,7 +1393,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
-    expect((await client.createOrReuseSession()).defaultScope, 'global');
+    expect((await client.createOrReuseSession()).projectId, isNull);
   });
 
   testWidgets(
@@ -1358,7 +1401,7 @@ void main() {
     (tester) async {
       final client = ScriptedMikuClient(includeArchiveProject: true);
       final session = await client.createSession();
-      await client.setSessionScope(session.id, 'project:tempestmiku');
+      await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
       client.endSessionForTesting(session.id);
       await loadApp(tester, client);
       await tester.tap(find.byKey(const Key('open-left-drawer')));

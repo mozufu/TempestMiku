@@ -65,17 +65,13 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+    super::util::validate_authorized_project(state.store.as_ref(), session.project_id.as_deref())
         .await?;
     // §30: drive is Miku's playground, not a project's folder. The feed is scope-relative: a
     // project scope shows that project's shelf; global scope shows the unprojected playground.
     // A project filter is only honored inside its own project scope (the object-capability
     // boundary: global sessions never reach projected content).
-    let project = match session
-        .memory_scope
-        .strip_prefix("project:")
-        .filter(|value| !value.is_empty())
-    {
+    let project = match session.project_id.as_deref() {
         Some(id) => {
             if query
                 .project

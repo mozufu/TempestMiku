@@ -36,9 +36,10 @@ sterile coding product:
   identity and the active mode's skills, not a structured profile field, API value, router input, or
   client setting. Rule: **the more serious, the fewer 喵.** Cuteness yields to precision, by design.
 - **Mode profile** (`modes.json` → `modes[]`) — *what capabilities are available now*: declared
-  runtime capabilities, the mode's own declared skills, grouping class, and default scope.
-  Switchable, and **sticky**: once switched, a mode stays active until the user changes it or
-  confirms an `await modes.suggest(...)` proposal — never a silent per-turn revert.
+  runtime capabilities, the mode's own declared skills, and grouping class. Switchable, and
+  **sticky**: once switched, a mode stays active until the user changes it or confirms an
+  `await modes.suggest(...)` proposal — never a silent per-turn revert. Project selection and memory
+  policy are separate session controls (§22, §30); a mode never supplies or changes either.
 - **Layered skills** (`modes.json` → top-level `skills[]`, bodies at `skills/*/SKILL.md`) —
   *procedural payloads* composed on top of whichever mode is active: always-on, or triggered by
   message content. Independent of mode capability grants.
@@ -60,10 +61,11 @@ SOUL and mode-selected skills. Configured or managed assets cannot replace or di
 runtime-owned language guidance. Repo workflow details such as `fs.patch` operations remain in
 `serious-engineer-ops`, not in the language contract.
 
-Mode id, capability list, and scope are dispatch data the router and host act on; they are never
-rendered into the prompt as labels. Miku doesn't read "Mode id: serious_engineer" or a structured
-voice level. She reads SOUL.md plus whichever skill markdown resolved for that turn. Voice behavior
-is therefore changed by editing those prompt assets, not by changing API metadata.
+Mode id and capability list are dispatch data the router and host act on; they are never rendered
+into the prompt as labels. Project id and memory policy come from the session, independently of the
+mode. Miku doesn't read "Mode id: serious_engineer" or a structured voice level. She reads SOUL.md
+plus whichever skill markdown resolved for that turn. Voice behavior is therefore changed by
+editing those prompt assets, not by changing API metadata.
 
 Rust vendors the default `SOUL.md`, `modes.json`, and bundled skills under
 `crates/tm-modes/assets/`. A configured mode/skill asset path may override those files except the
@@ -95,10 +97,10 @@ Pick the smallest sufficient mode — and expect it to stick until you leave it.
 
 Both modes run under the **one** character. Capabilities are config, not code (§10.4): a mode =
 runtime id + profile + route triggers (routing hints; see §21.4) + declared capabilities + its own
-declared skills + default scope. The optional `capabilityClass` is only grouping/display metadata;
-dispatch decisions use declared capabilities such as `backend.coding`, `fs.*`, `proc.*`, each exact
-`git.<operation>` grant from the 15-call namespace in §25.2.2, or `agents.*`; there is no wildcard
-`git.*` grant, `git.run`, raw argv, or shell-shaped Git capability.
+declared skills. The optional `capabilityClass` is only grouping/display metadata; dispatch decisions
+use declared capabilities such as `backend.coding`, `fs.*`, `proc.*`, each exact `git.<operation>`
+grant from the 15-call namespace in §25.2.2, or `agents.*`; there is no wildcard `git.*` grant,
+`git.run`, raw argv, or shell-shaped Git capability.
 Voice remains prompt-level agreement rather than mode metadata. The catalog contains only these two
 mode ids: `handoff` is rejected as unknown, with no compatibility alias.
 

@@ -113,11 +113,11 @@ let artifact = @artifacts.put {data: "child resource open ok", title: "child out
         Arc::new(crate::ChatActorExecutor::with_actor_context(
             llm_for_executor,
             cfg.clone(),
-            move |session_id, actor_id, grants, session_scope, cancellation| {
+            move |session_id, actor_id, grants, project_id, cancellation| {
                 let mut opts = executor_options.clone();
                 opts.session_id = session_id.to_string();
                 opts.actor_id = actor_id.map(str::to_string);
-                opts.session_scope = session_scope.map(str::to_string);
+                opts.project_id = project_id.map(str::to_string);
                 opts.cancellation = cancellation;
                 opts.grants = tm_host::CapabilityGrants::default()
                     .allow_many(grants.names().map(str::to_string));

@@ -18,7 +18,7 @@ impl ResourceHandler for RemoteLinkedFixture {
         selector: Option<&str>,
         ctx: &InvocationCtx,
     ) -> tm_host::Result<tm_artifacts::ResourceContent> {
-        assert_eq!(ctx.session_scope.as_deref(), Some("project:tempestmiku"));
+        assert_eq!(ctx.project_id.as_deref(), Some("tempestmiku"));
         Ok(tm_artifacts::ResourceContent {
             uri: uri.to_string(),
             kind: "text".to_string(),
@@ -37,7 +37,7 @@ impl ResourceHandler for RemoteLinkedFixture {
         _uri: Option<&str>,
         ctx: &InvocationCtx,
     ) -> tm_host::Result<Vec<ResourceEntry>> {
-        assert_eq!(ctx.session_scope.as_deref(), Some("project:tempestmiku"));
+        assert_eq!(ctx.project_id.as_deref(), Some("tempestmiku"));
         Ok(vec![ResourceEntry {
             uri: "linked://tempestmiku/README.md".to_string(),
             name: "README.md".to_string(),

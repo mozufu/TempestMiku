@@ -101,7 +101,7 @@ use memory_search::MEMORY_SEARCH_CAPABILITY;
 use memory_search::MemorySearchHostFn;
 use mode_suggest::{MODE_SUGGEST_APPROVAL_TIMEOUT, MODE_SUGGEST_CAPABILITY, ModeSuggestHostFn};
 use modes::{active_skills, build_turn_prompt, mode_changed_payload, mode_profile};
-use projects::{build_project_overview, project_id_from_scope, record_project_observations};
+use projects::{build_project_overview, record_project_observations};
 
 pub use modes::{ModeRequest, ModeResponse};
 pub use projects::{ProjectCatalogEntry, ProjectCatalogResponse};

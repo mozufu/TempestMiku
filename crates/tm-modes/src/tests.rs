@@ -21,7 +21,6 @@ fn bundled_mode_catalog_has_default_and_serious_engineer_profile() {
         .profile(&ModeId::from("serious_engineer"))
         .expect("serious engineer profile");
     assert_eq!(serious.label, "Serious Engineer");
-    assert_eq!(serious.default_scope, "project:tempestmiku");
     assert_eq!(serious.active_skills, ["serious-engineer-ops"]);
     assert!(serious.has_capability("backend.coding"));
     assert!(serious.has_capability("agents.run"));
@@ -388,7 +387,6 @@ fn mode_profiles_map_expected_skills_and_scope() {
         assistant.active_skills,
         vec!["miku-voice", "personal-assistant-state-capture"]
     );
-    assert_eq!(assistant.default_scope, "global");
     assert!(assistant.captures_personal_state());
     assert!(assistant.has_capability("http.request"));
     assert!(assistant.has_capability("resources.read:artifact"));
@@ -431,7 +429,6 @@ fn mode_profiles_map_expected_skills_and_scope() {
     assert!(serious.has_capability("resources.read:linked"));
     assert!(serious.has_capability("backend.coding"));
     assert_eq!(serious.capability_class, "engineering");
-    assert_eq!(serious.default_scope, "project:tempestmiku");
 
     for capability in [
         "fs.read",
@@ -594,7 +591,6 @@ fn custom_modes_json() -> String {
                 "mode": "custom_runtime_mode",
                 "label": "Custom Runtime Mode",
                 "description": "Loaded only from runtime mode assets.",
-                "defaultScope": "global",
                 "activeSkills": ["custom-skill"],
                 "capabilities": ["drive.search"],
                 "capabilityClass": "conversation",
@@ -617,7 +613,6 @@ fn missing_skill_modes_json() -> String {
                 "mode": "custom_runtime_mode",
                 "label": "Custom Runtime Mode",
                 "description": "Loaded only from runtime mode assets.",
-                "defaultScope": "global",
                 "activeSkills": ["missing-skill"],
                 "capabilities": [],
                 "capabilityClass": "conversation",

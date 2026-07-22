@@ -17,7 +17,9 @@ pub struct ChatTurn {
     pub durable_turn_id: Option<Uuid>,
     pub user_prompt: String,
     pub mode: ModeId,
-    pub scope: String,
+    pub owner_subject: String,
+    pub project_id: Option<String>,
+    pub memory_scope: String,
     pub system_prompt: String,
     pub capabilities: Vec<String>,
     pub prior_messages: Vec<Message>,
@@ -38,7 +40,9 @@ impl std::fmt::Debug for ChatTurn {
             .field("durable_turn_id", &self.durable_turn_id)
             .field("user_prompt", &self.user_prompt)
             .field("mode", &self.mode)
-            .field("scope", &self.scope)
+            .field("owner_subject", &self.owner_subject)
+            .field("project_id", &self.project_id)
+            .field("memory_scope", &self.memory_scope)
             .field("system_prompt", &self.system_prompt)
             .field("capabilities", &self.capabilities)
             .field("prior_messages", &self.prior_messages)

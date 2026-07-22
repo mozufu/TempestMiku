@@ -111,8 +111,10 @@ pub struct InvocationCtx {
     /// Top-level orchestrator sessions leave this unset and are treated as `Root`
     /// by the agents mailbox layer.
     pub actor_id: Option<String>,
-    /// Server-authoritative session scope used by project-bound capability families.
-    pub session_scope: Option<String>,
+    /// Server-authoritative project id used for project-bound capability families
+    /// (fs.*, code.*, proc.*, linked-folder resources). A bare project id — never a
+    /// "project:" prefixed scope string.
+    pub project_id: Option<String>,
     /// Server-authoritative owner and memory scope for resource calls.
     ///
     /// Product handlers must compare requested subjects/scopes against this
@@ -133,7 +135,7 @@ impl std::fmt::Debug for InvocationCtx {
             .field("approval_timeout", &self.approval_timeout)
             .field("session_id", &self.session_id)
             .field("actor_id", &self.actor_id)
-            .field("session_scope", &self.session_scope)
+            .field("project_id", &self.project_id)
             .field("memory_authority", &self.memory_authority)
             .finish_non_exhaustive()
     }
@@ -160,7 +162,7 @@ impl InvocationCtx {
             events: Arc::new(NoopHostEventSink),
             session_id: String::new(),
             actor_id: None,
-            session_scope: None,
+            project_id: None,
             memory_authority: None,
         }
     }
@@ -175,30 +177,25 @@ impl InvocationCtx {
         self
     }
 
-    pub fn with_session_scope(mut self, scope: impl Into<String>) -> Self {
-        self.session_scope = Some(scope.into());
+    pub fn with_project_id(mut self, project_id: impl Into<String>) -> Self {
+        self.project_id = Some(project_id.into());
         self
     }
 
     pub fn require_linked_alias(&self, alias: &str) -> Result<()> {
-        let Some(scope) = self.session_scope.as_deref() else {
+        let Some(project_id) = self.project_id.as_deref() else {
             if self.session_id.is_empty() || self.session_id == "default" {
                 return Ok(());
             }
             return Err(HostError::CapabilityDenied(
-                "linked resources require server-authoritative project scope".to_string(),
+                "linked resources require a server-authoritative project".to_string(),
             ));
         };
-        let Some(project) = scope.strip_prefix("project:") else {
-            return Err(HostError::CapabilityDenied(format!(
-                "linked resources are unavailable from non-project session scope {scope}"
-            )));
-        };
-        if project == alias {
+        if project_id == alias {
             Ok(())
         } else {
             Err(HostError::CapabilityDenied(format!(
-                "linked alias {alias} is outside authorized scope {scope}"
+                "linked alias {alias} is outside authorized project {project_id}"
             )))
         }
     }

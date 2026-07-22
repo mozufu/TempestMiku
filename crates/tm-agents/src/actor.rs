@@ -143,8 +143,8 @@ pub struct ActorSpec {
     /// to the user (approval prompts, lifecycle events, and artifacts) belong to
     /// the spawning session.
     pub session_id: String,
-    /// Exact server-authoritative session scope inherited from the spawning host call.
-    pub session_scope: Option<String>,
+    /// Exact server-authoritative project id inherited from the spawning host call.
+    pub project_id: Option<String>,
     pub role: String,
     pub task: String,
     pub mode: Option<String>,

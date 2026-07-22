@@ -310,11 +310,13 @@ pub(super) async fn read_linked_resource(
     uri: &str,
     selector: Option<&str>,
     session_id: Uuid,
-    session_scope: &str,
+    project_id: Option<&str>,
 ) -> Result<ResourceContent> {
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"))
-        .with_session_id(session_id.to_string())
-        .with_session_scope(session_scope.to_string());
+    let mut ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"))
+        .with_session_id(session_id.to_string());
+    if let Some(project_id) = project_id {
+        ctx = ctx.with_project_id(project_id.to_string());
+    }
     if let Some(handler) = remote_handler {
         handler
             .read(uri, selector, &ctx)
@@ -335,11 +337,13 @@ pub(super) async fn list_linked_resources(
     remote_handler: Option<&Arc<dyn tm_host::ResourceHandler>>,
     uri: Option<&str>,
     session_id: Uuid,
-    session_scope: &str,
+    project_id: Option<&str>,
 ) -> Result<Vec<ResourceEntry>> {
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"))
-        .with_session_id(session_id.to_string())
-        .with_session_scope(session_scope.to_string());
+    let mut ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:linked"))
+        .with_session_id(session_id.to_string());
+    if let Some(project_id) = project_id {
+        ctx = ctx.with_project_id(project_id.to_string());
+    }
     if let Some(handler) = remote_handler {
         handler.list(uri, &ctx).await.map_err(map_host_error)
     } else {
@@ -369,9 +373,11 @@ where
     })?;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(tm_drive::DriveResourceHandler::new(drive_store)));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"))
-        .with_session_id(session_id.to_string())
-        .with_session_scope(session.memory_scope);
+    let mut ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"))
+        .with_session_id(session_id.to_string());
+    if let Some(project_id) = session.project_id.as_deref() {
+        ctx = ctx.with_project_id(project_id);
+    }
     registry
         .read(uri, selector, &ctx)
         .await
@@ -397,9 +403,11 @@ where
     })?;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(tm_drive::DriveResourceHandler::new(drive_store)));
-    let ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"))
-        .with_session_id(session_id.to_string())
-        .with_session_scope(session.memory_scope);
+    let mut ctx = InvocationCtx::new(CapabilityGrants::default().allow("resources.read:drive"))
+        .with_session_id(session_id.to_string());
+    if let Some(project_id) = session.project_id.as_deref() {
+        ctx = ctx.with_project_id(project_id);
+    }
     registry.list(Some(uri), &ctx).await.map_err(map_host_error)
 }
 
@@ -466,12 +474,13 @@ where
         store: Arc::clone(&state.store),
         sender: state.sender(session_id),
     });
-    Ok(
-        InvocationCtx::new(CapabilityGrants::default().allow_many(capabilities))
-            .with_session_id(session_id.to_string())
-            .with_session_scope(session.memory_scope)
-            .with_event_sink(events),
-    )
+    let mut ctx = InvocationCtx::new(CapabilityGrants::default().allow_many(capabilities))
+        .with_session_id(session_id.to_string())
+        .with_event_sink(events);
+    if let Some(project_id) = session.project_id {
+        ctx = ctx.with_project_id(project_id);
+    }
+    Ok(ctx)
 }
 
 pub(super) async fn read_mcp_resource<S, M, C>(
@@ -550,10 +559,12 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+    state
+        .store
+        .ensure_memory_scope_active(&session.owner_subject, &session.memory_scope())
         .await?;
+    let scope = session.memory_scope();
     let subject = session.owner_subject;
-    let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
@@ -580,10 +591,12 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+    state
+        .store
+        .ensure_memory_scope_active(&session.owner_subject, &session.memory_scope())
         .await?;
+    let scope = session.memory_scope();
     let subject = session.owner_subject;
-    let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),
@@ -607,10 +620,12 @@ where
     C: ChatRunner,
 {
     let session = state.store.get_session(session_id).await?;
-    super::util::validate_authorized_memory_scope(state.store.as_ref(), &session.memory_scope)
+    state
+        .store
+        .ensure_memory_scope_active(&session.owner_subject, &session.memory_scope())
         .await?;
+    let scope = session.memory_scope();
     let subject = session.owner_subject;
-    let scope = session.memory_scope;
     let mut registry = ResourceRegistry::new();
     registry.register(Arc::new(crate::memory::MemoryResourceHandler::new(
         Arc::clone(&state.store),

@@ -116,6 +116,16 @@ const MIGRATIONS: &[Migration] = &[
         name: "project_entities",
         sql: include_str!("../../../migrations/0021_project_entities.sql"),
     },
+    Migration {
+        version: 22,
+        name: "project_default_memory_policy",
+        sql: include_str!("../../../migrations/0022_project_default_memory_policy.sql"),
+    },
+    Migration {
+        version: 23,
+        name: "session_project_memory_policy",
+        sql: include_str!("../../../migrations/0023_session_project_memory_policy.sql"),
+    },
 ];
 
 impl PostgresStore {

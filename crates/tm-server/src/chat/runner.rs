@@ -74,7 +74,8 @@ type SandboxFactory = dyn Fn(&ChatTurn, Arc<dyn HostEventSink>, Arc<dyn Cancella
 #[derive(Clone, PartialEq, Eq)]
 struct SandboxProfile {
     mode: ModeId,
-    scope: String,
+    project_id: Option<String>,
+    memory_scope: String,
     capabilities: Vec<String>,
     deny_approvals: bool,
     host_functions: Vec<String>,
@@ -84,7 +85,8 @@ impl From<&ChatTurn> for SandboxProfile {
     fn from(turn: &ChatTurn) -> Self {
         Self {
             mode: turn.mode.clone(),
-            scope: turn.scope.clone(),
+            project_id: turn.project_id.clone(),
+            memory_scope: turn.memory_scope.clone(),
             capabilities: turn.capabilities.clone(),
             deny_approvals: turn.deny_approvals,
             host_functions: turn
@@ -171,7 +173,11 @@ impl AgentChatRunner {
             move |turn, host_events, cancellation| {
                 let mut options = base_options.clone();
                 options.session_id = turn.session_id.to_string();
-                options.session_scope = Some(turn.scope.clone());
+                options.project_id = turn.project_id.clone();
+                options.memory_authority = Some(tm_host::MemoryAuthority {
+                    subject: turn.owner_subject.clone(),
+                    scope: turn.memory_scope.clone(),
+                });
                 options.grants =
                     CapabilityGrants::default().allow_many(turn.capabilities.iter().cloned());
                 for function in &turn.host_functions {

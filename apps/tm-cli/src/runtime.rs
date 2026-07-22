@@ -136,20 +136,25 @@ pub(super) async fn build_sandbox(
     // linked folder is unambiguous; multiple folders remain fail-closed until the
     // CLI grows an explicit project selector.
     let policies = linked_folders.policies();
-    let session_scope = match policies.as_slice() {
-        [policy] => Some(format!("project:{}", policy.alias)),
-        [_, _, ..] => Some("cli:unscoped".to_string()),
-        [] => None,
+    let project_id = match policies.as_slice() {
+        [policy] => Some(policy.alias.clone()),
+        _ => None,
     };
     let linked_folders = (!linked_folders.is_empty()).then_some(linked_folders);
     let egress_runtime = EgressRuntime::new(host_config.egress.clone())?;
+    // `default` is the tm-lang fixture identity and intentionally carries trusted
+    // local-host semantics. Never expose that bypass through the standalone CLI.
+    let session_id = match args.session_id.as_deref() {
+        None | Some("default") => "cli".to_string(),
+        Some(session_id) => session_id.to_string(),
+    };
     let mut options = TmSandboxOptions {
         artifact_root: host_config
             .artifact_root
             .clone()
             .unwrap_or_else(default_root),
-        session_id: args.session_id.clone().unwrap_or_else(|| "cli".to_string()),
-        session_scope,
+        session_id,
+        project_id,
         linked_folders,
         grants: serious_engineer_grants().allow_many(host_config.egress.turn_capabilities()),
         approval_policy: approval_policy(host_config)?,

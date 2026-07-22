@@ -541,7 +541,8 @@ fn compose_turn_prompt(turn: &CodingTurn) -> Result<String> {
         .collect::<Vec<_>>();
     let context = serde_json::to_string_pretty(&json!({
         "mode": turn.mode.as_str(),
-        "scope": turn.scope,
+        "projectId": turn.project_id,
+        "memoryScope": turn.memory_scope,
         "declaredCapabilities": turn.capabilities,
         "priorMessages": prior_messages,
     }))?;
@@ -873,7 +874,9 @@ mod transcript_tests {
             user_prompt: "fix the focused test".to_string(),
             system_prompt: "Keep Miku identity and report concrete evidence.".to_string(),
             mode: tm_modes::ModeId::from("serious_engineer"),
-            scope: "project:tempestmiku".to_string(),
+            owner_subject: "brian".to_string(),
+            project_id: Some("tempestmiku".to_string()),
+            memory_scope: "project:tempestmiku".to_string(),
             capabilities: vec!["code.*".to_string(), "proc.*".to_string()],
             prior_messages: vec![
                 tm_core::Message::user("earlier request"),
@@ -883,10 +886,11 @@ mod transcript_tests {
     }
 
     #[test]
-    fn turn_prompt_preserves_mode_scope_capabilities_and_bounded_history() {
+    fn turn_prompt_preserves_mode_authorities_capabilities_and_bounded_history() {
         let prompt = compose_turn_prompt(&sample_turn()).unwrap();
         assert!(prompt.contains(r#""mode": "serious_engineer""#));
-        assert!(prompt.contains(r#""scope": "project:tempestmiku""#));
+        assert!(prompt.contains(r#""projectId": "tempestmiku""#));
+        assert!(prompt.contains(r#""memoryScope": "project:tempestmiku""#));
         assert!(prompt.contains(r#""code.*""#));
         assert!(prompt.contains("earlier request"));
         assert!(prompt.contains("earlier result"));

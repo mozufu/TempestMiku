@@ -6,7 +6,6 @@ const ModeCatalog _scriptedModeCatalog = ModeCatalog(
     ModeProfile(
       id: 'personal_assistant',
       label: 'Personal Assistant',
-      defaultScope: 'global',
       capabilityClass: 'conversation',
       activeSkills: ['miku-voice', 'personal-assistant-state-capture'],
       capabilities: [
@@ -22,7 +21,6 @@ const ModeCatalog _scriptedModeCatalog = ModeCatalog(
     ModeProfile(
       id: 'ambiguity_grill',
       label: 'Ambiguity Grill',
-      defaultScope: 'global',
       capabilityClass: 'conversation',
       activeSkills: ['miku-voice', 'ambiguity-grill'],
       capabilities: [],
@@ -31,7 +29,6 @@ const ModeCatalog _scriptedModeCatalog = ModeCatalog(
     ModeProfile(
       id: 'negative_state_grounding',
       label: 'Negative-State Grounding',
-      defaultScope: 'global',
       capabilityClass: 'conversation',
       activeSkills: ['miku-voice', 'negative-state-grounding'],
       capabilities: [],
@@ -40,7 +37,6 @@ const ModeCatalog _scriptedModeCatalog = ModeCatalog(
     ModeProfile(
       id: 'serious_engineer',
       label: 'Serious Engineer',
-      defaultScope: 'project:tempestmiku',
       capabilityClass: 'engineering',
       activeSkills: [],
       capabilities: [

@@ -152,7 +152,8 @@ impl CodingBackend for ScriptedBackend {
         match &self.kind {
             ScriptedBackendKind::Events => {
                 assert_eq!(turn.mode, ModeId::from("serious_engineer"));
-                assert_eq!(turn.scope, "global");
+                assert_eq!(turn.project_id, None);
+                assert_eq!(turn.memory_scope, "global");
                 sink.emit("text", json!({ "event": "text", "delta": "working" }))
                     .await?;
                 sink.emit(
@@ -353,7 +354,9 @@ async fn create(app: &Router) -> CreateSessionResponse {
 async fn create_project_session(app: &Router) -> CreateSessionResponse {
     create_with_body(
         app,
-        Body::from(r#"{"mode":"serious_engineer","scope":"project:tempestmiku"}"#),
+        Body::from(
+            r#"{"mode":"serious_engineer","projectId":"tempestmiku","memoryPolicy":"project"}"#,
+        ),
     )
     .await
 }

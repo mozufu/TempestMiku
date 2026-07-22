@@ -7,7 +7,7 @@
       "description": "Planning, reminders, writing, open loops, and decision cleanup. Unlocked normal chat may request a confirmed transition through await modes.suggest(...).",
       "defaultScope": "global",
       "activeSkills": ["miku-voice", "personal-assistant-state-capture"],
-      "capabilities": ["drive.*", "project.*", "http.request", "resources.read:artifact", "resources.read:drive", "resources.read:skill"],
+      "capabilities": ["memory.search", "drive.*", "project.*", "http.request", "resources.read:artifact", "resources.read:drive", "resources.read:skill"],
       "capabilityClass": "conversation",
       "route": {
         "isDefault": true,

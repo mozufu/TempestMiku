@@ -3,7 +3,7 @@ use tm_artifacts::ArtifactStore;
 use tm_drive::{DrivePutOptions, InMemoryDriveStore};
 
 #[tokio::test]
-async fn chat_turn_prompt_includes_bounded_drive_recall_for_project_scope() {
+async fn chat_turn_indexes_drive_without_automatic_prompt_injection() {
     let artifact_root = tempfile::tempdir().unwrap();
     let drive_store =
         InMemoryDriveStore::new(ArtifactStore::open(artifact_root.path(), "drive").unwrap());
@@ -75,12 +75,13 @@ async fn chat_turn_prompt_includes_bounded_drive_recall_for_project_scope() {
     {
         let recorded = turns.lock();
         assert_eq!(recorded.len(), 1);
-        assert!(recorded[0].user_prompt.contains("Drive recall"));
-        assert!(recorded[0].user_prompt.contains(&filed.uri));
+        assert_eq!(recorded[0].user_prompt, "recall local drive docs");
+        assert!(!recorded[0].user_prompt.contains(&filed.uri));
         assert!(
             recorded[0]
-                .user_prompt
-                .contains("raw content remains behind drive://")
+                .capabilities
+                .iter()
+                .any(|capability| capability == MEMORY_SEARCH_CAPABILITY)
         );
     }
 

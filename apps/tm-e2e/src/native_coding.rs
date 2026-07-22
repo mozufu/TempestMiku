@@ -34,7 +34,7 @@ const APPROVED_FINAL: &str = "native coding approved path complete";
 const DENIED_FINAL: &str = "native coding denied path complete";
 const TIMEOUT_FINAL: &str = "native coding timeout path complete";
 const CONTINUITY_QUERY: &str = APPROVED_FINAL;
-const CONTINUITY_FINAL: &str = "native coding next-session recall complete";
+const CONTINUITY_FINAL: &str = "native coding next-session no-auto-recall complete";
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub async fn run_record_native_coding(options: RecordOptions) -> Result<EvidenceManifest> {
@@ -125,11 +125,11 @@ async fn run_native_coding_paths(
         Some(denied.last_event_id),
     )
     .await?;
-    let mut continuity = run_continuity_path(client, &session_id).await?;
+    let continuity = run_continuity_path(client, &session_id).await?;
     let llm_calls = server.llm_calls.load(Ordering::SeqCst);
     ensure!(
         llm_calls == 7,
-        "three native tool turns plus one next-session recall turn should use seven LLM calls; saw {llm_calls}"
+        "three native tool turns plus one next-session turn should use seven LLM calls; saw {llm_calls}"
     );
     let requests = server
         .llm_requests
@@ -137,7 +137,7 @@ async fn run_native_coding_paths(
         .map_err(|_| anyhow::anyhow!("native coding request capture lock poisoned"))?;
     let continuity_request = requests
         .last()
-        .context("next-session recall did not reach the native coding LLM")?;
+        .context("next-session turn did not reach the native coding LLM")?;
     let continuity_prompt = continuity_request
         .iter()
         .rev()
@@ -145,12 +145,11 @@ async fn run_native_coding_paths(
         .map(|message| message.content.as_str())
         .context("next-session native request omitted the continuity query")?;
     ensure!(
-        continuity_prompt.contains("[recall]")
-            && continuity_prompt.contains("Project summary/open loop from session")
-            && continuity_prompt.contains(&session_id),
-        "next-session native request omitted prior project recall: {continuity_prompt}"
+        !continuity_prompt.contains("[recall]")
+            && !continuity_prompt.contains("Project summary/open loop from session")
+            && !continuity_prompt.contains(&session_id),
+        "next-session native request unexpectedly auto-injected prior project recall: {continuity_prompt}"
     );
-    continuity.model_request_included_recall = true;
 
     let source_path = server.linked_root.join("src/lib.rs");
     let guard_path = server.linked_root.join("guard.txt");
@@ -167,7 +166,7 @@ async fn run_native_coding_paths(
         approved.artifact_uri, approved.linked_uri
     ));
     recorder.append_transcript(format!(
-        "- Fresh Serious Engineer session `{}` received source session `{}` in its model recall block and replayed `{}`.",
+        "- Fresh Serious Engineer session `{}` kept source session `{}` out of its model prompt and replayed `{}`.",
         continuity.session_id,
         continuity.source_session_id,
         continuity.replayed_event_types.join("`, `")
@@ -186,7 +185,6 @@ struct ContinuityPathReport {
     session_id: String,
     source_session_id: String,
     turn_id: String,
-    model_request_included_recall: bool,
     replayed_event_types: Vec<String>,
 }
 
@@ -196,7 +194,7 @@ impl ContinuityPathReport {
             "sessionId": self.session_id,
             "sourceSessionId": self.source_session_id,
             "turnId": self.turn_id,
-            "modelRequestIncludedRecall": self.model_request_included_recall,
+            "modelRequestIncludedRecall": false,
             "replayedEventTypes": self.replayed_event_types,
         })
     }
@@ -414,7 +412,7 @@ async fn run_continuity_path(
     ensure_turn_provenance(&replayed, &turn_id)?;
     ensure!(
         final_text(&replayed)? == CONTINUITY_FINAL,
-        "next-session native turn did not complete the recall path"
+        "next-session native turn did not complete the no-auto-recall path"
     );
     let replayed_event_types = event_types(&replayed);
     for expected in ["text", "final"] {
@@ -427,7 +425,6 @@ async fn run_continuity_path(
         session_id,
         source_session_id: source_session_id.to_string(),
         turn_id,
-        model_request_included_recall: false,
         replayed_event_types,
     })
 }

@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn durable_memory_recall_event_is_the_exact_retry_context() {
+async fn durable_memory_search_event_is_not_automatically_injected_on_retry() {
     let store = Arc::new(InMemoryStore::default());
     store.configure_owner_subject("owner").await.unwrap();
     let persona = tm_modes::ModesConfig::default();
@@ -24,7 +24,7 @@ async fn durable_memory_recall_event_is_the_exact_retry_context() {
         vec![RecallChunkRecord {
             id: Uuid::new_v4(),
             scope: "global".to_string(),
-            text: "persisted recall survives the retry boundary".to_string(),
+            text: "persisted search result remains behind memory.search".to_string(),
             source: "memory://fixture/retry".to_string(),
             importance: 0.8,
             created_at: Utc::now(),
@@ -55,11 +55,7 @@ async fn durable_memory_recall_event_is_the_exact_retry_context() {
     .with_auto_turn_dispatcher(false);
 
     let output = execute_turn_body(&state, &turn).await.unwrap();
-    assert!(
-        output
-            .response
-            .contains("persisted recall survives the retry boundary")
-    );
+    assert_eq!(output.response, "Miku heard: retry the durable turn");
     assert_eq!(
         store
             .events_by_type(session.id, "memory_recall", 10)

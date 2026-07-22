@@ -128,7 +128,7 @@ async fn only_unlocked_normal_chat_turns_receive_modes_suggest_authority() {
                 .iter()
                 .map(|function| function.name())
                 .collect::<Vec<_>>(),
-            vec![MODE_SUGGEST_CAPABILITY]
+            vec![MEMORY_SEARCH_CAPABILITY, MODE_SUGGEST_CAPABILITY]
         );
     }
 
@@ -161,8 +161,8 @@ async fn only_unlocked_normal_chat_turns_receive_modes_suggest_authority() {
             .iter()
             .map(|function| function.name())
             .collect::<Vec<_>>(),
-        vec![MODE_SUGGEST_CAPABILITY],
-        "handler registration alone must not confer authority"
+        vec![MEMORY_SEARCH_CAPABILITY, MODE_SUGGEST_CAPABILITY],
+        "handler registration alone must not confer mode-switch authority"
     );
 }
 

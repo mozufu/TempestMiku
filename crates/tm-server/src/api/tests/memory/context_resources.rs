@@ -1,4 +1,17 @@
 use super::*;
+struct NeverSearchMemory;
+
+#[async_trait]
+impl MemoryProvider for NeverSearchMemory {
+    async fn context_for_turn(
+        &self,
+        _subject: &str,
+        _scope: &str,
+        _query: &str,
+    ) -> Result<crate::MemoryContext> {
+        panic!("memory provider must not run unless the model calls memory.search")
+    }
+}
 
 struct HybridTraceProvider {
     candidate: tm_memory::HybridMemoryCandidate,
@@ -23,46 +36,30 @@ impl MemoryProvider for HybridTraceProvider {
     }
 }
 #[tokio::test]
-async fn memory_context_injects_profile_facts_and_recall_chunks() {
-    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
-    store
-        .add_profile_fact(ProfileFactRecord {
-            id: Uuid::new_v4(),
-            subject: "brian".to_string(),
-            predicate: "prefers".to_string(),
-            object: "boring Rust".to_string(),
-            confidence: 0.9,
-            importance: 0.72,
-            provenance: "test".to_string(),
-            valid_from: Utc::now(),
-            valid_to: None,
-        })
-        .await
-        .unwrap();
-    store
-        .add_recall_chunk(RecallChunkRecord {
-            id: Uuid::new_v4(),
-            scope: "global".to_string(),
-            text: "hello project open loop".to_string(),
-            source: "test".to_string(),
-            importance: 0.65,
-            created_at: Utc::now(),
-        })
-        .await
-        .unwrap();
+async fn ordinary_turn_does_not_search_or_inject_memory() {
+    let store = Arc::new(InMemoryStore::default());
+    let state = AppState::new(
+        Arc::clone(&store),
+        Arc::new(NeverSearchMemory),
+        Arc::new(EchoChatRunner),
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    );
+    let app = app(state);
     let session = create(&app).await;
+
     post_user_message(&app, session.id, "hello").await;
+
     let events = store.events_after(session.id, None).await.unwrap();
     let final_event = events
         .iter()
         .find(|event| event.event_type == "final")
         .unwrap();
-    assert!(final_event.payload_json.to_string().contains("boring Rust"));
+    assert_eq!(final_event.payload_json["text"], json!("Miku heard: hello"));
     assert!(
-        final_event
-            .payload_json
-            .to_string()
-            .contains("hello project open loop")
+        events
+            .iter()
+            .all(|event| event.event_type != "memory_recall")
     );
 }
 
@@ -105,10 +102,44 @@ async fn hybrid_turn_persists_exact_bounded_recall_and_typed_record_resources() 
             rrf_score: 0.0325,
         },
     });
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        vec![
+            StreamEvent::ToolCall {
+                index: 0,
+                id: Some("call_memory_search".to_string()),
+                name: Some("execute".to_string()),
+                arguments: Some(
+                    json!({"code": "@memory.search {query: \"replayable memory\"}"}).to_string(),
+                ),
+            },
+            StreamEvent::Finish {
+                reason: Some("tool_calls".to_string()),
+            },
+        ],
+        vec![
+            StreamEvent::Text("memory searched".to_string()),
+            StreamEvent::Finish {
+                reason: Some("stop".to_string()),
+            },
+        ],
+    ]));
+    let temp = tempfile::tempdir().unwrap();
+    let chat = Arc::new(AgentChatRunner::tm(
+        llm,
+        AgentConfig {
+            model: "fake".to_string(),
+            max_turns: 3,
+            ..AgentConfig::default()
+        },
+        TmSandboxOptions {
+            artifact_root: temp.path().join("artifacts"),
+            ..TmSandboxOptions::default()
+        },
+    ));
     let state = AppState::new(
         Arc::clone(&store),
         memory,
-        Arc::new(EchoChatRunner),
+        chat,
         ModesConfig::default(),
         AuthConfig::NoAuth,
     );

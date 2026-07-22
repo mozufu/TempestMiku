@@ -90,7 +90,7 @@ Pick the smallest sufficient mode — and expect it to stick until you leave it.
 
 | # | Bundled runtime mode | Declared capabilities | Mode-declared skills |
 |---|---|---|---|
-| 1 | **General** (default) | conversation + light `memory.recall` / `memory.propose` | `miku-voice`, `personal-assistant-state-capture` |
+| 1 | **General** (default) | conversation + model-controlled `memory.search`; approval-backed state capture | `miku-voice`, `personal-assistant-state-capture` |
 | 2 | **Serious Engineer** | `backend.coding`; native `fs.*` / `code.*` / `proc.*`; the exact `git.clone` / `git.init` / `git.add` / `git.mv` / `git.restore` / `git.rm` / `git.bisect` / `git.status` / `git.diff` / `git.grep` / `git.log` / `git.show` / `git.commit` / `git.push` / `git.pull` grants (§25.2.2); `agents.*`; `resources.read:linked` / `resources.read:agent` / `resources.read:history` (§23, §25). Only status/diff/grep are approval-free; log/show and every Git mutation/network call are always approved. The OMP ACP bridge is a replaceable coding backend. | `serious-engineer-ops` |
 
 Both modes run under the **one** character. Capabilities are config, not code (§10.4): a mode =

@@ -105,7 +105,7 @@ where
 }
 
 #[tokio::test]
-async fn completed_auto_turn_enqueues_one_manual_persona_approval_and_never_applies() {
+async fn completed_turn_without_memory_search_does_not_enqueue_persona_candidate() {
     let root = tempfile::tempdir().unwrap();
     let store = Arc::new(InMemoryStore::default());
     store.configure_owner_subject("owner").await.unwrap();
@@ -131,59 +131,21 @@ async fn completed_auto_turn_enqueues_one_manual_persona_approval_and_never_appl
     .with_self_evolution_tier(tm_host::SelfEvolutionTier::Moderate)
     .with_auto_turn_dispatcher(false);
 
-    let first_turn_id = run_turn(&state, session.id, "persona-auto-1").await;
-    assert_eq!(store.turn(first_turn_id).await.unwrap().status, "completed");
-    let proposals = store
-        .evolution_review_proposals_for_session(session.id)
-        .await
-        .unwrap();
-    assert_eq!(proposals.len(), 1);
-    let proposal = &proposals[0];
-    assert_eq!(proposal.status, tm_modes::ReviewProposalStatus::Pending);
-    assert_eq!(
-        proposal.apply_contract,
-        tm_modes::ReviewApplyContract::VersionedPersonaAddendum
-    );
-    let candidate = proposal.auto_candidate.as_ref().unwrap();
-    assert_eq!(candidate.source_turn_id, first_turn_id);
-    assert_eq!(candidate.evidence.len(), 2);
-    assert_eq!(
-        candidate.trigger,
-        crate::PersonaAutoCandidateTrigger::RepeatedPreference
-    );
+    let turn_id = run_turn(&state, session.id, "persona-no-search").await;
+    assert_eq!(store.turn(turn_id).await.unwrap().status, "completed");
     assert!(
-        persona
-            .managed_persona_addendum("miku")
-            .unwrap()
-            .active
-            .is_none()
-    );
-
-    let events = store.events_after(session.id, None).await.unwrap();
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.event_type == "approval")
-            .count(),
-        1
-    );
-    let proposal_event = events
-        .iter()
-        .find(|event| event.event_type == "write_proposal")
-        .unwrap();
-    assert_eq!(proposal_event.turn_id, Some(first_turn_id));
-    assert_eq!(proposal_event.payload_json["source"], json!("auto_mode"));
-    assert_eq!(proposal_event.payload_json["evidenceCount"], json!(2));
-
-    run_turn(&state, session.id, "persona-auto-2").await;
-    assert_eq!(
         store
             .evolution_review_proposals_for_session(session.id)
             .await
             .unwrap()
-            .len(),
-        1,
-        "a pending semantic duplicate must not enqueue another approval"
+            .is_empty()
+    );
+    assert!(
+        store
+            .events_by_type(session.id, "memory_recall", 10)
+            .await
+            .unwrap()
+            .is_empty()
     );
     assert!(
         persona

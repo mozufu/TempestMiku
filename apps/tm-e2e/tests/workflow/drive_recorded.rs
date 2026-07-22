@@ -160,7 +160,7 @@ async fn recorded_native_coding_proves_public_api_edit_test_approval_and_replay(
     );
     assert_eq!(
         scenario.details["continuity"]["modelRequestIncludedRecall"],
-        json!(true)
+        json!(false)
     );
     for event_type in ["text", "final"] {
         assert!(

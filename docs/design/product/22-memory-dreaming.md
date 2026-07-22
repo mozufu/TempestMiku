@@ -49,7 +49,7 @@ The **facts/profile store replaces Honcho's representation + dialectic + peer ca
 
 ## 22.3 Unified recall — the integration
 
-`memory.recall(query, ctx)` composes the stores instead of trusting any one:
+`memory.search(query)` composes the stores instead of trusting any one:
 
 ```mermaid
 flowchart LR
@@ -82,25 +82,25 @@ flowchart LR
 5. **Budget** — dedup, trim to the caller's token cap, attach provenance (`memory://` ids) so Miku can
    cite and so it stays heuristic (prefer live signal on conflict).
 
-## 22.4 Auto-context — the always-on budgets (principle #3)
+## 22.4 Model-controlled long-term context
 
-Each turn, only a small block is auto-injected; everything else is pull-on-demand via `memory.*` /
-`memory://`. Three stacked, self-computed budgets reproduce the honcho.json behavior natively:
+The active transcript and bounded prior messages remain the automatic working context. Long-term
+memory is **not** queried or injected on every turn. General mode receives the exact
+`memory.search` capability, and the model decides whether the current request needs cross-session
+preferences, commitments, decisions, project continuity, summaries, or other durable evidence.
 
-1. **Working context ≤ ~1600 tok** — rolling window + recursive summary (the `contextTokens` analog).
-2. **ToM synthesis ≤ ~800 chars**, every **N=3rd** turn — an LLM pass over recalled profile facts
-   answering *"what's relevant about Brian here"* (our self-built **dialectic**; cadence/cap = the
-   `dialecticCadence` / `dialecticMaxChars` analogs, gated off in serious/engineer turns).
-3. **Operational summary** — compact, at session start (separate cap; the OMP
-   `summaryInjectionTokenLimit`, set far below its 5k default).
+When called, `memory.search(query)` runs the bounded unified retrieval path in §22.3 under the
+server-authoritative owner and active memory scope. Its result includes provenance and budget
+metadata as ordinary `execute` output; the model can use it for the current answer or ignore it.
+The first result for a durable turn is persisted as `memory_recall` at
+`memory://recalls/<turn-id>`, and retries reuse that exact result instead of querying again. If the
+model does not call `memory.search`, the provider is not invoked and no recall trace is created.
+Serious Engineer receives no `memory.search` grant; it uses explicit repository, linked-folder, and
+Drive resources instead of silently importing companion memory into engineering work.
 
-The implementation counts durable user turns, plans this pass only every third turn when approved
-profile facts are present, and disables it for Serious/engineering/coding and scheduler work. The
-redacted request is capped and digest-bound. A no-tool auxiliary call produces a confirmed
-`memory_dialectic` trace before the main response; retries reuse an exact applied trace, while a
-durably empty/unavailable pass fails open without repeated auxiliary calls. Any synthesis is
-JSON-quoted as untrusted user-channel context and cannot override approved recall or the system
-prompt.
+Drive documents follow the same rule: project Drive entries may be indexed into scoped memory
+chunks after a turn, but their summaries are never appended to the user prompt automatically.
+The model pulls them through `memory.search` or uses `drive.search` / `drive://` directly.
 
 ## 22.5 Write path + "dreaming"
 
@@ -353,20 +353,22 @@ The current knobs become our config (now we own every one — none is an externa
   recurring blind spots. It emits only `write_proposal` + shared `approval` events, never direct
   durable writes. Transient moods, secrets, raw logs, large notes, obvious sensitive PII, one-off
   complaints, and project-specific commands are skipped before proposal creation.
-- **Turn integration:** every turn receives a bounded `MemoryContext` prompt block with profile
-  facts, scoped recall chunks, provenance labels, and budget metadata. Durable profile facts and scoped
-  recall chunks are created through `write_proposal` events plus the shared `approval` / `approval_resolved`
-  path; approve writes idempotently by normalized content, while deny/timeout writes nothing and remains
-  replayable in `session_events`. Contradictory approved profile facts close the previous active fact
-  with `valid_to` rather than deleting it. Approved writes emit previewable
-  `memory://profile/<subject>/facts/<id>` and `memory://scopes/<scope>/chunks/<id>` record URIs.
+- **Turn integration:** every General turn exposes bounded `memory.search` through the one
+  `execute(code)` model tool. Profile facts, summaries, scoped recall chunks, and hybrid candidates
+  remain out of context unless the model calls it; the returned context carries provenance labels and budget
+  metadata. Durable profile facts and scoped recall chunks are created through `write_proposal`
+  events plus the shared `approval` / `approval_resolved` path; approve writes idempotently by
+  normalized content, while deny/timeout writes nothing and remains replayable in `session_events`.
+  Contradictory approved profile facts close the previous active fact with `valid_to` rather than
+  deleting it. Approved writes emit previewable `memory://profile/<subject>/facts/<id>` and
+  `memory://scopes/<scope>/chunks/<id>` record URIs.
 
 ## 22.9 Target `memory.*` capability + implemented `memory://` resources
 
 | Call | Effect |
 |---|---|
-| `memory.recall(query, opts?)` | unified hybrid + stream recall (§22.3) |
-| `memory.ask(query)` | Reserved pull surface; not registered. The dialectic is an automatic server-owned every-third-turn pass (§22.4). |
+| `memory.search(query)` | model-controlled unified hybrid + stream recall; first durable-turn result is replayed exactly (§22.3–§22.4) |
+| `memory.ask(query)` | Reserved pull surface; not registered. |
 | `memory.note(text, tags?)` | durable operational note (approval-gated) |
 | `memory.fact(assertion)` | upsert a profile assertion (approval-gated, dedup/contradiction) |
 | `memory.edit(block, op)` | self-edit a core block (MemGPT-style) |

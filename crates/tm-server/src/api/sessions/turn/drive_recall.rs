@@ -1,46 +1,6 @@
 use super::super::*;
 use sha2::{Digest, Sha256};
 
-pub(super) async fn drive_recall_block(
-    drive_store: &Option<tm_drive::SharedDriveStore>,
-    scope: &str,
-) -> Option<String> {
-    let store = drive_store.as_ref()?;
-    let project = drive_project_from_scope(scope)?;
-    let hits = store
-        .search(tm_drive::DriveSearchOptions {
-            project: Some(project),
-            limit: 3,
-            return_snippets: true,
-            ..tm_drive::DriveSearchOptions::default()
-        })
-        .await
-        .ok()?;
-    if hits.is_empty() {
-        return None;
-    }
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "Drive recall (scope: {scope}; included docs: {}; raw content remains behind drive:// resources).",
-        hits.len()
-    ));
-    for hit in hits {
-        let title = hit.title.as_deref().unwrap_or(&hit.path);
-        let snippet = hit
-            .snippet
-            .unwrap_or_else(|| "No summary available.".to_string());
-        lines.push(format!(
-            "- [{}; hash: {}; selector: {}] {} -- {}",
-            hit.uri,
-            hit.content_hash,
-            hit.selector.as_deref().unwrap_or("preview"),
-            title,
-            snippet.replace('\n', " ")
-        ));
-    }
-    Some(lines.join("\n"))
-}
-
 pub(super) async fn persist_drive_recall_chunks<S, M, C>(
     state: &AppState<S, M, C>,
     scope: &str,

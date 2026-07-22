@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn user_model_dialectic_is_third_turn_only_and_disabled_for_serious_mode() {
+async fn turns_expose_pull_only_memory_without_automatic_recall() {
     let store = Arc::new(InMemoryStore::default());
     store
         .add_profile_fact(ProfileFactRecord {
@@ -41,51 +41,43 @@ async fn user_model_dialectic_is_third_turn_only_and_disabled_for_serious_mode()
         post_user_message(&app, general.id, content).await;
     }
     let serious = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
-    for content in ["first check", "second check", "third engineering check"] {
-        post_user_message(&app, serious.id, content).await;
-    }
+    post_user_message(&app, serious.id, "third engineering check").await;
 
-    let turns = turns.lock();
-    assert_eq!(
-        turns.len(),
-        3,
-        "only the three general turns run through ChatRunner"
-    );
-    assert!(turns[0].dialectic.is_none());
-    assert!(turns[1].dialectic.is_none());
-    let crate::DialecticTurn::Generate(request) = turns[2]
-        .dialectic
-        .as_ref()
-        .expect("third general turn plans dialectic")
-    else {
-        panic!("fresh third turn must generate, not reuse, a dialectic");
-    };
-    assert_eq!(request.turn_number, 3);
-    assert_eq!(request.max_chars, tm_memory::DEFAULT_DIALECTIC_MAX_CHARS);
-    assert_eq!(request.facts.len(), 1);
+    {
+        let turns = turns.lock();
+        assert_eq!(turns.len(), 3);
+        assert!(turns.iter().all(|turn| turn.dialectic.is_none()));
+        assert!(
+            turns
+                .iter()
+                .all(|turn| !turn.user_prompt.contains("[recall]"))
+        );
+        assert!(turns.iter().all(|turn| {
+            turn.capabilities
+                .iter()
+                .any(|capability| capability == MEMORY_SEARCH_CAPABILITY)
+        }));
+        assert!(turns.iter().all(|turn| {
+            turn.host_functions
+                .iter()
+                .any(|function| function.name() == MEMORY_SEARCH_CAPABILITY)
+        }));
+    }
     assert!(
-        request.facts[0]
-            .text
-            .contains("boring Rust implementations")
+        store
+            .events_by_type(general.id, "memory_recall", 10)
+            .await
+            .unwrap()
+            .is_empty()
     );
-    assert!(
-        request.facts[0]
-            .source_uri
-            .starts_with("memory://profile/brian/facts/")
-    );
-    // Serious/engineering turns dispatch to the coding backend, whose turn payload has no
-    // user-model dialectic concept at all: the auxiliary pass is structurally excluded from
-    // coding mode, not merely left unset on a chat turn.
     let coding_turns = coding_turns.lock();
-    assert_eq!(
-        coding_turns.len(),
-        3,
-        "the three serious turns run through the coding backend"
-    );
+    assert_eq!(coding_turns.len(), 1);
+    assert!(!coding_turns[0].user_prompt.contains("[recall]"));
     assert!(
-        coding_turns
+        coding_turns[0]
+            .capabilities
             .iter()
-            .all(|turn| turn.mode == ModeId::from("serious_engineer"))
+            .all(|capability| capability != MEMORY_SEARCH_CAPABILITY)
     );
 }
 
@@ -184,6 +176,12 @@ async fn chat_turn_prompt_uses_active_mode_bundle() {
     // are triggered layered skills, not separate modes, so they never change turns[*].mode.
     assert_eq!(turns[0].mode, ModeId::from("general"));
     assert!(turns[0].capabilities.iter().any(|cap| cap == "drive.*"));
+    assert!(
+        turns[0]
+            .capabilities
+            .iter()
+            .any(|capability| capability == MEMORY_SEARCH_CAPABILITY)
+    );
     for retired in ["memory.recall", "memory.propose"] {
         assert!(
             !turns[0].capabilities.iter().any(|cap| cap == retired),

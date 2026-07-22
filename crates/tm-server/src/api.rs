@@ -84,6 +84,7 @@ impl ActorResourceLinkSeed {
 pub(crate) mod approvals;
 mod auth_devices;
 mod events;
+mod memory_search;
 mod mode_suggest;
 pub(crate) mod modes;
 pub(crate) mod pairing;
@@ -95,6 +96,9 @@ pub(crate) mod sessions;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+use memory_search::MEMORY_SEARCH_CAPABILITY;
+use memory_search::MemorySearchHostFn;
 use mode_suggest::{MODE_SUGGEST_APPROVAL_TIMEOUT, MODE_SUGGEST_CAPABILITY, ModeSuggestHostFn};
 use modes::{active_skills, build_turn_prompt, mode_changed_payload, mode_profile};
 use projects::{build_project_overview, project_id_from_scope, record_project_observations};

@@ -115,7 +115,7 @@ Three orthogonal layers keep engineering useful without erasing the character:
 
   | Mode | Capabilities | Voice | Declared skills |
   |---|---|---|---|
-  | **General** (default) | conversation + light `memory` recall/propose | `medium` | `miku-voice`, `personal-assistant-state-capture` |
+  | **General** (default) | conversation + model-controlled `memory.search`; approval-backed state capture | `medium` | `miku-voice`, `personal-assistant-state-capture` |
   | **Serious Engineer** | `backend.coding`; `fs.*` / `code.*` / `proc.*`; exact `git.clone` / `git.init` / `git.add` / `git.mv` / `git.restore` / `git.rm` / `git.bisect` / `git.status` / `git.diff` / `git.grep` / `git.log` / `git.show` / `git.commit` / `git.push` / `git.pull` grants; `agents.*`; `resources.read:linked` / `resources.read:agent` / `resources.read:history` (§23, §25) | `off` | `serious-engineer-ops` |
 
 - **Layered skills** — procedural markdown composed on top of whichever mode is active: always-on
@@ -145,9 +145,7 @@ Zep/Graphiti bi-temporal facts.
   authority-filtered exact dense cosine ordering, profile facts, recent episodic records, and
   summaries; fuses them by deterministic RRF; deduplicates; and trims to a token budget with
   `memory://` provenance. The provisioned HNSW index and graph extraction remain demand-triggered.
-- **Auto-context budgets.** Each turn injects only a small block (working context ≤ ~1600 tokens); a
-  bounded every-third-turn dialectic synthesizes what is relevant about Brian, gated off in
-  serious/engineering turns and treated as untrusted user-channel context.
+- **Pull-only long-term context.** The active transcript remains the automatic working context. In General mode, long-term profile facts, summaries, episodic/semantic records, and Drive-derived chunks stay out of the prompt until the model calls bounded `memory.search(query)`. The first search result in a durable turn is persisted for exact retry reuse; a turn that does not search creates no recall trace. Serious Engineer stays on explicit repo/Drive resources and receives no implicit memory search authority.
 - **Write path & dreaming.** Turns append to episodic storage and enqueue without blocking.
   Background **dreaming** (idle / session end / scheduler) redacts and budgets source material,
   creates deterministic session/reflection/rollup summaries, and emits evidence-backed memory and

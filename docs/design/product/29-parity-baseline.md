@@ -56,9 +56,9 @@ deployment location is intentionally omitted. Honcho host id `hermes`; Honcho wo
   commitments/deadlines, decisions, shipped artifacts, and workflows; transient moods, secrets, raw
   logs, one-off complaints, large notes, and obvious sensitive PII are skipped before proposal creation
   (§22.8 / §27.6).
-- **Adds bounded ToM:** approved profile facts feed a redacted, no-tool every-third-turn dialectic
-  outside Serious/engineering modes; a confirmed trace is replayed on retry and its output remains
-  untrusted user-channel context (§22.4).
+- **Refines recall control beyond parity:** General mode receives bounded `memory.search`; the model
+  decides when durable profile, summary, episodic, semantic, or Drive-derived context is relevant.
+  A turn that does not search performs no long-term retrieval or dialectic pass (§22.4).
 - **Adds local-first drive as a post-parity expansion:** `drive.*`, `drive://`, project
   linked-folder/memory views, and drive-derived recall chunks are Rust
   surfaces layered on the existing approval/resource model. They do not weaken the inherited Hermes

@@ -1,14 +1,27 @@
 use super::super::*;
 
 #[tokio::test]
-async fn serious_engineer_session_uses_authoritative_global_scope_and_recalls_next_session() {
-    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+async fn serious_engineer_persists_open_loops_without_automatic_next_session_recall() {
+    let store = Arc::new(InMemoryStore::default());
+    let memory = Arc::new(StoreMemoryProvider::new(store.clone()));
+    let chat = Arc::new(EchoChatRunner);
+    let backend = Arc::new(RecordingBackend::default());
+    let turns = Arc::clone(&backend.turns);
+    let state = AppState::new(
+        store.clone(),
+        memory,
+        chat,
+        ModesConfig::default(),
+        AuthConfig::NoAuth,
+    )
+    .with_coding_backend(backend);
+    let app = app(state);
     let session_a = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
     assert_eq!(session_a.default_scope, "global");
     assert_eq!(session_a.active_skills, vec!["serious-engineer-ops"]);
     post_user_message(&app, session_a.id, "tempestmiku code open loop").await;
     let chunks = store
-        .recall_chunks("global", "tempestmiku", 5)
+        .recall_chunks("global", "Project summary", 5)
         .await
         .unwrap();
     assert_eq!(chunks.len(), 1);
@@ -17,18 +30,18 @@ async fn serious_engineer_session_uses_authoritative_global_scope_and_recalls_ne
             .text
             .contains("Project summary/open loop from session")
     );
+
     let session_b = create_with_body(&app, Body::from(r#"{"mode":"serious_engineer"}"#)).await;
     post_user_message(&app, session_b.id, "tempestmiku code open loop").await;
-    let events = store.events_after(session_b.id, None).await.unwrap();
-    let final_event = events
-        .iter()
-        .find(|event| event.event_type == "final")
-        .unwrap();
+    let turns = turns.lock();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1].user_prompt, "tempestmiku code open loop");
+    assert!(!turns[1].user_prompt.contains("Project summary/open loop"));
     assert!(
-        final_event
-            .payload_json
-            .to_string()
-            .contains("Project summary/open loop from session")
+        turns[1]
+            .capabilities
+            .iter()
+            .all(|capability| capability != MEMORY_SEARCH_CAPABILITY)
     );
 }
 

@@ -20,6 +20,7 @@ use tm_memory::{
 use crate::{CodingEventSink, Result, ServerError, SessionEvent, Store, StoreCodingEventSink};
 
 use super::config::DreamWorkerConfig;
+use super::evolution::capture_episodes;
 use super::proposals::{
     DreamSkillProposal, MemoryProposalContext, dream_skill_proposal, spawn_memory_write_proposal,
     spawn_skill_write_proposal,
@@ -255,6 +256,15 @@ where
                 "events": events.len(),
                 "redactedMessages": redaction_count,
             }),
+        )
+        .await?;
+
+        capture_episodes(
+            &self.store,
+            &self.config.evolution,
+            dream,
+            &events,
+            sink.as_ref(),
         )
         .await?;
 

@@ -29,6 +29,7 @@ use crate::{
 
 mod approval_effects;
 mod daemon_budget;
+mod evolution;
 mod failure_modes;
 mod skill_proposals;
 mod summaries;

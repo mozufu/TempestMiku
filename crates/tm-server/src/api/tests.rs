@@ -614,6 +614,7 @@ mod coding_native;
 mod core_flow;
 mod egress;
 mod evolution_review;
+mod feedback;
 mod mcp;
 mod memory;
 mod pairing;

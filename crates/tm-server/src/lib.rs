@@ -23,6 +23,7 @@ mod turn_control;
 pub mod voice_asr;
 pub mod webui;
 
+pub use api::sessions::{TurnFeedbackRequest, TurnFeedbackResponse};
 pub use api::{AppState, app};
 pub use auth::{
     AuthConfig, AuthContext, AuthDeviceRecord, AuthDeviceStore, AuthPrincipal, DeviceAuthConfig,

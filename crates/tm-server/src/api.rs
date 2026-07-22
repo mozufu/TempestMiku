@@ -636,6 +636,10 @@ where
             get(sessions::get_turn::<S, M, C>),
         )
         .route(
+            "/sessions/:id/turns/:turn_id/feedback",
+            post(sessions::turn_feedback::<S, M, C>),
+        )
+        .route(
             "/sessions/:id/memory/proposals",
             post(sessions::propose_memory_write::<S, M, C>),
         )

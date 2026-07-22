@@ -2,6 +2,7 @@ use super::*;
 
 mod crud;
 pub(crate) mod evolution_review;
+mod feedback;
 mod memory_write;
 mod persona_candidate;
 pub(crate) mod skill_lifecycle;
@@ -23,6 +24,8 @@ pub use evolution_review::{
 pub(crate) use evolution_review::{
     propose_evolution_review, propose_mode_addendum_rollback, propose_persona_addendum_rollback,
 };
+pub(crate) use feedback::turn_feedback;
+pub use feedback::{TurnFeedbackRequest, TurnFeedbackResponse};
 pub(crate) use memory_write::propose_memory_write;
 pub use memory_write::{MemoryWriteProposalResponse, ProposeMemoryWriteRequest};
 pub(crate) use skill_lifecycle::propose_skill_rollback;

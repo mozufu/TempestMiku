@@ -853,6 +853,18 @@ class ScriptedMikuClient
         hasMore: false,
       );
     }
+    if (uri.startsWith('memory://')) {
+      return ResourcePreview(
+        uri: uri,
+        kind: 'memory',
+        mime: 'application/json',
+        title: uri.split('/').last,
+        sizeBytes: 96,
+        preview: 'Scripted memory record for $uri',
+        content: 'Scripted memory record for $uri',
+        hasMore: false,
+      );
+    }
     return previewResource(sessionId, uri);
   }
 
@@ -902,6 +914,44 @@ class ScriptedMikuClient
               'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           kind: 'managed_skill_version',
           title: 'Earlier scripted version',
+        ),
+      ];
+    }
+    final memorySession = _sessions[sessionId];
+    final activeScope =
+        memorySession?.memoryPolicy == MikuMemoryPolicy.project &&
+                memorySession?.projectId != null
+            ? 'project:${memorySession!.projectId}'
+            : 'global';
+    if (uri == 'memory://summaries') {
+      return [
+        MikuResourceEntry(
+          uri: 'memory://summaries/scripted-$activeScope',
+          name: 'scripted-$activeScope',
+          kind: 'memory_summary',
+          title:
+              activeScope == 'global'
+                  ? 'Global rollup: recent preferences and open loops'
+                  : 'Session summary: verified the next UI slice',
+          modifiedAt: '2026-07-21T09:00:00Z',
+        ),
+      ];
+    }
+    if (uri.startsWith('memory://scopes/') && uri.endsWith('/chunks')) {
+      final scope = uri.substring(
+        'memory://scopes/'.length,
+        uri.length - '/chunks'.length,
+      );
+      // §22.6: scoped recall is authority-checked against the active scope.
+      if (scope != activeScope) throw StateError('404 memory scope');
+      return [
+        MikuResourceEntry(
+          uri: 'memory://scopes/$scope/chunks/scripted-chunk',
+          name: 'scripted-chunk',
+          kind: 'memory_recall_chunk',
+          title: 'Keep chat as the primary surface for $scope',
+          sizeBytes: 64,
+          modifiedAt: '2026-07-20T18:00:00Z',
         ),
       ];
     }

@@ -65,13 +65,19 @@ void main() {
     const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
     final client = _FlakyResolveClient(failUri: readme);
     final session = await client.createSession();
-    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
+    await client.setSessionMemoryContext(
+      session.id,
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
     await loadApp(tester, client);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('project-page-content')), findsOneWidget);
+    await tester.tap(find.text('檔案'));
+    await tester.pumpAndSettle();
     final directoryListsBeforeFailure = client.listedUris.length;
 
     await tester.ensureVisible(

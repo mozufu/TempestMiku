@@ -860,7 +860,11 @@ void main() {
 
     final client = ScriptedMikuClient();
     final session = await client.createSession();
-    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
+    await client.setSessionMemoryContext(
+      session.id,
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
     await client.sendMessage(
       session.id,
       '整理 Drive research',
@@ -916,7 +920,11 @@ void main() {
     await tester.pumpAndSettle();
     final failingClient = ScriptedMikuClient(failDriveFeed: true);
     final session = await failingClient.createSession();
-    await failingClient.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
+    await failingClient.setSessionMemoryContext(
+      session.id,
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
     await loadApp(tester, failingClient);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
@@ -957,6 +965,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('project-page-content')), findsOneWidget);
     expect(find.text('Scripted project status'), findsOneWidget);
+    await tester.tap(find.text('脈絡'));
+    await tester.pumpAndSettle();
     expect(
       find.textContaining('Continue from latest session result'),
       findsOneWidget,
@@ -1062,29 +1072,35 @@ void main() {
       memoryPolicy: MikuMemoryPolicy.project,
     );
     await loadApp(tester, client);
-
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('project-browser-up')));
-    await tester.pumpAndSettle();
 
-    final toggle = find.byKey(
-      const Key('project-memory-policy-tempestmiku'),
-    );
+    // Opening deep-links into the active project's detail; the memory scope
+    // toggle lives on the 記憶 tab (shown by default).
+    final toggle = find.byKey(const Key('project-memory-policy'));
     expect(toggle, findsOneWidget);
-    await tester.tap(find.text('沿用全域記憶'));
+    await tester.tap(find.text('沿用全域'));
     await tester.pumpAndSettle();
 
     final updated = (await client.loadSession(session.id)).session;
     expect(updated.projectId, 'tempestmiku');
     expect(updated.memoryPolicy, MikuMemoryPolicy.global);
+    // The project stays active, so the toggle remains available.
     expect(toggle, findsOneWidget);
 
+    // Backing out to the catalog and choosing Global drops the project scope,
+    // and Global has no per-conversation policy toggle.
+    await tester.tap(find.byKey(const Key('project-browser-up')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-global-scope')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('project-memory-policy-tempestmiku')), findsNothing);
+    expect(find.byKey(const Key('project-memory-policy')), findsNothing);
+    expect(
+      find.byKey(const Key('project-memory-policy-tempestmiku')),
+      findsNothing,
+    );
   });
 
   testWidgets(
@@ -1097,7 +1113,11 @@ void main() {
 
       final client = ScriptedMikuClient();
       final session = await client.createSession();
-      await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
+      await client.setSessionMemoryContext(
+        session.id,
+        projectId: 'tempestmiku',
+        memoryPolicy: MikuMemoryPolicy.project,
+      );
       await loadApp(tester, client);
 
       await tester.enterText(
@@ -1125,18 +1145,15 @@ void main() {
       expect(tester.getSize(globalScope).height, greaterThanOrEqualTo(44));
       expect(tester.widget<ListTile>(globalScope).selected, isFalse);
 
+      // Tapping Global drops the project scope and enters the Global detail.
       await tester.tap(globalScope);
       await tester.pumpAndSettle();
-
       expect((await client.loadSession(session.id)).session.projectId, isNull);
-      expect(tester.widget<ListTile>(globalScope).selected, isTrue);
-      expect(
-        tester
-            .widget<ListTile>(find.byKey(const Key('project-tempestmiku')))
-            .selected,
-        isFalse,
-      );
+      expect(find.byKey(const Key('scope-memory-tab')), findsOneWidget);
 
+      // Back out of the Global detail, then out of the page, to the conversation.
+      await tester.tap(find.byKey(const Key('project-browser-up')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byType(BackButton).first);
       await tester.pumpAndSettle();
       expect(find.text('保留這段訊息'), findsOneWidget);
@@ -1167,6 +1184,9 @@ void main() {
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-tempestmiku')));
+    await tester.pumpAndSettle();
+    // The detail opens on the 記憶 tab; files live under the 檔案 tab.
+    await tester.tap(find.text('檔案'));
     await tester.pumpAndSettle();
 
     const linkedRoot = 'project://tempestmiku/linked-folders/tempestmiku/';
@@ -1204,7 +1224,11 @@ void main() {
   testWidgets('system back walks up the project browser path', (tester) async {
     final client = ScriptedMikuClient();
     final session = await client.createSession();
-    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
+    await client.setSessionMemoryContext(
+      session.id,
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
     await loadApp(tester, client);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
@@ -1212,6 +1236,8 @@ void main() {
     await tester.pumpAndSettle();
     const docs = 'project://tempestmiku/linked-folders/tempestmiku/docs/';
     const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
+    await tester.tap(find.text('檔案'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-resource-$docs')));
     await tester.pumpAndSettle();
 
@@ -1233,7 +1259,11 @@ void main() {
 
     final client = ScriptedMikuClient();
     final session = await client.createSession();
-    await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
+    await client.setSessionMemoryContext(
+      session.id,
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
     await client.sendMessage(
       session.id,
       'Summarize the project update',
@@ -1245,13 +1275,12 @@ void main() {
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
 
-    // §30: the next action is primary; accumulated context stays available on demand.
+    // §30: accumulated context lives on the 脈絡 tab, no longer as a transcript dump.
+    await tester.tap(find.text('脈絡'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('scope-context-tab')), findsOneWidget);
     expect(find.text('接下來'), findsOneWidget);
     expect(find.text('Continue from latest session result'), findsOneWidget);
-    expect(find.text('Verify the next UI slice'), findsNothing);
-    expect(find.text('Keep chat as the primary surface'), findsNothing);
-    await tester.tap(find.byKey(const Key('project-context-details')));
-    await tester.pumpAndSettle();
     expect(find.text('待處理'), findsOneWidget);
     expect(find.text('Verify the next UI slice'), findsOneWidget);
     expect(find.text('已決定'), findsOneWidget);
@@ -1278,7 +1307,7 @@ void main() {
     await tester.tap(find.byKey(const Key('project-tempestmiku')));
     await tester.pumpAndSettle();
 
-    expect(find.text('在這個 Project 新增對話'), findsOneWidget);
+    expect(find.text('在這裡新增對話'), findsOneWidget);
     expect(find.text('回到目前對話'), findsOneWidget);
     await tester.tap(find.byKey(const Key('project-new-conversation')));
     await tester.pumpAndSettle();
@@ -1327,6 +1356,72 @@ void main() {
       (await client.loadSession(session.id)).session.projectId,
       created.id,
     );
+  });
+
+  testWidgets('memory tab surfaces scoped recall and previews a record', (
+    tester,
+  ) async {
+    // §22: the 記憶 tab shows dream summaries and scoped recall chunks for the
+    // active memory scope, replacing the old transcript-dump sections.
+    tester.view.physicalSize = const Size(430, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    final session = await client.createSession();
+    await client.setSessionMemoryContext(
+      session.id,
+      projectId: 'tempestmiku',
+      memoryPolicy: MikuMemoryPolicy.project,
+    );
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+
+    // Opens on the 記憶 tab with project-scoped recall content.
+    expect(find.byKey(const Key('scope-memory-tab')), findsOneWidget);
+    const chunk = 'memory://scopes/project:tempestmiku/chunks/scripted-chunk';
+    expect(find.byKey(const Key('memory-chunk-$chunk')), findsOneWidget);
+    expect(
+      find.textContaining('Keep chat as the primary surface'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('memory-chunk-$chunk')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('project-file-content')), findsOneWidget);
+    expect(find.textContaining('Scripted memory record'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('global scope card opens memory-only detail', (tester) async {
+    // §30/§22.6: Global is a pinned pseudo-scope with a memory-only detail; it
+    // has no files or context tabs and no per-conversation policy toggle.
+    tester.view.physicalSize = const Size(430, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+
+    // No project active: the catalog is shown with Global pinned on top.
+    await tester.tap(find.byKey(const Key('project-global-scope')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('scope-memory-tab')), findsOneWidget);
+    expect(find.text('檔案'), findsNothing);
+    expect(find.text('脈絡'), findsNothing);
+    expect(find.byKey(const Key('project-memory-policy')), findsNothing);
+    expect(find.byKey(const Key('project-new-conversation')), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('archives a project entity and removes it from the picker', (
@@ -1401,7 +1496,11 @@ void main() {
     (tester) async {
       final client = ScriptedMikuClient(includeArchiveProject: true);
       final session = await client.createSession();
-      await client.setSessionMemoryContext(session.id, projectId: 'tempestmiku', memoryPolicy: MikuMemoryPolicy.project);
+      await client.setSessionMemoryContext(
+        session.id,
+        projectId: 'tempestmiku',
+        memoryPolicy: MikuMemoryPolicy.project,
+      );
       client.endSessionForTesting(session.id);
       await loadApp(tester, client);
       await tester.tap(find.byKey(const Key('open-left-drawer')));
@@ -1442,10 +1541,7 @@ void main() {
 
     client.failProjectResolve = true;
     const readme = 'project://tempestmiku/linked-folders/tempestmiku/README.md';
-    await tester.drag(
-      find.byKey(const Key('project-page-content')),
-      const Offset(0, -220),
-    );
+    await tester.tap(find.text('檔案'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-resource-$readme')));
     await tester.pumpAndSettle();

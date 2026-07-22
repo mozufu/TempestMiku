@@ -1,8 +1,8 @@
 use tm_artifacts::preview;
 use tm_host::{HostError, Result as HostResult};
 use tm_memory::{
-    DreamQueueRecord, MemoryRecordKind, MemorySummaryRecord, SkillProposalRecord,
-    StoredMemoryRecord,
+    DreamQueueRecord, EvolutionEpisodeRecord, MemoryRecordKind, MemorySummaryRecord,
+    SkillProposalRecord, StoredMemoryRecord,
 };
 use uuid::Uuid;
 
@@ -15,6 +15,7 @@ pub(super) enum MemoryUri {
     UserModel,
     Dreams,
     EvolutionAudits,
+    EvolutionEpisode { id: Uuid },
     Dream { id: Uuid },
     ProfileFact { subject: String, id: Uuid },
     RecallChunk { scope: String, id: Uuid },
@@ -33,6 +34,7 @@ pub(super) enum MemoryListUri {
     Records,
     Recalls,
     Summaries,
+    EvolutionEpisodes,
     Dreams,
     SkillProposals,
     ReviewProposals,
@@ -83,6 +85,9 @@ pub(super) fn parse_memory_uri(uri: &str) -> HostResult<MemoryUri> {
         ["evolution-proposals", id] => Ok(MemoryUri::EvolutionProposal {
             id: parse_memory_uuid(id, uri)?,
         }),
+        ["evolution", "episodes", id] => Ok(MemoryUri::EvolutionEpisode {
+            id: parse_memory_uuid(id, uri)?,
+        }),
         ["review-proposals", id] => Ok(MemoryUri::ReviewProposal {
             id: parse_memory_uuid(id, uri)?,
         }),
@@ -117,6 +122,7 @@ pub(super) fn parse_memory_list_uri(uri: &str) -> HostResult<MemoryListUri> {
         ["summaries"] => Ok(MemoryListUri::Summaries),
         ["skill-proposals"] => Ok(MemoryListUri::SkillProposals),
         ["review-proposals"] => Ok(MemoryListUri::ReviewProposals),
+        ["evolution", "episodes"] => Ok(MemoryListUri::EvolutionEpisodes),
         _ => Err(unsupported_memory_uri(uri)),
     }
 }
@@ -181,6 +187,10 @@ pub(super) fn skill_proposal_uri(proposal: &SkillProposalRecord) -> String {
 
 pub(super) fn evolution_proposal_uri(id: Uuid) -> String {
     format!("memory://evolution-proposals/{id}")
+}
+
+pub(super) fn evolution_episode_uri(episode: &EvolutionEpisodeRecord) -> String {
+    format!("memory://evolution/episodes/{}", episode.id)
 }
 
 pub(super) fn review_proposal_uri(id: Uuid) -> String {

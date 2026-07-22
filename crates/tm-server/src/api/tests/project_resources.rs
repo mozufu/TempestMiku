@@ -5,7 +5,8 @@ use tm_artifacts::ArtifactStore;
 use tm_drive::{DriveListOptions, DrivePutOptions, InMemoryDriveStore};
 use tm_memory::{
     DreamReason, DreamStatus, MemoryEvidenceRef, MemorySummaryKind, NewDreamQueueRecord,
-    NewMemorySummaryRecord, NewSkillProposalRecord, SkillVerification,
+    NewEvolutionEpisodeRecord, NewExperienceTraceRecord, NewMemorySummaryRecord,
+    NewSkillProposalRecord, SkillVerification, TraceKind,
 };
 
 mod assignment;

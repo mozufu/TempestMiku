@@ -274,3 +274,108 @@ async fn memory_resource_gateway_reads_dream_summaries_and_skill_proposals() {
             .contains("Installable: false")
     );
 }
+
+#[tokio::test]
+async fn memory_resource_gateway_lists_and_authorizes_evolution_episodes() {
+    let (app, store) = test_app(ModesConfig::default(), AuthConfig::NoAuth);
+    let session = create(&app).await;
+    let turn = store
+        .enqueue_turn(session.id, "evolution-resource", "inspect")
+        .await
+        .unwrap();
+    let (episode, inserted) = store
+        .upsert_evolution_episode(NewEvolutionEpisodeRecord {
+            session_id: session.id,
+            turn_id: turn.id,
+            owner_subject: "brian".to_string(),
+            memory_scope: "global".to_string(),
+        })
+        .await
+        .unwrap();
+    assert!(inserted);
+    store
+        .replace_experience_traces(
+            episode.id,
+            vec![NewExperienceTraceRecord {
+                episode_id: episode.id,
+                ordinal: 0,
+                kind: TraceKind::Terminal,
+                capability: None,
+                action_summary: "turn terminal".to_string(),
+                observation_summary: "done".to_string(),
+                error_signature: None,
+                event_seq: 1,
+                result_event_seq: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let uri = format!("memory://evolution/episodes/{}", episode.id);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={uri}",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = response_json(response).await;
+    assert_eq!(json["uri"], json!(uri));
+    assert_eq!(json["kind"], json!("evolution_episode"));
+    let content: Value = serde_json::from_str(json["content"].as_str().unwrap()).unwrap();
+    assert_eq!(content["episode"]["id"], json!(episode.id));
+    assert_eq!(content["traces"][0]["observationSummary"], json!("done"));
+
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/list?uri=memory://evolution/episodes",
+                    session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = response_json(listed).await;
+    assert!(listed.as_array().unwrap().iter().any(|entry| {
+        entry["uri"] == json!(uri) && entry["kind"] == json!("evolution_episode")
+    }));
+
+    let other_session = create(&app).await;
+    store
+        .set_session_memory_context(
+            other_session.id,
+            Some("other"),
+            crate::MemoryPolicy::Project,
+        )
+        .await
+        .unwrap();
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!(
+                    "/sessions/{}/resources/resolve?uri={uri}",
+                    other_session.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+}

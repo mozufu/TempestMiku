@@ -17,8 +17,8 @@ use super::render::{
     render_skill_proposal, render_summary, render_user_model,
 };
 use super::uri::{
-    MemoryListUri, MemoryUri, dream_uri, evolution_proposal_uri, memory_record_uri,
-    parse_memory_list_uri, parse_memory_uri, profile_fact_uri, recall_chunk_uri,
+    MemoryListUri, MemoryUri, dream_uri, evolution_episode_uri, evolution_proposal_uri,
+    memory_record_uri, parse_memory_list_uri, parse_memory_uri, profile_fact_uri, recall_chunk_uri,
     review_proposal_uri, skill_proposal_uri, summary_uri,
 };
 
@@ -65,6 +65,31 @@ where
                     "memory_evolution_audits",
                     Some("Self-evolution audit history".to_string()),
                     content,
+                    selector,
+                )
+            }
+            MemoryUri::EvolutionEpisode { id } => {
+                let episode = self
+                    .store
+                    .evolution_episode(id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                ensure_authorized_record(
+                    authority,
+                    &episode.owner_subject,
+                    &episode.memory_scope,
+                    uri,
+                )?;
+                let traces = self
+                    .store
+                    .experience_traces(episode.id)
+                    .await
+                    .map_err(map_memory_store_error)?;
+                self.json_resource(
+                    &evolution_episode_uri(&episode),
+                    "evolution_episode",
+                    Some(format!("evolution episode {}", short_id(episode.id))),
+                    serde_json::json!({"episode": episode, "traces": traces}),
                     selector,
                 )
             }
@@ -268,6 +293,7 @@ where
                 self.recall_trace_entries(session_id, authority).await
             }
             MemoryListUri::Summaries => self.summary_entries(&self.scope).await,
+            MemoryListUri::EvolutionEpisodes => self.evolution_episode_entries(authority).await,
             MemoryListUri::Dreams => self.dream_entries(&self.scope).await,
             MemoryListUri::SkillProposals => {
                 let session_id = Uuid::parse_str(&ctx.session_id)

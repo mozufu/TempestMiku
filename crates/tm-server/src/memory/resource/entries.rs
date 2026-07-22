@@ -8,8 +8,8 @@ use super::super::util::short_id;
 use super::MemoryResourceHandler;
 use super::access::map_memory_store_error;
 use super::uri::{
-    dream_uri, memory_record_title, memory_record_uri, profile_fact_uri, recall_chunk_uri,
-    review_proposal_uri, skill_proposal_uri, summary_uri,
+    dream_uri, evolution_episode_uri, memory_record_title, memory_record_uri, profile_fact_uri,
+    recall_chunk_uri, review_proposal_uri, skill_proposal_uri, summary_uri,
 };
 
 impl<S> MemoryResourceHandler<S>
@@ -63,6 +63,14 @@ where
                 name: "evolution-audits".to_string(),
                 kind: "memory_evolution_audits".to_string(),
                 title: Some("Self-evolution audit history".to_string()),
+                size_bytes: None,
+                modified_at: None,
+            },
+            ResourceEntry {
+                uri: "memory://evolution/episodes".to_string(),
+                name: "evolution-episodes".to_string(),
+                kind: "evolution_episode_collection".to_string(),
+                title: Some(format!("{} evolution episodes", self.scope)),
                 size_bytes: None,
                 modified_at: None,
             },
@@ -201,6 +209,32 @@ where
                         .map(|value| value.len()),
                     modified_at: Some(event.created_at.to_rfc3339()),
                 })
+            })
+            .collect())
+    }
+
+    pub(super) async fn evolution_episode_entries(
+        &self,
+        authority: &tm_host::MemoryAuthority,
+    ) -> HostResult<Vec<ResourceEntry>> {
+        let episodes = self
+            .store
+            .evolution_episodes(&authority.subject, &authority.scope, 50)
+            .await
+            .map_err(map_memory_store_error)?;
+        Ok(episodes
+            .into_iter()
+            .map(|episode| ResourceEntry {
+                uri: evolution_episode_uri(&episode),
+                name: short_id(episode.id),
+                kind: "evolution_episode".to_string(),
+                title: Some(format!(
+                    "{} turn {}",
+                    episode.status,
+                    short_id(episode.turn_id)
+                )),
+                size_bytes: serde_json::to_vec(&episode).ok().map(|value| value.len()),
+                modified_at: Some(episode.updated_at.to_rfc3339()),
             })
             .collect())
     }

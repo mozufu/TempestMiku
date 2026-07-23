@@ -165,7 +165,9 @@ void main() {
       );
       await tester.tap(find.byKey(const Key('select-self-hosted-voice-asr')));
       await tester.pump();
-      expect(find.textContaining('不會在失敗時自動退回本機'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('disclosure-confirm-toggle')));
+      await tester.pump();
+      expect(find.textContaining('失敗時也不會自動退回本機辨識'), findsOneWidget);
       await tester.tap(find.byKey(const Key('confirm-self-hosted-voice-asr')));
       await tester.pump();
       expect(
@@ -220,7 +222,9 @@ void main() {
       await tester.tap(find.byKey(const Key('install-voice-model')));
       await tester.pump();
       expect(models.installCalls, 0);
-      expect(find.textContaining('固定 commit'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('disclosure-confirm-toggle')));
+      await tester.pump();
+      expect(find.textContaining('固定版本的 csukuangfj 模型'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, '取消').last);
       await tester.pump();
       expect(models.installCalls, 0);

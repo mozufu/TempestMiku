@@ -25,7 +25,7 @@ class _SessionContextDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final current = session;
     final ended = current?.status == 'ended';
     return Drawer(
@@ -69,21 +69,21 @@ class _SessionContextDrawer extends StatelessWidget {
                     _SessionSummaryCard(session: current),
                     const SizedBox(height: 18),
                     Text(
-                      'Mode',
+                      '模式',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Mode 只改變這段對話的工作方式；Miku 的身份不會改變。',
+                      '模式只改變這段對話的工作方式；Miku 的身份不會改變。',
                       style: Theme.of(
                         context,
                       ).textTheme.bodySmall?.copyWith(color: palette.muted),
                     ),
                     const SizedBox(height: 12),
                     if (loading && catalog == null)
-                      const _DrawerLoadingState(label: '載入 Mode…')
+                      const _DrawerLoadingState(label: '載入模式…')
                     else if (error != null && catalog == null)
                       _DrawerErrorState(error: error!, onRetry: onRetry)
                     else if (catalog != null)
@@ -106,10 +106,10 @@ class _SessionContextDrawer extends StatelessWidget {
                       value: current.locked,
                       onChanged:
                           ended || changingModeId != null ? null : onSetLocked,
-                      title: const Text('鎖定目前 Mode'),
+                      title: const Text('鎖定目前模式'),
                       subtitle: Text(
                         current.locked
-                            ? '保持目前 Mode，直到你解除鎖定。'
+                            ? '保持目前模式，直到你解除鎖定。'
                             : '允許對話流程依明確規則調整。',
                       ),
                       secondary:
@@ -156,7 +156,7 @@ class _SessionSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final projectId = session.projectId;
     return Container(
       padding: const EdgeInsets.all(14),
@@ -184,7 +184,7 @@ class _SessionSummaryCard extends StatelessWidget {
           const SizedBox(height: 10),
           _ContextFact(
             icon: Icons.workspaces_outline,
-            label: 'Project',
+            label: '專案',
             value: projectId ?? '未選擇',
           ),
           const SizedBox(height: 6),
@@ -193,13 +193,13 @@ class _SessionSummaryCard extends StatelessWidget {
             label: '記憶',
             value:
                 session.memoryPolicy == MikuMemoryPolicy.project
-                    ? '此 Project'
-                    : 'Global',
+                    ? '此專案'
+                    : '全域',
           ),
           const SizedBox(height: 6),
           _ContextFact(
             icon: Icons.fingerprint_rounded,
-            label: 'Session',
+            label: '對話代號',
             value: _shortSessionId(session.id),
           ),
         ],
@@ -221,7 +221,7 @@ class _ContextFact extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = _Palette.of(context).muted;
+    final muted = TmTokens.of(context).muted;
     return Row(
       children: [
         Icon(icon, size: 17, color: muted),
@@ -252,7 +252,7 @@ class _ModeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Semantics(
       selected: selected,
       button: !selected,
@@ -303,19 +303,19 @@ class _ModeDetails extends StatelessWidget {
             ? profile?.activeSkills ?? const <String>[]
             : session.activeSkills;
     final capabilities = profile?.capabilities ?? const <String>[];
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return ExpansionTile(
       key: const Key('mode-details'),
       tilePadding: EdgeInsets.zero,
       childrenPadding: const EdgeInsets.only(bottom: 10),
-      title: const Text('Mode 詳細資料'),
+      title: const Text('模式詳細資料'),
       subtitle: Text(
-        profile?.capabilityClass ?? 'conversation',
+        profile?.capabilityClass ?? '一般對話',
         style: TextStyle(color: palette.muted),
       ),
       children: [
-        _DetailGroup(label: 'Active skills', values: skills),
-        _DetailGroup(label: 'Capabilities', values: capabilities),
+        _DetailGroup(label: '啟用的技能', values: skills),
+        _DetailGroup(label: '能力', values: capabilities),
       ],
     );
   }
@@ -340,7 +340,7 @@ class _DetailGroup extends StatelessWidget {
             child: Text(
               label,
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: _Palette.of(context).muted,
+                color: TmTokens.of(context).muted,
               ),
             ),
           ),

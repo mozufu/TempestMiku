@@ -207,7 +207,7 @@ class _ResourceInspectorSheetState extends State<_ResourceInspectorSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return PopScope(
       canPop: _preview == null && _path.length <= 1,
       onPopInvokedWithResult: (didPop, result) {
@@ -414,7 +414,7 @@ class _ResourceEntryList extends StatelessWidget {
     final values = entries;
     if (values == null) {
       return loading
-          ? const _DrawerLoadingState(label: '載入 Resources…')
+          ? const _DrawerLoadingState(label: '載入資源…')
           : const SizedBox.shrink();
     }
     if (values.isEmpty) {
@@ -444,7 +444,7 @@ class _ResourceEntryList extends StatelessWidget {
             unavailableRoot
                 ? entry.name == 'history'
                     ? '請使用上方連結按鈕開啟完整 history URI'
-                    : '請從 Project 開啟已授權的 linked alias'
+                    : '請從專案開啟已授權的 linked alias'
                 : entry.kind,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -474,7 +474,7 @@ class _ResourcePreviewBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final body =
         preview.preview.trim().isNotEmpty
             ? preview.preview

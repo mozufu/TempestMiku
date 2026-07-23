@@ -15,7 +15,7 @@ class _ThemeModeSettings extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -173,9 +173,8 @@ class _DiagnosticsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final isReady = readiness?.ready;
-    final role = diagnostics?.role ?? '—';
     return Container(
       key: const Key('server-diagnostics'),
       padding: const EdgeInsets.all(14),
@@ -214,12 +213,6 @@ class _DiagnosticsCard extends StatelessWidget {
                   ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
-              Text(
-                role,
-                style: Theme.of(
-                  context,
-                ).textTheme.labelMedium?.copyWith(color: palette.muted),
-              ),
             ],
           ),
           if (readiness != null && readiness!.detail.isNotEmpty) ...[
@@ -232,49 +225,75 @@ class _DiagnosticsCard extends StatelessWidget {
               ).textTheme.bodySmall?.copyWith(color: palette.muted),
             ),
           ],
-          if (diagnostics != null) ...[
-            const SizedBox(height: 8),
-            SelectableText(
-              diagnostics!.baseUrl,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                fontFamily: 'monospace',
-                color: palette.muted,
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: const Key('server-diagnostics-advanced'),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 4),
+              title: Text(
+                '進階（開發者）',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelMedium?.copyWith(color: palette.muted),
               ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
               children: [
-                _MetricChip(label: 'Turns', value: diagnostics!.turnQueueDepth),
-                _MetricChip(
-                  label: 'Dreams',
-                  value: diagnostics!.dreamQueueDepth,
-                ),
-                _MetricChip(
-                  label: 'Scheduler',
-                  value: diagnostics!.schedulerQueueDepth,
-                ),
-                _MetricChip(
-                  label: 'Approvals',
-                  value: diagnostics!.pendingApprovals,
-                ),
-                if (diagnostics!.pushQueueDepth != null)
-                  _MetricChip(
-                    label: 'Push',
-                    value: diagnostics!.pushQueueDepth!,
+                if (diagnostics != null) ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '執行角色：${diagnostics!.role}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: palette.muted,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SelectableText(
+                    diagnostics!.baseUrl,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      fontFamily: 'monospace',
+                      color: palette.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _MetricChip(
+                        label: '處理佇列',
+                        value: diagnostics!.turnQueueDepth,
+                      ),
+                      _MetricChip(
+                        label: '整理佇列',
+                        value: diagnostics!.dreamQueueDepth,
+                      ),
+                      _MetricChip(
+                        label: '排程',
+                        value: diagnostics!.schedulerQueueDepth,
+                      ),
+                      _MetricChip(
+                        label: '待核准',
+                        value: diagnostics!.pendingApprovals,
+                      ),
+                      if (diagnostics!.pushQueueDepth != null)
+                        _MetricChip(
+                          label: '推播佇列',
+                          value: diagnostics!.pushQueueDepth!,
+                        ),
+                    ],
+                  ),
+                ] else
+                  Text(
+                    '佇列深度目前不可用。',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: palette.muted),
                   ),
               ],
             ),
-          ] else ...[
-            const SizedBox(height: 10),
-            Text(
-              '佇列深度目前不可用。',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: palette.muted),
-            ),
-          ],
+          ),
         ],
       ),
     );

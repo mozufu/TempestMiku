@@ -51,7 +51,7 @@ class _HistoryPageState extends State<_HistoryPage> {
       }
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = 'History 暫時讀不到，請再試一次。');
+      setState(() => _error = '歷史紀錄暫時讀不到，請再試一次。');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -61,7 +61,7 @@ class _HistoryPageState extends State<_HistoryPage> {
     final projects =
         _projects?.where((project) => project.status == 'active').toList();
     if (projects == null || projects.isEmpty) {
-      _notify('目前沒有可指派的 Project，先建立一個。');
+      _notify('目前沒有可指派的專案，先建立一個。');
       return;
     }
     final project = await showModalBottomSheet<ProjectCatalogEntry>(
@@ -82,7 +82,7 @@ class _HistoryPageState extends State<_HistoryPage> {
         session.id,
       );
       if (!mounted) return;
-      _notify('已指派到 ${project.title}；成長了 $grown 個 Project 項目。');
+      _notify('已指派到 ${project.title}；成長了 $grown 個專案項目。');
     } catch (_) {
       if (!mounted) return;
       _notify('指派失敗，請稍後再試。');
@@ -101,10 +101,10 @@ class _HistoryPageState extends State<_HistoryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('History'),
+        title: const Text('歷史紀錄'),
         actions: [
           IconButton(
-            tooltip: '重新整理 History',
+            tooltip: '重新整理歷史紀錄',
             onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh_rounded),
           ),
@@ -117,7 +117,7 @@ class _HistoryPageState extends State<_HistoryPage> {
   Widget _buildBody() {
     final sessions = _sessions;
     if (_loading && sessions == null) {
-      return const _DrawerLoadingState(label: '載入 History…');
+      return const _DrawerLoadingState(label: '載入歷史紀錄…');
     }
     if (_error != null && sessions == null) {
       return _DrawerErrorState(error: _error!, onRetry: _load);
@@ -126,7 +126,7 @@ class _HistoryPageState extends State<_HistoryPage> {
     if (sessions.isEmpty) {
       return const _DrawerEmptyState(text: '還沒有對話紀錄。');
     }
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final canAssign = (_projects?.isNotEmpty ?? false);
     return RefreshIndicator(
       onRefresh: _load,
@@ -197,7 +197,7 @@ class _HistoryTrailing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -210,7 +210,7 @@ class _HistoryTrailing extends StatelessWidget {
         else if (assignable)
           IconButton(
             key: Key('history-assign-$sessionId'),
-            tooltip: '指派到 Project',
+            tooltip: '指派到專案',
             visualDensity: VisualDensity.compact,
             onPressed: canAssign ? onAssign : null,
             icon: const Icon(Icons.drive_file_move_outline, size: 19),
@@ -236,7 +236,7 @@ class _AssignProjectSheet extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
             child: Text(
-              '指派「${session.title.trim().isEmpty ? '新對話' : session.title}」到 Project',
+              '指派「${session.title.trim().isEmpty ? '新對話' : session.title}」到專案',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),

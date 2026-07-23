@@ -240,8 +240,8 @@ void main() {
     await tester.tap(find.byKey(const Key('mode-details')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Active skills'), findsOneWidget);
-    expect(find.text('Capabilities'), findsOneWidget);
+    expect(find.text('啟用的技能'), findsOneWidget);
+    expect(find.text('能力'), findsOneWidget);
   });
 
   testWidgets('shows typed memory and evolution review details in approvals', (
@@ -286,7 +286,7 @@ void main() {
     expect(find.text('偏好繁體中文介面'), findsOneWidget);
     expect(find.text('來源：full proposal resource'), findsOneWidget);
     expect(find.byKey(const Key('evolution-proposal-details')), findsOneWidget);
-    expect(find.text('Persona · miku'), findsOneWidget);
+    expect(find.text('人格 · miku'), findsOneWidget);
     expect(find.text('核准後會建立不可變版本並啟用。'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -349,6 +349,24 @@ void main() {
     );
     expect(find.byKey(const Key('server-diagnostics')), findsOneWidget);
     expect(find.text('伺服器已就緒'), findsOneWidget);
+    // Base URL and queue depths sit behind the collapsed advanced section.
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('server-diagnostics-advanced')),
+      180,
+      scrollable:
+          find
+              .descendant(
+                of: find.byKey(const Key('settings-sheet')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+    );
+    await tester.ensureVisible(
+      find.byKey(const Key('server-diagnostics-advanced')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('server-diagnostics-advanced')));
+    await tester.pumpAndSettle();
     expect(find.text('https://miku.example'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.byKey(const Key('auth-device-device-browser')),
@@ -558,7 +576,20 @@ void main() {
       await loadApp(tester, client);
       await tester.tap(find.byKey(const Key('open-left-drawer')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('drawer-resources')));
+      await tester.tap(find.byKey(const Key('drawer-settings')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('settings-resources')),
+        180,
+        scrollable:
+            find
+                .descendant(
+                  of: find.byKey(const Key('settings-sheet')),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+      );
+      await tester.tap(find.byKey(const Key('settings-resources')));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('resource-inspector')), findsOneWidget);
@@ -930,7 +961,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-drive')));
     await tester.pumpAndSettle();
-    expect(find.text('Drive 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect(find.text('硬碟暫時讀不到，請再試一次。'), findsOneWidget);
 
     failingClient.failDriveFeed = false;
     await tester.tap(find.byKey(const Key('drive-refresh')));
@@ -1053,7 +1084,7 @@ void main() {
 
     expect(client.assignedSessionIds, [closed.id]);
     expect(client.assignedProjectIds, ['tempestmiku']);
-    expect(find.textContaining('成長了 3 個 Project 項目'), findsOneWidget);
+    expect(find.textContaining('成長了 3 個專案項目'), findsOneWidget);
   });
 
   testWidgets('toggles memory policy without changing the active project', (
@@ -1436,7 +1467,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('封存 Project'));
+    await tester.tap(find.text('封存專案'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, '封存'));
     await tester.pumpAndSettle();
@@ -1454,7 +1485,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
-    expect(find.text('還沒有 Project。按右上角的「＋」建立第一個。'), findsOneWidget);
+    expect(find.text('還沒有專案。按右上角的「＋」建立第一個。'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
@@ -1464,7 +1495,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('drawer-project')));
     await tester.pumpAndSettle();
-    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect(find.text('專案暫時讀不到，請再試一次。'), findsOneWidget);
 
     failingClient.failProjectCatalog = false;
     await tester.tap(find.byTooltip('重試'));
@@ -1487,7 +1518,7 @@ void main() {
     await tester.tap(find.byKey(const Key('project-tempestmiku')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect(find.text('專案暫時讀不到，請再試一次。'), findsOneWidget);
     expect((await client.createOrReuseSession()).projectId, isNull);
   });
 
@@ -1533,7 +1564,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-tempestmiku')));
     await tester.pumpAndSettle();
-    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect(find.text('專案暫時讀不到，請再試一次。'), findsOneWidget);
 
     client.failProjectResources = false;
     await tester.tap(find.byTooltip('重試'));
@@ -1545,7 +1576,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('project-resource-$readme')));
     await tester.pumpAndSettle();
-    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect(find.text('專案暫時讀不到，請再試一次。'), findsOneWidget);
     expect(find.byKey(const Key('project-file-content')), findsNothing);
   });
 
@@ -1728,6 +1759,30 @@ void main() {
     expect(client.resolvedApprovals.single, contains(':approve'));
     expect(find.text('已允許'), findsOneWidget);
   });
+  testWidgets(
+    'shows a human summary and keeps the raw action behind technical details',
+    (tester) async {
+      final client = ScriptedMikuClient();
+      final session = await client.createSession();
+      client.seedPendingApproval(
+        session.id,
+        approvalId: 'summarized',
+        action:
+            '{"operation":"fs.remove","details":{"path":"notes.md","effect":"remove","expectedTag":"abc"}}',
+        scope: const {'summary': '刪除 notes.md'},
+      );
+      await loadApp(tester, client);
+
+      expect(find.text('刪除 notes.md'), findsOneWidget);
+      expect(find.textContaining('"operation":"fs.remove"'), findsNothing);
+
+      await tester.tap(
+        find.byKey(const Key('approval-technical-detail-toggle')),
+      );
+      await tester.pump();
+      expect(find.textContaining('"operation":"fs.remove"'), findsOneWidget);
+    },
+  );
   testWidgets('classifies non-allow approval kinds as deny', (tester) async {
     final client = ScriptedMikuClient();
     final session = await client.createSession();

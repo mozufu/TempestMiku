@@ -9,6 +9,7 @@ import 'package:flutter/semantics.dart';
 import 'asr/local_asr_engine.dart';
 import 'asr/local_asr_model.dart';
 import 'conversation_notifications.dart';
+import 'design/tm_tokens.dart';
 import 'notification_service.dart';
 import 'pairing_scanner.dart';
 import 'rich_message.dart';
@@ -17,6 +18,7 @@ import 'share_import_service.dart';
 import 'theme_mode_controller.dart';
 import 'voice_capture_service.dart';
 
+part 'conversation_disclosure_dialog.dart';
 part 'conversation_project_browser.dart';
 part 'conversation_project_scope.dart';
 part 'conversation_drive.dart';
@@ -460,6 +462,7 @@ class _ConversationScreenState extends State<ConversationScreen>
             notificationSettingsPanel: BackgroundNotificationsSettingsPanel(
               coordinator: _notificationCoordinator,
             ),
+            onOpenResources: _openResources,
           ),
     );
     if (!mounted || result == null) return;
@@ -531,7 +534,7 @@ class _ConversationScreenState extends State<ConversationScreen>
       setState(() => _modeCatalog = catalog);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _modeCatalogError = 'Mode 清單暫時讀不到，請再試一次。');
+      setState(() => _modeCatalogError = '模式清單暫時讀不到，請再試一次。');
     } finally {
       if (mounted) setState(() => _modeCatalogLoading = false);
     }
@@ -557,7 +560,7 @@ class _ConversationScreenState extends State<ConversationScreen>
       });
     } catch (_) {
       if (!mounted || _session?.id != session.id) return;
-      setState(() => _modeCatalogError = 'Mode 沒有切換，請再試一次。');
+      setState(() => _modeCatalogError = '模式沒有切換，請再試一次。');
     } finally {
       if (mounted && _session?.id == session.id) {
         setState(() => _changingModeId = null);
@@ -587,7 +590,7 @@ class _ConversationScreenState extends State<ConversationScreen>
       setState(() => _session = _copySessionWithLock(session, locked));
     } catch (_) {
       if (!mounted || _session?.id != session.id) return;
-      setState(() => _modeCatalogError = 'Mode 鎖定狀態沒有變更，請再試一次。');
+      setState(() => _modeCatalogError = '模式鎖定狀態沒有變更，請再試一次。');
     } finally {
       if (mounted && _session?.id == session.id) {
         setState(() => _changingModeId = null);
@@ -1376,12 +1379,11 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Scaffold(
       key: _scaffoldKey,
       drawer: _ConversationDrawer(
         onOpenSettings: _openSettings,
-        onOpenResources: _openResources,
         onOpenReviewedChanges: _openReviewedChanges,
         onNewConversation: _startNewConversation,
         currentSessionId: _session?.id,
@@ -1484,7 +1486,7 @@ class _ConversationScreenState extends State<ConversationScreen>
     );
   }
 
-  Widget _buildConversation(_Palette palette) {
+  Widget _buildConversation(TmTokens palette) {
     if (_presence == _PresenceState.loading && _items.isEmpty) {
       return const Center(child: _QuietLoading());
     }
@@ -1585,7 +1587,7 @@ class _ConversationScreenState extends State<ConversationScreen>
   }
 
   bool _isActivityGroupExpanded(_ActivityGroupNode group) =>
-      _activityGroupExpanded[group.key] ?? group.hasActive;
+      _activityGroupExpanded[group.key] ?? false;
 
   void _toggleActivityGroup(_ActivityGroupNode group) {
     setState(() {
@@ -1614,50 +1616,6 @@ class _ConversationScreenState extends State<ConversationScreen>
     if (hour < 11) return '早安';
     if (hour < 18) return '午安';
     return '晚上好';
-  }
-}
-
-class _Palette {
-  const _Palette({
-    required this.miku,
-    required this.muted,
-    required this.outline,
-    required this.userBubble,
-    required this.warm,
-    required this.approvalSurface,
-    required this.approvalOutline,
-  });
-
-  final Color miku;
-  final Color muted;
-  final Color outline;
-  final Color userBubble;
-  final Color warm;
-  final Color approvalSurface;
-  final Color approvalOutline;
-
-  static _Palette of(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    if (dark) {
-      return const _Palette(
-        miku: Color(0xff5fd0c5),
-        muted: Color(0xff9aa8ae),
-        outline: Color(0xff28353b),
-        userBubble: Color(0xff1a292f),
-        warm: Color(0xffffc786),
-        approvalSurface: Color(0xff211c18),
-        approvalOutline: Color(0xff5d4934),
-      );
-    }
-    return const _Palette(
-      miku: Color(0xff167f78),
-      muted: Color(0xff657378),
-      outline: Color(0xffd9dfdd),
-      userBubble: Color(0xffe4efeb),
-      warm: Color(0xff9a5c18),
-      approvalSurface: Color(0xfffff7ed),
-      approvalOutline: Color(0xffe4c49d),
-    );
   }
 }
 

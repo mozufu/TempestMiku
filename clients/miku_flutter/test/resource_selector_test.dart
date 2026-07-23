@@ -20,7 +20,20 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
       await tester.tap(find.byKey(const Key('open-left-drawer')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('drawer-resources')));
+      await tester.tap(find.byKey(const Key('drawer-settings')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('settings-resources')),
+        180,
+        scrollable:
+            find
+                .descendant(
+                  of: find.byKey(const Key('settings-sheet')),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+      );
+      await tester.tap(find.byKey(const Key('settings-resources')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('resource-entry-artifact://')));
       await tester.pumpAndSettle();
@@ -76,6 +89,11 @@ void main() {
   testWidgets('system back walks up the resource inspector path', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     final client = ScriptedMikuClient();
     await tester.pumpWidget(
       TempestMikuApp(client: client, themeMode: ThemeMode.light),
@@ -84,7 +102,20 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drawer-resources')));
+    await tester.tap(find.byKey(const Key('drawer-settings')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-resources')),
+      180,
+      scrollable:
+          find
+              .descendant(
+                of: find.byKey(const Key('settings-sheet')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+    );
+    await tester.tap(find.byKey(const Key('settings-resources')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('resource-entry-artifact://')));
     await tester.pumpAndSettle();

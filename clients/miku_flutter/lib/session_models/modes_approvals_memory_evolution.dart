@@ -97,6 +97,11 @@ class ApprovalPrompt {
 
   Map<String, Object?>? get proposalScope => _mapValue(scope['proposal']);
 
+  String? get summary {
+    final value = _stringValue(scope['summary']);
+    return value.isEmpty ? null : value;
+  }
+
   String? get proposalId {
     final direct = _stringValue(scope['proposalId']);
     if (direct.isNotEmpty) return direct;

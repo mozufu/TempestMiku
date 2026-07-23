@@ -13,6 +13,7 @@ class _ApprovalCard extends StatefulWidget {
 class _ApprovalCardState extends State<_ApprovalCard> {
   Timer? _countdown;
   DateTime? _deadline;
+  bool _technicalDetailExpanded = false;
 
   @override
   void initState() {
@@ -52,7 +53,7 @@ class _ApprovalCardState extends State<_ApprovalCard> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final onSelect = widget.onSelect;
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final resolved = item.resolvedStatus;
     final memoryProposal = MemoryWriteProposal.fromApproval(item.prompt);
     final evolutionProposal = EvolutionReviewProposal.fromEvent({
@@ -60,16 +61,19 @@ class _ApprovalCardState extends State<_ApprovalCard> {
       'status': 'pending',
     });
     final rollbackProposal = _rollbackReviewDetails(item.prompt.scope);
+    final hasTypedDetail =
+        memoryProposal != null ||
+        evolutionProposal != null ||
+        rollbackProposal != null;
+    final summary = hasTypedDetail ? null : item.prompt.summary;
     final genericScope =
-        memoryProposal == null &&
-                evolutionProposal == null &&
-                rollbackProposal == null
+        !hasTypedDetail && summary == null
             ? _scopeLabel(item.prompt.scope)
             : null;
     return Semantics(
       liveRegion: true,
       container: true,
-      label: '需要確認：${item.prompt.action}',
+      label: '需要確認：${summary ?? item.prompt.action}',
       child: Container(
         key: Key('approval-${item.prompt.approvalId}'),
         padding: const EdgeInsets.all(16),
@@ -89,10 +93,57 @@ class _ApprovalCardState extends State<_ApprovalCard> {
               ],
             ),
             const SizedBox(height: 10),
-            SelectableText(
-              item.prompt.action,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
+            if (summary != null) ...[
+              SelectableText(
+                summary,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              InkWell(
+                key: const Key('approval-technical-detail-toggle'),
+                onTap:
+                    () => setState(
+                      () => _technicalDetailExpanded = !_technicalDetailExpanded,
+                    ),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '技術細節',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: palette.muted,
+                        ),
+                      ),
+                      Icon(
+                        _technicalDetailExpanded
+                            ? Icons.expand_less_rounded
+                            : Icons.expand_more_rounded,
+                        size: 16,
+                        color: palette.muted,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (_technicalDetailExpanded)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: SelectableText(
+                    item.prompt.action,
+                    key: const Key('approval-technical-detail'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      fontFamily: 'monospace',
+                      color: palette.muted,
+                    ),
+                  ),
+                ),
+            ] else
+              SelectableText(
+                item.prompt.action,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             if (genericScope case final scope?) ...[
               const SizedBox(height: 5),
               Text(
@@ -175,7 +226,7 @@ class _MemoryProposalDetails extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       key: const Key('memory-proposal-details'),
       padding: const EdgeInsets.all(12),
@@ -224,8 +275,8 @@ class _EvolutionProposalDetails extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
-    final targetLabel = proposal.targetKind == 'persona' ? 'Persona' : 'Mode';
+    final palette = TmTokens.of(context);
+    final targetLabel = proposal.targetKind == 'persona' ? '人格' : '模式';
     return Container(
       key: const Key('evolution-proposal-details'),
       padding: const EdgeInsets.all(12),
@@ -255,7 +306,7 @@ class _EvolutionProposalDetails extends StatelessWidget {
           Text(
             proposal.applyEnabled
                 ? '核准後會建立不可變版本並啟用。'
-                : '核准後只保留為 review，不會自動啟用。',
+                : '核准後只保留為待審核狀態，不會自動啟用。',
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: palette.muted),

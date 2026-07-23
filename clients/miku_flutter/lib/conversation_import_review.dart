@@ -174,7 +174,7 @@ class _ImportReviewSheetState extends State<_ImportReviewSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final source = _content.source;
     final isVoice = source == SharedContentSource.voice;
     final canSend = _controller.text.trim().isNotEmpty && _destination != null;
@@ -346,7 +346,7 @@ class _ImportWarning extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -394,5 +394,5 @@ String _voiceProvenanceLabel(VoiceTranscriptProvenance value) =>
     switch (value) {
       VoiceTranscriptProvenance.local => '本機裝置端辨識 · 原始音訊已清除',
       VoiceTranscriptProvenance.selfHosted =>
-        '固定家用自架服務辨識 · 音訊曾經配對 Server 傳送 · 無 fallback',
+        '固定家用自架服務辨識 · 音訊曾經配對伺服器傳送 · 無自動退回本機',
     };

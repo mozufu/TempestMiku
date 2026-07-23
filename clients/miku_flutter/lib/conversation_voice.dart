@@ -341,29 +341,15 @@ extension _VoiceSettingsActions on _SettingsSheetState {
       return;
     }
     if (_voiceSelection == VoiceAsrEngineKind.remote) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('使用家裡的自架 ASR？'),
-            content: const Text(
-              '每段錄音都會離開這台裝置，經由已配對的 TempestMiku Server '
-              '傳到固定設定的家用自架 ASR 服務。它不會改送第三方雲端，也不會在失敗時'
-              '自動退回本機。轉寫一定先開啟供你編輯與確認，絕不會自動送給 Miku。',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                key: const Key('confirm-self-hosted-voice-asr'),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('使用家用服務'),
-              ),
-            ],
-          ),
+    final confirmed = await _showDisclosureConfirm(
+      context,
+      title: '使用家裡的自架 ASR？',
+      summary: '錄音會傳到你設定好的家用語音服務，而不是留在這台裝置上處理。',
+      details:
+          '只會送到你已配對、固定設定的家用 TempestMiku 服務，不會改送第三方雲端，'
+          '失敗時也不會自動退回本機辨識。轉寫一定先開啟讓你編輯確認，不會自動送出給 Miku。',
+      confirmLabel: '使用家用服務',
+      confirmKey: const Key('confirm-self-hosted-voice-asr'),
     );
     if (confirmed != true || !mounted) return;
     final changed = await widget.onSelectVoiceEngine(VoiceAsrEngineKind.remote);
@@ -380,29 +366,16 @@ extension _VoiceSettingsActions on _SettingsSheetState {
 
   Future<void> _confirmInstallVoiceModel() async {
     if (_voiceModelOperation) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('安裝已驗證的本機語音模型？'),
-            content: const Text(
-              '這個明確操作會從 Hugging Face 下載固定 commit 的 csukuangfj 模型'
-              '（約 226 MiB），依 Apache-2.0 存在 Android 不備份的應用程式私有空間。'
-              '只有模型識別碼與必要檔案都驗證通過後才會啟用；辨識保持離線，轉寫仍須確認後才能送出。',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                key: const Key('confirm-install-voice-model'),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('下載並驗證'),
-              ),
-            ],
-          ),
+    final confirmed = await _showDisclosureConfirm(
+      context,
+      title: '安裝已驗證的本機語音模型？',
+      summary: '下載約 226 MB 的離線語音模型，之後辨識完全在裝置上進行。',
+      details:
+          '模型來自 Hugging Face 上固定版本的 csukuangfj 模型（Apache-2.0 授權），'
+          '安裝後存放在應用程式的私有空間，不會納入系統備份。只有識別碼與檔案都驗證通過'
+          '才會啟用；轉寫仍須你確認後才會送出。',
+      confirmLabel: '下載並驗證',
+      confirmKey: const Key('confirm-install-voice-model'),
     );
     if (confirmed != true || !mounted) return;
     final cancellation = LocalAsrCancellationToken();
@@ -441,28 +414,15 @@ extension _VoiceSettingsActions on _SettingsSheetState {
 
   Future<void> _confirmDeleteVoiceModel() async {
     if (_voiceModelOperation) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('刪除本機語音模型？'),
-            content: const Text(
-              '這會先停止並清除目前的語音作業，再移除應用程式私有空間中的模型。'
-              '之後仍可重新下載並驗證；對話與轉寫草稿不會被刪除。',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('保留模型'),
-              ),
-              FilledButton(
-                key: const Key('confirm-delete-voice-model'),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('刪除模型'),
-              ),
-            ],
-          ),
+    final confirmed = await _showDisclosureConfirm(
+      context,
+      title: '刪除本機語音模型？',
+      summary: '停止目前的語音作業，並移除裝置上的離線語音模型。',
+      details: '之後仍可以重新下載並驗證；這不會刪除任何對話內容或轉寫草稿。',
+      cancelLabel: '保留模型',
+      confirmLabel: '刪除模型',
+      confirmKey: const Key('confirm-delete-voice-model'),
+      destructive: true,
     );
     if (confirmed != true || !mounted) return;
     _voiceSetState(() {
@@ -515,7 +475,7 @@ class _VoiceSettingsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final remote = catalog.selfHosted;
     final status = modelStatus;
     final modelLabel = switch (status?.state) {
@@ -680,7 +640,7 @@ class _VoiceSettingsPanel extends StatelessWidget {
                 subtitle: Text(
                   remote?.available == true
                       ? '已設定 · ${remote?.modelId ?? remote?.label}'
-                      : '配對的 Server 目前未提供',
+                      : '配對的伺服器目前未提供',
                 ),
                 trailing:
                     selection == VoiceAsrEngineKind.remote
@@ -697,7 +657,7 @@ class _VoiceSettingsPanel extends StatelessWidget {
         if (selection == VoiceAsrEngineKind.remote) ...[
           const SizedBox(height: 8),
           Text(
-            '錄音會經配對 Server 傳到固定的家用服務；失敗時不會改送雲端或退回本機。',
+            '錄音會經配對的伺服器傳到固定的家用服務；失敗時不會改送雲端或退回本機。',
             key: const Key('self-hosted-voice-disclosure'),
             style: Theme.of(
               context,

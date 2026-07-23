@@ -92,7 +92,7 @@ class _Composer extends StatelessWidget {
                           color:
                               voiceError != null
                                   ? colors.error
-                                  : _Palette.of(context).muted,
+                                  : TmTokens.of(context).muted,
                         ),
                       ),
                     ),

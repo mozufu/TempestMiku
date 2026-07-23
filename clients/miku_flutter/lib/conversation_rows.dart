@@ -15,7 +15,7 @@ class _PresenceBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final status = switch (connection) {
       _ServerConnectionState.connecting => '正在連上伺服器',
       _ServerConnectionState.connected => '伺服器已連線',
@@ -83,7 +83,7 @@ class _PresenceMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       key: const Key('miku-presence-mark'),
       width: 34,
@@ -115,7 +115,7 @@ class _MessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final user = message.role == 'user';
     final body =
         user
@@ -236,7 +236,7 @@ class _TurnStatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final failed = const {
       'failed',
       'cancelled',
@@ -253,7 +253,7 @@ class _TurnStatusRow extends StatelessWidget {
       'failed' => '處理失敗',
       'cancelled' => '已取消',
       'timed_out' => '處理逾時',
-      _ => '伺服器狀態：${turn.status}',
+      _ => '狀態更新中',
     };
     final color = failed ? Theme.of(context).colorScheme.error : palette.muted;
     return Semantics(
@@ -334,7 +334,7 @@ class _ActivityRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Semantics(
       key: Key('activity-${activity.correlationKey ?? activity.key}'),
       liveRegion: activity.running || activity.phase == _ActivityPhase.paused,
@@ -425,7 +425,7 @@ class _ActivityGroupRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final activities = group.activities;
     final active = group.hasActive;
     final anyFailed = activities.any(
@@ -542,7 +542,7 @@ class _InlineNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Semantics(
       liveRegion: notice.isError,
       child: Text(
@@ -622,7 +622,7 @@ class _QuietLoading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Semantics(
       liveRegion: true,
       label: '正在載入對話',

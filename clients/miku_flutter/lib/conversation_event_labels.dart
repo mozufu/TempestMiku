@@ -297,15 +297,15 @@ String? _dreamPhaseLabel(MikuEvent event) => switch (_firstEventString(
 };
 
 String _driveEventLabel(String type) => switch (type) {
-  'drive_put' => 'Drive 文件已保存',
-  'drive_transduced' => 'Drive 文件已整理',
-  'drive_path_proposed' || 'drive_write_proposed' => 'Drive 變更已提出',
-  'drive_filed' => 'Drive 文件已歸檔',
-  'drive_moved' => 'Drive 文件已移動',
-  'drive_tagged' => 'Drive 標籤已更新',
-  'project_linked' => 'Project 資料夾已連結',
-  'project_unlinked' => 'Project 資料夾已解除連結',
-  _ => 'Drive 已更新',
+  'drive_put' => '硬碟文件已保存',
+  'drive_transduced' => '硬碟文件已整理',
+  'drive_path_proposed' || 'drive_write_proposed' => '硬碟變更已提出',
+  'drive_filed' => '硬碟文件已歸檔',
+  'drive_moved' => '硬碟文件已移動',
+  'drive_tagged' => '硬碟標籤已更新',
+  'project_linked' => '專案資料夾已連結',
+  'project_unlinked' => '專案資料夾已解除連結',
+  _ => '硬碟已更新',
 };
 
 String? _driveEventDetail(MikuEvent event) {
@@ -334,11 +334,9 @@ String _proposalStatusLabel(String status) => switch (status) {
 
 String _proposalKindLabel(String kind) => switch (kind) {
   'memory' || 'profile_fact' || 'recall_chunk' => '記憶變更',
-  'persona' ||
-  'persona_addendum' ||
-  'persona_addendum_rollback' => 'Persona guidance',
-  'mode' || 'mode_addendum' || 'mode_addendum_rollback' => 'Mode guidance',
-  'skill' || 'skill_rollback' => 'Skill 版本',
-  'drive' || 'move' || 'tag' => 'Drive 整理',
+  'persona' || 'persona_addendum' || 'persona_addendum_rollback' => '人格指引',
+  'mode' || 'mode_addendum' || 'mode_addendum_rollback' => '模式指引',
+  'skill' || 'skill_rollback' => '技能版本',
+  'drive' || 'move' || 'tag' => '硬碟整理',
   _ => '經審核的變更',
 };

@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'asr/local_asr_engine.dart';
 import 'asr/local_asr_model.dart';
 import 'conversation_screen.dart';
+import 'design/tm_tokens.dart';
 import 'notification_service.dart';
 import 'session_models.dart';
 import 'share_import_service.dart';
@@ -100,12 +101,12 @@ class _TempestMikuAppState extends State<TempestMikuApp> {
 
 ThemeData _theme(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
-  const mikuCyan = Color(0xff5fd0c5);
+  final tokens = isDark ? const TmTokens.dark() : const TmTokens.light();
   final scheme = ColorScheme.fromSeed(
-    seedColor: mikuCyan,
+    seedColor: tokens.miku,
     brightness: brightness,
   ).copyWith(
-    primary: isDark ? mikuCyan : const Color(0xff167f78),
+    primary: tokens.miku,
     onPrimary: isDark ? const Color(0xff09201e) : Colors.white,
     surface: isDark ? const Color(0xff11191e) : const Color(0xfffbfaf7),
     onSurface: isDark ? const Color(0xffe8eff1) : const Color(0xff182126),
@@ -116,6 +117,7 @@ ThemeData _theme(Brightness brightness) {
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
+    extensions: [tokens],
     scaffoldBackgroundColor:
         isDark ? const Color(0xff0b1115) : const Color(0xfff4f3ef),
     dividerColor: isDark ? const Color(0xff253138) : const Color(0xffdce1df),

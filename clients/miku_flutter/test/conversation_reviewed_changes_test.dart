@@ -104,7 +104,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(find.byKey(const Key('evolution-proposal-details')), findsOneWidget);
-    expect(find.text('Persona · miku'), findsOneWidget);
+    expect(find.text('人格 · miku'), findsOneWidget);
     expect(find.textContaining('狀態更新語氣'), findsWidgets);
     await rejectPendingApproval(tester);
     expect(client.sentClientMessageIds, isEmpty);
@@ -186,7 +186,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('review-rollback-proposal')));
     await tester.pumpAndSettle();
-    expect(find.text('核對 rollback 版本'), findsOneWidget);
+    expect(find.text('核對版本回溯'), findsOneWidget);
     expect(find.text(active), findsWidgets);
     expect(find.text(target), findsWidgets);
 

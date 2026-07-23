@@ -77,7 +77,7 @@ class _ScopeDetailViewState extends State<_ScopeDetailView>
     if (!widget.atRoot) {
       return widget.files ?? const SizedBox.shrink();
     }
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final views = <Widget>[
       widget.memory,
       if (widget.files != null) widget.files!,
@@ -142,7 +142,7 @@ class _ScopeDetailHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
       decoration: BoxDecoration(
@@ -257,7 +257,7 @@ class _ScopeMemoryTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final summaryItems = summaries ?? const [];
     final chunkItems = chunks ?? const [];
     final loaded = summaries != null || chunks != null;
@@ -286,7 +286,7 @@ class _ScopeMemoryTab extends StatelessWidget {
                       ButtonSegment(
                         value: MikuMemoryPolicy.project,
                         icon: Icon(Icons.workspaces_outline, size: 17),
-                        label: Text('此 Project'),
+                        label: Text('此專案'),
                       ),
                       ButtonSegment(
                         value: MikuMemoryPolicy.global,
@@ -303,8 +303,8 @@ class _ScopeMemoryTab extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     policy == MikuMemoryPolicy.project
-                        ? '寫入與回想都留在這個 Project；不會混入其它對話。'
-                        : '這段對話沿用全域記憶，不寫入 Project 專屬範圍。',
+                        ? '寫入與回想都留在這個專案；不會混入其它對話。'
+                        : '這段對話沿用全域記憶，不寫入專案專屬範圍。',
                     style: Theme.of(
                       context,
                     ).textTheme.bodySmall?.copyWith(color: palette.muted),
@@ -396,7 +396,7 @@ class _ScopeMemoryGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -457,7 +457,7 @@ class _ScopeMemoryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final text =
         entry.title?.trim().isNotEmpty == true
             ? entry.title!.trim()
@@ -502,7 +502,7 @@ class _ScopeMemoryEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       key: const Key('scope-memory-empty'),
       padding: const EdgeInsets.all(18),
@@ -557,7 +557,7 @@ class _ScopeFilesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final values = entries;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -600,8 +600,8 @@ class _ScopeFilesTab extends StatelessWidget {
                             const SizedBox(height: 4),
                             Text(
                               hasLinkedFolder
-                                  ? '只顯示你明確授權給這個 Project 的檔案。'
-                                  : '這個 Project 可以先用來規劃；需要檔案時再請 Miku 連結。',
+                                  ? '只顯示你明確授權給這個專案的檔案。'
+                                  : '這個專案可以先用來規劃；需要檔案時再請 Miku 連結。',
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: palette.muted),
                             ),
@@ -674,7 +674,7 @@ class _ProjectFilesEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -711,7 +711,7 @@ class _ScopeContextTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final data = overview;
     if (data == null) {
       return const _DrawerLoadingState(label: '讀取脈絡…');
@@ -821,7 +821,7 @@ class _ScopeContextGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -930,7 +930,7 @@ class _ProjectFileSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final body = resource.content.isEmpty ? resource.preview : resource.content;
     return FractionallySizedBox(
       heightFactor: 0.86,

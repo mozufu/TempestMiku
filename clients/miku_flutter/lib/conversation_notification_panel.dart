@@ -3,7 +3,7 @@ part of 'conversation_notifications.dart';
 /// Low-frequency settings UI. It intentionally exposes no endpoint, token, or
 /// provider secret and labels sync only as evidence observed during this app
 /// launch.
-class BackgroundNotificationsSettingsPanel extends StatelessWidget {
+class BackgroundNotificationsSettingsPanel extends StatefulWidget {
   const BackgroundNotificationsSettingsPanel({
     required this.coordinator,
     super.key,
@@ -12,12 +12,22 @@ class BackgroundNotificationsSettingsPanel extends StatelessWidget {
   final BackgroundNotificationCoordinator coordinator;
 
   @override
+  State<BackgroundNotificationsSettingsPanel> createState() =>
+      _BackgroundNotificationsSettingsPanelState();
+}
+
+class _BackgroundNotificationsSettingsPanelState
+    extends State<BackgroundNotificationsSettingsPanel> {
+  bool _detailExpanded = false;
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: coordinator,
+      animation: widget.coordinator,
       builder: (context, _) {
-        final snapshot = coordinator.snapshot;
+        final snapshot = widget.coordinator.snapshot;
         final visual = _NotificationStatusVisual.from(snapshot, context);
+        final muted = TmTokens.of(context).muted;
         return DecoratedBox(
           decoration: BoxDecoration(
             border: Border.all(color: Theme.of(context).dividerColor),
@@ -36,7 +46,7 @@ class BackgroundNotificationsSettingsPanel extends StatelessWidget {
                               snapshot.permission ==
                                   BackgroundNotificationPermission.unsupported
                           ? null
-                          : coordinator.setEnabled,
+                          : widget.coordinator.setEnabled,
                   title: const Text('背景通知'),
                   subtitle: const Text('只在 App 不在前景時提醒；核准內容仍需回到 App 確認。'),
                   secondary: const Icon(Icons.notifications_none_rounded),
@@ -45,39 +55,82 @@ class BackgroundNotificationsSettingsPanel extends StatelessWidget {
               const Divider(height: 1),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-                child: Row(
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(visual.icon, color: visual.color, size: 20),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(visual.icon, color: visual.color, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
                             visual.title,
                             key: const Key('background-notifications-status'),
                             style: Theme.of(context).textTheme.labelLarge,
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            visual.detail,
-                            style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (!snapshot.busy &&
+                            ((snapshot.localOptIn &&
+                                    !snapshot.syncedThisLaunch) ||
+                                snapshot.syncState ==
+                                    BackgroundNotificationSyncState
+                                        .serverCleanupUnconfirmed))
+                          SizedBox(
+                            height: 44,
+                            child: TextButton(
+                              key: const Key('retry-background-notifications'),
+                              onPressed: widget.coordinator.retrySync,
+                              child: const Text('重試'),
+                            ),
                           ),
-                        ],
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 30),
+                      child: InkWell(
+                        key: const Key(
+                          'notification-technical-detail-toggle',
+                        ),
+                        onTap:
+                            () => setState(
+                              () => _detailExpanded = !_detailExpanded,
+                            ),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '技術細節',
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.bodySmall?.copyWith(color: muted),
+                              ),
+                              Icon(
+                                _detailExpanded
+                                    ? Icons.expand_less_rounded
+                                    : Icons.expand_more_rounded,
+                                size: 16,
+                                color: muted,
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                    if (!snapshot.busy &&
-                        ((snapshot.localOptIn && !snapshot.syncedThisLaunch) ||
-                            snapshot.syncState ==
-                                BackgroundNotificationSyncState
-                                    .serverCleanupUnconfirmed))
-                      SizedBox(
-                        height: 44,
-                        child: TextButton(
-                          key: const Key('retry-background-notifications'),
-                          onPressed: coordinator.retrySync,
-                          child: const Text('重試'),
+                    if (_detailExpanded)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 30, top: 2),
+                        child: Text(
+                          visual.detail,
+                          key: const Key(
+                            'background-notifications-status-detail',
+                          ),
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodySmall?.copyWith(color: muted),
                         ),
                       ),
                   ],

@@ -42,7 +42,7 @@ class _DrivePageState extends State<_DrivePage> {
       setState(() => _feed = feed);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = 'Drive 暫時讀不到，請再試一次。');
+      setState(() => _error = '硬碟暫時讀不到，請再試一次。');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -71,7 +71,7 @@ class _DrivePageState extends State<_DrivePage> {
       );
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = '這份 Drive 文件暫時無法預覽。');
+      setState(() => _error = '這份硬碟文件暫時無法預覽。');
     } finally {
       if (mounted) setState(() => _previewingUri = null);
     }
@@ -105,7 +105,7 @@ class _DrivePageState extends State<_DrivePage> {
       );
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = '這份 Drive 文件暫時無法預覽。');
+      setState(() => _error = '這份硬碟文件暫時無法預覽。');
     } finally {
       if (mounted) setState(() => _previewingUri = null);
     }
@@ -113,15 +113,15 @@ class _DrivePageState extends State<_DrivePage> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final project = _projectId;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Drive'),
+        title: const Text('硬碟'),
         actions: [
           IconButton(
             key: const Key('drive-refresh'),
-            tooltip: '重新整理 Drive',
+            tooltip: '重新整理硬碟',
             onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh_rounded),
           ),
@@ -157,7 +157,7 @@ class _DrivePageState extends State<_DrivePage> {
               child: Text(
                 project == null
                     ? '你分享給 Miku、以及 Miku 收進來的內容都在這裡。'
-                    : '這個 Project 範圍內分享給 Miku 的內容。',
+                    : '這個專案範圍內分享給 Miku 的內容。',
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: palette.muted),
@@ -171,17 +171,17 @@ class _DrivePageState extends State<_DrivePage> {
     );
   }
 
-  Widget _buildBody(_Palette palette) {
+  Widget _buildBody(TmTokens palette) {
     final feed = _feed;
     if (_loading && feed == null) {
-      return const _DrawerLoadingState(label: '載入 Drive…');
+      return const _DrawerLoadingState(label: '載入硬碟…');
     }
     if (_error != null && feed == null) {
       return _DrawerErrorState(error: _error!, onRetry: _load);
     }
     if (feed == null) return const SizedBox.shrink();
     if (feed.isEmpty) {
-      return const _DrawerEmptyState(text: 'Drive 還沒有內容。');
+      return const _DrawerEmptyState(text: '硬碟還沒有內容。');
     }
     return ListView(
       key: const Key('drive-page-content'),
@@ -252,7 +252,7 @@ class _DriveSectionLabel extends StatelessWidget {
       child: Text(
         label,
         style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: _Palette.of(context).muted,
+          color: TmTokens.of(context).muted,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -273,10 +273,10 @@ class _DriveDocumentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Semantics(
       button: true,
-      label: '${item.displayTitle}，Drive 文件',
+      label: '${item.displayTitle}，硬碟文件',
       child: ListTile(
         key: Key('drive-document-${item.uri}'),
         dense: true,
@@ -314,7 +314,7 @@ class _DriveProposalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final confidence = proposal.confidence;
     return Container(
       key: Key('drive-proposal-${proposal.proposalId}'),
@@ -380,7 +380,7 @@ class _DrivePendingApprovalCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Container(
       key: Key('drive-pending-${approval.approvalId}'),
       margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
@@ -449,7 +449,7 @@ class _DriveDocumentSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final text =
         resource.preview.trim().isEmpty
             ? item.displayPreview
@@ -517,7 +517,7 @@ class _DriveDocumentSheet extends StatelessWidget {
 String _driveDirectoryLabel(DriveVirtualDir directory) {
   return switch (directory.name) {
     'recent' => '最近',
-    'by-project' => 'Project',
+    'by-project' => '專案',
     'by-type' => '類型',
     'by-tag' => '標籤',
     'by-date' => '日期',

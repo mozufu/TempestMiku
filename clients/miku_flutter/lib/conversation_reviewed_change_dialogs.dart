@@ -21,7 +21,7 @@ class _ReviewedChangesSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return FractionallySizedBox(
       key: const Key('reviewed-changes-sheet'),
       heightFactor: 0.82,
@@ -52,7 +52,7 @@ class _ReviewedChangesSheet extends StatelessWidget {
                   ],
                 ),
                 Text(
-                  '這裡只建立有界提案。記憶、guidance 與 rollback 都必須回到對話中手動核准，才可能寫入或啟用。',
+                  '這裡只建立有界提案。記憶、指引與版本回溯 都必須回到對話中手動核准，才可能寫入或啟用。',
                   style: Theme.of(
                     context,
                   ).textTheme.bodySmall?.copyWith(color: palette.muted),
@@ -65,7 +65,7 @@ class _ReviewedChangesSheet extends StatelessWidget {
                         key: const Key('propose-memory-change'),
                         icon: Icons.psychology_outlined,
                         title: '提出記憶',
-                        subtitle: '個人偏好／事實，或目前 scope 的可回想片段',
+                        subtitle: '個人偏好／事實，或目前範圍的可回想片段',
                         onTap:
                             () => _pick(
                               context,
@@ -80,8 +80,8 @@ class _ReviewedChangesSheet extends StatelessWidget {
                       _ReviewedChangeTile(
                         key: const Key('propose-guidance-change'),
                         icon: Icons.tune_rounded,
-                        title: '提出 guidance 變更',
-                        subtitle: '只提交結構化摘要，不接受 raw prompt 或 patch',
+                        title: '提出指引變更',
+                        subtitle: '只提交結構化摘要，不接受原始提示詞或修改片段',
                         onTap:
                             () => _pick(
                               context,
@@ -99,7 +99,7 @@ class _ReviewedChangesSheet extends StatelessWidget {
                       _ReviewedChangeTile(
                         key: const Key('propose-version-rollback'),
                         icon: Icons.history_toggle_off_rounded,
-                        title: '提出版本 rollback',
+                        title: '提出版本回溯',
                         subtitle: '以完整 SHA-256 digest 鎖定目前與目標版本',
                         onTap:
                             () => _pick(
@@ -271,7 +271,7 @@ class _MemoryProposalDialogState extends State<_MemoryProposalDialog> {
                     validator: _required,
                     decoration: const InputDecoration(
                       labelText: '要保留的片段',
-                      helperText: '會寫入這段對話目前的 memory scope。',
+                      helperText: '會寫入這段對話目前的記憶範圍。',
                       border: OutlineInputBorder(),
                     ),
                   ),
@@ -279,7 +279,7 @@ class _MemoryProposalDialogState extends State<_MemoryProposalDialog> {
                 Text(
                   '請勿放入 token、密碼或私鑰；伺服器會拒絕偵測到的敏感資料。',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: _Palette.of(context).muted,
+                    color: TmTokens.of(context).muted,
                   ),
                 ),
               ],
@@ -349,13 +349,13 @@ class _EvolutionProposalDialogState extends State<_EvolutionProposalDialog> {
   List<({String value, String label})> get _sections =>
       _kind == _EvolutionTargetKind.persona
           ? const [
-            (value: 'tone_guidance', label: '語氣 guidance'),
-            (value: 'address_guidance', label: '稱呼 guidance'),
+            (value: 'tone_guidance', label: '語氣指引'),
+            (value: 'address_guidance', label: '稱呼指引'),
             (value: 'interaction_preference', label: '互動偏好'),
           ]
           : const [
-            (value: 'description', label: 'Mode 描述'),
-            (value: 'routing_guidance', label: '路由 guidance'),
+            (value: 'description', label: '模式描述'),
+            (value: 'routing_guidance', label: '路由指引'),
           ];
 
   void _changeKind(_EvolutionTargetKind? value) {
@@ -400,7 +400,7 @@ class _EvolutionProposalDialogState extends State<_EvolutionProposalDialog> {
   Widget build(BuildContext context) {
     final modes = widget.catalog?.modes ?? const <ModeProfile>[];
     return AlertDialog(
-      title: const Text('提出 guidance 變更'),
+      title: const Text('提出指引變更'),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560),
         child: Form(
@@ -425,7 +425,7 @@ class _EvolutionProposalDialogState extends State<_EvolutionProposalDialog> {
                     ),
                     DropdownMenuItem(
                       value: _EvolutionTargetKind.mode,
-                      child: Text('Mode'),
+                      child: Text('模式'),
                     ),
                   ],
                   onChanged: _changeKind,
@@ -441,7 +441,7 @@ class _EvolutionProposalDialogState extends State<_EvolutionProposalDialog> {
                               ? _modeId.text
                               : modes.first.id,
                       decoration: const InputDecoration(
-                        labelText: 'Mode',
+                        labelText: '模式',
                         border: OutlineInputBorder(),
                       ),
                       items: [
@@ -459,7 +459,7 @@ class _EvolutionProposalDialogState extends State<_EvolutionProposalDialog> {
                       controller: _modeId,
                       validator: _required,
                       decoration: const InputDecoration(
-                        labelText: 'Mode ID',
+                        labelText: '模式代號',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -504,7 +504,7 @@ class _EvolutionProposalDialogState extends State<_EvolutionProposalDialog> {
                   validator: _required,
                   decoration: const InputDecoration(
                     labelText: '有界摘要',
-                    helperText: '這是待審核 metadata，不是 raw system prompt。',
+                    helperText: '這是待審核的變更摘要，不是系統提示詞本身。',
                     border: OutlineInputBorder(),
                   ),
                 ),
@@ -616,7 +616,7 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
       barrierDismissible: false,
       builder:
           (context) => AlertDialog(
-            title: const Text('核對 rollback 版本'),
+            title: const Text('核對版本回溯'),
             content: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 520),
               child: Column(
@@ -631,7 +631,7 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                   ),
                   _RollbackFact(
                     label: '切換到',
-                    value: request.targetDigest ?? 'base（停用 addendum）',
+                    value: request.targetDigest ?? '預設版本（停用補充內容）',
                   ),
                   const SizedBox(height: 12),
                   const Text('送出後仍須在對話中再次核准；這一步不會直接切換版本。'),
@@ -658,7 +658,7 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
   Widget build(BuildContext context) {
     final modes = widget.catalog?.modes ?? const <ModeProfile>[];
     return AlertDialog(
-      title: const Text('提出版本 rollback'),
+      title: const Text('提出版本回溯'),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 580),
         child: Form(
@@ -679,15 +679,15 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                   items: const [
                     DropdownMenuItem(
                       value: _RollbackTargetKind.mode,
-                      child: Text('Mode addendum'),
+                      child: Text('模式補充內容'),
                     ),
                     DropdownMenuItem(
                       value: _RollbackTargetKind.persona,
-                      child: Text('Persona addendum'),
+                      child: Text('人格補充內容'),
                     ),
                     DropdownMenuItem(
                       value: _RollbackTargetKind.skill,
-                      child: Text('Managed skill'),
+                      child: Text('受管理技能'),
                     ),
                   ],
                   onChanged: _changeKind,
@@ -702,7 +702,7 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                             ? _targetId.text
                             : modes.first.id,
                     decoration: const InputDecoration(
-                      labelText: 'Mode',
+                      labelText: '模式',
                       border: OutlineInputBorder(),
                     ),
                     items: [
@@ -723,10 +723,10 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                     decoration: InputDecoration(
                       labelText:
                           _kind == _RollbackTargetKind.skill
-                              ? 'Skill name'
+                              ? '技能名稱'
                               : _kind == _RollbackTargetKind.persona
-                              ? 'Persona ID'
-                              : 'Mode ID',
+                              ? '人格代號'
+                              : '模式代號',
                       border: const OutlineInputBorder(),
                     ),
                   ),
@@ -739,9 +739,9 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                   validator: _digest,
                   style: const TextStyle(fontFamily: 'monospace'),
                   decoration: InputDecoration(
-                    labelText: '目前 active digest',
+                    labelText: '目前啟用的版本 digest',
                     helperText:
-                        '必須與伺服器目前版本完全相同，否則 fail closed。'
+                        '必須與伺服器目前版本完全相同，否則會直接拒絕執行。'
                         '可在資源檢視器複製版本 digest 後貼上。',
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
@@ -759,8 +759,8 @@ class _RollbackProposalDialogState extends State<_RollbackProposalDialog> {
                     contentPadding: EdgeInsets.zero,
                     value: _returnToBase,
                     onChanged: (value) => setState(() => _returnToBase = value),
-                    title: const Text('回到 base'),
-                    subtitle: const Text('停用目前的 addendum，不刪除不可變版本。'),
+                    title: const Text('回復為預設版本'),
+                    subtitle: const Text('停用目前的補充內容，不會刪除既有版本。'),
                   ),
                 ],
                 if (!_returnToBase) ...[

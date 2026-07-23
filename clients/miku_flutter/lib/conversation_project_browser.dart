@@ -244,7 +244,7 @@ class _ProjectPageState extends State<_ProjectPage> {
           (context) => AlertDialog(
             title: Text('封存 ${project.title}？'),
             content: const Text(
-              '封存後這個 Project 不會出現在選單，它的記憶範圍會停用：之後不再寫入，也不會被回想。已保留的記錄仍留作歷史，不會刪除。這是唯一會停用記憶範圍的動作。',
+              '封存後這個專案不會出現在選單，它的記憶範圍會停用：之後不再寫入，也不會被回想。已保留的記錄仍留作歷史，不會刪除。這是唯一會停用記憶範圍的動作。',
             ),
             actions: [
               TextButton(
@@ -426,7 +426,7 @@ class _ProjectPageState extends State<_ProjectPage> {
     }
     setState(() {
       _startingConversation = false;
-      _error = '無法在這個 Project 建立對話，請再試一次。';
+      _error = '無法在這個專案建立對話，請再試一次。';
     });
   }
 
@@ -505,12 +505,12 @@ class _ProjectPageState extends State<_ProjectPage> {
                     key: const Key('project-browser-up'),
                     onPressed: _browserLoading ? null : _goUp,
                   ),
-          title: Text(_inDetail ? _path.last.label : 'Projects'),
+          title: Text(_inDetail ? _path.last.label : '專案'),
           actions: [
             if (!_inDetail)
               IconButton(
                 key: const Key('project-create'),
-                tooltip: '新 Project',
+                tooltip: '新增專案',
                 onPressed:
                     (_busy || widget.sessionEnded) ? null : _createProject,
                 icon: const Icon(Icons.add_rounded),
@@ -525,7 +525,7 @@ class _ProjectPageState extends State<_ProjectPage> {
   Widget _buildBody() {
     final projects = _projects;
     if (_catalogLoading && projects == null) {
-      return const _DrawerLoadingState(label: '載入 Project…');
+      return const _DrawerLoadingState(label: '載入專案…');
     }
     if (_error != null && projects == null) {
       return _DrawerErrorState(error: _error!, onRetry: _loadCatalog);
@@ -548,8 +548,8 @@ class _ProjectPageState extends State<_ProjectPage> {
     }
     if (_isGlobalDetail) {
       return _ScopeDetailView(
-        title: 'Global',
-        subtitle: '所有沒有指定 Project 的對話共用這裡的記憶。',
+        title: '全域',
+        subtitle: '所有沒有指定專案的對話共用這裡的記憶。',
         icon: Icons.public_rounded,
         isGlobal: true,
         atRoot: _atRoot,
@@ -566,7 +566,7 @@ class _ProjectPageState extends State<_ProjectPage> {
     final activeProject =
         projects.where((project) => project.id == _activeProjectId).firstOrNull;
     if (activeProject == null) {
-      return _DrawerErrorState(error: '找不到這個 Project。', onRetry: _loadCatalog);
+      return _DrawerErrorState(error: '找不到這個專案。', onRetry: _loadCatalog);
     }
     return _ScopeDetailView(
       title: activeProject.title,
@@ -712,7 +712,7 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = '無法建立 Project，請換個名稱再試。';
+        _error = '無法建立專案，請換個名稱再試。';
       });
     }
   }
@@ -720,12 +720,12 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('新 Project'),
+      title: const Text('新增專案'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Project 是一個有主題的實體，不一定要連結資料夾。'),
+          const Text('專案是一個有主題的實體，不一定要連結資料夾。'),
           const SizedBox(height: 12),
           TextField(
             key: const Key('create-project-title'),
@@ -740,7 +740,7 @@ class _CreateProjectDialogState extends State<_CreateProjectDialog> {
           SwitchListTile.adaptive(
             key: const Key('create-project-memory-policy'),
             contentPadding: EdgeInsets.zero,
-            title: const Text('這個 Project 預設使用它自己的記憶'),
+            title: const Text('這個專案預設使用它自己的記憶'),
             value: _defaultMemoryPolicy == MikuMemoryPolicy.project,
             onChanged:
                 _submitting
@@ -827,7 +827,7 @@ class _ProjectCatalogList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final busySwitch = switchingProjectId != null || switchingToGlobal || busy;
     return ListView(
       key: const Key('project-page-content'),
@@ -866,14 +866,14 @@ class _ProjectCatalogList extends StatelessWidget {
                 ),
                 const SizedBox(height: 18),
                 Text(
-                  '你的 Projects',
+                  '你的專案',
                   style: Theme.of(
                     context,
                   ).textTheme.labelLarge?.copyWith(color: palette.muted),
                 ),
                 const SizedBox(height: 8),
                 if (projects.isEmpty)
-                  const _DrawerEmptyState(text: '還沒有 Project。按右上角的「＋」建立第一個。')
+                  const _DrawerEmptyState(text: '還沒有專案。按右上角的「＋」建立第一個。')
                 else
                   for (final project in projects) ...[
                     _ProjectCatalogCard(
@@ -920,11 +920,11 @@ class _GlobalScopeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Semantics(
       button: true,
       selected: active,
-      label: 'Global 記憶範圍${active ? '，目前使用中' : ''}',
+      label: '全域記憶範圍${active ? '，目前使用中' : ''}',
       child: ListTile(
         key: const Key('project-global-scope'),
         minTileHeight: 66,
@@ -956,7 +956,7 @@ class _GlobalScopeCard extends StatelessWidget {
           'Global',
           style: TextStyle(fontWeight: FontWeight.w600),
         ),
-        subtitle: Text(active ? '目前對話使用全域記憶' : '不綁定 Project 的全域記憶'),
+        subtitle: Text(active ? '目前對話使用全域記憶' : '不綁定專案的全域記憶'),
         trailing:
             loading
                 ? const SizedBox.square(
@@ -998,7 +998,7 @@ class _ProjectCatalogCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final folderCount = project.linkedFolderUris.length;
     final subtitle =
         active
@@ -1085,7 +1085,7 @@ class _ProjectTrailing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1095,7 +1095,7 @@ class _ProjectTrailing extends StatelessWidget {
           const Icon(Icons.chevron_right_rounded, size: 20),
         PopupMenuButton<_ProjectMenuAction>(
           key: Key('project-archive-$projectId'),
-          tooltip: 'Project 選項',
+          tooltip: '專案選項',
           enabled: onArchive != null,
           onSelected: (action) {
             if (action == _ProjectMenuAction.archive) onArchive?.call();
@@ -1108,7 +1108,7 @@ class _ProjectTrailing extends StatelessWidget {
                     children: [
                       Icon(Icons.archive_outlined, size: 19),
                       SizedBox(width: 10),
-                      Text('封存 Project'),
+                      Text('封存專案'),
                     ],
                   ),
                 ),
@@ -1125,12 +1125,12 @@ enum _ProjectMenuAction { archive }
 String _friendlyProjectError(Object error) {
   final message = error.toString();
   if (message.contains('409') || message.contains('has ended')) {
-    return '這段對話已結束；請先開新對話再切換 Project。';
+    return '這段對話已結束；請先開新對話再切換專案。';
   }
   if (message.contains('404') || message.contains('active project')) {
-    return 'Project 目前不可用，請重新載入清單。';
+    return '專案目前不可用，請重新載入清單。';
   }
-  return 'Project 暫時讀不到，請再試一次。';
+  return '專案暫時讀不到，請再試一次。';
 }
 
 String _friendlyMemoryError(Object error) {

@@ -297,13 +297,13 @@ extension _ConversationEventFidelity on _ConversationScreenState {
           phase: _ActivityPhase.completed,
         );
       case 'drive_organizer_started':
-        _addActivity(event, '正在整理 Drive');
+        _addActivity(event, '正在整理硬碟');
       case 'drive_organizer_completed':
-        _completeActivity(event, label: 'Drive 整理完成');
+        _completeActivity(event, label: '硬碟整理完成');
       case 'drive_organizer_failed':
         _completeActivity(
           event,
-          label: 'Drive 整理未完成',
+          label: '硬碟整理未完成',
           phase: _ActivityPhase.failed,
         );
       case 'egress_started':
@@ -408,7 +408,7 @@ class _ActivityStatusMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     if (activity.phase == _ActivityPhase.running) {
       return CircularProgressIndicator(strokeWidth: 1.6, color: palette.miku);
     }
@@ -431,7 +431,7 @@ class _ProposalRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final pending = proposal.status == 'pending';
     final failed = const {
       'denied',
@@ -498,7 +498,7 @@ class _EventResourcePreviewSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return FractionallySizedBox(
       key: const Key('event-resource-preview'),
       heightFactor: 0.72,
@@ -588,11 +588,11 @@ class _RollbackProposalDetails extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final kindLabel = switch (details.kind) {
-      'mode_addendum_rollback' => 'Mode guidance',
-      'persona_addendum_rollback' => 'Persona guidance',
-      _ => 'Skill',
+      'mode_addendum_rollback' => '模式指引',
+      'persona_addendum_rollback' => '人格指引',
+      _ => '技能',
     };
     return Container(
       key: const Key('rollback-proposal-details'),
@@ -617,7 +617,7 @@ class _RollbackProposalDetails extends StatelessWidget {
           const SizedBox(height: 6),
           _RollbackDigestLine(
             label: '切換目標',
-            value: details.targetDigest ?? 'base（停用 addendum）',
+            value: details.targetDigest ?? '預設版本（停用補充內容）',
           ),
           const SizedBox(height: 8),
           Text(

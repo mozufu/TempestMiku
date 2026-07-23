@@ -21,7 +21,7 @@ class _ReviewedEvolutionRequest extends _ReviewedChangeRequest {
   final EvolutionReviewProposalRequest request;
 
   @override
-  String get pendingLabel => 'Guidance 變更已提出，核准前不會啟用。';
+  String get pendingLabel => '指引變更已提出，核准前不會啟用。';
 }
 
 enum _RollbackTargetKind { mode, persona, skill }
@@ -40,7 +40,7 @@ class _ReviewedRollbackRequest extends _ReviewedChangeRequest {
   final String? targetDigest;
 
   @override
-  String get pendingLabel => 'Rollback 已提出，核准前不會切換版本。';
+  String get pendingLabel => '版本回溯已提出，核准前不會切換版本。';
 }
 
 extension _ConversationReviewedChanges on _ConversationScreenState {

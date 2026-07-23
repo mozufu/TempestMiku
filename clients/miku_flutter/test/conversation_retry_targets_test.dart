@@ -26,7 +26,20 @@ void main() {
     await loadApp(tester, client);
     await tester.tap(find.byKey(const Key('open-left-drawer')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('drawer-resources')));
+    await tester.tap(find.byKey(const Key('drawer-settings')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('settings-resources')),
+      180,
+      scrollable:
+          find
+              .descendant(
+                of: find.byKey(const Key('settings-sheet')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+    );
+    await tester.tap(find.byKey(const Key('settings-resources')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('resource-inspector')), findsOneWidget);
     final directoryListsBeforeFailure = client.listedUris.length;
@@ -86,7 +99,7 @@ void main() {
     await tester.tap(find.byKey(const Key('project-resource-$readme')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Project 暫時讀不到，請再試一次。'), findsOneWidget);
+    expect(find.text('專案暫時讀不到，請再試一次。'), findsOneWidget);
     expect(find.byKey(const Key('project-file-content')), findsNothing);
     expect(client.resolvedUris, [readme]);
 

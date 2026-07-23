@@ -18,6 +18,7 @@ class _SettingsSheet extends StatefulWidget {
     required this.onDeleteVoiceModel,
     required this.onRefreshVoiceCatalog,
     required this.onSelectVoiceEngine,
+    required this.onOpenResources,
     this.notificationSettingsPanel,
   });
 
@@ -40,6 +41,7 @@ class _SettingsSheet extends StatefulWidget {
   final Future<LocalAsrModelStatus> Function() onDeleteVoiceModel;
   final Future<VoiceAsrEngineCatalog> Function() onRefreshVoiceCatalog;
   final Future<bool> Function(VoiceAsrEngineKind) onSelectVoiceEngine;
+  final VoidCallback onOpenResources;
   final Widget? notificationSettingsPanel;
 
   @override
@@ -297,30 +299,14 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         device.id == _currentDeviceId) {
       return;
     }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('撤銷裝置？'),
-            content: Text(
-              '${device.name} 將立即失去 API、事件串流與通知權限。裝置上的本機資料不會被遠端刪除。',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                key: const Key('confirm-device-revoke'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.error,
-                  foregroundColor: Theme.of(context).colorScheme.onError,
-                ),
-                onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('撤銷權限'),
-              ),
-            ],
-          ),
+    final confirmed = await _showDisclosureConfirm(
+      context,
+      title: '撤銷裝置？',
+      summary: '${device.name} 將立即無法再存取這個帳號。',
+      details: '包含 API、事件串流與通知權限；裝置上的本機資料不會被遠端刪除。',
+      confirmLabel: '撤銷權限',
+      confirmKey: const Key('confirm-device-revoke'),
+      destructive: true,
     );
     if (confirmed != true || !mounted) return;
     setState(() {
@@ -368,7 +354,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     const SizedBox(height: 14),
                     DecoratedBox(
                       decoration: BoxDecoration(
-                        border: Border.all(color: _Palette.of(context).outline),
+                        border: Border.all(color: TmTokens.of(context).outline),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Padding(
@@ -473,7 +459,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     return PopScope(
       canPop: !_voiceModelOperation && !_pairing && !_loggingOut,
       child: FractionallySizedBox(
@@ -788,6 +774,30 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                                                 ),
                                           ],
                                         ),
+                              ),
+                              const SizedBox(height: 20),
+                              _SettingsSection(
+                                title: '進階（開發者）',
+                                action: const SizedBox.shrink(),
+                                child: ListTile(
+                                  key: const Key('settings-resources'),
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(
+                                    Icons.inventory_2_outlined,
+                                  ),
+                                  title: const Text('資源檢視器'),
+                                  subtitle: const Text('進階唯讀檢視，直接瀏覽伺服器內部資源'),
+                                  trailing: const Icon(
+                                    Icons.chevron_right_rounded,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  onTap: () {
+                                    Navigator.of(context).pop();
+                                    widget.onOpenResources();
+                                  },
+                                ),
                               ),
                               const SizedBox(height: 28),
                               Text(

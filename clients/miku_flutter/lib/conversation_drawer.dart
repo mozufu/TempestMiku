@@ -3,7 +3,6 @@ part of 'conversation_screen.dart';
 class _ConversationDrawer extends StatelessWidget {
   const _ConversationDrawer({
     required this.onOpenSettings,
-    required this.onOpenResources,
     required this.onOpenReviewedChanges,
     required this.onNewConversation,
     required this.currentSessionId,
@@ -14,7 +13,6 @@ class _ConversationDrawer extends StatelessWidget {
   });
 
   final VoidCallback onOpenSettings;
-  final VoidCallback onOpenResources;
   final VoidCallback onOpenReviewedChanges;
   final VoidCallback onNewConversation;
   final String? currentSessionId;
@@ -25,7 +23,7 @@ class _ConversationDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _Palette.of(context);
+    final palette = TmTokens.of(context);
     final hasSession = currentSessionId != null;
     return Drawer(
       key: const Key('left-conversation-drawer'),
@@ -64,7 +62,7 @@ class _ConversationDrawer extends StatelessWidget {
                   _DrawerPageDestination(
                     pageKey: const Key('drawer-drive'),
                     icon: Icons.folder_open_rounded,
-                    label: 'Drive',
+                    label: '硬碟',
                     subtitle: 'Miku 的空間',
                     enabled: hasSession,
                     onTap: onOpenDrive,
@@ -72,7 +70,7 @@ class _ConversationDrawer extends StatelessWidget {
                   _DrawerPageDestination(
                     pageKey: const Key('drawer-project'),
                     icon: Icons.workspaces_outline,
-                    label: 'Project',
+                    label: '專案',
                     subtitle: '主題實體與工作範圍',
                     enabled: hasSession,
                     onTap: onOpenProject,
@@ -80,32 +78,17 @@ class _ConversationDrawer extends StatelessWidget {
                   _DrawerPageDestination(
                     pageKey: const Key('drawer-history'),
                     icon: Icons.history_rounded,
-                    label: 'History',
+                    label: '歷史紀錄',
                     subtitle: '過往對話與指派',
                     enabled: true,
                     onTap: onOpenHistory,
-                  ),
-                  ListTile(
-                    key: const Key('drawer-resources'),
-                    minTileHeight: 52,
-                    leading: const Icon(Icons.inventory_2_outlined),
-                    title: const Text('Resources'),
-                    subtitle: const Text('進階唯讀檢視'),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      onOpenResources();
-                    },
                   ),
                   ListTile(
                     key: const Key('drawer-reviewed-changes'),
                     minTileHeight: 52,
                     leading: const Icon(Icons.rule_folder_outlined),
                     title: const Text('經審核的變更'),
-                    subtitle: const Text('記憶、guidance 與 rollback'),
+                    subtitle: const Text('記憶、指引與版本回溯'),
                     trailing: const Icon(Icons.chevron_right_rounded),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -277,7 +260,7 @@ class _DrawerEmptyState extends StatelessWidget {
         text,
         style: Theme.of(
           context,
-        ).textTheme.bodySmall?.copyWith(color: _Palette.of(context).muted),
+        ).textTheme.bodySmall?.copyWith(color: TmTokens.of(context).muted),
       ),
     );
   }

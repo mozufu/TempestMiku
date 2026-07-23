@@ -66,6 +66,14 @@ void main() {
       ),
     );
 
+    // Activity groups default to collapsed even while a step is still
+    // running; expand to inspect the interleaved rows.
+    await tester.tap(
+      find.byKey(const Key('activity-group-toggle-node:effect-a')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
+
     final a = find.byKey(const Key('activity-node:effect-a'));
     final b = find.byKey(const Key('activity-node:effect-b'));
     expect(a, findsOneWidget);
@@ -163,6 +171,13 @@ void main() {
         data: {'nodeId': 'effect-a'},
       ),
     );
+    // Activity groups default to collapsed even while a step is still
+    // running; expand to inspect the paused/running rows.
+    await tester.tap(
+      find.byKey(const Key('activity-group-toggle-node:effect-a')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
     final a = find.byKey(const Key('activity-node:effect-a'));
     final b = find.byKey(const Key('activity-node:effect-b'));
     expect(find.descendant(of: a, matching: find.text('等待確認')), findsOneWidget);
@@ -470,9 +485,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 80));
 
     expect(find.byKey(const Key('rollback-proposal-details')), findsOneWidget);
-    expect(find.text('Mode guidance · general'), findsOneWidget);
+    expect(find.text('模式指引 · general'), findsOneWidget);
     expect(find.text('sha256:active'), findsOneWidget);
-    expect(find.text('base（停用 addendum）'), findsOneWidget);
+    expect(find.text('預設版本（停用補充內容）'), findsOneWidget);
   });
 }
 

@@ -1476,6 +1476,111 @@ void main() {
     expect(find.byKey(const Key('project-tempestmiku')), findsNothing);
   });
 
+  testWidgets('joins a project to a new memory pool and shows it as a member', (
+    tester,
+  ) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('加入記憶群組'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('pool-create-title')),
+      'Slime 生態圈',
+    );
+    await tester.tap(find.byKey(const Key('pool-create-submit')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('群組 slime'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+    await tester.pumpAndSettle();
+    expect(find.text('記憶群組（已加入）'), findsOneWidget);
+  });
+
+  testWidgets('leaves a memory pool from the manage dialog', (tester) async {
+    final client = ScriptedMikuClient();
+    await loadApp(tester, client);
+    await tester.tap(find.byKey(const Key('open-left-drawer')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('drawer-project')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('加入記憶群組'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('pool-create-title')),
+      'Slime 生態圈',
+    );
+    await tester.tap(find.byKey(const Key('pool-create-submit')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('記憶群組（已加入）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pool-leave')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('關閉'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('群組 slime'), findsNothing);
+    await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+    await tester.pumpAndSettle();
+    expect(find.text('加入記憶群組'), findsOneWidget);
+  });
+
+  testWidgets(
+    'joining then leaving a memory pool keeps a project\'s linked folder info',
+    (tester) async {
+      // The join/leave/create/archive pool endpoints return a thin response with no
+      // linkedFolderUris (§30.2); the UI must merge only the pool field into its cached catalog
+      // entry, or a project with a linked folder would appear to lose it (regression guard).
+      final client = ScriptedMikuClient();
+      await loadApp(tester, client);
+      await tester.tap(find.byKey(const Key('open-left-drawer')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('drawer-project')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('個連結資料夾'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('加入記憶群組'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('pool-create-title')),
+        'Slime 生態圈',
+      );
+      await tester.tap(find.byKey(const Key('pool-create-submit')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('個連結資料夾'), findsOneWidget);
+      expect(find.text('可直接開始，不需要資料夾'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('project-archive-tempestmiku')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('記憶群組（已加入）'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('pool-leave')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('關閉'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('個連結資料夾'), findsOneWidget);
+      expect(find.text('可直接開始，不需要資料夾'), findsNothing);
+    },
+  );
+
   testWidgets('shows project catalog empty and retryable error states', (
     tester,
   ) async {

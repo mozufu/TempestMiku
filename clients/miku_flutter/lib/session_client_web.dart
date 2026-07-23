@@ -342,6 +342,50 @@ class WebMikuSessionClient
   }
 
   @override
+  Future<List<MikuMemoryPool>> listMemoryPools() async {
+    final json = await _request('GET', '/pools');
+    return ((json['pools'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((item) => MikuMemoryPool.fromJson(item.cast<String, Object?>()))
+        .toList();
+  }
+
+  @override
+  Future<MikuMemoryPool> createMemoryPool(String id, {String? title}) async {
+    final json = await _request(
+      'POST',
+      '/pools',
+      body: {'id': id, if (title != null) 'title': title},
+    );
+    return MikuMemoryPool.fromJson(json);
+  }
+
+  @override
+  Future<MikuMemoryPool> archiveMemoryPool(String poolId) async {
+    final json = await _request('POST', '/pools/$poolId/archive');
+    return MikuMemoryPool.fromJson(json);
+  }
+
+  @override
+  Future<ProjectCatalogEntry> joinMemoryPool(
+    String projectId,
+    String poolId,
+  ) async {
+    final json = await _request(
+      'POST',
+      '/projects/$projectId/pool',
+      body: {'poolId': poolId},
+    );
+    return ProjectCatalogEntry.fromJson(json);
+  }
+
+  @override
+  Future<ProjectCatalogEntry> leaveMemoryPool(String projectId) async {
+    final json = await _request('DELETE', '/projects/$projectId/pool');
+    return ProjectCatalogEntry.fromJson(json);
+  }
+
+  @override
   Future<MikuSession> setSessionMemoryContext(
     String sessionId, {
     String? projectId,

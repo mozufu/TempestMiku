@@ -61,6 +61,8 @@ class ScriptedMikuClient
   final List<String> assignedSessionIds = [];
   final List<ProjectCatalogEntry> createdProjects = [];
   final List<String> archivedProjectIds = [];
+  final Map<String, MikuMemoryPool> _pools = {};
+  final Map<String, String> _projectPoolIds = {};
   final List<String> sentClientMessageIds = [];
   final List<String?> resolvedResourceSelectors = [];
   final List<String> revokedDeviceIds = [];
@@ -372,28 +374,33 @@ class ScriptedMikuClient
     if (failProjectCatalog) throw StateError('project catalog unavailable');
     if (projectCatalogEmpty) return const [];
     return [
-      const ProjectCatalogEntry(
-        id: 'tempestmiku',
-        title: 'TempestMiku',
-        status: 'active',
-        memoryScope: 'project:tempestmiku',
-        defaultMemoryPolicy: MikuMemoryPolicy.project,
-        projectUri: 'project://tempestmiku',
-        linkedFoldersUri: 'project://tempestmiku/linked-folders',
-        linkedFolderUris: ['project://tempestmiku/linked-folders/tempestmiku/'],
-      ),
-      if (includeArchiveProject)
-        const ProjectCatalogEntry(
-          id: 'archive',
-          title: 'Archive',
-          status: 'active',
-          memoryScope: 'project:archive',
-          defaultMemoryPolicy: MikuMemoryPolicy.project,
-          projectUri: 'project://archive',
-          linkedFoldersUri: 'project://archive/linked-folders',
-        ),
-      ...createdProjects,
-    ].where((project) => !archivedProjectIds.contains(project.id)).toList();
+          const ProjectCatalogEntry(
+            id: 'tempestmiku',
+            title: 'TempestMiku',
+            status: 'active',
+            memoryScope: 'project:tempestmiku',
+            defaultMemoryPolicy: MikuMemoryPolicy.project,
+            projectUri: 'project://tempestmiku',
+            linkedFoldersUri: 'project://tempestmiku/linked-folders',
+            linkedFolderUris: [
+              'project://tempestmiku/linked-folders/tempestmiku/',
+            ],
+          ),
+          if (includeArchiveProject)
+            const ProjectCatalogEntry(
+              id: 'archive',
+              title: 'Archive',
+              status: 'active',
+              memoryScope: 'project:archive',
+              defaultMemoryPolicy: MikuMemoryPolicy.project,
+              projectUri: 'project://archive',
+              linkedFoldersUri: 'project://archive/linked-folders',
+            ),
+          ...createdProjects,
+        ]
+        .where((project) => !archivedProjectIds.contains(project.id))
+        .map((project) => project.copyWithPoolId(_projectPoolIds[project.id]))
+        .toList();
   }
 
   @override
@@ -1044,6 +1051,75 @@ class ScriptedMikuClient
           existing?.defaultMemoryPolicy ?? MikuMemoryPolicy.project,
       projectUri: 'project://$projectId',
       linkedFoldersUri: 'project://$projectId/linked-folders',
+    );
+  }
+
+  @override
+  Future<List<MikuMemoryPool>> listMemoryPools() async {
+    return _pools.values.where((pool) => pool.status == 'active').toList();
+  }
+
+  @override
+  Future<MikuMemoryPool> createMemoryPool(String id, {String? title}) async {
+    final pool = MikuMemoryPool(id: id, title: title ?? id, status: 'active');
+    _pools[id] = pool;
+    return pool;
+  }
+
+  @override
+  Future<MikuMemoryPool> archiveMemoryPool(String poolId) async {
+    final existing = _pools[poolId];
+    if (existing == null) {
+      throw StateError('memory pool $poolId not found');
+    }
+    // A pure status flip (§30.7): member projects keep their poolId untouched.
+    final archived = MikuMemoryPool(
+      id: existing.id,
+      title: existing.title,
+      status: 'archived',
+    );
+    _pools[poolId] = archived;
+    return archived;
+  }
+
+  @override
+  Future<ProjectCatalogEntry> joinMemoryPool(
+    String projectId,
+    String poolId,
+  ) async {
+    final pool = _pools[poolId];
+    if (pool == null || pool.status != 'active') {
+      throw StateError('memory pool $poolId is not active');
+    }
+    if (_projectPoolIds[projectId] != null) {
+      throw StateError('project $projectId already belongs to a pool');
+    }
+    _projectPoolIds[projectId] = poolId;
+    return _thinProjectResponse(projectId);
+  }
+
+  @override
+  Future<ProjectCatalogEntry> leaveMemoryPool(String projectId) async {
+    _projectPoolIds.remove(projectId);
+    return _thinProjectResponse(projectId);
+  }
+
+  /// Mirrors the server's `ProjectResponse` (§30.2) as returned by the join/leave/create/archive
+  /// pool endpoints: no `linkedFolderUris` — those are resolved only in the `listProjects` catalog
+  /// view. Callers must merge just the changed field back into their cached catalog entry rather
+  /// than replacing it wholesale, or a project with linked folders appears to lose them.
+  Future<ProjectCatalogEntry> _thinProjectResponse(String projectId) async {
+    final projects = await listProjects();
+    final existing = projects.firstWhere((project) => project.id == projectId);
+    return ProjectCatalogEntry(
+      id: existing.id,
+      title: existing.title,
+      status: existing.status,
+      memoryScope: existing.memoryScope,
+      defaultMemoryPolicy: existing.defaultMemoryPolicy,
+      projectUri: existing.projectUri,
+      linkedFoldersUri: existing.linkedFoldersUri,
+      poolId: existing.poolId,
     );
   }
 

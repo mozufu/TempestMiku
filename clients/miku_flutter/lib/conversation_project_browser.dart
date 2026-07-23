@@ -278,6 +278,28 @@ class _ProjectPageState extends State<_ProjectPage> {
     }
   }
 
+  Future<void> _managePool(ProjectCatalogEntry project) async {
+    if (_busy) return;
+    final updated = await showDialog<ProjectCatalogEntry>(
+      context: context,
+      builder:
+          (context) =>
+              _ManagePoolDialog(client: widget.client, project: project),
+    );
+    if (updated == null || !mounted) return;
+    setState(() {
+      final next = [...?_projects];
+      final index = next.indexWhere((item) => item.id == updated.id);
+      // The join/leave/create/archive pool endpoints return a thin `ProjectResponse` with no
+      // `linkedFolderUris` (§30.2 vs §30's catalog view) — merge only the pool field so a project
+      // with linked folders doesn't lose them from the card until the next full catalog reload.
+      if (index != -1) {
+        next[index] = next[index].copyWithPoolId(updated.poolId);
+      }
+      _projects = next;
+    });
+  }
+
   Future<void> _loadRoot(ProjectCatalogEntry project) async {
     if (_browserLoading) return;
     setState(() {
@@ -544,6 +566,7 @@ class _ProjectPageState extends State<_ProjectPage> {
         onOpenGlobal: _openGlobal,
         onOpen: _openProject,
         onArchive: _archiveProject,
+        onManagePool: _managePool,
       );
     }
     if (_isGlobalDetail) {
@@ -798,6 +821,234 @@ String _projectIdForTitle(String title) {
   return 'project-$codePoints';
 }
 
+/// §30.7: joins or leaves a memory pool for one project. A project belongs to at most one active
+/// pool at a time — while it's in one, this only offers "leave" (no silent moves between pools);
+/// once it has none, it offers existing active pools to join or a new one to create-and-join.
+class _ManagePoolDialog extends StatefulWidget {
+  const _ManagePoolDialog({required this.client, required this.project});
+
+  final MikuSessionClient client;
+  final ProjectCatalogEntry project;
+
+  @override
+  State<_ManagePoolDialog> createState() => _ManagePoolDialogState();
+}
+
+class _ManagePoolDialogState extends State<_ManagePoolDialog> {
+  final TextEditingController _controller = TextEditingController();
+  late ProjectCatalogEntry _project;
+  List<MikuMemoryPool>? _pools;
+  bool _loading = true;
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _project = widget.project;
+    unawaited(_loadPools());
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPools() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final pools = await widget.client.listMemoryPools();
+      if (!mounted) return;
+      setState(() {
+        _pools = pools;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = '記憶群組清單讀不到，請再試一次。';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _leave() async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      final updated = await widget.client.leaveMemoryPool(_project.id);
+      if (!mounted) return;
+      setState(() {
+        _project = updated;
+        _submitting = false;
+      });
+      await _loadPools();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _error = '離開群組失敗，請再試一次。';
+      });
+    }
+  }
+
+  Future<void> _join(String poolId, {String? createTitle}) async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      if (createTitle != null) {
+        await widget.client.createMemoryPool(poolId, title: createTitle);
+      }
+      final updated = await widget.client.joinMemoryPool(_project.id, poolId);
+      if (!mounted) return;
+      Navigator.of(context).pop(updated);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _error = '加入群組失敗，請再試一次（同一時間只能屬於一個群組）。';
+      });
+    }
+  }
+
+  Future<void> _createAndJoin() async {
+    final title = _controller.text.trim();
+    if (title.isEmpty || _submitting) return;
+    await _join(_projectIdForTitle(title), createTitle: title);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = TmTokens.of(context);
+    final currentPoolId = _project.poolId;
+    final currentPoolTitle =
+        _pools?.where((pool) => pool.id == currentPoolId).firstOrNull?.title ??
+        currentPoolId;
+    return AlertDialog(
+      title: const Text('記憶群組'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '同一群組裡的專案會互相看到彼此的記憶，適合「主專案＋它依賴的子專案」這種關係。',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.muted),
+            ),
+            const SizedBox(height: 12),
+            if (currentPoolId != null) ...[
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.group_work_outlined),
+                title: Text('目前群組：$currentPoolTitle'),
+                subtitle: const Text('要換群組，請先離開這個。'),
+              ),
+              const SizedBox(height: 4),
+              FilledButton.tonal(
+                key: const Key('pool-leave'),
+                onPressed: _submitting ? null : _leave,
+                child:
+                    _submitting
+                        ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : const Text('離開群組'),
+              ),
+            ] else ...[
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                )
+              else if ((_pools ?? const []).isNotEmpty) ...[
+                Text(
+                  '加入現有群組',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: palette.muted),
+                ),
+                const SizedBox(height: 6),
+                for (final pool in _pools!)
+                  ListTile(
+                    key: Key('pool-join-${pool.id}'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    leading: const Icon(Icons.group_work_outlined, size: 20),
+                    title: Text(pool.title),
+                    enabled: !_submitting,
+                    onTap: () => _join(pool.id),
+                  ),
+                const SizedBox(height: 12),
+              ],
+              Text(
+                '或建立新群組',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: palette.muted),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                key: const Key('pool-create-title'),
+                controller: _controller,
+                enabled: !_submitting,
+                decoration: const InputDecoration(
+                  labelText: '群組名稱',
+                  hintText: '例如：Slime 生態圈',
+                ),
+                onSubmitted: (_) => _createAndJoin(),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed:
+              _submitting ? null : () => Navigator.of(context).pop(_project),
+          child: const Text('關閉'),
+        ),
+        if (currentPoolId == null)
+          FilledButton(
+            key: const Key('pool-create-submit'),
+            onPressed: _submitting ? null : _createAndJoin,
+            child:
+                _submitting
+                    ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                    : const Text('建立並加入'),
+          ),
+      ],
+    );
+  }
+}
+
 class _ProjectCatalogList extends StatelessWidget {
   const _ProjectCatalogList({
     required this.projects,
@@ -811,6 +1062,7 @@ class _ProjectCatalogList extends StatelessWidget {
     required this.onOpenGlobal,
     required this.onOpen,
     required this.onArchive,
+    required this.onManagePool,
   });
 
   final List<ProjectCatalogEntry> projects;
@@ -824,6 +1076,7 @@ class _ProjectCatalogList extends StatelessWidget {
   final VoidCallback onOpenGlobal;
   final ValueChanged<ProjectCatalogEntry> onOpen;
   final ValueChanged<ProjectCatalogEntry> onArchive;
+  final ValueChanged<ProjectCatalogEntry> onManagePool;
 
   @override
   Widget build(BuildContext context) {
@@ -886,6 +1139,8 @@ class _ProjectCatalogList extends StatelessWidget {
                       sessionEnded: sessionEnded,
                       onTap: () => onOpen(project),
                       onArchive: busySwitch ? null : () => onArchive(project),
+                      onManagePool:
+                          busySwitch ? null : () => onManagePool(project),
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -986,6 +1241,7 @@ class _ProjectCatalogCard extends StatelessWidget {
     required this.sessionEnded,
     required this.onTap,
     required this.onArchive,
+    required this.onManagePool,
   });
 
   final ProjectCatalogEntry project;
@@ -995,12 +1251,13 @@ class _ProjectCatalogCard extends StatelessWidget {
   final bool sessionEnded;
   final VoidCallback onTap;
   final VoidCallback? onArchive;
+  final VoidCallback? onManagePool;
 
   @override
   Widget build(BuildContext context) {
     final palette = TmTokens.of(context);
     final folderCount = project.linkedFolderUris.length;
-    final subtitle =
+    final baseSubtitle =
         active
             ? '目前對話正在這裡'
             : sessionEnded
@@ -1008,6 +1265,9 @@ class _ProjectCatalogCard extends StatelessWidget {
             : folderCount == 0
             ? '可直接開始，不需要資料夾'
             : '$folderCount 個連結資料夾';
+    final poolId = project.poolId;
+    final subtitle =
+        poolId == null ? baseSubtitle : '$baseSubtitle · 群組 $poolId';
     return Semantics(
       button: true,
       selected: active,
@@ -1063,7 +1323,9 @@ class _ProjectCatalogCard extends StatelessWidget {
                 : _ProjectTrailing(
                   projectId: project.id,
                   active: active,
+                  hasPool: project.poolId != null,
                   onArchive: onArchive,
+                  onManagePool: onManagePool,
                 ),
         enabled: enabled,
         onTap: onTap,
@@ -1076,16 +1338,21 @@ class _ProjectTrailing extends StatelessWidget {
   const _ProjectTrailing({
     required this.projectId,
     required this.active,
+    required this.hasPool,
     required this.onArchive,
+    required this.onManagePool,
   });
 
   final String projectId;
   final bool active;
+  final bool hasPool;
   final VoidCallback? onArchive;
+  final VoidCallback? onManagePool;
 
   @override
   Widget build(BuildContext context) {
     final palette = TmTokens.of(context);
+    final menuEnabled = onArchive != null || onManagePool != null;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1096,15 +1363,32 @@ class _ProjectTrailing extends StatelessWidget {
         PopupMenuButton<_ProjectMenuAction>(
           key: Key('project-archive-$projectId'),
           tooltip: '專案選項',
-          enabled: onArchive != null,
+          enabled: menuEnabled,
           onSelected: (action) {
-            if (action == _ProjectMenuAction.archive) onArchive?.call();
+            switch (action) {
+              case _ProjectMenuAction.archive:
+                onArchive?.call();
+              case _ProjectMenuAction.managePool:
+                onManagePool?.call();
+            }
           },
           itemBuilder:
-              (context) => const [
+              (context) => [
+                PopupMenuItem(
+                  value: _ProjectMenuAction.managePool,
+                  enabled: onManagePool != null,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.group_work_outlined, size: 19),
+                      const SizedBox(width: 10),
+                      Text(hasPool ? '記憶群組（已加入）' : '加入記憶群組'),
+                    ],
+                  ),
+                ),
                 PopupMenuItem(
                   value: _ProjectMenuAction.archive,
-                  child: Row(
+                  enabled: onArchive != null,
+                  child: const Row(
                     children: [
                       Icon(Icons.archive_outlined, size: 19),
                       SizedBox(width: 10),
@@ -1120,7 +1404,7 @@ class _ProjectTrailing extends StatelessWidget {
   }
 }
 
-enum _ProjectMenuAction { archive }
+enum _ProjectMenuAction { archive, managePool }
 
 String _friendlyProjectError(Object error) {
   final message = error.toString();

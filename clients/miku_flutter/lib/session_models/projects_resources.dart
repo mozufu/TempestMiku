@@ -10,6 +10,7 @@ class ProjectCatalogEntry {
     required this.projectUri,
     required this.linkedFoldersUri,
     this.linkedFolderUris = const [],
+    this.poolId,
   });
 
   factory ProjectCatalogEntry.fromJson(Map<String, Object?> json) {
@@ -27,6 +28,7 @@ class ProjectCatalogEntry {
       projectUri: _stringValue(json['projectUri']),
       linkedFoldersUri: _stringValue(json['linkedFoldersUri']),
       linkedFolderUris: _stringList(json['linkedFolderUris']),
+      poolId: _nullableString(json['poolId']),
     );
   }
 
@@ -39,12 +41,52 @@ class ProjectCatalogEntry {
   final String linkedFoldersUri;
   final List<String> linkedFolderUris;
 
+  /// The memory pool this project currently belongs to (§30.7), if any.
+  final String? poolId;
+
   /// True when the project has at least one attached linked folder (§30).
   bool get hasLinkedFolder => linkedFolderUris.isNotEmpty;
 
   /// The flat folder root shown in the picker; empty for a folderless project.
   String get rootUri =>
       linkedFolderUris.isNotEmpty ? linkedFolderUris.first : '';
+
+  ProjectCatalogEntry copyWithPoolId(String? poolId) => ProjectCatalogEntry(
+    id: id,
+    title: title,
+    status: status,
+    memoryScope: memoryScope,
+    defaultMemoryPolicy: defaultMemoryPolicy,
+    projectUri: projectUri,
+    linkedFoldersUri: linkedFoldersUri,
+    linkedFolderUris: linkedFolderUris,
+    poolId: poolId,
+  );
+}
+
+/// A memory pool entity (§30.7): a symmetric group of projects whose recall fan-out includes each
+/// other's active scope. A project belongs to at most one active pool at a time.
+class MikuMemoryPool {
+  const MikuMemoryPool({
+    required this.id,
+    required this.title,
+    required this.status,
+  });
+
+  factory MikuMemoryPool.fromJson(Map<String, Object?> json) {
+    final id = _stringValue(json['id']);
+    final title = _stringValue(json['title']);
+    final status = _stringValue(json['status']);
+    return MikuMemoryPool(
+      id: id,
+      title: title.isEmpty ? id : title,
+      status: status.isEmpty ? 'active' : status,
+    );
+  }
+
+  final String id;
+  final String title;
+  final String status;
 }
 
 class MikuResourceEntry {

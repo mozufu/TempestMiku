@@ -84,6 +84,24 @@ abstract class MikuSessionClient {
     String? reason,
   });
 
+  Future<List<MikuMemoryPool>> listMemoryPools();
+
+  /// Creates (or returns) a memory pool entity (§30.7). Owner-initiated; idempotent on id.
+  Future<MikuMemoryPool> createMemoryPool(String id, {String? title});
+
+  /// Archives a memory pool: a pure status flip. Member projects keep their `poolId` unchanged —
+  /// recall fan-out stops seeing them because it's gated on the pool's status, not on cleaning up
+  /// a membership list (§30.7).
+  Future<MikuMemoryPool> archiveMemoryPool(String poolId);
+
+  /// Joins a project to a memory pool for symmetric recall fan-out with its other active members
+  /// (§30.7). Rejects if the project already belongs to a pool — call [leaveMemoryPool] first.
+  Future<ProjectCatalogEntry> joinMemoryPool(String projectId, String poolId);
+
+  /// Removes a project from its memory pool (§30.7). Idempotent: a project with no pool is
+  /// returned unchanged.
+  Future<ProjectCatalogEntry> leaveMemoryPool(String projectId);
+
   Future<MikuSession> setSessionMemoryContext(
     String sessionId, {
     String? projectId,

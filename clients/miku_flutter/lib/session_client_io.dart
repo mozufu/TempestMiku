@@ -14,6 +14,7 @@ part 'session_client_io/auth.dart';
 part 'session_client_io/credentials.dart';
 part 'session_client_io/drive.dart';
 part 'session_client_io/events.dart';
+part 'session_client_io/pools.dart';
 part 'session_client_io/proposals.dart';
 part 'session_client_io/sessions.dart';
 part 'session_client_io/settings.dart';
@@ -164,6 +165,25 @@ class NativeMikuSessionClient
     String projectId, {
     String? reason,
   }) => _archiveProjectImpl(projectId, reason);
+
+  @override
+  Future<List<MikuMemoryPool>> listMemoryPools() => _listMemoryPoolsImpl();
+
+  @override
+  Future<MikuMemoryPool> createMemoryPool(String id, {String? title}) =>
+      _createMemoryPoolImpl(id, title);
+
+  @override
+  Future<MikuMemoryPool> archiveMemoryPool(String poolId) =>
+      _archiveMemoryPoolImpl(poolId);
+
+  @override
+  Future<ProjectCatalogEntry> joinMemoryPool(String projectId, String poolId) =>
+      _joinMemoryPoolImpl(projectId, poolId);
+
+  @override
+  Future<ProjectCatalogEntry> leaveMemoryPool(String projectId) =>
+      _leaveMemoryPoolImpl(projectId);
 
   @override
   Future<MikuSession> setSessionMemoryContext(

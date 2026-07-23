@@ -120,7 +120,43 @@ The two revocation axes are independent, and each fails closed on its own trigge
   output is ordinary approval-gated `drive.put` with `sourceUri` provenance; clients may
   batch-select, but that is a client concern, not a server concept.
 
-## 30.7 Migration shape
+## 30.7 Memory pools — symmetric single-pool cross-project recall
+
+**Status: storage/API implemented; recall fan-out pending.** The `memory_pools` entity, the
+`pool_id` column on `projects`, both store backends, and the join/leave/archive HTTP surface are
+live. The fan-out step below — widening `memory.search` candidate generation across active
+pool-member scopes — is the remaining rollout step (§30.8 Migration shape).
+
+**Motivation.** A project can depend on others — e.g. an app project (`SlimeOS`) built from two
+library projects (`zutai`, `dango`). The owner works across all three and wants Miku's recall to
+surface relevant memory from the sibling projects without merging their scopes or granting ambient
+access.
+
+- **Memory pool** — a durable, server-owned entity: stable id, display name, `active | archived`
+  status. Membership is **project ↔ pool**, and — a deliberate simplicity choice scoped to the
+  concrete need above, not a general N-pool model — **each project belongs to at most one active
+  pool at a time**. `pool.join(project_id)` / `pool.leave(project_id)` are approval-gated host calls,
+  the same shape as `project.link` / `project.unlink` (§30.3).
+- **What pool membership does not change:** a project's own `memory_scope` (`project:<id>`), its
+  writes, its exact reads (`memory://records/...`, `memory://recalls/...`), and its archive tombstone
+  lifecycle (§30.4) are exactly as before. Pool membership never widens write authority or
+  exact-record reads — only the fuzzy hybrid recall path below.
+- **What it does change:** when the active scope is `project:<id>` and that project is an active
+  member of a pool, `memory.search`'s candidate generation (§22.3) additionally queries every other
+  **active** member project's scope in the same fan-out step. Each candidate keeps its source scope
+  as provenance so Miku can attribute and cite correctly. RRF fusion (§22.3) applies a lower default
+  weight to cross-pool candidates than same-scope candidates, so a project's own memory dominates its
+  ranking instead of being diluted by pool siblings.
+- **Revocation is a pure read-time filter:** a project leaving its pool, a pool being archived, or the
+  member project itself being archived (§30.4) all drop that project out of every remaining member's
+  fan-out set on the *next* query. The fan-out set is recomputed from current active
+  membership/status per query, so this needs no new tombstone type — it reuses the existing
+  scope/status gate that already runs before every scoped read.
+
+If a second concrete case ever needs a project to sit in more than one pool, or needs asymmetric
+(one-way) visibility, revisit the single-pool constraint above rather than generalizing preemptively.
+
+## 30.8 Migration shape
 
 1. `projects` table + entity CRUD + lifecycle tombstones; backfill one entity per active link alias.
 2. `project.link` / `project.unlink` host calls; `drive.link` / `drive.unlink` removed with every
@@ -133,6 +169,10 @@ The two revocation axes are independent, and each fails closed on its own trigge
 6. Flutter: the entity picker and dedicated Project/Drive/History pages replace drawer expansion;
    active sessions select scope, closed sessions expose assignment, and Drive presents the
    scope-relative playground without treating a linked folder as the project itself.
+7. Memory pools (§30.7): `memory_pools` table + entity CRUD; `pool.join` / `pool.leave` host calls —
+   **done**. Recall candidate-generation fan-out across active pool-member scopes with provenance
+   tagging and lower cross-pool RRF weight — **pending**; no changes to write authority, exact
+   reads, or archive tombstones.
 
 Every migration step preserves the established drive/memory acceptance boundaries or amends them
 explicitly in the same change.

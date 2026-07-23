@@ -151,6 +151,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "skill_runtime_ledgers",
         sql: include_str!("../../../migrations/0028_skill_runtime_ledgers.sql"),
     },
+    Migration {
+        version: 29,
+        name: "memory_pools",
+        sql: include_str!("../../../migrations/0029_memory_pools.sql"),
+    },
 ];
 
 impl PostgresStore {

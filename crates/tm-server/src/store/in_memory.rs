@@ -38,12 +38,12 @@ use super::{
     AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
     AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MemoryPolicy,
-    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
-    NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
-    NewProjectItem, NewSession, NewSkillApprovalBundle, ProfileFactRecord, ProjectItemKind,
-    ProjectItemRecord, ProjectRecord, ProjectStatus, RecallChunkRecord, SessionEvent,
-    SessionRecord, SessionSummaryRecord, SessionTurnRecord, SkillApprovalBundleResult, Store,
-    StoreRuntimeMetrics,
+    MemoryPoolRecord, MemoryPoolStatus, MessageRecord, ModeState, NewApprovalRequest,
+    NewApprovalResolution, NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord,
+    NewEvolutionReviewProposal, NewProjectItem, NewSession, NewSkillApprovalBundle,
+    ProfileFactRecord, ProjectItemKind, ProjectItemRecord, ProjectRecord, ProjectStatus,
+    RecallChunkRecord, SessionEvent, SessionRecord, SessionSummaryRecord, SessionTurnRecord,
+    SkillApprovalBundleResult, Store, StoreRuntimeMetrics,
 };
 
 mod approval_helpers;
@@ -82,6 +82,7 @@ struct Inner {
     memory_scope_tombstones: Vec<MemoryScopeTombstone>,
     project_items: Vec<ProjectItemRecord>,
     projects: BTreeMap<String, ProjectRecord>,
+    memory_pools: BTreeMap<String, MemoryPoolRecord>,
     dream_queue: Vec<DreamQueueRecord>,
     memory_summaries: Vec<MemorySummaryRecord>,
     evolution_episodes: Vec<EvolutionEpisodeRecord>,
@@ -2843,6 +2844,7 @@ impl Store for InMemoryStore {
                 updated_at: now,
                 archived_at: None,
                 default_memory_policy,
+                pool_id: None,
             });
         Ok(record.clone())
     }
@@ -2884,6 +2886,73 @@ impl Store for InMemoryStore {
             .ok_or_else(|| ServerError::NotFound(format!("project {id}")))?;
         project.status = ProjectStatus::Archived;
         project.archived_at = Some(now);
+        project.updated_at = now;
+        Ok(project.clone())
+    }
+
+    async fn ensure_memory_pool(&self, id: &str, title: &str) -> Result<MemoryPoolRecord> {
+        validate_persistence_identifier("memory pool id", id)?;
+        let title = title.trim();
+        let title = if title.is_empty() { id } else { title };
+        let now = Utc::now();
+        let mut inner = self.inner.lock();
+        let record = inner
+            .memory_pools
+            .entry(id.to_string())
+            .or_insert_with(|| MemoryPoolRecord {
+                id: id.to_string(),
+                title: title.to_string(),
+                status: MemoryPoolStatus::Active,
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+            });
+        Ok(record.clone())
+    }
+
+    async fn memory_pool(&self, id: &str) -> Result<Option<MemoryPoolRecord>> {
+        Ok(self.inner.lock().memory_pools.get(id).cloned())
+    }
+
+    async fn memory_pools(&self, include_archived: bool) -> Result<Vec<MemoryPoolRecord>> {
+        let mut pools = self
+            .inner
+            .lock()
+            .memory_pools
+            .values()
+            .filter(|pool| include_archived || pool.status == MemoryPoolStatus::Active)
+            .cloned()
+            .collect::<Vec<_>>();
+        pools.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(pools)
+    }
+
+    async fn archive_memory_pool(&self, id: &str) -> Result<MemoryPoolRecord> {
+        validate_persistence_identifier("memory pool id", id)?;
+        let now = Utc::now();
+        let mut inner = self.inner.lock();
+        let pool = inner
+            .memory_pools
+            .get_mut(id)
+            .ok_or_else(|| ServerError::NotFound(format!("memory pool {id}")))?;
+        pool.status = MemoryPoolStatus::Archived;
+        pool.archived_at = Some(now);
+        pool.updated_at = now;
+        Ok(pool.clone())
+    }
+
+    async fn set_project_pool(
+        &self,
+        project_id: &str,
+        pool_id: Option<&str>,
+    ) -> Result<ProjectRecord> {
+        let now = Utc::now();
+        let mut inner = self.inner.lock();
+        let project = inner
+            .projects
+            .get_mut(project_id)
+            .ok_or_else(|| ServerError::NotFound(format!("project {project_id}")))?;
+        project.pool_id = pool_id.map(str::to_string);
         project.updated_at = now;
         Ok(project.clone())
     }

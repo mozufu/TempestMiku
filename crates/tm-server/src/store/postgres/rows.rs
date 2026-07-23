@@ -14,8 +14,8 @@ use crate::{Result, ServerError};
 
 use super::{
     ApprovalEffectRecord, ApprovalRequestRecord, CronJobRecord, CronRunRecord,
-    EvolutionReviewProposalRecord, MessageRecord, ModeState, ProjectItemRecord, ProjectRecord,
-    SessionRecord, SessionTurnRecord,
+    EvolutionReviewProposalRecord, MemoryPoolRecord, MessageRecord, ModeState, ProjectItemRecord,
+    ProjectRecord, SessionRecord, SessionTurnRecord,
 };
 
 pub(super) fn row_to_approval_request(row: tokio_postgres::Row) -> ApprovalRequestRecord {
@@ -469,6 +469,19 @@ pub(super) fn row_to_project(row: tokio_postgres::Row) -> Result<ProjectRecord> 
         updated_at: row.get("updated_at"),
         archived_at: row.get("archived_at"),
         default_memory_policy: row.get::<_, String>("default_memory_policy").parse()?,
+        pool_id: row.get("pool_id"),
+    })
+}
+
+pub(super) fn row_to_memory_pool(row: tokio_postgres::Row) -> Result<MemoryPoolRecord> {
+    let status: String = row.get("status");
+    Ok(MemoryPoolRecord {
+        id: row.get("id"),
+        title: row.get("title"),
+        status: status.parse()?,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        archived_at: row.get("archived_at"),
     })
 }
 

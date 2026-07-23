@@ -413,4 +413,52 @@ pub struct ProjectRecord {
     pub updated_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
     pub default_memory_policy: MemoryPolicy,
+    /// The memory pool this project currently belongs to (§30.7), if any. A project belongs to at
+    /// most one active pool at a time; membership is stored here rather than on the pool record.
+    #[serde(default)]
+    pub pool_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryPoolStatus {
+    Active,
+    Archived,
+}
+
+impl MemoryPoolStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+        }
+    }
+}
+
+impl std::str::FromStr for MemoryPoolStatus {
+    type Err = ServerError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "active" => Ok(Self::Active),
+            "archived" => Ok(Self::Archived),
+            other => Err(ServerError::Store(format!(
+                "unknown memory pool status {other}"
+            ))),
+        }
+    }
+}
+
+/// A server-owned memory pool entity (§30.7): a symmetric group of projects whose recall fan-out
+/// includes each other's active scope. The pool record carries no membership list — each project
+/// points at its pool via `ProjectRecord::pool_id` instead.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryPoolRecord {
+    pub id: String,
+    pub title: String,
+    pub status: MemoryPoolStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
 }

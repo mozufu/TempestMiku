@@ -19,10 +19,12 @@ pub(crate) struct ProjectResponse {
     pub memory_scope: String,
     pub project_uri: String,
     pub default_memory_policy: crate::MemoryPolicy,
+    /// The memory pool this project currently belongs to (§30.7), if any.
+    pub pool_id: Option<String>,
 }
 
 impl ProjectResponse {
-    fn from_record(record: ProjectRecord) -> Self {
+    pub(crate) fn from_record(record: ProjectRecord) -> Self {
         let id = record.id;
         Self {
             title: record.title,
@@ -30,6 +32,7 @@ impl ProjectResponse {
             memory_scope: format!("project:{id}"),
             project_uri: format!("project://{id}"),
             default_memory_policy: record.default_memory_policy,
+            pool_id: record.pool_id,
             id,
         }
     }

@@ -72,7 +72,10 @@ flowchart LR
 1. **Candidate generation (parallel)** — dense, sparse, fact-store, episodic-recent, and **graph-hop**
    (1–2 hop neighbors of entities named in the turn) each return their top-K.
 2. **Fusion — RRF** (`score(d) = Σ 1/(k + rank_i(d))`, `k≈60`): rank-based, needs no score
-   normalization, and **degrades gracefully** if a store is down or empty (Cormack et al.).
+   normalization, and **degrades gracefully** if a store is down or empty (Cormack et al.). When the
+   active project is in a memory pool (§30.7), candidate generation also fans out across active
+   pool-member scopes, tagged by source scope and down-weighted relative to the project's own scope —
+   read-only; write authority and exact reads are unaffected.
 3. **Memory-stream re-score** (Generative Agents): blend the fused rank with **importance**
    (LLM poignancy stored at write) and **recency** (exponential decay, factor ~0.995) — so a companion
    surfaces what *matters*, not just what's lexically near. Weights are config (§22.7); default leans

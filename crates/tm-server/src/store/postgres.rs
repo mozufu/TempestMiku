@@ -12,9 +12,9 @@ use rows::{
     row_to_approval_effect, row_to_approval_request, row_to_cron_job, row_to_cron_run,
     row_to_dream_record, row_to_environment_cognition, row_to_evolution_audit,
     row_to_evolution_episode, row_to_evolution_policy, row_to_evolution_review_proposal,
-    row_to_experience_trace, row_to_memory_embedding_job, row_to_memory_summary,
-    row_to_message_record, row_to_project, row_to_project_item, row_to_session_record,
-    row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
+    row_to_experience_trace, row_to_memory_embedding_job, row_to_memory_pool,
+    row_to_memory_summary, row_to_message_record, row_to_project, row_to_project_item,
+    row_to_session_record, row_to_session_turn, row_to_skill_proposal, row_to_stored_memory_record,
 };
 use serde_json::{Value, json};
 use tm_host::{EvolutionAuditRecord, EvolutionAuditStatus, EvolutionPolicyReason};
@@ -51,7 +51,7 @@ use super::{
     AutoEvolutionReviewBundleResult, AutoEvolutionReviewDisposition,
     AutoEvolutionReviewProposalResult, CronJobRecord, CronLease, CronRunRecord,
     EndSessionDreamResult, EvolutionAuditEntry, EvolutionReviewProposalRecord, MemoryPolicy,
-    MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
+    MemoryPoolRecord, MessageRecord, ModeState, NewApprovalRequest, NewApprovalResolution,
     NewAutoEvolutionReviewBundle, NewCronJobRecord, NewCronRunRecord, NewEvolutionReviewProposal,
     NewProjectItem, NewSession, NewSkillApprovalBundle, ProfileFactRecord, ProjectItemKind,
     ProjectItemRecord, ProjectRecord, RecallChunkRecord, SessionEvent, SessionRecord,
@@ -4470,7 +4470,7 @@ impl Store for PostgresStore {
                 "insert into projects(id, title, status, default_memory_policy, created_at, updated_at)
                  values ($1, $2, 'active', $3, now(), now())
                  on conflict (id) do update set updated_at = projects.updated_at
-                 returning id, title, status, default_memory_policy, created_at, updated_at, archived_at",
+                 returning id, title, status, default_memory_policy, pool_id, created_at, updated_at, archived_at",
                 &[&id, &title, &default_memory_policy.as_str()],
             )
             .await
@@ -4482,7 +4482,7 @@ impl Store for PostgresStore {
         let row = self
             .client
             .query_opt(
-                "select id, title, status, default_memory_policy, created_at, updated_at, archived_at
+                "select id, title, status, default_memory_policy, pool_id, created_at, updated_at, archived_at
                    from projects where id = $1",
                 &[&id],
             )
@@ -4495,7 +4495,7 @@ impl Store for PostgresStore {
         let rows = if include_archived {
             self.client
                 .query(
-                    "select id, title, status, default_memory_policy, created_at, updated_at, archived_at
+                    "select id, title, status, default_memory_policy, pool_id, created_at, updated_at, archived_at
                        from projects order by id asc",
                     &[],
                 )
@@ -4503,7 +4503,7 @@ impl Store for PostgresStore {
         } else {
             self.client
                 .query(
-                    "select id, title, status, default_memory_policy, created_at, updated_at, archived_at
+                    "select id, title, status, default_memory_policy, pool_id, created_at, updated_at, archived_at
                        from projects where status = 'active' order by id asc",
                     &[],
                 )
@@ -4550,7 +4550,7 @@ impl Store for PostgresStore {
                 "update projects
                     set status = 'archived', archived_at = coalesce(archived_at, $2), updated_at = $2
                   where id = $1
-                  returning id, title, status, created_at, updated_at, archived_at",
+                  returning id, title, status, default_memory_policy, pool_id, created_at, updated_at, archived_at",
                 &[&id, &now],
             )
             .await
@@ -4559,6 +4559,100 @@ impl Store for PostgresStore {
         let record = row_to_project(row)?;
         transaction.commit().await.map_err(postgres_memory_error)?;
         Ok(record)
+    }
+
+    async fn ensure_memory_pool(&self, id: &str, title: &str) -> Result<MemoryPoolRecord> {
+        validate_persistence_identifier("memory pool id", id)?;
+        let title = title.trim();
+        let title = if title.is_empty() { id } else { title };
+        let row = self
+            .client
+            .query_one(
+                "insert into memory_pools(id, title, status, created_at, updated_at)
+                 values ($1, $2, 'active', now(), now())
+                 on conflict (id) do update set updated_at = memory_pools.updated_at
+                 returning id, title, status, created_at, updated_at, archived_at",
+                &[&id, &title],
+            )
+            .await
+            .map_err(store_error)?;
+        row_to_memory_pool(row)
+    }
+
+    async fn memory_pool(&self, id: &str) -> Result<Option<MemoryPoolRecord>> {
+        let row = self
+            .client
+            .query_opt(
+                "select id, title, status, created_at, updated_at, archived_at
+                   from memory_pools where id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(store_error)?;
+        row.map(row_to_memory_pool).transpose()
+    }
+
+    async fn memory_pools(&self, include_archived: bool) -> Result<Vec<MemoryPoolRecord>> {
+        let rows = if include_archived {
+            self.client
+                .query(
+                    "select id, title, status, created_at, updated_at, archived_at
+                       from memory_pools order by id asc",
+                    &[],
+                )
+                .await
+        } else {
+            self.client
+                .query(
+                    "select id, title, status, created_at, updated_at, archived_at
+                       from memory_pools where status = 'active' order by id asc",
+                    &[],
+                )
+                .await
+        }
+        .map_err(store_error)?;
+        rows.into_iter().map(row_to_memory_pool).collect()
+    }
+
+    async fn archive_memory_pool(&self, id: &str) -> Result<MemoryPoolRecord> {
+        validate_persistence_identifier("memory pool id", id)?;
+        let now = Utc::now();
+        let row = self
+            .client
+            .query_opt(
+                "update memory_pools
+                    set status = 'archived', archived_at = coalesce(archived_at, $2), updated_at = $2
+                  where id = $1
+                  returning id, title, status, created_at, updated_at, archived_at",
+                &[&id, &now],
+            )
+            .await
+            .map_err(store_error)?;
+        let row = row.ok_or_else(|| ServerError::NotFound(format!("memory pool {id}")))?;
+        row_to_memory_pool(row)
+    }
+
+    async fn set_project_pool(
+        &self,
+        project_id: &str,
+        pool_id: Option<&str>,
+    ) -> Result<ProjectRecord> {
+        validate_persistence_identifier("project id", project_id)?;
+        if let Some(pool_id) = pool_id {
+            validate_persistence_identifier("memory pool id", pool_id)?;
+        }
+        let row = self
+            .client
+            .query_opt(
+                "update projects set pool_id = $2, updated_at = now()
+                  where id = $1
+                  returning id, title, status, default_memory_policy, pool_id, created_at, updated_at, archived_at",
+                &[&project_id, &pool_id],
+            )
+            .await
+            .map_err(store_error)?;
+        let row = row.ok_or_else(|| ServerError::NotFound(format!("project {project_id}")))?;
+        row_to_project(row)
     }
 
     async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord> {

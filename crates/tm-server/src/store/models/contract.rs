@@ -589,6 +589,119 @@ pub trait Store: Send + Sync + 'static {
             "project entities are not implemented by this store".to_string(),
         ))
     }
+    /// Create or return the memory pool entity for `id` (§30.7). `title` is the display name.
+    /// Idempotent on `id`.
+    async fn ensure_memory_pool(&self, id: &str, title: &str) -> Result<MemoryPoolRecord> {
+        let _ = (id, title);
+        Err(ServerError::Store(
+            "memory pool entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// Look up a single memory pool by id.
+    async fn memory_pool(&self, id: &str) -> Result<Option<MemoryPoolRecord>> {
+        let _ = id;
+        Err(ServerError::Store(
+            "memory pool entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// List memory pools. When `include_archived` is false, only `active` pools are returned.
+    async fn memory_pools(&self, include_archived: bool) -> Result<Vec<MemoryPoolRecord>> {
+        let _ = include_archived;
+        Err(ServerError::Store(
+            "memory pool entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// Archive a memory pool (§30.7). A pure status flip: member projects keep their `pool_id`
+    /// unchanged, and fan-out membership is recomputed at read time from the pool's status — there
+    /// is nothing to tombstone or clean up here (contrast with §30.4 project-archive revocation).
+    async fn archive_memory_pool(&self, id: &str) -> Result<MemoryPoolRecord> {
+        let _ = id;
+        Err(ServerError::Store(
+            "memory pool entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// Raw setter for a project's pool membership (§30.7); no validation beyond existence.
+    /// `join_memory_pool` / `leave_memory_pool` are the validated entry points — they enforce the
+    /// active-project / active-pool / at-most-one-pool rules once, here, for both stores.
+    async fn set_project_pool(
+        &self,
+        project_id: &str,
+        pool_id: Option<&str>,
+    ) -> Result<ProjectRecord> {
+        let _ = (project_id, pool_id);
+        Err(ServerError::Store(
+            "memory pool entities are not implemented by this store".to_string(),
+        ))
+    }
+    /// Join `project_id` to `pool_id` (§30.7). Both must be active, and the project must not
+    /// already belong to a pool — leave first, no silent moves between pools.
+    async fn join_memory_pool(&self, project_id: &str, pool_id: &str) -> Result<ProjectRecord> {
+        validate_persistence_identifier("project id", project_id)?;
+        validate_persistence_identifier("memory pool id", pool_id)?;
+        let project = self
+            .project(project_id)
+            .await?
+            .ok_or_else(|| ServerError::NotFound(format!("project {project_id}")))?;
+        if project.status != ProjectStatus::Active {
+            return Err(ServerError::Conflict(format!(
+                "project {project_id} is archived"
+            )));
+        }
+        if project.pool_id.is_some() {
+            return Err(ServerError::Conflict(format!(
+                "project {project_id} already belongs to a pool; leave it first"
+            )));
+        }
+        let pool = self
+            .memory_pool(pool_id)
+            .await?
+            .ok_or_else(|| ServerError::NotFound(format!("memory pool {pool_id}")))?;
+        if pool.status != MemoryPoolStatus::Active {
+            return Err(ServerError::Conflict(format!(
+                "memory pool {pool_id} is archived"
+            )));
+        }
+        self.set_project_pool(project_id, Some(pool_id)).await
+    }
+    /// Remove `project_id` from whichever pool it belongs to (§30.7). Idempotent: a project with no
+    /// pool is returned unchanged.
+    async fn leave_memory_pool(&self, project_id: &str) -> Result<ProjectRecord> {
+        validate_persistence_identifier("project id", project_id)?;
+        let project = self
+            .project(project_id)
+            .await?
+            .ok_or_else(|| ServerError::NotFound(format!("project {project_id}")))?;
+        if project.pool_id.is_none() {
+            return Ok(project);
+        }
+        self.set_project_pool(project_id, None).await
+    }
+    /// Sibling memory scopes for `project_id`'s recall fan-out (§30.7, §22.3): every other
+    /// **active** project in the same pool, gated on the pool itself being **active**. Empty when
+    /// the project has no pool, its pool is archived, or there are no active siblings. Read-only —
+    /// write authority, exact reads, and archive tombstones (§30.4) are entirely unaffected.
+    async fn pool_sibling_scopes(&self, project_id: &str) -> Result<Vec<String>> {
+        let Some(project) = self.project(project_id).await? else {
+            return Ok(Vec::new());
+        };
+        let Some(pool_id) = project.pool_id.as_deref() else {
+            return Ok(Vec::new());
+        };
+        match self.memory_pool(pool_id).await? {
+            Some(pool) if pool.status == MemoryPoolStatus::Active => {}
+            _ => return Ok(Vec::new()),
+        }
+        let siblings = self
+            .projects(false)
+            .await?
+            .into_iter()
+            .filter(|sibling| {
+                sibling.id != project_id && sibling.pool_id.as_deref() == Some(pool_id)
+            })
+            .map(|sibling| format!("project:{}", sibling.id))
+            .collect();
+        Ok(siblings)
+    }
     async fn enqueue_dream(&self, new: NewDreamQueueRecord) -> Result<DreamQueueRecord>;
     async fn dream_queue_for_session(&self, session_id: Uuid) -> Result<Vec<DreamQueueRecord>>;
     async fn dream_queue(&self, scope: &str, limit: usize) -> Result<Vec<DreamQueueRecord>>;

@@ -172,6 +172,7 @@ fn dense_query(
 mod egress_state;
 mod in_memory_approvals;
 mod in_memory_memory;
+mod in_memory_projects;
 mod in_memory_scheduling;
 mod in_memory_sessions;
 mod mcp_mutation_effects;

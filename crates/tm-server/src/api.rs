@@ -42,9 +42,9 @@ use tm_memory::DreamQueueRecord;
 use crate::{
     ApprovalBroker, ApprovalEffectRecord, ApprovalOption, ApprovalPrompt, ApprovalRequestRecord,
     ApprovalStatus, AuthConfig, AuthContext, AuthDeviceStore, ChatRunner, ChatTurn, CodingBackend,
-    CodingEventSink, CodingTurn, DurableApprovalSpec, MemoryProvider, MemoryRecordRef,
-    MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, ModeCatalog, ModeId, ModeProfile,
-    ModesConfig, NewProjectItem, NewSession, PersistingEventSink, ProjectItemKind,
+    CodingEventSink, CodingTurn, DurableApprovalSpec, MemoryPoolRecord, MemoryProvider,
+    MemoryRecordRef, MemoryWriteKind, MemoryWriteProposal, MemoryWriteStatus, ModeCatalog, ModeId,
+    ModeProfile, ModesConfig, NewProjectItem, NewSession, PersistingEventSink, ProjectItemKind,
     ProjectItemRecord, ProjectRecord, ProjectStatus, ResolveApprovalRequest, Result, ServerError,
     SessionEvent, SkillProposalStatus, Store, StoreCodingEventSink, StoreEvent, store::ModeState,
     store::RecallChunkRecord,
@@ -88,6 +88,7 @@ mod memory_search;
 mod mode_suggest;
 pub(crate) mod modes;
 pub(crate) mod pairing;
+mod pools;
 mod projects;
 mod push_notifications;
 mod resources;
@@ -614,6 +615,15 @@ where
             "/projects/:id/sessions/:session_id",
             post(projects::assign_session::<S, M, C>),
         )
+        .route(
+            "/projects/:id/pool",
+            post(projects::join_pool::<S, M, C>).delete(projects::leave_pool::<S, M, C>),
+        )
+        .route(
+            "/pools",
+            get(pools::list_pools::<S, M, C>).post(pools::create_pool::<S, M, C>),
+        )
+        .route("/pools/:id/archive", post(pools::archive_pool::<S, M, C>))
         .route(
             "/voice/asr/engines",
             get(crate::voice_asr::engines::<S, M, C>),

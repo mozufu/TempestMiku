@@ -12,6 +12,8 @@ pub struct ProjectCatalogEntry {
     pub linked_folders_uri: String,
     /// 0..n linked folders currently attached to this project (§30). Empty for a folderless project.
     pub linked_folder_uris: Vec<String>,
+    /// The memory pool this project currently belongs to (§30.7), if any.
+    pub pool_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -56,6 +58,7 @@ fn catalog_entry(record: ProjectRecord, linked_folders: &LinkedFolders) -> Proje
         project_uri: format!("project://{id}"),
         linked_folders_uri: format!("project://{id}/linked-folders"),
         linked_folder_uris,
+        pool_id: record.pool_id,
         id,
     }
 }

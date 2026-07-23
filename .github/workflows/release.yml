@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.41.9"
+
+jobs:
+  server-image:
+    name: Build and publish tm-server image
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push tm-server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/arm64
+          build-args: |
+            SOURCE_REV=${{ github.sha }}
+          tags: |
+            ghcr.io/mozufu/tempestmiku:${{ github.sha }}
+            ghcr.io/mozufu/tempestmiku:main
+
+  android-release:
+    name: Signed Android release build
+    runs-on: ubuntu-latest
+    environment: android-release
+    defaults:
+      run:
+        working-directory: clients/miku_flutter
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Restore production signing keystore
+        run: |
+          umask 077
+          printf '%s' "${{ secrets.TM_ANDROID_RELEASE_KEYSTORE_B64 }}" | base64 --decode > "$RUNNER_TEMP/tempestmiku-release.jks"
+
+      - name: Build signed Android release APK
+        env:
+          TM_ANDROID_RELEASE_KEY_ALIAS: tempestmiku-release
+          TM_ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.TM_ANDROID_RELEASE_KEY_PASSWORD }}
+          TM_ANDROID_RELEASE_STORE_FILE: ${{ runner.temp }}/tempestmiku-release.jks
+          TM_ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.TM_ANDROID_RELEASE_KEY_PASSWORD }}
+        run: flutter build apk --release --split-per-abi --target-platform android-arm64 --no-pub
+
+      - name: Remove signing keystore from runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/tempestmiku-release.jks"
+
+      - name: Verify release APK matches production signer
+        run: ../../tools/verify-p6-6-release-apk.sh "$PWD/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tempestmiku-android-release-${{ github.sha }}
+          path: clients/miku_flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          if-no-files-found: error
+          retention-days: 14

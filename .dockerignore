@@ -1,0 +1,8 @@
+.git
+target
+clients/miku_flutter/build
+clients/miku_flutter/.dart_tool
+clients/miku_flutter/android/.gradle
+clients/miku_flutter/android/app/release.jks
+clients/miku_flutter/android/key.properties
+**/*.jks

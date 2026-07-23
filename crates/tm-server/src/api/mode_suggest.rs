@@ -167,6 +167,7 @@ where
                 "targetMode": target_mode.as_str(),
                 "reason": reason,
                 "currentMode": current_mode.as_str(),
+                "summary": format!("切換到「{}」模式", profile.label),
             }),
             options: vec![
                 ApprovalOption {
